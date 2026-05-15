@@ -2,7 +2,14 @@
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
-	import { appendGroupMessage, getGroupMessages } from './chat-data.svelte';
+	import type { ChatMessage } from './chat.types';
+	import { manager } from '$lib/services/accountManager.svelte';
+	import { formatUnixTimestamp } from '$lib/utils';
+	import {
+		getChatGroup,
+		listChatGroupMessages,
+		sendChatGroupMessage
+	} from '$lib/services/chatGroups.svelte';
 
 	let {
 		groupId = 'general',
@@ -15,35 +22,47 @@
 	} = $props();
 
 	let draft = $state('');
-	const messages = $derived.by(() => getGroupMessages(groupId));
+	let sendError = $state('');
+	const activePubkey = $derived.by(() => manager.getActive()?.pubkey?.trim().toLowerCase() ?? '');
+	const group = $derived.by(() => getChatGroup(groupId));
+	const messages = $derived.by<ChatMessage[]>(() =>
+		listChatGroupMessages(groupId).map((message) => ({
+			id: message.id,
+			author: message.sender,
+			text: message.content,
+			timestamp: formatUnixTimestamp(message.createdAt, true),
+			isOwn: message.sender.trim().toLowerCase() === activePubkey
+		}))
+	);
 
-	function handleSubmit() {
+	async function handleSubmit() {
 		const text = draft.trim();
 
-		if (!text) {
+		if (!text || !group) {
 			return;
 		}
 
-		appendGroupMessage(groupId, {
-			id: messages.length + 1,
-			author: 'me',
-			text,
-			timestamp: new Date().toLocaleTimeString([], {
-				hour: '2-digit',
-				minute: '2-digit'
-			})
-		});
+		sendError = '';
 
-		draft = '';
+		try {
+			await sendChatGroupMessage({ groupId, content: text });
+			draft = '';
+		} catch (error) {
+			sendError = error instanceof Error ? error.message : 'Failed to send message';
+		}
 	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<ChatHeader {title} {subtitle} />
+	<ChatHeader {groupId} {title} {subtitle} />
 
 	<div class="min-h-0 flex-1">
 		<ChatMessageList {messages} />
 	</div>
+
+	{#if sendError}
+		<p class="px-4 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
+	{/if}
 
 	<ChatComposer bind:value={draft} onSubmit={handleSubmit} />
 </div>

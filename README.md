@@ -1,42 +1,26 @@
-# sv
+# cordn-web
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+[`cordn-web`](package.json) is the web client for Cordn.
 
-## Creating a project
+It is built with SvelteKit, Svelte 5, TypeScript, and Tailwind CSS, and currently includes:
 
-If you're seeing this, you've probably already done this step. Congrats!
+- a landing page at [`/`](src/routes/+page.svelte)
+- a browser chat UI at [`/chat`](src/routes/chat/+page.svelte)
+- route-based group navigation under [`src/routes/chat/[id]`](src/routes/chat/[id])
 
-```sh
-# create a new project
-npx sv create my-app
-```
+## Development
 
-To recreate this project with the same configuration:
+- Install dependencies: `pnpm install`
+- Start the dev server: `pnpm dev`
+- Run checks: `pnpm check`
+- Run linting: `pnpm lint`
+- Run tests: `pnpm test`
 
-```sh
-# recreate this project
-pnpm dlx sv@0.15.3 create --template minimal --types ts --add prettier eslint vitest="usages:unit,component" tailwindcss="plugins:typography" --install pnpm ./
-```
+## Build
 
-## Developing
+- Production build: `pnpm build`
+- Preview build: `pnpm preview`
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Related project
 
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+The protocol and server implementation lives in the nested [`cordn/`](cordn) workspace.
