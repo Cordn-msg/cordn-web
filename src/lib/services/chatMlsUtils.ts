@@ -5,6 +5,7 @@ import {
 	base64ToBytes,
 	bytesToBase64,
 	createCommit,
+	defaultProposalTypes,
 	defaultCapabilities,
 	defaultCredentialTypes,
 	getCiphersuiteImpl,
@@ -282,6 +283,81 @@ export async function addMemberToGroup(params: {
 		welcome: result.welcome.welcome,
 		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit)),
 		welcomeBase64: encodeWelcomeBase64(result.welcome.welcome)
+	};
+}
+
+export function findMemberLeafIndexByStablePubkey(
+	state: ClientState,
+	stablePubkey: string
+): number {
+	const target = new TextEncoder().encode(stablePubkey);
+	const leaves = state.ratchetTree as
+		| Array<
+				| {
+						leaf?: {
+							credential?: {
+								identity?: Uint8Array;
+							};
+						};
+				  }
+				| undefined
+		  >
+		| undefined;
+
+	if (!leaves) return -1;
+
+	for (let index = 0; index < leaves.length; index += 1) {
+		const identity = leaves[index]?.leaf?.credential?.identity;
+		if (!identity || identity.length !== target.length) continue;
+
+		let matches = true;
+		for (let cursor = 0; cursor < identity.length; cursor += 1) {
+			if (identity[cursor] !== target[cursor]) {
+				matches = false;
+				break;
+			}
+		}
+
+		if (matches) {
+			return Math.floor(index / 2);
+		}
+	}
+
+	return -1;
+}
+
+export class SelfRemovalNotSupportedError extends Error {
+	constructor(groupId: string) {
+		super(`Removing the active member is not supported in group: ${groupId}`);
+		this.name = 'SelfRemovalNotSupportedError';
+	}
+}
+
+export async function removeMemberFromGroup(params: {
+	state: ClientState;
+	removedLeafIndex: number;
+}): Promise<{
+	newState: ClientState;
+	commitMessageBase64: string;
+}> {
+	const cipherSuite = await getCordnCipherSuite();
+	const result = await createCommit({
+		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
+		state: params.state,
+		ratchetTreeExtension: true,
+		extraProposals: [
+			{
+				proposalType: defaultProposalTypes.remove,
+				remove: {
+					removed: params.removedLeafIndex
+				}
+			}
+		]
+	});
+
+	return {
+		newState: result.newState,
+		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit))
 	};
 }
 

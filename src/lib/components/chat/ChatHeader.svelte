@@ -2,6 +2,7 @@
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
 		fetchGroupMessagesAction,
@@ -10,10 +11,13 @@
 		toggleGroupWatchAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
+	import { getChatGroup, isChatGroupRemoved } from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
 	import Download from '@lucide/svelte/icons/download';
 	import Eye from '@lucide/svelte/icons/eye';
 	import EyeOff from '@lucide/svelte/icons/eye-off';
+	import Info from '@lucide/svelte/icons/info';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 
 	let {
@@ -54,7 +58,20 @@
 	const isWatching = $derived.by(() =>
 		groupId ? chatGroupWatchStore.watchingGroupIds.includes(groupId) : false
 	);
+	const group = $derived.by(() => (groupId ? getChatGroup(groupId) : undefined));
+	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
+	const canInvite = $derived.by(() => {
+		if (!$activeAccount || !group) return false;
+		if (isRemoved) return false;
+		return isGroupAdmin({ metadata: group.metadata, stablePubkey: $activeAccount.pubkey });
+	});
 	const watchLabel = $derived.by(() => (isWatching ? 'Stop watching group' : 'Watch group'));
+	const inviteLabel = $derived.by(() =>
+		canInvite ? 'Invite member' : 'Only configured group admins can invite members'
+	);
+	const infoHref = $derived.by(() =>
+		groupId ? resolve('/chat/[id]/info', { id: groupId }) : '/chat'
+	);
 
 	$effect(() => {
 		if (chatHeaderActionsStore.inviteOpen) {
@@ -89,7 +106,19 @@
 					variant="outline"
 					size="icon"
 					class="h-10 w-10 rounded-xl"
-					disabled={!$activeAccount || chatHeaderActionsStore.watchLoading}
+					href={infoHref}
+					aria-label="Group info"
+					title="Group info"
+				>
+					<Info class="size-4" />
+				</Button>
+
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="h-10 w-10 rounded-xl"
+					disabled={!$activeAccount || chatHeaderActionsStore.watchLoading || isRemoved}
 					aria-label={watchLabel}
 					title={watchLabel}
 					onclick={toggleWatch}
@@ -107,7 +136,7 @@
 						variant="outline"
 						size="icon"
 						class="h-10 w-10 rounded-xl"
-						disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading}
+						disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading || isRemoved}
 						aria-label="Fetch messages"
 						onclick={fetchMessages}
 					>
@@ -116,14 +145,19 @@
 				{/if}
 
 				<Dialog.Root bind:open={chatHeaderActionsStore.inviteOpen}>
-					<Dialog.Trigger class="inline-flex" disabled={!$activeAccount} aria-label="Invite member">
+					<Dialog.Trigger
+						class="inline-flex"
+						disabled={!$activeAccount || !canInvite}
+						aria-label={inviteLabel}
+					>
 						<Button
 							type="button"
 							variant="outline"
 							size="icon"
 							class="h-10 w-10 rounded-xl"
-							disabled={!$activeAccount}
-							aria-label="Invite member"
+							disabled={!$activeAccount || !canInvite}
+							aria-label={inviteLabel}
+							title={inviteLabel}
 						>
 							<UserPlus class="size-4" />
 						</Button>
@@ -135,6 +169,12 @@
 								Consume a coordinator key package and publish a welcome for this group.
 							</Dialog.Description>
 						</Dialog.Header>
+
+						{#if !canInvite}
+							<p class="text-sm text-muted-foreground">
+								Only configured group admins can invite members.
+							</p>
+						{/if}
 
 						{#if chatHeaderActionsStore.error}
 							<p class="text-sm text-destructive">{chatHeaderActionsStore.error}</p>
@@ -207,5 +247,10 @@
 
 	{#if chatGroupWatchStore.error}
 		<p class="px-4 pb-3 text-sm text-destructive md:px-6">{chatGroupWatchStore.error}</p>
+	{/if}
+	{#if isRemoved}
+		<p class="px-4 pb-3 text-sm text-muted-foreground md:px-6">
+			This group is inactive for your account. Live watching and sending are disabled.
+		</p>
 	{/if}
 </header>

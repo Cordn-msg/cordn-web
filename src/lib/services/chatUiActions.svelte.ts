@@ -1,12 +1,15 @@
 import { goto } from '$app/navigation';
 import {
 	acceptChatWelcome,
+	deleteChatGroup,
 	fetchChatGroupMessages,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
+	removeChatGroupMember,
 	sendChatGroupMessage,
 	type CoordinatorAvailableKeyPackage
 } from '$lib/services/chatGroups.svelte';
+import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
 import {
 	chatWelcomeNotificationsStore,
 	fetchWelcomeNotifications,
@@ -36,6 +39,16 @@ export const chatHeaderActionsStore = $state<{
 	watchLoading: false,
 	error: '',
 	availableKeyPackages: []
+});
+
+export const chatGroupInfoActionsStore = $state<{
+	removeSubmitting: string;
+	deleteSubmitting: boolean;
+	error: string;
+}>({
+	removeSubmitting: '',
+	deleteSubmitting: false,
+	error: ''
 });
 
 export async function fetchGroupMessagesAction(groupId?: string) {
@@ -104,6 +117,44 @@ export async function inviteGroupMemberAction(groupId: string | undefined, ident
 		return false;
 	} finally {
 		chatHeaderActionsStore.inviteSubmitting = false;
+	}
+}
+
+export async function removeGroupMemberAction(
+	groupId: string | undefined,
+	targetStablePubkey: string
+) {
+	if (!groupId || chatGroupInfoActionsStore.removeSubmitting) return false;
+	chatGroupInfoActionsStore.removeSubmitting = targetStablePubkey;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		await removeChatGroupMember({ groupId, targetStablePubkey });
+		return true;
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to remove member';
+		return false;
+	} finally {
+		chatGroupInfoActionsStore.removeSubmitting = '';
+	}
+}
+
+export async function deleteGroupAction(groupId: string | undefined) {
+	if (!groupId || chatGroupInfoActionsStore.deleteSubmitting) return false;
+	chatGroupInfoActionsStore.deleteSubmitting = true;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		await stopWatchingGroup(groupId, 'group deleted locally');
+		deleteChatGroup(groupId);
+		removeChatGroupPresence(groupId);
+		await goto('/chat');
+		return true;
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to delete group';
+		return false;
+	} finally {
+		chatGroupInfoActionsStore.deleteSubmitting = false;
 	}
 }
 

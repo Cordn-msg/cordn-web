@@ -1,13 +1,20 @@
 import type { cordnClient } from '$lib/services/coordinatorClient';
 
-export type PendingEpochOperation = {
-	kind: 'add-member';
-	groupId: string;
-	commitMessageBase64: string;
-	targetStablePubkey: string;
-	keyPackageReference: string;
-	welcomeBase64: string;
-};
+export type PendingEpochOperation =
+	| {
+			kind: 'add-member';
+			groupId: string;
+			commitMessageBase64: string;
+			targetStablePubkey: string;
+			keyPackageReference: string;
+			welcomeBase64: string;
+	  }
+	| {
+			kind: 'remove-member';
+			groupId: string;
+			commitMessageBase64: string;
+			targetStablePubkey: string;
+	  };
 
 export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;
 
@@ -56,11 +63,13 @@ export async function finalizePendingEpochOperations(
 			continue;
 		}
 
-		await client.StoreWelcome({
-			target_pk: operation.targetStablePubkey,
-			kp_ref: operation.keyPackageReference,
-			welcome_64: operation.welcomeBase64
-		});
+		if (operation.kind === 'add-member') {
+			await client.StoreWelcome({
+				target_pk: operation.targetStablePubkey,
+				kp_ref: operation.keyPackageReference,
+				welcome_64: operation.welcomeBase64
+			});
+		}
 	}
 
 	if (remaining.length === 0) {

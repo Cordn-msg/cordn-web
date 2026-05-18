@@ -3,6 +3,7 @@ import { manager } from '$lib/services/accountManager.svelte';
 import {
 	decodeStoredGroupState,
 	getChatGroup,
+	isChatGroupRemoved,
 	listChatGroups,
 	ingestIncomingChatGroupMessages
 } from '$lib/services/chatGroups.svelte';
@@ -120,6 +121,9 @@ export async function startWatchingGroup(groupId: string) {
 	if (!group) {
 		throw new Error('Group not found');
 	}
+	if (isChatGroupRemoved(group)) {
+		return;
+	}
 
 	const state = decodeStoredGroupState(group);
 	const gid = groupIdDecoder.decode(state.groupContext.groupId);
@@ -172,13 +176,17 @@ export async function startWatchingGroup(groupId: string) {
 
 			try {
 				for await (const message of subscription.stream) {
-					await ingestIncomingChatGroupMessages(groupId, [
+					const result = await ingestIncomingChatGroupMessages(groupId, [
 						{
 							cursor: message.cursor,
 							createdAt: message.at,
 							opaqueMessageBase64: message.msg_64
 						}
 					]);
+					if (isChatGroupRemoved(result.group)) {
+						await abort('removed from group');
+						return;
+					}
 				}
 			} catch (error) {
 				const detail = error instanceof Error ? error.message : String(error);
@@ -216,7 +224,9 @@ export async function startWatchingAllGroups() {
 		groups
 			.filter(
 				(group) =>
-					getCurrentWatch(group.id) === undefined && !autoWatchDisabledGroupIds.has(group.id)
+					getCurrentWatch(group.id) === undefined &&
+					!autoWatchDisabledGroupIds.has(group.id) &&
+					!isChatGroupRemoved(group)
 			)
 			.map((group) => startWatchingGroup(group.id))
 	);

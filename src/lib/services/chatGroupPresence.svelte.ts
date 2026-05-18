@@ -82,3 +82,11 @@ export function pruneChatGroupPresence() {
 	chatGroupPresenceStore.groups = Object.fromEntries(nextEntries);
 	savePresence();
 }
+
+export function removeChatGroupPresence(groupId: string) {
+	if (!(groupId in chatGroupPresenceStore.groups)) return;
+	const nextGroups = { ...chatGroupPresenceStore.groups };
+	delete nextGroups[groupId];
+	chatGroupPresenceStore.groups = nextGroups;
+	savePresence();
+}

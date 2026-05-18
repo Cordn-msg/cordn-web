@@ -10,7 +10,11 @@
 	} from '$lib/services/chatUiActions.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
-	import { getChatGroup, listChatGroupMessages } from '$lib/services/chatGroups.svelte';
+	import {
+		getChatGroup,
+		isChatGroupRemoved,
+		listChatGroupMessages
+	} from '$lib/services/chatGroups.svelte';
 
 	let {
 		groupId = 'general',
@@ -29,6 +33,7 @@
 		return pubkey ? normalizePubKey(pubkey) : '';
 	});
 	const group = $derived.by(() => getChatGroup(groupId));
+	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const messages = $derived.by<ChatMessage[]>(() =>
 		listChatGroupMessages(groupId).map((message) => ({
 			id: `${message.id}:${message.cursor}`,
@@ -65,9 +70,18 @@
 		<ChatMessageList {messages} />
 	</div>
 
+	{#if isRemoved}
+		<p
+			class="mx-4 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+		>
+			You were removed from this group. This local copy is now read-only. Open the info page to
+			delete it from this device.
+		</p>
+	{/if}
+
 	{#if sendError || chatComposerActionsStore.error}
 		<p class="px-4 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
 	{/if}
 
-	<ChatComposer bind:value={draft} onSubmit={handleSubmit} />
+	<ChatComposer bind:value={draft} onSubmit={handleSubmit} disabled={isRemoved} />
 </div>

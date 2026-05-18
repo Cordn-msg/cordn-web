@@ -22,6 +22,8 @@ export interface PersistedChatGroupLike {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
+	status?: 'active' | 'removed';
+	removedAtCursor?: number;
 }
 
 export interface WorkingChatGroupSession {
@@ -31,6 +33,8 @@ export interface WorkingChatGroupSession {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
+	status?: 'active' | 'removed';
+	removedAtCursor?: number;
 }
 
 export function createWorkingChatGroupSession(
@@ -43,7 +47,9 @@ export function createWorkingChatGroupSession(
 		lastCursor: group.lastCursor,
 		fetchCursor: group.fetchCursor,
 		messages: [...group.messages],
-		syncIssues: [...group.syncIssues]
+		syncIssues: [...group.syncIssues],
+		status: group.status,
+		removedAtCursor: group.removedAtCursor
 	};
 }
 
@@ -57,6 +63,7 @@ export async function syncChatGroupMessages(params: {
 	}>;
 	pendingEpochOperations: GroupPendingEpochStore;
 	coordinatorClient: Pick<cordnClient, 'StoreWelcome'>;
+	localStablePubkey?: string;
 }): Promise<{
 	workingGroup: WorkingChatGroupSession;
 	received: StoredChatMessage[];
@@ -67,7 +74,8 @@ export async function syncChatGroupMessages(params: {
 		group: params.workingGroup,
 		messages: params.messages,
 		hasPendingEpochOperation: (opaqueMessageBase64) =>
-			hasPendingEpochOperation(params.pendingEpochOperations, params.group.id, opaqueMessageBase64)
+			hasPendingEpochOperation(params.pendingEpochOperations, params.group.id, opaqueMessageBase64),
+		localStablePubkey: params.localStablePubkey
 	});
 
 	await reconcilePendingEpochOperations({
@@ -98,6 +106,8 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		lastCursor: params.workingGroup.lastCursor,
 		fetchCursor: params.workingGroup.fetchCursor,
 		messages: params.workingGroup.messages,
-		syncIssues: params.workingGroup.syncIssues
+		syncIssues: params.workingGroup.syncIssues,
+		status: params.workingGroup.status,
+		removedAtCursor: params.workingGroup.removedAtCursor
 	};
 }

@@ -12,10 +12,14 @@ import { createChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
 	encodeWelcomeBase64,
+	findMemberLeafIndexByStablePubkey,
 	getCordnGroupMetadataExtension,
 	parseConsumedPublishedKeyPackage,
+	removeMemberFromGroup,
+	SelfRemovalNotSupportedError,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
+import { assertCanAdministerGroup, listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
 	createApplicationMessageBase64,
 	createUnsignedCordnMessageEvent,
@@ -60,6 +64,8 @@ export interface StoredChatGroup {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
+	status?: 'active' | 'removed';
+	removedAtCursor?: number;
 	metadata?: GroupMetadataInput;
 }
 
@@ -83,7 +89,9 @@ function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 		lastCursor: group.lastCursor ?? 0,
 		fetchCursor: group.fetchCursor ?? 0,
 		messages: group.messages ?? [],
-		syncIssues: group.syncIssues ?? []
+		syncIssues: group.syncIssues ?? [],
+		status: group.status ?? 'active',
+		removedAtCursor: group.removedAtCursor
 	};
 }
 
@@ -121,6 +129,29 @@ export function decodeStoredGroupState(group: StoredChatGroup): ClientState {
 		throw new Error(`Unable to decode stored group state for ${group.id}`);
 	}
 	return decoded[0];
+}
+
+export class RemovedFromGroupError extends Error {
+	constructor(groupId: string) {
+		super(`You were removed from this group and can no longer participate: ${groupId}`);
+		this.name = 'RemovedFromGroupError';
+	}
+}
+
+export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean {
+	if (!group) return false;
+	if (group.status === 'removed') return true;
+	try {
+		return decodeStoredGroupState(group).groupActiveState?.kind === 'removedFromGroup';
+	} catch {
+		return false;
+	}
+}
+
+function assertChatGroupIsActive(group: StoredChatGroup): void {
+	if (isChatGroupRemoved(group)) {
+		throw new RemovedFromGroupError(group.alias || group.id);
+	}
 }
 
 export function listChatGroups(): StoredChatGroup[] {
@@ -298,6 +329,12 @@ export async function inviteChatGroupMember(input: {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
 		const group = requireChatGroup(input.groupId);
+		assertChatGroupIsActive(group);
+		assertCanAdministerGroup({
+			groupId: group.id,
+			metadata: group.metadata,
+			stablePubkey: account.pubkey
+		});
 
 		const state = decodeStoredGroupState(group);
 		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
@@ -354,7 +391,8 @@ export async function inviteChatGroupMember(input: {
 				opaqueMessageBase64: message.msg_64
 			})),
 			pendingEpochOperations,
-			coordinatorClient
+			coordinatorClient,
+			localStablePubkey: normalizePubKey(account.pubkey)
 		});
 
 		const nextGroup = buildPersistedChatGroup({
@@ -362,6 +400,93 @@ export async function inviteChatGroupMember(input: {
 			workingGroup: sync.workingGroup,
 			encodeState,
 			metadata: toPersistedGroupMetadata(sync.workingGroup.metadata)
+		});
+
+		replaceGroup(group.id, nextGroup);
+		return nextGroup;
+	});
+}
+
+export function listChatGroupMembers(groupId: string): Array<{
+	leafIndex: number;
+	stablePubkey: string;
+	isAdmin: boolean;
+	isSelf: boolean;
+}> {
+	const group = requireChatGroup(groupId);
+	const state = decodeStoredGroupState(group);
+	const account = requireActiveAccount('You must be logged in to inspect group members');
+	return listGroupMembers(state).map((member) => ({
+		...member,
+		isAdmin: assertMemberAdmin(group, member.stablePubkey),
+		isSelf: normalizePubKey(member.stablePubkey) === normalizePubKey(account.pubkey)
+	}));
+}
+
+function assertMemberAdmin(group: StoredChatGroup, stablePubkey: string): boolean {
+	return (
+		group.metadata?.adminPubkeys?.length === 0 ||
+		!group.metadata?.adminPubkeys ||
+		group.metadata.adminPubkeys.map(normalizePubKey).includes(normalizePubKey(stablePubkey))
+	);
+}
+
+export async function removeChatGroupMember(input: {
+	groupId: string;
+	targetStablePubkey: string;
+}): Promise<StoredChatGroup> {
+	return runGroupOperation(input.groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to remove a member');
+		const group = requireChatGroup(input.groupId);
+		assertChatGroupIsActive(group);
+		assertCanAdministerGroup({
+			groupId: group.id,
+			metadata: group.metadata,
+			stablePubkey: account.pubkey
+		});
+
+		if (normalizePubKey(input.targetStablePubkey) === normalizePubKey(account.pubkey)) {
+			throw new SelfRemovalNotSupportedError(group.id);
+		}
+
+		const state = decodeStoredGroupState(group);
+		const removedLeafIndex = findMemberLeafIndexByStablePubkey(
+			state,
+			normalizePubKey(input.targetStablePubkey)
+		);
+		if (removedLeafIndex < 0) {
+			throw new Error('Member not found in group');
+		}
+
+		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
+		const commitResult = await removeMemberFromGroup({ state, removedLeafIndex });
+
+		enqueuePendingEpochOperation(pendingEpochOperations, {
+			kind: 'remove-member',
+			groupId: group.id,
+			commitMessageBase64: commitResult.commitMessageBase64,
+			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
+		});
+
+		await coordinatorClient.PostGroupMessage({
+			msg_64: commitResult.commitMessageBase64
+		});
+
+		const nextGroup = buildPersistedChatGroup({
+			group,
+			workingGroup: createWorkingChatGroupSession(
+				{
+					...group,
+					metadata:
+						toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+						group.metadata
+				},
+				commitResult.newState
+			),
+			encodeState,
+			metadata:
+				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+				group.metadata
 		});
 
 		replaceGroup(group.id, nextGroup);
@@ -392,6 +517,7 @@ async function applyIncomingChatGroupMessages(
 	issues: StoredChatSyncIssue[];
 }> {
 	const account = requireActiveAccount('You must be logged in to process group messages');
+	assertChatGroupIsActive(group);
 	const state = decodeStoredGroupState(group);
 	const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 	const workingGroup = createWorkingChatGroupSession(group, state);
@@ -401,7 +527,8 @@ async function applyIncomingChatGroupMessages(
 		workingGroup,
 		messages,
 		pendingEpochOperations,
-		coordinatorClient
+		coordinatorClient,
+		localStablePubkey: normalizePubKey(account.pubkey)
 	});
 
 	const nextGroup = buildPersistedChatGroup({
@@ -427,6 +554,7 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 	return runGroupOperation(groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to fetch group messages');
 		const group = requireChatGroup(groupId);
+		assertChatGroupIsActive(group);
 
 		const state = decodeStoredGroupState(group);
 		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
@@ -473,6 +601,7 @@ export async function sendChatGroupMessage(input: {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
 		const group = requireChatGroup(input.groupId);
+		assertChatGroupIsActive(group);
 
 		const content = input.content.trim();
 		if (!content) {
@@ -520,4 +649,9 @@ export async function sendChatGroupMessage(input: {
 		replaceGroup(group.id, nextGroup);
 		return stored;
 	});
+}
+
+export function deleteChatGroup(groupId: string): void {
+	chatGroupsStore.groups = chatGroupsStore.groups.filter((group) => group.id !== groupId);
+	saveGroups();
 }

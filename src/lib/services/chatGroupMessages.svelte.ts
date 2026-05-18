@@ -7,10 +7,15 @@ import {
 	mlsMessageEncoder,
 	processMessage,
 	unsafeTestingAuthenticationService,
-	type ClientState
+	type ClientState,
+	type IncomingMessageCallback
 } from 'ts-mls';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
+import {
+	createAdminAuthorizationCallback,
+	createUnauthorizedAdminRejectionDetail
+} from '$lib/services/chatAdminPolicy';
 import { getCordnCipherSuite, getCordnGroupMetadataExtension } from '$lib/services/chatMlsUtils';
 
 export interface StoredChatMessage {
@@ -48,6 +53,8 @@ export interface GroupMessageIngestionTarget {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
+	status?: 'active' | 'removed';
+	removedAtCursor?: number;
 }
 
 export interface RawChatGroupMessage {
@@ -146,6 +153,7 @@ export async function createApplicationMessageBase64(params: {
 export async function processMessageBase64(params: {
 	state: ClientState;
 	opaqueMessageBase64: string;
+	callback?: IncomingMessageCallback;
 }): Promise<Awaited<ReturnType<typeof processMessage>>> {
 	const cipherSuite = await getCordnCipherSuite();
 	const decoded = mlsMessageDecoder(base64ToBytes(params.opaqueMessageBase64), 0);
@@ -161,7 +169,8 @@ export async function processMessageBase64(params: {
 	return processMessage({
 		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
 		state: params.state,
-		message: decoded[0]
+		message: decoded[0],
+		callback: params.callback
 	});
 }
 
@@ -176,22 +185,37 @@ function isStaleGenerationIssue(detail: string): boolean {
 	return detail === 'Desired gen in the past';
 }
 
+function isRemovedMemberCommitIssue(detail: string): boolean {
+	return detail === 'Could not find common ancestor';
+}
+
+function isRemovedFromGroupState(state: ClientState): boolean {
+	return state.groupActiveState?.kind === 'removedFromGroup';
+}
+
+function wasMessageRejectedByCallback(result: { kind: 'newState'; actionTaken?: string }): boolean {
+	return result.actionTaken === 'reject';
+}
+
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
 	hasPendingEpochOperation?: (opaqueMessageBase64: string) => boolean;
+	localStablePubkey?: string;
 }): Promise<{
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
 	cursorAdvancedTo: number;
 	appliedPendingCommitMessages: Set<string>;
 	rejectedPendingCommitMessages: Set<string>;
+	removedLocalMember: boolean;
 }> {
 	const { group, messages } = params;
 	const received: StoredChatMessage[] = [];
 	const issues: StoredChatSyncIssue[] = [];
 	const appliedPendingCommitMessages = new Set<string>();
 	const rejectedPendingCommitMessages = new Set<string>();
+	let removedLocalMember = false;
 
 	for (const message of messages) {
 		const isPendingOperationMessage =
@@ -215,12 +239,29 @@ export async function ingestChatGroupMessages(params: {
 		try {
 			processed = await processMessageBase64({
 				state: group.state,
-				opaqueMessageBase64: message.opaqueMessageBase64
+				opaqueMessageBase64: message.opaqueMessageBase64,
+				callback: createAdminAuthorizationCallback({
+					state: group.state,
+					metadata: group.metadata
+				})
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 
-			if (isFormerEpochIssue(detail) || isStaleGenerationIssue(detail)) {
+			if (
+				isFormerEpochIssue(detail) ||
+				isStaleGenerationIssue(detail) ||
+				isRemovedMemberCommitIssue(detail)
+			) {
+				if (isRemovedMemberCommitIssue(detail) && !isPendingOperationMessage) {
+					group.fetchCursor = message.cursor;
+					group.lastCursor = Math.max(group.lastCursor, message.cursor);
+					group.status = 'removed';
+					group.removedAtCursor = message.cursor;
+					removedLocalMember = true;
+					continue;
+				}
+
 				const issue = {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
@@ -239,12 +280,35 @@ export async function ingestChatGroupMessages(params: {
 			throw error;
 		}
 
+		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
+			const issue = {
+				cursor: message.cursor,
+				createdAt: message.createdAt,
+				detail: createUnauthorizedAdminRejectionDetail({
+					groupId: group.metadata?.name ?? 'unknown'
+				})
+			};
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			group.syncIssues.push(issue);
+			issues.push(issue);
+			if (isPendingOperationMessage) {
+				rejectedPendingCommitMessages.add(message.opaqueMessageBase64);
+			}
+			continue;
+		}
+
 		group.fetchCursor = message.cursor;
 		group.lastCursor = Math.max(group.lastCursor, message.cursor);
 
 		if (processed.kind === 'applicationMessage') {
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);
+			if (isRemovedFromGroupState(processed.newState)) {
+				group.status = 'removed';
+				group.removedAtCursor = message.cursor;
+				removedLocalMember = true;
+			}
 			if (processed.aad.length === 0) {
 				throw new Error('Cordn application message missing authenticated sender');
 			}
@@ -275,6 +339,11 @@ export async function ingestChatGroupMessages(params: {
 		if (processed.kind === 'newState') {
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);
+			if (isRemovedFromGroupState(processed.newState)) {
+				group.status = 'removed';
+				group.removedAtCursor = message.cursor;
+				removedLocalMember = true;
+			}
 			if (isPendingOperationMessage) {
 				appliedPendingCommitMessages.add(message.opaqueMessageBase64);
 			}
@@ -286,6 +355,7 @@ export async function ingestChatGroupMessages(params: {
 		issues,
 		cursorAdvancedTo: group.fetchCursor,
 		appliedPendingCommitMessages,
-		rejectedPendingCommitMessages
+		rejectedPendingCommitMessages,
+		removedLocalMember
 	};
 }

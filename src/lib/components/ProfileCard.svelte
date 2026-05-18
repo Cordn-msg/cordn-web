@@ -9,6 +9,7 @@
 	import { pubkeyToHexColor } from '$lib/utils';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { cn } from '$lib/utils';
+	import { copyToClipboard } from '$lib/utils';
 
 	let {
 		pubkey,
@@ -30,6 +31,10 @@
 	const displayName = $derived(
 		$profile?.name || $profile?.display_name || $profile?.nip05 || pubkey.slice(0, 8)
 	);
+
+	async function copyPubkey() {
+		await copyToClipboard(pubkey);
+	}
 	$effect(() => {
 		if ($profile) return;
 		const sub = addressLoader({
@@ -65,7 +70,13 @@
 			<div class="flex items-start gap-3">
 				{@render pfp(pubkey, $profile?.picture, 'extended')}
 				<div class="min-w-0 flex-1 pt-1">
-					<span class="block truncate text-lg font-semibold">{displayName}</span>
+					<button
+						type="button"
+						class="block w-full truncate text-left text-lg font-semibold"
+						onclick={copyPubkey}
+					>
+						{displayName}
+					</button>
 					{#if $profile?.nip05}
 						<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
 					{/if}
@@ -85,14 +96,20 @@
 	</div>
 {:else if isInline}
 	<span class="inline align-baseline text-sm font-medium break-words text-foreground">
-		{displayName}
+		<button type="button" class="inline text-left" onclick={copyPubkey}>{displayName}</button>
 	</span>
 {:else}
 	<div class="flex items-center gap-2">
 		{@render pfp(pubkey, $profile?.picture)}
 		{#if showName}
 			<div class="min-w-0 flex-1">
-				<span class="block truncate text-sm font-semibold">{displayName}</span>
+				<button
+					type="button"
+					class="block w-full truncate text-left text-sm font-semibold"
+					onclick={copyPubkey}
+				>
+					{displayName}
+				</button>
 				{#if $profile?.nip05}
 					<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
 				{/if}
