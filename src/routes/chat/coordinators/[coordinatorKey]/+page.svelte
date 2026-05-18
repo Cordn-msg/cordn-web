@@ -1,5 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -9,7 +11,6 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
-	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import {
 		chatWelcomeNotificationsStore,
 		listWelcomeNotificationsForCoordinator,
@@ -21,11 +22,13 @@
 		loadCoordinatorRemoteKeyPackagesAction,
 		refreshCoordinatorWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 	import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import Inbox from '@lucide/svelte/icons/inbox';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Server from '@lucide/svelte/icons/server';
 
 	let { params } = $props();
@@ -52,6 +55,8 @@
 	const otherRemoteKeyPackages = $derived.by(() =>
 		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) !== activePubkey)
 	);
+	let removingKeyPackageRef = $state('');
+	let removeError = $state('');
 
 	const ownedRemoteKeyPackagesWithState = $derived.by(() =>
 		ownedRemoteKeyPackages.map((entry) => {
@@ -89,6 +94,19 @@
 	async function acceptWelcome(welcomeId: string) {
 		await acceptWelcomeAction(welcomeId);
 	}
+
+	async function removeOwnedKeyPackage(keyPackageRef: string) {
+		try {
+			removingKeyPackageRef = keyPackageRef;
+			removeError = '';
+			await removeChatKeyPackage(keyPackageRef, { coordinatorKey });
+			await loadRemoteKeyPackages();
+		} catch (error) {
+			removeError = error instanceof Error ? error.message : 'Failed to remove key package';
+		} finally {
+			removingKeyPackageRef = '';
+		}
+	}
 </script>
 
 <svelte:head>
@@ -104,11 +122,11 @@
 			>
 				<Server class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0 space-y-2">
 				<h1 class="text-lg font-semibold tracking-tight">
 					{coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
 				</h1>
-				<p class="text-sm break-all text-muted-foreground">{coordinatorKey}</p>
+				<ProfileCard pubkey={coordinatorKey} />
 			</div>
 		</div>
 	</header>
@@ -150,7 +168,9 @@
 								</div>
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Pubkey</p>
-									<p class="mt-1 font-mono text-xs break-all">{coordinatorKey}</p>
+									<div class="mt-2">
+										<ProfileCard pubkey={coordinatorKey} />
+									</div>
 								</div>
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Relays</p>
@@ -201,7 +221,7 @@
 							{:else}
 								{#each relatedGroups as group (group.id)}
 									<a
-										href={`/chat/${group.id}`}
+										href={resolve('/chat/[id]', { id: group.id })}
 										class="block rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
 									>
 										<p class="font-medium">{group.metadata?.name || group.alias}</p>
@@ -294,6 +314,9 @@
 									</div>
 								{:else}
 									<div class="space-y-3">
+										{#if removeError}
+											<p class="text-sm text-destructive">{removeError}</p>
+										{/if}
 										{#each ownedRemoteKeyPackagesWithState as item (item.entry.kp_ref)}
 											<div class="rounded-xl border border-border px-4 py-3">
 												<div class="flex items-center justify-between gap-3">
@@ -317,6 +340,18 @@
 														<span>Last resort</span>
 													{/if}
 													<span>{new Date(item.entry.at).toLocaleString()}</span>
+												</div>
+												<div class="mt-3 flex justify-end">
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														disabled={removingKeyPackageRef === item.entry.kp_ref}
+														onclick={() => removeOwnedKeyPackage(item.entry.kp_ref)}
+													>
+														<Trash2 class="mr-2 size-4" />
+														{removingKeyPackageRef === item.entry.kp_ref ? 'Removing…' : 'Remove'}
+													</Button>
 												</div>
 											</div>
 										{/each}
@@ -351,9 +386,9 @@
 							{:else}
 								{#each otherRemoteKeyPackages as entry (entry.kp_ref)}
 									<div class="rounded-xl border border-border px-4 py-3">
-										<p class="font-mono text-xs break-all text-muted-foreground">
-											Owner {entry.pk}
-										</p>
+										<div class="mb-2">
+											<ProfileCard pubkey={entry.pk} />
+										</div>
 										<p class="mt-1 font-mono text-xs break-all">{entry.kp_ref}</p>
 										<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
 											{#if entry.last_resort}

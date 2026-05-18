@@ -19,6 +19,7 @@ import {
 	createCredential,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
+import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
@@ -121,6 +122,15 @@ export function getChatKeyPackage(keyPackageRef: string): StoredKeyPackageRecord
 	return chatKeyPackagesStore.keyPackages.find((entry) => entry.keyPackageRef === keyPackageRef);
 }
 
+function setKeyPackages(keyPackages: StoredKeyPackageRecord[]) {
+	chatKeyPackagesStore.keyPackages = keyPackages;
+	saveKeyPackages();
+}
+
+function dedupeStrings(values: string[]): string[] {
+	return values.filter((value, index) => values.indexOf(value) === index);
+}
+
 function buildKeyPackageLabel(input: {
 	label?: string;
 	ownerPubkey: string;
@@ -188,8 +198,7 @@ export async function createChatKeyPackage(input?: {
 		publishedCoordinatorKeys: []
 	};
 
-	chatKeyPackagesStore.keyPackages = [record, ...chatKeyPackagesStore.keyPackages];
-	saveKeyPackages();
+	setKeyPackages([record, ...chatKeyPackagesStore.keyPackages]);
 
 	if (input?.publishCoordinatorKey?.trim()) {
 		await publishChatKeyPackage(record.keyPackageRef, input.publishCoordinatorKey);
@@ -236,36 +245,139 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
 }
 
+export async function removeChatKeyPackage(
+	keyPackageRef: string,
+	input: { coordinatorKey?: string; localOnly?: boolean } = {}
+) {
+	const record = getChatKeyPackage(keyPackageRef);
+	const normalizedCoordinator = input.coordinatorKey?.trim()
+		? normalizePubKey(input.coordinatorKey)
+		: undefined;
+
+	if (!record && !normalizedCoordinator) {
+		throw new Error('Key package not found');
+	}
+
+	if (!input.localOnly) {
+		const account = requireActiveAccount('You must be logged in to manage key packages');
+		const coordinatorKeys = normalizedCoordinator
+			? [normalizedCoordinator]
+			: dedupeStrings(record?.publishedCoordinatorKeys ?? []);
+
+		for (const coordinatorKey of coordinatorKeys) {
+			const client = getCoordinatorClient(account, coordinatorKey);
+			await client.RemoveKeyPackages({ kp_refs: [keyPackageRef] });
+		}
+	}
+
+	if (record) {
+		if (normalizedCoordinator && !input.localOnly) {
+			setKeyPackages(
+				chatKeyPackagesStore.keyPackages.map((entry) =>
+					entry.keyPackageRef !== keyPackageRef
+						? entry
+						: {
+								...entry,
+								publishedCoordinatorKeys: entry.publishedCoordinatorKeys.filter(
+									(entryCoordinatorKey) => entryCoordinatorKey !== normalizedCoordinator
+								)
+							}
+				)
+			);
+			return;
+		}
+
+		setKeyPackages(
+			chatKeyPackagesStore.keyPackages.filter((entry) => entry.keyPackageRef !== keyPackageRef)
+		);
+	}
+}
+
+let lastReconciledOwnerPubkey = '';
+
+export async function reconcilePublishedKeyPackagesForActiveAccount() {
+	const account = requireActiveAccount('You must be logged in to manage key packages');
+	const ownerPubkey = normalizePubKey(account.pubkey);
+	const localKeyPackages = listChatKeyPackages(ownerPubkey);
+	if (localKeyPackages.length === 0) {
+		lastReconciledOwnerPubkey = ownerPubkey;
+		return;
+	}
+
+	const coordinatorKeys = dedupeStrings(listKnownCoordinatorKeys().map(normalizePubKey));
+	for (const keyPackage of localKeyPackages) {
+		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) {
+			const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
+			if (!coordinatorKeys.includes(normalizedCoordinatorKey)) {
+				coordinatorKeys.push(normalizedCoordinatorKey);
+			}
+		}
+	}
+
+	const availableRefsByCoordinator: Record<string, string[]> = {};
+	for (const coordinatorKey of coordinatorKeys) {
+		const client = getCoordinatorClient(account, coordinatorKey);
+		const result = await client.ListAvailableKeyPackages({});
+		availableRefsByCoordinator[coordinatorKey] = result.keyPackages
+			.filter((entry) => normalizePubKey(entry.pk) === ownerPubkey)
+			.map((entry) => entry.kp_ref);
+	}
+
+	setKeyPackages(
+		chatKeyPackagesStore.keyPackages.map((entry) => {
+			if (normalizePubKey(entry.ownerPubkey) !== ownerPubkey) return entry;
+			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.filter((coordinatorKey) =>
+				(availableRefsByCoordinator[normalizePubKey(coordinatorKey)] ?? []).includes(
+					entry.keyPackageRef
+				)
+			);
+			return publishedCoordinatorKeys.length === entry.publishedCoordinatorKeys.length
+				? entry
+				: { ...entry, publishedCoordinatorKeys };
+		})
+	);
+	lastReconciledOwnerPubkey = ownerPubkey;
+}
+
+export function shouldReconcilePublishedKeyPackages(ownerPubkey?: string) {
+	if (!ownerPubkey) return false;
+	return normalizePubKey(ownerPubkey) !== lastReconciledOwnerPubkey;
+}
+
 export function markKeyPackagePublished(
 	keyPackageRef: string,
 	coordinatorKey: string,
 	isLastResort?: boolean
 ) {
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
-	chatKeyPackagesStore.keyPackages = chatKeyPackagesStore.keyPackages.map((entry) => {
-		if (entry.keyPackageRef !== keyPackageRef) return entry;
-		const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
-			? entry.publishedCoordinatorKeys
-			: [...entry.publishedCoordinatorKeys, normalizedCoordinator];
-		return {
-			...entry,
-			isLastResort: isLastResort ?? entry.isLastResort,
-			publishedCoordinatorKeys
-		};
-	});
-	saveKeyPackages();
+	setKeyPackages(
+		chatKeyPackagesStore.keyPackages.map((entry) => {
+			if (entry.keyPackageRef !== keyPackageRef) return entry;
+			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(
+				normalizedCoordinator
+			)
+				? entry.publishedCoordinatorKeys
+				: [...entry.publishedCoordinatorKeys, normalizedCoordinator];
+			return {
+				...entry,
+				isLastResort: isLastResort ?? entry.isLastResort,
+				publishedCoordinatorKeys
+			};
+		})
+	);
 }
 
 export function markKeyPackageConsumed(keyPackageRef: string, groupId: string) {
 	const consumedAt = Date.now();
-	chatKeyPackagesStore.keyPackages = chatKeyPackagesStore.keyPackages.map((entry) =>
-		entry.keyPackageRef === keyPackageRef
-			? {
-					...entry,
-					consumedAt,
-					consumedByGroupId: groupId
-				}
-			: entry
+	setKeyPackages(
+		chatKeyPackagesStore.keyPackages.map((entry) =>
+			entry.keyPackageRef === keyPackageRef
+				? {
+						...entry,
+						consumedAt,
+						consumedByGroupId: groupId
+					}
+				: entry
+		)
 	);
-	saveKeyPackages();
 }

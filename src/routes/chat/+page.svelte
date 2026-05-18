@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { resolve } from '$app/paths';
@@ -11,8 +12,12 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
-	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+	import {
+		listChatKeyPackages,
+		type StoredKeyPackageRecord
+	} from '$lib/services/chatKeyPackages.svelte';
 	import type { StoredCoordinator } from '$lib/services/chatCoordinators.svelte';
+	import { copyToClipboard } from '$lib/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -34,16 +39,20 @@
 	const hasGroups = $derived.by(() => groups.length > 0);
 	const latestGroup = $derived.by(() => groups.at(-1));
 	const keyPackagesByCoordinator = $derived.by(() => {
-		const counts = new Map<string, number>();
+		const grouped: Record<string, StoredKeyPackageRecord[]> = {};
 
 		for (const keyPackage of keyPackages) {
 			for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) {
-				counts.set(coordinatorKey, (counts.get(coordinatorKey) ?? 0) + 1);
+				grouped[coordinatorKey] = [...(grouped[coordinatorKey] ?? []), keyPackage];
 			}
 		}
 
-		return counts;
+		return grouped;
 	});
+
+	function getCoordinatorKeyPackages(coordinatorKey: string) {
+		return keyPackagesByCoordinator[coordinatorKey] ?? [];
+	}
 	const pendingOnboardingSteps = $derived.by(() =>
 		onboardingSteps.filter((step) => !step.complete)
 	);
@@ -114,6 +123,10 @@
 
 	function toggleCompletedSteps() {
 		completedStepsExpanded = !completedStepsExpanded;
+	}
+
+	async function copyKeyPackageRef(keyPackageRef: string) {
+		await copyToClipboard(keyPackageRef);
 	}
 </script>
 
@@ -289,7 +302,7 @@
 					<Card.Content class="space-y-4">
 						<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
 							<a
-								href="/chat/coordinators"
+								href={resolve('/chat/coordinators')}
 								class="group rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
 							>
 								<div class="flex items-start justify-between gap-3">
@@ -310,7 +323,7 @@
 							</a>
 
 							<a
-								href="/chat/config/key-packages"
+								href={resolve('/chat/config/key-packages')}
 								class="group rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
 							>
 								<div class="flex items-start justify-between gap-3">
@@ -394,24 +407,48 @@
 					<Card.Content class="space-y-3">
 						{#if coordinators.length > 0}
 							{#each coordinators as coordinator (coordinator.pubkey)}
+								{@const coordinatorKeyPackages = getCoordinatorKeyPackages(coordinator.pubkey)}
 								<div class="rounded-xl border border-border px-4 py-3">
 									<div class="flex items-start justify-between gap-3">
-										<div class="min-w-0 space-y-1">
+										<div class="min-w-0 space-y-2">
 											<p class="font-medium text-foreground">{getCoordinatorLabel(coordinator)}</p>
-											<p class="font-mono text-xs break-all text-muted-foreground">
-												{coordinator.pubkey}
-											</p>
+											<ProfileCard pubkey={coordinator.pubkey} />
 										</div>
 										<span
 											class="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
 										>
-											{keyPackagesByCoordinator.get(coordinator.pubkey) ?? 0} key package{(keyPackagesByCoordinator.get(
-												coordinator.pubkey
-											) ?? 0) === 1
+											{coordinatorKeyPackages.length} key package{coordinatorKeyPackages.length ===
+											1
 												? ''
 												: 's'}
 										</span>
 									</div>
+									{#if coordinatorKeyPackages.length > 0}
+										<div class="mt-3 space-y-2">
+											{#each coordinatorKeyPackages as keyPackage (keyPackage.keyPackageRef)}
+												<div class="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+													<div class="flex items-start justify-between gap-3">
+														<div class="min-w-0">
+															<p class="text-sm font-medium">{keyPackage.label}</p>
+														</div>
+														<button
+															type="button"
+															class="font-mono text-xs break-all text-muted-foreground hover:text-foreground"
+															onclick={() => copyKeyPackageRef(keyPackage.keyPackageRef)}
+														>
+															{keyPackage.keyPackageRef}
+														</button>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{:else}
+										<div
+											class="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
+										>
+											No local key packages published here yet.
+										</div>
+									{/if}
 								</div>
 							{/each}
 						{:else}

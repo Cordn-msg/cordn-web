@@ -1,11 +1,24 @@
 export interface ChatMessage {
 	id: string;
+	eventId: string;
 	author: string;
+	authorLabel?: string;
 	text: string;
-	timestamp: string;
 	timeLabel: string;
 	dayLabel: string;
 	isOwn?: boolean;
+	reactions?: Array<{
+		emoji: string;
+		count: number;
+		reactedByMe?: boolean;
+		reactors: string[];
+	}>;
+	replyTo?: {
+		id: string;
+		author: string;
+		authorLabel?: string;
+		text: string;
+	};
 }
 
 export interface ChatGroup {

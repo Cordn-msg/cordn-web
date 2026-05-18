@@ -22,6 +22,10 @@ import {
 	stopWatchingGroup
 } from '$lib/services/chatGroupWatch.svelte';
 import type { AvailableKeyPackage } from '$lib/contracts';
+import type {
+	ChatMessageReactionTarget,
+	ChatMessageReplyTarget
+} from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
 	fetchLoading: boolean;
@@ -182,13 +186,23 @@ export const coordinatorDetailsActionsStore = $state<{
 	remoteKeyPackages: []
 });
 
-export async function sendGroupMessageAction(groupId: string | undefined, content: string) {
+export async function sendGroupMessageAction(
+	groupId: string | undefined,
+	content: string,
+	replyTo?: ChatMessageReplyTarget,
+	reactionTo?: ChatMessageReactionTarget
+) {
 	const text = content.trim();
-	if (!text || !groupId || chatComposerActionsStore.sending) return false;
+	if ((!text && !reactionTo) || !groupId || chatComposerActionsStore.sending) return false;
 	chatComposerActionsStore.error = '';
 	chatComposerActionsStore.sending = true;
 	try {
-		await sendChatGroupMessage({ groupId, content: text });
+		await sendChatGroupMessage({
+			groupId,
+			content: reactionTo ? content : text,
+			replyTo,
+			reactionTo
+		});
 		return true;
 	} catch (error) {
 		chatComposerActionsStore.error =

@@ -3,16 +3,20 @@
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		createChatKeyPackage,
 		listChatKeyPackages,
-		publishChatKeyPackage
+		publishChatKeyPackage,
+		removeChatKeyPackage
 	} from '$lib/services/chatKeyPackages.svelte';
 	import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+	import { copyToClipboard } from '$lib/utils';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import KeyRound from '@lucide/svelte/icons/key-round';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	function getCoordinatorHref(coordinatorKey: string) {
 		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey });
@@ -25,12 +29,17 @@
 		);
 	}
 
+	function getCoordinator(pubkey: string) {
+		return coordinators.find((entry) => entry.pubkey === pubkey);
+	}
+
 	let loading = $state(false);
 	let error = $state('');
 	let label = $state('');
 	let publishCoordinatorKey = $state('');
 	let isLastResort = $state(false);
 	let publishingKeyPackageRef = $state('');
+	let removingKeyPackageRef = $state('');
 
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const coordinators = $derived.by(() => listChatCoordinators());
@@ -64,6 +73,22 @@
 		} finally {
 			publishingKeyPackageRef = '';
 		}
+	}
+
+	async function handleRemove(keyPackageRef: string) {
+		try {
+			removingKeyPackageRef = keyPackageRef;
+			error = '';
+			await removeChatKeyPackage(keyPackageRef);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to remove key package';
+		} finally {
+			removingKeyPackageRef = '';
+		}
+	}
+
+	async function copyKeyPackageRef(keyPackageRef: string) {
+		await copyToClipboard(keyPackageRef);
 	}
 </script>
 
@@ -191,9 +216,6 @@
 									<div class="flex items-center justify-between gap-3">
 										<div>
 											<p class="font-medium">{keyPackage.label}</p>
-											<p class="text-xs text-muted-foreground">
-												{keyPackage.keyPackageRef.slice(0, 16)}…
-											</p>
 										</div>
 										<p class="text-xs text-muted-foreground">
 											{new Date(keyPackage.createdAt).toLocaleString()}
@@ -207,9 +229,13 @@
 											Last resort
 										</p>
 									{/if}
-									<p class="font-mono text-xs break-all text-muted-foreground">
+									<button
+										type="button"
+										class="text-left font-mono text-xs break-all text-muted-foreground hover:text-foreground"
+										onclick={() => copyKeyPackageRef(keyPackage.keyPackageRef)}
+									>
 										{keyPackage.keyPackageRef}
-									</p>
+									</button>
 									<p class="text-xs text-muted-foreground">
 										Published to {keyPackage.publishedCoordinatorKeys.length} coordinator{keyPackage
 											.publishedCoordinatorKeys.length === 1
@@ -217,13 +243,27 @@
 											: 's'}
 									</p>
 									{#if keyPackage.publishedCoordinatorKeys.length > 0}
-										<div class="flex flex-wrap gap-2 pt-1">
+										<div class="space-y-2 pt-1">
 											{#each keyPackage.publishedCoordinatorKeys as coordinatorKey (coordinatorKey)}
 												<a
 													href={getCoordinatorHref(coordinatorKey)}
-													class="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+													class="block rounded-lg border border-border/60 px-3 py-2 transition-colors hover:bg-background"
 												>
-													{getCoordinatorLabel(coordinatorKey)}
+													<div class="flex items-center justify-between gap-3">
+														<div class="min-w-0">
+															<p class="text-sm font-medium">
+																{getCoordinatorLabel(coordinatorKey)}
+															</p>
+															<ProfileCard pubkey={coordinatorKey} />
+														</div>
+														{#if getCoordinator(coordinatorKey)?.isDefault}
+															<span
+																class="rounded-full bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+															>
+																Default
+															</span>
+														{/if}
+													</div>
 												</a>
 											{/each}
 										</div>
@@ -247,6 +287,20 @@
 											{/each}
 										</div>
 									{/if}
+									<div class="flex justify-end pt-1">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											disabled={removingKeyPackageRef === keyPackage.keyPackageRef}
+											onclick={() => handleRemove(keyPackage.keyPackageRef)}
+										>
+											<Trash2 class="mr-2 size-4" />
+											{removingKeyPackageRef === keyPackage.keyPackageRef
+												? 'Removing…'
+												: 'Remove local + remote'}
+										</Button>
+									</div>
 								</div>
 							{/each}
 						{/if}

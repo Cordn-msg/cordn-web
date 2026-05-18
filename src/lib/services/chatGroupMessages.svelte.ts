@@ -30,6 +30,36 @@ export interface StoredChatMessage {
 	content: string;
 }
 
+export interface ChatMessageReplyTarget {
+	id: string;
+	pubkey: string;
+	kind: number;
+	content: string;
+	tags: string[][];
+}
+
+export interface ChatMessageReactionTarget {
+	id: string;
+	pubkey: string;
+	kind: number;
+}
+
+export interface ChatMessageThreadReference {
+	rootId: string;
+	rootPubkey: string;
+	rootKind: number;
+	parentId: string;
+	parentPubkey: string;
+	parentKind: number;
+}
+
+export interface ChatMessageReactionReference {
+	targetId: string;
+	targetPubkey: string;
+	targetKind: number;
+	reaction: string;
+}
+
 export interface StoredChatSyncIssue {
 	cursor: number;
 	createdAt: number;
@@ -79,6 +109,105 @@ export function createUnsignedCordnMessageEvent(params: {
 		created_at: params.createdAt ?? Math.floor(Date.now() / 1000),
 		kind: params.kind ?? 9,
 		tags: params.tags ?? []
+	};
+}
+
+function findTag(tags: string[][], name: string): string[] | undefined {
+	return tags.find((tag) => tag[0] === name);
+}
+
+function isFiniteKind(value: string | undefined): value is string {
+	if (!value) return false;
+	return Number.isFinite(Number(value));
+}
+
+export function createReplyMessageTags(target: ChatMessageReplyTarget): string[][] {
+	const rootEventTag = findTag(target.tags, 'E');
+	const rootKindTag = findTag(target.tags, 'K');
+	const rootPubkeyTag = findTag(target.tags, 'P');
+
+	const rootId = rootEventTag?.[1] ?? target.id;
+	const rootPubkey = rootPubkeyTag?.[1] ?? rootEventTag?.[3] ?? target.pubkey;
+	const rootKind = rootKindTag?.[1] ?? String(target.kind);
+
+	return [
+		['E', rootId, '', rootPubkey],
+		['K', rootKind],
+		['P', rootPubkey],
+		['e', target.id, '', target.pubkey],
+		['k', String(target.kind)],
+		['p', target.pubkey]
+	];
+}
+
+export function createReactionMessageTags(target: ChatMessageReactionTarget): string[][] {
+	return [
+		['e', target.id, '', target.pubkey],
+		['p', target.pubkey],
+		['k', String(target.kind)]
+	];
+}
+
+export function getMessageThreadReference(tags: string[][]): ChatMessageThreadReference | null {
+	const rootEventTag = findTag(tags, 'E');
+	const rootKindTag = findTag(tags, 'K');
+	const parentEventTag = findTag(tags, 'e');
+	const parentKindTag = findTag(tags, 'k');
+
+	if (!rootEventTag || !rootKindTag || !parentEventTag || !parentKindTag) {
+		return null;
+	}
+
+	if (!isFiniteKind(rootKindTag[1]) || !isFiniteKind(parentKindTag[1])) {
+		return null;
+	}
+
+	const rootId = rootEventTag[1];
+	const parentId = parentEventTag[1];
+	const rootPubkey = findTag(tags, 'P')?.[1] ?? rootEventTag[3] ?? '';
+	const parentPubkey = findTag(tags, 'p')?.[1] ?? parentEventTag[3] ?? '';
+
+	if (!rootId || !parentId || !rootPubkey || !parentPubkey) {
+		return null;
+	}
+
+	return {
+		rootId,
+		rootPubkey,
+		rootKind: Number(rootKindTag[1]),
+		parentId,
+		parentPubkey,
+		parentKind: Number(parentKindTag[1])
+	};
+}
+
+export function getMessageReactionReference(
+	kind: number,
+	content: string,
+	tags: string[][]
+): ChatMessageReactionReference | null {
+	if (kind !== 7) {
+		return null;
+	}
+
+	const eventTag = findTag(tags, 'e');
+	const pubkeyTag = findTag(tags, 'p');
+	const kindTag = findTag(tags, 'k');
+	const reaction = content.trim();
+
+	if (!eventTag?.[1] || !pubkeyTag?.[1] || !kindTag?.[1] || !reaction) {
+		return null;
+	}
+
+	if (!isFiniteKind(kindTag[1])) {
+		return null;
+	}
+
+	return {
+		targetId: eventTag[1],
+		targetPubkey: pubkeyTag[1],
+		targetKind: Number(kindTag[1]),
+		reaction
 	};
 }
 

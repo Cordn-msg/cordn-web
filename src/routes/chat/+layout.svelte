@@ -3,6 +3,10 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
+	import {
+		reconcilePublishedKeyPackagesForActiveAccount,
+		shouldReconcilePublishedKeyPackages
+	} from '$lib/services/chatKeyPackages.svelte';
 
 	let { children } = $props();
 
@@ -11,6 +15,12 @@
 	$effect(() => {
 		if (!$activeAccount || groups.length === 0) return;
 		void startWatchingAllGroups();
+	});
+
+	$effect(() => {
+		const pubkey = $activeAccount?.pubkey;
+		if (!pubkey || !shouldReconcilePublishedKeyPackages(pubkey)) return;
+		void reconcilePublishedKeyPackagesForActiveAccount();
 	});
 </script>
 

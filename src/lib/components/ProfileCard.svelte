@@ -15,12 +15,14 @@
 		pubkey,
 		mode = 'compact',
 		showLogout = false,
-		showName = true
+		showName = true,
+		showInlineAvatar = false
 	}: {
 		pubkey: string;
 		mode?: 'compact' | 'extended' | 'inline';
 		showLogout?: boolean;
 		showName?: boolean;
+		showInlineAvatar?: boolean;
 	} = $props();
 
 	const isExtended = $derived(mode === 'extended');
@@ -46,16 +48,22 @@
 	});
 </script>
 
-{#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' = 'compact')}
+{#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' | 'inline' = 'compact')}
 	{#if pfp}
 		<img
 			src={pfp}
 			alt="pfp"
-			class={cn('rounded-full object-cover', size === 'extended' ? 'h-16 w-16' : 'h-8 w-8')}
+			class={cn(
+				'rounded-full object-cover',
+				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-4 w-4 shrink-0' : 'h-8 w-8'
+			)}
 		/>
 	{:else}
 		<div
-			class={cn('rounded-full', size === 'extended' ? 'h-16 w-16' : 'h-8 w-8')}
+			class={cn(
+				'rounded-full',
+				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-4 w-4 shrink-0' : 'h-8 w-8'
+			)}
 			style="background-color: {pubkeyToHexColor(pubkey)}"
 		></div>
 	{/if}
@@ -95,8 +103,15 @@
 		</div>
 	</div>
 {:else if isInline}
-	<span class="inline align-baseline text-sm font-medium break-words text-foreground">
-		<button type="button" class="inline text-left" onclick={copyPubkey}>{displayName}</button>
+	<span
+		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium break-words text-foreground"
+	>
+		{#if showInlineAvatar}
+			{@render pfp(pubkey, $profile?.picture, 'inline')}
+		{/if}
+		<button type="button" class="inline min-w-0 text-left" onclick={copyPubkey}
+			>{displayName}</button
+		>
 	</span>
 {:else}
 	<div class="flex items-center gap-2">

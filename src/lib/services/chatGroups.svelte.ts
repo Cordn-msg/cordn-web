@@ -22,8 +22,12 @@ import {
 import { assertCanAdministerGroup, listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
 	createApplicationMessageBase64,
+	createReactionMessageTags,
+	createReplyMessageTags,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	type ChatMessageReactionTarget,
+	type ChatMessageReplyTarget,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
@@ -597,13 +601,16 @@ export async function ingestIncomingChatGroupMessages(
 export async function sendChatGroupMessage(input: {
 	groupId: string;
 	content: string;
+	replyTo?: ChatMessageReplyTarget;
+	reactionTo?: ChatMessageReactionTarget;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
 		const group = requireChatGroup(input.groupId);
 		assertChatGroupIsActive(group);
 
-		const content = input.content.trim();
+		const isReaction = Boolean(input.reactionTo);
+		const content = isReaction ? input.content : input.content.trim();
 		if (!content) {
 			throw new Error('Message content is required');
 		}
@@ -615,7 +622,13 @@ export async function sendChatGroupMessage(input: {
 			state,
 			event: createUnsignedCordnMessageEvent({
 				pubkey: normalizePubKey(account.pubkey),
-				content
+				content,
+				kind: input.reactionTo ? 7 : input.replyTo ? 1111 : 9,
+				tags: input.reactionTo
+					? createReactionMessageTags(input.reactionTo)
+					: input.replyTo
+						? createReplyMessageTags(input.replyTo)
+						: []
 			}),
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
 		});
