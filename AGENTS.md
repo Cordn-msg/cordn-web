@@ -22,6 +22,8 @@
 - Shared UI primitives live in [`src/lib/components/ui`](src/lib/components/ui).
 - Chat-specific UI lives in [`src/lib/components/chat`](src/lib/components/chat).
 - Prefer small, focused Svelte components and keep route files thin.
+- Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.
+- Active group watching is managed in [`startWatchingGroup()`](src/lib/services/chatGroupWatch.svelte.ts:71) and should remain the default path for keeping an open chat route up to date instead of adding parallel fetch-heavy flows.
 
 ## Code style
 

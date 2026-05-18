@@ -3,6 +3,8 @@ export interface ChatMessage {
 	author: string;
 	text: string;
 	timestamp: string;
+	timeLabel: string;
+	dayLabel: string;
 	isOwn?: boolean;
 }
 

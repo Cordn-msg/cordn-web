@@ -1,4 +1,5 @@
-import { isHex } from 'applesauce-core/helpers';
+import { bytesToHex } from 'applesauce-core/helpers';
+import { normalizePubKey } from '$lib/utils';
 import {
 	encode,
 	base64ToBytes,
@@ -37,10 +38,6 @@ export interface CordnGroupMetadata {
 	icon?: string;
 	imageUrl?: string;
 	adminPubkeys?: string[];
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-	return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 function decodeExact<T>(bytes: Uint8Array, decoder: Decoder<T>, label: string): T {
@@ -91,14 +88,9 @@ function decodeField(bytes: Uint8Array, offset: number): [Uint8Array, number] {
 
 function normalizeAdminPubkeys(adminPubkeys?: string[]): string[] {
 	if (!adminPubkeys?.length) return [];
-	const normalized = adminPubkeys.map((value) => value.trim().toLowerCase()).filter(Boolean);
+	const normalized = adminPubkeys.map((value) => normalizePubKey(value)).filter(Boolean);
 	if (new Set(normalized).size !== normalized.length) {
 		throw new Error('Group metadata admin pubkeys must not contain duplicates');
-	}
-	for (const value of normalized) {
-		if (!isHex(value)) {
-			throw new Error(`Invalid admin pubkey: ${value}`);
-		}
 	}
 	return normalized;
 }

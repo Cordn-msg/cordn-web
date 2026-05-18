@@ -109,10 +109,14 @@ export class cordnClient implements coordinatorClient {
 			signer: providedSigner,
 			...rest
 		} = options;
+		const stableSigner = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
+		const ephemeralSigner = resolvedEphemeralPrivateKey
+			? new PrivateKeySigner(resolvedEphemeralPrivateKey)
+			: new PrivateKeySigner();
 
 		this.stableTransport = new NostrClientTransport({
 			serverPubkey,
-			signer: providedSigner || new PrivateKeySigner(resolvedPrivateKey),
+			signer: stableSigner,
 			relayHandler,
 			isStateless: true,
 			logLevel: 'silent',
@@ -128,9 +132,7 @@ export class cordnClient implements coordinatorClient {
 
 		this.ephemeralTransport = new NostrClientTransport({
 			serverPubkey,
-			signer: resolvedEphemeralPrivateKey
-				? new PrivateKeySigner(resolvedEphemeralPrivateKey)
-				: new PrivateKeySigner(),
+			signer: ephemeralSigner,
 			relayHandler,
 			isStateless: true,
 			logLevel: 'silent',
@@ -309,8 +311,6 @@ export class cordnClient implements coordinatorClient {
 			name: COORDINATOR_METHODS.subscribeGroupMessages,
 			arguments: { ...input }
 		});
-		void call.stream.closed.catch(() => undefined);
-
 		const stream: AsyncIterable<GroupMessage> = {
 			async *[Symbol.asyncIterator]() {
 				for await (const chunk of call.stream) {
@@ -325,6 +325,7 @@ export class cordnClient implements coordinatorClient {
 				subscribeGroupMessagesOutputSchema.parse(result.structuredContent)
 			),
 			abort: async (reason?: string) => {
+				void call.stream.closed.catch(() => undefined);
 				try {
 					await call.abort(reason);
 				} catch {

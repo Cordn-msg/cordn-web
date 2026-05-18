@@ -13,17 +13,16 @@ import {
 	type KeyPackage,
 	type PrivateKeyPackage
 } from 'ts-mls';
-import { manager } from '$lib/services/accountManager.svelte';
-import { cordnClient } from '$lib/services/coordinatorClient';
-import { relayActions } from '$lib/stores/relay-store.svelte';
 import {
 	CLI_CIPHERSUITE,
 	createCordnMetadataCapabilities,
 	createCredential,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
-import { getChatCoordinator, markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import type { IAccount } from 'applesauce-accounts';
+import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import { normalizePubKey } from '$lib/utils';
+import { bytesToHex } from 'applesauce-core/helpers';
 
 const STORAGE_KEY = 'cordn-chat-key-packages';
 const LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE = 0x0004;
@@ -101,24 +100,8 @@ function loadKeyPackages() {
 	}
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-	return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
-}
-
 function getActivePubkey(): string {
-	const account = manager.getActive();
-	if (!account) {
-		throw new Error('You must be logged in to create a key package');
-	}
-	return account.pubkey;
-}
-
-function getActiveAccount(): IAccount {
-	const account = manager.getActive();
-	if (!account) {
-		throw new Error('You must be logged in to manage key packages');
-	}
-	return account;
+	return requireActiveAccount('You must be logged in to create a key package').pubkey;
 }
 
 async function getCipherSuite() {
@@ -242,19 +225,13 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	if (!record) {
 		throw new Error('Key package not found');
 	}
-	const normalizedCoordinator = coordinatorKey.trim().toLowerCase();
-	const account = getActiveAccount();
-	const coordinator = getChatCoordinator(normalizedCoordinator);
-	const client = new cordnClient({
-		signer: account.signer,
-		serverPubkey: normalizedCoordinator,
-		relays: coordinator?.relays ?? relayActions.getSelectedRelays()
-	} as ConstructorParameters<typeof cordnClient>[0]);
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	const account = requireActiveAccount('You must be logged in to manage key packages');
+	const client = getCoordinatorClient(account, normalizedCoordinator);
 	const result = await client.PublishKeyPackage({
 		kp_ref: record.keyPackageRef,
 		kp_64: record.keyPackageBase64
 	});
-	await client.disconnect();
 	markCoordinatorUsed(normalizedCoordinator);
 	markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
 }
@@ -264,7 +241,7 @@ export function markKeyPackagePublished(
 	coordinatorKey: string,
 	isLastResort?: boolean
 ) {
-	const normalizedCoordinator = coordinatorKey.trim().toLowerCase();
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
 	chatKeyPackagesStore.keyPackages = chatKeyPackagesStore.keyPackages.map((entry) => {
 		if (entry.keyPackageRef !== keyPackageRef) return entry;
 		const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(normalizedCoordinator)

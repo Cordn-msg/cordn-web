@@ -20,7 +20,7 @@ export function formatUnixTimestamp(
 	showDate: boolean = true,
 	locale?: string
 ): string {
-	const date = new Date(timestamp * 1000);
+	const date = new Date(timestamp);
 	const options: Intl.DateTimeFormatOptions = {};
 
 	if (showDate) {
@@ -92,6 +92,21 @@ export function slugify(text: string): string {
 		.replace(/[^a-z0-9\s-]/g, '') // Remove all non-word characters (allows letters, numbers, spaces, dashes)
 		.replace(/[\s-]+/g, '-') // Replace spaces and dashes with a single dash
 		.replace(/^-+|-+$/g, ''); // Trim dashes from the beginning and the end
+}
+
+export function buildUniqueSlugId(
+	existingIds: Iterable<string>,
+	label: string,
+	fallback: string
+): string {
+	const baseId = slugify(label) || fallback;
+	const ids = new Set(existingIds);
+	let id = baseId;
+	let suffix = 2;
+	while (ids.has(id)) {
+		id = `${baseId}-${suffix++}`;
+	}
+	return id;
 }
 
 export function normalizePubKey(pubkey: string): string {

@@ -8,18 +8,21 @@
 		getCoordinatorColor,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import { acceptChatWelcome, getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import {
 		chatWelcomeNotificationsStore,
-		fetchWelcomeNotifications,
-		getWelcomeNotification,
 		listWelcomeNotificationsForCoordinator,
 		markWelcomeNotificationRead
 	} from '$lib/services/chatWelcomeNotifications.svelte';
-	import { cordnClient } from '$lib/services/coordinatorClient';
-	import type { AvailableKeyPackage } from '$lib/contracts';
-	import { relayActions } from '$lib/stores/relay-store.svelte';
+	import {
+		acceptWelcomeAction,
+		coordinatorDetailsActionsStore,
+		loadCoordinatorRemoteKeyPackagesAction,
+		refreshCoordinatorWelcomeNotificationsAction
+	} from '$lib/services/chatUiActions.svelte';
+	import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import Inbox from '@lucide/svelte/icons/inbox';
@@ -27,11 +30,7 @@
 
 	let { params } = $props();
 
-	let loadingKeyPackages = $state(false);
-	let keyPackageError = $state('');
-	let remoteKeyPackages = $state<AvailableKeyPackage[]>([]);
-
-	const coordinatorKey = $derived.by(() => params.coordinatorKey.trim().toLowerCase());
+	const coordinatorKey = $derived.by(() => normalizePubKey(params.coordinatorKey));
 	const coordinator = $derived.by(() => getChatCoordinator(coordinatorKey));
 	const relatedGroups = $derived.by(() =>
 		listChatGroups().filter((group) => group.coordinatorKey === coordinatorKey)
@@ -43,12 +42,15 @@
 	const relatedPublishedKeyPackages = $derived.by(() =>
 		localKeyPackages.filter((entry) => entry.publishedCoordinatorKeys.includes(coordinatorKey))
 	);
-	const activePubkey = $derived.by(() => $activeAccount?.pubkey?.toLowerCase() ?? '');
+	const activePubkey = $derived.by(() =>
+		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
+	);
+	const remoteKeyPackages = $derived.by(() => coordinatorDetailsActionsStore.remoteKeyPackages);
 	const ownedRemoteKeyPackages = $derived.by(() =>
-		remoteKeyPackages.filter((entry) => entry.pk.toLowerCase() === activePubkey)
+		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
 	);
 	const otherRemoteKeyPackages = $derived.by(() =>
-		remoteKeyPackages.filter((entry) => entry.pk.toLowerCase() !== activePubkey)
+		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) !== activePubkey)
 	);
 
 	const ownedRemoteKeyPackagesWithState = $derived.by(() =>
@@ -62,36 +64,17 @@
 		})
 	);
 
-	function createCoordinatorClient() {
-		if (!$activeAccount) {
-			throw new Error('You must be logged in to inspect coordinators');
-		}
-
-		const savedCoordinator = getChatCoordinator(coordinatorKey);
-		return new cordnClient({
-			signer: $activeAccount.signer,
-			serverPubkey: coordinatorKey,
-			relays: savedCoordinator?.relays ?? relayActions.getSelectedRelays()
-		} as ConstructorParameters<typeof cordnClient>[0]);
-	}
-
 	async function loadRemoteKeyPackages() {
-		try {
-			loadingKeyPackages = true;
-			keyPackageError = '';
-			const client = createCoordinatorClient();
-			const result = await client.ListAvailableKeyPackages({});
-			await client.disconnect();
-			remoteKeyPackages = result.keyPackages;
-		} catch (err) {
-			keyPackageError = err instanceof Error ? err.message : 'Failed to load remote key packages';
-		} finally {
-			loadingKeyPackages = false;
-		}
+		await loadCoordinatorRemoteKeyPackagesAction(
+			getCoordinatorClient(
+				requireActiveAccount('You must be logged in to inspect coordinators'),
+				coordinatorKey
+			)
+		);
 	}
 
 	async function loadPendingWelcomes() {
-		await fetchWelcomeNotifications([coordinatorKey]);
+		await refreshCoordinatorWelcomeNotificationsAction(coordinatorKey);
 	}
 
 	function storeCoordinator() {
@@ -104,16 +87,7 @@
 	}
 
 	async function acceptWelcome(welcomeId: string) {
-		chatWelcomeNotificationsStore.error = '';
-		try {
-			await acceptChatWelcome({ welcomeId });
-		} catch (error) {
-			const welcome = getWelcomeNotification(welcomeId);
-			chatWelcomeNotificationsStore.error =
-				error instanceof Error
-					? error.message
-					: `Failed to accept welcome${welcome ? ` ${welcome.kpRef}` : ''}`;
-		}
+		await acceptWelcomeAction(welcomeId);
 	}
 </script>
 
@@ -293,16 +267,18 @@
 									<Button
 										type="button"
 										onclick={loadRemoteKeyPackages}
-										disabled={loadingKeyPackages}
+										disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
 									>
 										<Boxes class="mr-2 size-4" />
-										{loadingKeyPackages
+										{coordinatorDetailsActionsStore.loadingKeyPackages
 											? 'Loading remote key packages…'
 											: 'Load remote key packages'}
 									</Button>
 								</div>
-								{#if keyPackageError}
-									<p class="text-sm text-destructive">{keyPackageError}</p>
+								{#if coordinatorDetailsActionsStore.keyPackageError}
+									<p class="text-sm text-destructive">
+										{coordinatorDetailsActionsStore.keyPackageError}
+									</p>
 								{/if}
 								{#if remoteKeyPackages.length === 0}
 									<div

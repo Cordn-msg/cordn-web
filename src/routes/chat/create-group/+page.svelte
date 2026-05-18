@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
@@ -61,7 +62,7 @@
 		try {
 			loading = true;
 			error = '';
-			await createChatGroup({
+			const group = await createChatGroup({
 				name,
 				description,
 				icon,
@@ -75,6 +76,7 @@
 					.map((value) => value.trim())
 					.filter(Boolean)
 			});
+			await goto(`/chat/${group.id}`);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create group';
 		} finally {

@@ -1,11 +1,10 @@
 import { browser } from '$app/environment';
 import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
-import { cordnClient } from '$lib/services/coordinatorClient';
-import { getChatCoordinator, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 import { listChatGroups } from '$lib/services/chatGroups.svelte';
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-import { relayActions } from '$lib/stores/relay-store.svelte';
+import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-welcome-notifications';
@@ -80,19 +79,6 @@ export function listKnownCoordinatorKeys(): string[] {
 	return [...keys].sort();
 }
 
-function buildCoordinatorClient(coordinatorKey: string) {
-	const account = manager.getActive();
-	if (!account) {
-		throw new Error('You must be logged in to fetch welcomes');
-	}
-	const coordinator = getChatCoordinator(coordinatorKey);
-	return new cordnClient({
-		signer: account.signer,
-		serverPubkey: coordinatorKey,
-		relays: coordinator?.relays ?? relayActions.getSelectedRelays()
-	} as ConstructorParameters<typeof cordnClient>[0]);
-}
-
 function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]) {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
 	const existingById = new Map(
@@ -135,14 +121,11 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	chatWelcomeNotificationsStore.loading = true;
 	chatWelcomeNotificationsStore.error = '';
 	try {
+		const account = requireActiveAccount('You must be logged in to fetch welcomes');
 		for (const coordinatorKey of keys) {
-			const client = buildCoordinatorClient(coordinatorKey);
-			try {
-				const result = await client.FetchPendingWelcomes({});
-				mergeFetchedWelcomes(coordinatorKey, result.welcomes);
-			} finally {
-				await client.disconnect();
-			}
+			const client = getCoordinatorClient(account, coordinatorKey);
+			const result = await client.FetchPendingWelcomes({});
+			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
 		}
 	} catch (error) {
 		chatWelcomeNotificationsStore.error =

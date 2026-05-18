@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { normalizePubKey, pubkeyToHexColor, slugify } from '$lib/utils';
+import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
 const DEFAULT_RELAYS = ['ws://localhost:10547'];
@@ -155,12 +155,11 @@ export function upsertChatCoordinator(input: {
 		return getChatCoordinator(pubkey)!;
 	}
 
-	const baseId = slugify(nextLabel);
-	let id = baseId;
-	let suffix = 2;
-	while (chatCoordinatorsStore.coordinators.some((entry) => entry.id === id)) {
-		id = `${baseId}-${suffix++}`;
-	}
+	const id = buildUniqueSlugId(
+		chatCoordinatorsStore.coordinators.map((entry) => entry.id),
+		nextLabel,
+		`coordinator-${Date.now()}`
+	);
 
 	const created: StoredCoordinator = {
 		id,

@@ -3,80 +3,61 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import {
-		fetchChatGroupMessages,
-		inviteChatGroupMember,
-		listCoordinatorAvailableKeyPackages,
-		type CoordinatorAvailableKeyPackage
-	} from '$lib/services/chatGroups.svelte';
+		chatHeaderActionsStore,
+		fetchGroupMessagesAction,
+		inviteGroupMemberAction,
+		refreshInviteKeyPackagesAction,
+		toggleGroupWatchAction
+	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
 	import Download from '@lucide/svelte/icons/download';
+	import Eye from '@lucide/svelte/icons/eye';
+	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 
 	let {
 		groupId,
 		title = 'Cordn',
-		subtitle = 'Coordinator-assisted messaging'
+		subtitle = 'Coordinator-assisted messaging',
+		icon
 	}: {
 		groupId?: string;
 		title?: string;
 		subtitle?: string;
+		icon?: string;
 	} = $props();
 
-	let inviteOpen = $state(false);
-	let inviteLoading = $state(false);
-	let inviteSubmitting = $state(false);
-	let inviteError = $state('');
-	let fetchLoading = $state(false);
-	let availableKeyPackages = $state<CoordinatorAvailableKeyPackage[]>([]);
-
 	async function fetchMessages() {
-		if (!groupId || fetchLoading) return;
-		fetchLoading = true;
-		inviteError = '';
-		try {
-			await fetchChatGroupMessages(groupId);
-		} catch (error) {
-			inviteError = error instanceof Error ? error.message : 'Failed to fetch messages';
-		} finally {
-			fetchLoading = false;
-		}
+		await fetchGroupMessagesAction(groupId);
+	}
+
+	async function toggleWatch() {
+		await toggleGroupWatchAction(groupId);
 	}
 
 	async function refreshAvailableKeyPackages() {
-		if (!$activeAccount || !groupId) return;
-		inviteLoading = true;
-		inviteError = '';
-		try {
-			availableKeyPackages = await listCoordinatorAvailableKeyPackages(groupId);
-		} catch (error) {
-			inviteError =
-				error instanceof Error ? error.message : 'Failed to load available key packages';
-		} finally {
-			inviteLoading = false;
-		}
+		if (!$activeAccount) return;
+		await refreshInviteKeyPackagesAction(groupId);
 	}
 
 	async function inviteMember(identifier: string) {
-		if (!groupId || inviteSubmitting) return;
-		inviteSubmitting = true;
-		inviteError = '';
-		try {
-			await inviteChatGroupMember({ groupId, identifier });
-			await refreshAvailableKeyPackages();
-			inviteOpen = false;
-		} catch (error) {
-			inviteError = error instanceof Error ? error.message : 'Failed to invite member';
-		} finally {
-			inviteSubmitting = false;
-		}
+		await inviteGroupMemberAction(groupId, identifier);
 	}
 
-	function formatKeyPackageLabel(entry: CoordinatorAvailableKeyPackage) {
+	function formatKeyPackageLabel(
+		entry: (typeof chatHeaderActionsStore.availableKeyPackages)[number]
+	) {
 		return `${entry.stablePubkey.slice(0, 12)}…${entry.stablePubkey.slice(-8)}`;
 	}
 
+	const isWatching = $derived.by(() =>
+		groupId ? chatGroupWatchStore.watchingGroupIds.includes(groupId) : false
+	);
+	const watchLabel = $derived.by(() => (isWatching ? 'Stop watching group' : 'Watch group'));
+
 	$effect(() => {
-		if (inviteOpen) {
+		if (chatHeaderActionsStore.inviteOpen) {
 			void refreshAvailableKeyPackages();
 		}
 	});
@@ -88,7 +69,11 @@
 	<div class="flex items-center justify-between gap-4 px-4 py-3 md:px-6">
 		<div class="flex min-w-0 items-center gap-3">
 			<Avatar class="h-10 w-10 border border-border bg-card">
-				<AvatarFallback class="bg-card text-base">🪢</AvatarFallback>
+				{#if icon}
+					<AvatarFallback class="bg-card text-base">{icon}</AvatarFallback>
+				{:else}
+					<AvatarFallback class="bg-card text-base">🪢</AvatarFallback>
+				{/if}
 			</Avatar>
 
 			<div class="min-w-0">
@@ -104,14 +89,33 @@
 					variant="outline"
 					size="icon"
 					class="h-10 w-10 rounded-xl"
-					disabled={!$activeAccount || fetchLoading}
-					aria-label="Fetch messages"
-					onclick={fetchMessages}
+					disabled={!$activeAccount || chatHeaderActionsStore.watchLoading}
+					aria-label={watchLabel}
+					title={watchLabel}
+					onclick={toggleWatch}
 				>
-					<Download class="size-4" />
+					{#if isWatching}
+						<EyeOff class="size-4" />
+					{:else}
+						<Eye class="size-4" />
+					{/if}
 				</Button>
 
-				<Dialog.Root bind:open={inviteOpen}>
+				{#if !isWatching}
+					<Button
+						type="button"
+						variant="outline"
+						size="icon"
+						class="h-10 w-10 rounded-xl"
+						disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading}
+						aria-label="Fetch messages"
+						onclick={fetchMessages}
+					>
+						<Download class="size-4" />
+					</Button>
+				{/if}
+
+				<Dialog.Root bind:open={chatHeaderActionsStore.inviteOpen}>
 					<Dialog.Trigger class="inline-flex" disabled={!$activeAccount} aria-label="Invite member">
 						<Button
 							type="button"
@@ -132,15 +136,15 @@
 							</Dialog.Description>
 						</Dialog.Header>
 
-						{#if inviteError}
-							<p class="text-sm text-destructive">{inviteError}</p>
+						{#if chatHeaderActionsStore.error}
+							<p class="text-sm text-destructive">{chatHeaderActionsStore.error}</p>
 						{/if}
 
 						<div class="space-y-3">
 							<div class="flex items-center justify-between gap-2">
 								<p class="text-sm text-muted-foreground">
-									{availableKeyPackages.length} available key package{availableKeyPackages.length ===
-									1
+									{chatHeaderActionsStore.availableKeyPackages.length} available key package{chatHeaderActionsStore
+										.availableKeyPackages.length === 1
 										? ''
 										: 's'}
 								</p>
@@ -149,9 +153,9 @@
 									variant="outline"
 									size="sm"
 									onclick={refreshAvailableKeyPackages}
-									disabled={inviteLoading || !$activeAccount}
+									disabled={chatHeaderActionsStore.inviteLoading || !$activeAccount}
 								>
-									{inviteLoading ? 'Refreshing…' : 'Refresh'}
+									{chatHeaderActionsStore.inviteLoading ? 'Refreshing…' : 'Refresh'}
 								</Button>
 							</div>
 
@@ -160,14 +164,14 @@
 							>
 								{#if !$activeAccount}
 									<p class="text-sm text-muted-foreground">Log in to invite members.</p>
-								{:else if inviteLoading && availableKeyPackages.length === 0}
+								{:else if chatHeaderActionsStore.inviteLoading && chatHeaderActionsStore.availableKeyPackages.length === 0}
 									<p class="text-sm text-muted-foreground">Loading available key packages…</p>
-								{:else if availableKeyPackages.length === 0}
+								{:else if chatHeaderActionsStore.availableKeyPackages.length === 0}
 									<p class="text-sm text-muted-foreground">
 										No coordinator key packages available for invitation.
 									</p>
 								{:else}
-									{#each availableKeyPackages as entry (entry.keyPackageRef)}
+									{#each chatHeaderActionsStore.availableKeyPackages as entry (entry.keyPackageRef)}
 										<div
 											class="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/60 px-4 py-3"
 										>
@@ -186,7 +190,7 @@
 												type="button"
 												size="sm"
 												onclick={() => inviteMember(entry.keyPackageRef)}
-												disabled={inviteSubmitting}
+												disabled={chatHeaderActionsStore.inviteSubmitting}
 											>
 												Invite
 											</Button>
@@ -200,4 +204,8 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if chatGroupWatchStore.error}
+		<p class="px-4 pb-3 text-sm text-destructive md:px-6">{chatGroupWatchStore.error}</p>
+	{/if}
 </header>

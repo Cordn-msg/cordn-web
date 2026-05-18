@@ -3,13 +3,14 @@
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
 	import type { ChatMessage } from './chat.types';
-	import { manager } from '$lib/services/accountManager.svelte';
-	import { formatUnixTimestamp } from '$lib/utils';
+	import { markChatGroupRead } from '$lib/services/chatGroupPresence.svelte';
 	import {
-		getChatGroup,
-		listChatGroupMessages,
-		sendChatGroupMessage
-	} from '$lib/services/chatGroups.svelte';
+		chatComposerActionsStore,
+		sendGroupMessageAction
+	} from '$lib/services/chatUiActions.svelte';
+	import { manager } from '$lib/services/accountManager.svelte';
+	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
+	import { getChatGroup, listChatGroupMessages } from '$lib/services/chatGroups.svelte';
 
 	let {
 		groupId = 'general',
@@ -23,44 +24,48 @@
 
 	let draft = $state('');
 	let sendError = $state('');
-	const activePubkey = $derived.by(() => manager.getActive()?.pubkey?.trim().toLowerCase() ?? '');
+	const activePubkey = $derived.by(() => {
+		const pubkey = manager.getActive()?.pubkey;
+		return pubkey ? normalizePubKey(pubkey) : '';
+	});
 	const group = $derived.by(() => getChatGroup(groupId));
 	const messages = $derived.by<ChatMessage[]>(() =>
 		listChatGroupMessages(groupId).map((message) => ({
-			id: message.id,
+			id: `${message.id}:${message.cursor}`,
 			author: message.sender,
 			text: message.content,
 			timestamp: formatUnixTimestamp(message.createdAt, true),
-			isOwn: message.sender.trim().toLowerCase() === activePubkey
+			timeLabel: formatUnixTimestamp(message.createdAt, true, false),
+			dayLabel: formatUnixTimestamp(message.createdAt, false, true),
+			isOwn: normalizePubKey(message.sender) === activePubkey
 		}))
 	);
 
 	async function handleSubmit() {
-		const text = draft.trim();
-
-		if (!text || !group) {
+		if (!draft.trim() || !group) {
 			return;
 		}
-
-		sendError = '';
-
-		try {
-			await sendChatGroupMessage({ groupId, content: text });
+		const sent = await sendGroupMessageAction(groupId, draft);
+		sendError = chatComposerActionsStore.error;
+		if (sent) {
 			draft = '';
-		} catch (error) {
-			sendError = error instanceof Error ? error.message : 'Failed to send message';
 		}
 	}
+
+	$effect(() => {
+		if (!groupId || !group) return;
+		markChatGroupRead(groupId, group.lastCursor);
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<ChatHeader {groupId} {title} {subtitle} />
+	<ChatHeader {groupId} {title} {subtitle} icon={group?.metadata?.icon} />
 
 	<div class="min-h-0 flex-1">
 		<ChatMessageList {messages} />
 	</div>
 
-	{#if sendError}
+	{#if sendError || chatComposerActionsStore.error}
 		<p class="px-4 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
 	{/if}
 

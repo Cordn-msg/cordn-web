@@ -1,39 +1,18 @@
 import { browser } from '$app/environment';
-import { goto } from '$app/navigation';
 import {
 	bytesToBase64,
 	base64ToBytes,
 	clientStateDecoder,
 	clientStateEncoder,
-	createGroup,
 	encode,
-	generateKeyPackage,
-	keyPackageEncoder,
-	unsafeTestingAuthenticationService,
-	type ClientState,
-	type KeyPackage,
-	type PrivateKeyPackage
+	type ClientState
 } from 'ts-mls';
-import { manager } from '$lib/services/accountManager.svelte';
-import { relayActions } from '$lib/stores/relay-store.svelte';
-import { cordnClient } from '$lib/services/coordinatorClient';
-import { getChatCoordinator, markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import {
-	createChatKeyPackage,
-	decodeStoredKeyPackage,
-	getChatKeyPackage,
-	markKeyPackageConsumed,
-	markKeyPackagePublished
-} from '$lib/services/chatKeyPackages.svelte';
+import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import { createChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
-	createCordnMetadataCapabilities,
-	createCredential,
 	encodeWelcomeBase64,
-	getCordnCipherSuite,
 	getCordnGroupMetadataExtension,
-	joinGroupFromWelcome,
-	makeCordnGroupMetadataExtension,
 	parseConsumedPublishedKeyPackage,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
@@ -41,22 +20,35 @@ import {
 	createApplicationMessageBase64,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
-	ingestChatGroupMessages,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
 import {
+	createGroupPendingEpochStore,
+	enqueuePendingEpochOperation
+} from '$lib/services/chatGroupProtocol';
+import {
+	buildPersistedChatGroup,
+	createWorkingChatGroupSession,
+	syncChatGroupMessages
+} from '$lib/services/chatGroupSessions.svelte';
+import {
+	acceptWelcomeToGroup,
+	buildStoredChatGroup,
+	createInitialGroupState,
+	createMemberArtifacts,
+	markGroupCreatorKeyPackagePublished,
+	type GroupMetadataInput
+} from '$lib/services/chatGroupLifecycle.svelte';
+import {
 	getWelcomeNotification,
 	removeWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
-import type { IAccount } from 'applesauce-accounts';
-import { normalizePubKey } from '$lib/utils';
+import { buildUniqueSlugId, normalizePubKey } from '$lib/utils';
+import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 
 const STORAGE_KEY = 'cordn-chat-groups';
-
-export interface GroupMetadataInput extends CordnGroupMetadata {
-	name: string;
-}
+const groupIdDecoder = new TextDecoder();
 
 export interface StoredChatGroup {
 	id: string;
@@ -82,6 +74,9 @@ type PersistedGroups = {
 	groups: StoredChatGroup[];
 };
 
+const groupOperationChains = new Map<string, Promise<unknown>>();
+const pendingEpochOperations = createGroupPendingEpochStore();
+
 function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 	return {
 		...group,
@@ -95,19 +90,6 @@ function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 	groups: []
 });
-
-function bytesToHex(bytes: Uint8Array): string {
-	return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
-}
-
-function slugify(value: string): string {
-	const slug = value
-		.toLowerCase()
-		.trim()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return slug || `group-${Date.now()}`;
-}
 
 function saveGroups() {
 	if (!browser) return;
@@ -129,44 +111,6 @@ function loadGroups() {
 
 loadGroups();
 
-function getActiveAccount(): IAccount {
-	const account = manager.getActive();
-	if (!account) {
-		throw new Error('You must be logged in to create a group');
-	}
-	return account;
-}
-
-async function getCipherSuite() {
-	return getCordnCipherSuite();
-}
-
-async function createMemberArtifacts(stablePubkey: string): Promise<{
-	keyPackage: KeyPackage;
-	privateKeyPackage: PrivateKeyPackage;
-	keyPackageRef: string;
-	keyPackageBase64: string;
-}> {
-	const cipherSuite = await getCipherSuite();
-	const generated = await generateKeyPackage({
-		credential: createCredential(stablePubkey),
-		cipherSuite,
-		capabilities: createCordnMetadataCapabilities()
-	});
-
-	const { makeKeyPackageRef } = await import('ts-mls');
-	const keyPackageRef = bytesToHex(
-		await makeKeyPackageRef(generated.publicPackage, cipherSuite.hash)
-	);
-
-	return {
-		keyPackage: generated.publicPackage,
-		privateKeyPackage: generated.privatePackage,
-		keyPackageRef,
-		keyPackageBase64: bytesToBase64(encode(keyPackageEncoder, generated.publicPackage))
-	};
-}
-
 function encodeState(state: ClientState): string {
 	return bytesToBase64(encode(clientStateEncoder, state));
 }
@@ -187,22 +131,13 @@ export function getChatGroup(groupId: string): StoredChatGroup | undefined {
 	return chatGroupsStore.groups.find((group) => group.id === groupId);
 }
 
-function buildCoordinatorClient(account: IAccount, coordinatorKey: string) {
-	const coordinator = getChatCoordinator(coordinatorKey);
-	return new cordnClient({
-		signer: account.signer,
-		serverPubkey: coordinatorKey,
-		relays: coordinator?.relays ?? relayActions.getSelectedRelays()
-	} as ConstructorParameters<typeof cordnClient>[0]);
-}
-
-function buildUniqueGroupId(aliasBase: string): string {
-	let id = aliasBase;
-	let suffix = 2;
-	while (chatGroupsStore.groups.some((group) => group.id === id)) {
-		id = `${aliasBase}-${suffix++}`;
+function requireChatGroup(groupId: string): StoredChatGroup {
+	const group = getChatGroup(groupId);
+	if (!group) {
+		throw new Error('Group not found');
 	}
-	return id;
+
+	return group;
 }
 
 function persistGroup(group: StoredChatGroup) {
@@ -215,6 +150,28 @@ function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 		group.id === groupId ? nextGroup : group
 	);
 	saveGroups();
+}
+
+async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>): Promise<T> {
+	const previous = groupOperationChains.get(groupId) ?? Promise.resolve();
+	let release!: () => void;
+	const current = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	groupOperationChains.set(
+		groupId,
+		previous.then(() => current)
+	);
+
+	await previous;
+	try {
+		return await operation();
+	} finally {
+		release();
+		if (groupOperationChains.get(groupId) === current) {
+			groupOperationChains.delete(groupId);
+		}
+	}
 }
 
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
@@ -239,7 +196,7 @@ export async function createChatGroup(input: {
 	keyPackageLabel?: string;
 	keyPackageIsLastResort?: boolean;
 }) {
-	const account = getActiveAccount();
+	const account = requireActiveAccount('You must be logged in to create a group');
 	const metadata: GroupMetadataInput = {
 		name: input.name,
 		description: input.description,
@@ -247,121 +204,67 @@ export async function createChatGroup(input: {
 		imageUrl: input.imageUrl,
 		adminPubkeys: input.adminPubkeys
 	};
-	let memberArtifacts: Awaited<ReturnType<typeof createMemberArtifacts>>;
-	if (input.keyPackageRef) {
-		const storedRecord = getChatKeyPackage(input.keyPackageRef);
-		if (!storedRecord) {
-			throw new Error('Selected key package was not found');
-		}
-		const decoded = decodeStoredKeyPackage(storedRecord);
-		memberArtifacts = {
-			keyPackage: decoded.keyPackage,
-			privateKeyPackage: decoded.privateKeyPackage,
-			keyPackageRef: storedRecord.keyPackageRef,
-			keyPackageBase64: storedRecord.keyPackageBase64
-		};
-	} else {
-		const createdKeyPackage = await createChatKeyPackage({
-			label: input.keyPackageLabel,
-			isLastResort: input.keyPackageIsLastResort,
-			publishCoordinatorKey: undefined
-		});
-		memberArtifacts = {
-			keyPackage: createdKeyPackage.keyPackage,
-			privateKeyPackage: createdKeyPackage.privateKeyPackage,
-			keyPackageRef: createdKeyPackage.record.keyPackageRef,
-			keyPackageBase64: createdKeyPackage.record.keyPackageBase64
-		};
-	}
-	const cipherSuite = await getCipherSuite();
-	const extensions = [makeCordnGroupMetadataExtension(metadata)];
-	const state = await createGroup({
-		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
-		groupId: new TextEncoder().encode(crypto.randomUUID()),
-		keyPackage: memberArtifacts.keyPackage,
-		privateKeyPackage: memberArtifacts.privateKeyPackage,
-		extensions
+	const memberArtifacts = await createMemberArtifacts({
+		selectedKeyPackageRef: input.keyPackageRef,
+		createKeyPackage: async () =>
+			createChatKeyPackage({
+				label: input.keyPackageLabel,
+				isLastResort: input.keyPackageIsLastResort,
+				publishCoordinatorKey: undefined
+			})
+	});
+	const state = await createInitialGroupState({
+		metadata,
+		memberArtifacts
 	});
 
-	const coordinatorClient = buildCoordinatorClient(account, input.coordinatorKey.trim());
+	const coordinatorClient = getCoordinatorClient(account, input.coordinatorKey);
 	await coordinatorClient.PublishKeyPackage({
 		kp_ref: memberArtifacts.keyPackageRef,
 		kp_64: memberArtifacts.keyPackageBase64
 	});
-	await coordinatorClient.disconnect();
-	markCoordinatorUsed(input.coordinatorKey.trim());
-	markKeyPackagePublished(memberArtifacts.keyPackageRef, input.coordinatorKey.trim());
+	const normalizedCoordinatorKey = normalizePubKey(input.coordinatorKey);
+	markCoordinatorUsed(normalizedCoordinatorKey);
+	markGroupCreatorKeyPackagePublished(memberArtifacts.keyPackageRef, normalizedCoordinatorKey);
 
-	const alias = slugify(input.name);
-	const id = buildUniqueGroupId(alias);
-
-	const group: StoredChatGroup = {
-		id,
-		alias,
-		coordinatorKey: input.coordinatorKey.trim(),
-		createdAt: Date.now(),
+	const group = buildStoredChatGroup({
+		id: buildUniqueSlugId(
+			chatGroupsStore.groups.map((group) => group.id),
+			input.name,
+			`group-${Date.now()}`
+		),
+		coordinatorKey: normalizedCoordinatorKey,
 		stateBase64: encodeState(state),
-		lastCursor: 0,
-		fetchCursor: 0,
-		messages: [],
-		syncIssues: [],
 		metadata
-	};
+	});
 
 	persistGroup(group);
-	await goto(`/chat/${group.id}`);
 	return group;
 }
 
-export async function acceptChatWelcome(input: {
-	welcomeId: string;
-	navigate?: boolean;
-}): Promise<StoredChatGroup> {
-	getActiveAccount();
+export async function acceptChatWelcome(input: { welcomeId: string }): Promise<StoredChatGroup> {
+	requireActiveAccount('You must be logged in to accept a welcome');
 	const welcome = getWelcomeNotification(input.welcomeId);
 	if (!welcome) {
 		throw new Error('Stored welcome not found');
 	}
 
-	const keyPackageRecord = getChatKeyPackage(welcome.kpRef);
-	if (!keyPackageRecord) {
-		throw new Error(`Missing local key package for welcome ${welcome.kpRef}`);
-	}
-	if (keyPackageRecord.consumedAt) {
-		throw new Error(`Key package ${welcome.kpRef} was already consumed`);
-	}
-
-	const { keyPackage, privateKeyPackage } = decodeStoredKeyPackage(keyPackageRecord);
-	const state = await joinGroupFromWelcome({
-		welcomeBase64: welcome.welcomeBase64,
-		keyPackage,
-		privateKeyPackage
+	const group = await acceptWelcomeToGroup({
+		welcome,
+		encodeState,
+		buildGroupId: (name, fallback) =>
+			buildUniqueSlugId(
+				chatGroupsStore.groups.map((group) => group.id),
+				name,
+				fallback
+			)
 	});
-
-	const metadata = toPersistedGroupMetadata(getCordnGroupMetadataExtension(state));
-	const alias = slugify(metadata?.name || `group-${welcome.kpRef.slice(0, 8)}`);
-	const id = buildUniqueGroupId(alias);
-	const group: StoredChatGroup = {
-		id,
-		alias,
-		coordinatorKey: normalizePubKey(welcome.coordinatorKey),
-		createdAt: Date.now(),
-		stateBase64: encodeState(state),
-		lastCursor: 0,
-		fetchCursor: 0,
-		messages: [],
-		syncIssues: [],
-		metadata
-	};
+	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
+	group.metadata = toPersistedGroupMetadata(group.metadata);
 
 	persistGroup(group);
 	markCoordinatorUsed(group.coordinatorKey);
-	markKeyPackageConsumed(welcome.kpRef, group.id);
 	removeWelcomeNotification(welcome.id);
-
-	if (input.navigate ?? true) {
-		await goto(`/chat/${group.id}`);
-	}
 
 	return group;
 }
@@ -369,43 +272,36 @@ export async function acceptChatWelcome(input: {
 export async function listCoordinatorAvailableKeyPackages(
 	groupId: string
 ): Promise<CoordinatorAvailableKeyPackage[]> {
-	const account = getActiveAccount();
+	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
 	const group = getChatGroup(groupId);
 	if (!group) {
 		throw new Error('Group not found');
 	}
 
-	const coordinatorClient = buildCoordinatorClient(account, group.coordinatorKey);
-	try {
-		const result = await coordinatorClient.ListAvailableKeyPackages();
-		return result.keyPackages
-			.filter((entry) => normalizePubKey(entry.pk) !== normalizePubKey(account.pubkey))
-			.map((entry) => ({
-				stablePubkey: normalizePubKey(entry.pk),
-				keyPackageRef: entry.kp_ref,
-				isLastResort: entry.last_resort,
-				publishedAt: entry.at
-			}))
-			.sort((a, b) => b.publishedAt - a.publishedAt);
-	} finally {
-		await coordinatorClient.disconnect();
-	}
+	const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
+	const result = await coordinatorClient.ListAvailableKeyPackages();
+	return result.keyPackages
+		.filter((entry) => normalizePubKey(entry.pk) !== normalizePubKey(account.pubkey))
+		.map((entry) => ({
+			stablePubkey: normalizePubKey(entry.pk),
+			keyPackageRef: entry.kp_ref,
+			isLastResort: entry.last_resort,
+			publishedAt: entry.at
+		}))
+		.sort((a, b) => b.publishedAt - a.publishedAt);
 }
 
 export async function inviteChatGroupMember(input: {
 	groupId: string;
 	identifier: string;
 }): Promise<StoredChatGroup> {
-	const account = getActiveAccount();
-	const group = getChatGroup(input.groupId);
-	if (!group) {
-		throw new Error('Group not found');
-	}
+	return runGroupOperation(input.groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to invite a member');
+		const group = requireChatGroup(input.groupId);
 
-	const state = decodeStoredGroupState(group);
-	const coordinatorClient = buildCoordinatorClient(account, group.coordinatorKey);
+		const state = decodeStoredGroupState(group);
+		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
-	try {
 		const consumeResult = await coordinatorClient.ConsumeKeyPackage({
 			id: input.identifier.trim()
 		});
@@ -424,30 +320,53 @@ export async function inviteChatGroupMember(input: {
 			memberKeyPackage
 		});
 
+		enqueuePendingEpochOperation(pendingEpochOperations, {
+			kind: 'add-member',
+			groupId: group.id,
+			commitMessageBase64: commitResult.commitMessageBase64,
+			targetStablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
+			keyPackageReference: consumeResult.keyPackage.kp_ref,
+			welcomeBase64: encodeWelcomeBase64(commitResult.welcome)
+		});
+
 		await coordinatorClient.PostGroupMessage({
 			msg_64: commitResult.commitMessageBase64
 		});
 
-		await coordinatorClient.StoreWelcome({
-			target_pk: normalizePubKey(consumeResult.keyPackage.pk),
-			kp_ref: consumeResult.keyPackage.kp_ref,
-			welcome_64: encodeWelcomeBase64(commitResult.welcome)
+		const syncBaseGroup: StoredChatGroup = {
+			...group,
+			metadata:
+				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+				group.metadata
+		};
+		const result = await coordinatorClient.FetchGroupMessages({
+			gid: groupIdDecoder.decode(state.groupContext.groupId),
+			after: group.fetchCursor > 0 ? group.fetchCursor : undefined
 		});
 
-		const metadata =
-			toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
-			group.metadata;
-		const nextGroup: StoredChatGroup = {
-			...group,
-			stateBase64: encodeState(commitResult.newState),
-			metadata
-		};
+		const workingGroup = createWorkingChatGroupSession(syncBaseGroup, state);
+		const sync = await syncChatGroupMessages({
+			group,
+			workingGroup,
+			messages: result.messages.map((message) => ({
+				cursor: message.cursor,
+				createdAt: message.at,
+				opaqueMessageBase64: message.msg_64
+			})),
+			pendingEpochOperations,
+			coordinatorClient
+		});
+
+		const nextGroup = buildPersistedChatGroup({
+			group: syncBaseGroup,
+			workingGroup: sync.workingGroup,
+			encodeState,
+			metadata: toPersistedGroupMetadata(sync.workingGroup.metadata)
+		});
 
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
-	} finally {
-		await coordinatorClient.disconnect();
-	}
+	});
 }
 
 export function listChatGroupMessages(groupId: string): StoredChatMessage[] {
@@ -460,86 +379,109 @@ export function listChatGroupSyncIssues(groupId: string): StoredChatSyncIssue[] 
 	return group ? [...group.syncIssues].sort((a, b) => a.cursor - b.cursor) : [];
 }
 
+async function applyIncomingChatGroupMessages(
+	group: StoredChatGroup,
+	messages: Array<{
+		cursor: number;
+		createdAt: number;
+		opaqueMessageBase64: string;
+	}>
+): Promise<{
+	group: StoredChatGroup;
+	received: StoredChatMessage[];
+	issues: StoredChatSyncIssue[];
+}> {
+	const account = requireActiveAccount('You must be logged in to process group messages');
+	const state = decodeStoredGroupState(group);
+	const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
+	const workingGroup = createWorkingChatGroupSession(group, state);
+
+	const sync = await syncChatGroupMessages({
+		group,
+		workingGroup,
+		messages,
+		pendingEpochOperations,
+		coordinatorClient
+	});
+
+	const nextGroup = buildPersistedChatGroup({
+		group,
+		workingGroup,
+		encodeState,
+		metadata: toPersistedGroupMetadata(workingGroup.metadata)
+	});
+
+	replaceGroup(group.id, nextGroup);
+	return {
+		group: nextGroup,
+		received: sync.received,
+		issues: sync.issues
+	};
+}
+
 export async function fetchChatGroupMessages(groupId: string): Promise<{
 	group: StoredChatGroup;
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
 }> {
-	const account = getActiveAccount();
-	const group = getChatGroup(groupId);
-	if (!group) {
-		throw new Error('Group not found');
-	}
+	return runGroupOperation(groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to fetch group messages');
+		const group = requireChatGroup(groupId);
 
-	const state = decodeStoredGroupState(group);
-	const coordinatorClient = buildCoordinatorClient(account, group.coordinatorKey);
+		const state = decodeStoredGroupState(group);
+		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
-	try {
-		const groupIdBytes = state.groupContext.groupId;
-		const gid = new TextDecoder().decode(groupIdBytes);
+		const gid = groupIdDecoder.decode(state.groupContext.groupId);
 		const result = await coordinatorClient.FetchGroupMessages({
 			gid,
 			after: group.fetchCursor > 0 ? group.fetchCursor : undefined
 		});
 
-		const workingGroup = {
-			state,
-			metadata: group.metadata,
-			lastCursor: group.lastCursor,
-			fetchCursor: group.fetchCursor,
-			messages: [...group.messages],
-			syncIssues: [...group.syncIssues]
-		};
-
-		const sync = await ingestChatGroupMessages({
-			group: workingGroup,
-			messages: result.messages.map((message) => ({
+		return applyIncomingChatGroupMessages(
+			group,
+			result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
 				opaqueMessageBase64: message.msg_64
 			}))
-		});
+		);
+	});
+}
 
-		const nextGroup: StoredChatGroup = {
-			...group,
-			stateBase64: encodeState(workingGroup.state),
-			metadata: toPersistedGroupMetadata(workingGroup.metadata) ?? group.metadata,
-			lastCursor: workingGroup.lastCursor,
-			fetchCursor: workingGroup.fetchCursor,
-			messages: workingGroup.messages,
-			syncIssues: workingGroup.syncIssues
-		};
-
-		replaceGroup(group.id, nextGroup);
-		return {
-			group: nextGroup,
-			received: sync.received,
-			issues: sync.issues
-		};
-	} finally {
-		await coordinatorClient.disconnect();
-	}
+export async function ingestIncomingChatGroupMessages(
+	groupId: string,
+	messages: Array<{
+		cursor: number;
+		createdAt: number;
+		opaqueMessageBase64: string;
+	}>
+): Promise<{
+	group: StoredChatGroup;
+	received: StoredChatMessage[];
+	issues: StoredChatSyncIssue[];
+}> {
+	return runGroupOperation(groupId, async () => {
+		const group = requireChatGroup(groupId);
+		return applyIncomingChatGroupMessages(group, messages);
+	});
 }
 
 export async function sendChatGroupMessage(input: {
 	groupId: string;
 	content: string;
 }): Promise<StoredChatMessage> {
-	const account = getActiveAccount();
-	const group = getChatGroup(input.groupId);
-	if (!group) {
-		throw new Error('Group not found');
-	}
+	return runGroupOperation(input.groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to send a message');
+		const group = requireChatGroup(input.groupId);
 
-	const content = input.content.trim();
-	if (!content) {
-		throw new Error('Message content is required');
-	}
+		const content = input.content.trim();
+		if (!content) {
+			throw new Error('Message content is required');
+		}
 
-	const state = decodeStoredGroupState(group);
-	const coordinatorClient = buildCoordinatorClient(account, group.coordinatorKey);
+		const state = decodeStoredGroupState(group);
+		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
-	try {
 		const outbound = await createApplicationMessageBase64({
 			state,
 			event: createUnsignedCordnMessageEvent({
@@ -557,6 +499,7 @@ export async function sendChatGroupMessage(input: {
 			cursor: posted.cursor,
 			createdAt: posted.at,
 			direction: 'outbound',
+			opaqueMessageBase64: outbound.opaqueMessageBase64,
 			sender: normalizePubKey(account.pubkey),
 			id: outbound.event.id,
 			kind: outbound.event.kind,
@@ -564,16 +507,17 @@ export async function sendChatGroupMessage(input: {
 			content: outbound.event.content
 		};
 
-		const nextGroup: StoredChatGroup = {
-			...group,
-			stateBase64: encodeState(outbound.newState),
-			lastCursor: Math.max(group.lastCursor, posted.cursor),
-			messages: [...group.messages, stored]
-		};
+		const workingGroup = createWorkingChatGroupSession(group, outbound.newState);
+		workingGroup.lastCursor = Math.max(workingGroup.lastCursor, posted.cursor);
+		workingGroup.messages.push(stored);
+
+		const nextGroup = buildPersistedChatGroup({
+			group,
+			workingGroup,
+			encodeState
+		});
 
 		replaceGroup(group.id, nextGroup);
 		return stored;
-	} finally {
-		await coordinatorClient.disconnect();
-	}
+	});
 }

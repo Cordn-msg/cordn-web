@@ -17,6 +17,7 @@ export interface StoredChatMessage {
 	cursor: number;
 	createdAt: number;
 	direction: 'inbound' | 'outbound';
+	opaqueMessageBase64?: string;
 	sender: string;
 	id: string;
 	kind: UnsignedEvent['kind'];
@@ -178,17 +179,32 @@ function isStaleGenerationIssue(detail: string): boolean {
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
+	hasPendingEpochOperation?: (opaqueMessageBase64: string) => boolean;
 }): Promise<{
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
 	cursorAdvancedTo: number;
+	appliedPendingCommitMessages: Set<string>;
+	rejectedPendingCommitMessages: Set<string>;
 }> {
 	const { group, messages } = params;
 	const received: StoredChatMessage[] = [];
 	const issues: StoredChatSyncIssue[] = [];
+	const appliedPendingCommitMessages = new Set<string>();
+	const rejectedPendingCommitMessages = new Set<string>();
 
 	for (const message of messages) {
-		if (group.messages.some((stored) => stored.cursor === message.cursor)) {
+		const isPendingOperationMessage =
+			params.hasPendingEpochOperation?.(message.opaqueMessageBase64) ?? false;
+
+		if (
+			group.messages.some(
+				(stored) =>
+					(stored.direction === 'outbound' &&
+						stored.opaqueMessageBase64 === message.opaqueMessageBase64) ||
+					stored.cursor === message.cursor
+			)
+		) {
 			group.fetchCursor = message.cursor;
 			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			continue;
@@ -214,6 +230,9 @@ export async function ingestChatGroupMessages(params: {
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				group.syncIssues.push(issue);
 				issues.push(issue);
+				if (isPendingOperationMessage) {
+					rejectedPendingCommitMessages.add(message.opaqueMessageBase64);
+				}
 				continue;
 			}
 
@@ -240,6 +259,7 @@ export async function ingestChatGroupMessages(params: {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				direction: 'inbound',
+				opaqueMessageBase64: message.opaqueMessageBase64,
 				sender,
 				id: event.id,
 				kind: event.kind,
@@ -255,12 +275,17 @@ export async function ingestChatGroupMessages(params: {
 		if (processed.kind === 'newState') {
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);
+			if (isPendingOperationMessage) {
+				appliedPendingCommitMessages.add(message.opaqueMessageBase64);
+			}
 		}
 	}
 
 	return {
 		received,
 		issues,
-		cursorAdvancedTo: group.fetchCursor
+		cursorAdvancedTo: group.fetchCursor,
+		appliedPendingCommitMessages,
+		rejectedPendingCommitMessages
 	};
 }

@@ -6,21 +6,29 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
-	import { acceptChatWelcome, getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import {
+		getLatestChatGroupMessagePreview,
+		getUnreadChatGroupMessageCount,
+		pruneChatGroupPresence
+	} from '$lib/services/chatGroupPresence.svelte';
+	import { getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getCoordinatorColor,
 		getChatCoordinator,
 		listChatCoordinators
 	} from '$lib/services/chatCoordinators.svelte';
 	import {
-		fetchWelcomeNotifications,
 		getUnreadWelcomeNotificationCount,
-		getWelcomeNotification,
 		listWelcomeNotifications,
 		markAllWelcomeNotificationsRead,
 		markWelcomeNotificationRead,
 		chatWelcomeNotificationsStore
 	} from '$lib/services/chatWelcomeNotifications.svelte';
+	import {
+		acceptWelcomeAction,
+		chatWelcomeActionsStore,
+		refreshWelcomeNotificationsAction
+	} from '$lib/services/chatUiActions.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
@@ -31,11 +39,21 @@
 
 	let collapsed = $state(false);
 	let notificationsOpen = $state(false);
-	let lastFetchedAccountPubkey = $state('');
 	const chats = $derived.by(() => listChatGroups());
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
+	const chatSummaries = $derived.by(() =>
+		Object.fromEntries(
+			chats.map((chat) => [
+				chat.id,
+				{
+					preview: getLatestChatGroupMessagePreview(chat.id),
+					unreadCount: getUnreadChatGroupMessageCount(chat.id)
+				}
+			])
+		)
+	);
 	const groupedChats = $derived.by(() => {
 		const groups = new Map<
 			string,
@@ -81,6 +99,10 @@
 		return resolve('/chat/[id]', { id: groupId });
 	}
 
+	function getChatHomeHref() {
+		return resolve('/chat');
+	}
+
 	function getCoordinatorHref(pubkey: string) {
 		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey: pubkey });
 	}
@@ -94,31 +116,33 @@
 		return group?.metadata?.name || group?.alias || 'Joined group';
 	}
 
+	function getChatSummary(groupId: string) {
+		return chatSummaries[groupId] ?? { preview: 'Group chat', unreadCount: 0 };
+	}
+
 	async function refreshWelcomeNotifications() {
 		if (!$activeAccount) return;
-		await fetchWelcomeNotifications();
+		await refreshWelcomeNotificationsAction();
 	}
 
 	async function acceptWelcome(notificationId: string) {
 		if (!$activeAccount) return;
-		chatWelcomeNotificationsStore.error = '';
-		try {
-			await acceptChatWelcome({ welcomeId: notificationId });
+		const accepted = await acceptWelcomeAction(notificationId);
+		if (accepted) {
 			notificationsOpen = false;
-		} catch (error) {
-			const notification = getWelcomeNotification(notificationId);
-			chatWelcomeNotificationsStore.error =
-				error instanceof Error
-					? error.message
-					: `Failed to accept welcome${notification ? ` ${notification.kpRef}` : ''}`;
 		}
 	}
 
 	$effect(() => {
 		const activePubkey = $activeAccount?.pubkey ?? '';
-		if (!activePubkey || activePubkey === lastFetchedAccountPubkey) return;
-		lastFetchedAccountPubkey = activePubkey;
+		if (!activePubkey || activePubkey === chatWelcomeActionsStore.lastFetchedAccountPubkey) return;
+		chatWelcomeActionsStore.lastFetchedAccountPubkey = activePubkey;
 		void refreshWelcomeNotifications();
+	});
+
+	$effect(() => {
+		chats.length;
+		pruneChatGroupPresence();
 	});
 
 	const sidebarClass = $derived(collapsed ? 'w-20 px-2.5' : 'w-72 px-3');
@@ -128,7 +152,12 @@
 	class={`flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-card/60 py-3 transition-[width,padding] duration-200 ${sidebarClass}`}
 >
 	<div class={`flex items-center pb-4 ${collapsed ? 'justify-center' : 'justify-between gap-2'}`}>
-		<div class={`flex min-w-0 items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
+		<a
+			href={getChatHomeHref()}
+			class={`flex min-w-0 items-center gap-3 rounded-xl transition-colors hover:text-foreground ${collapsed ? 'justify-center' : ''} ${isActive(getChatHomeHref()) ? 'text-foreground' : 'text-muted-foreground'}`}
+			aria-label="Open chat home"
+			title="Chat home"
+		>
 			<div
 				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-base leading-none"
 			>
@@ -141,7 +170,7 @@
 					<p class="truncate text-xs text-muted-foreground">Chats</p>
 				</div>
 			{/if}
-		</div>
+		</a>
 
 		{#if !collapsed}
 			<Button
@@ -218,21 +247,35 @@
 
 				<div class="space-y-1">
 					{#each coordinatorGroup.chats as chat (chat.id)}
+						{@const summary = getChatSummary(chat.id)}
 						<a
 							href={getGroupHref(chat.id)}
 							class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : 'ml-1'} ${isActive(getGroupHref(chat.id)) ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 						>
-							<Avatar class="h-10 w-10 shrink-0 border border-border bg-background">
-								<AvatarFallback class="bg-background text-sm font-medium"
-									>{chat.metadata?.icon || chat.metadata?.name?.slice(0, 1) || '#'}</AvatarFallback
-								>
-							</Avatar>
+							<div class="relative shrink-0">
+								<Avatar class="h-10 w-10 shrink-0 border border-border bg-background">
+									<AvatarFallback class="bg-background text-sm font-medium"
+										>{chat.metadata?.icon ||
+											chat.metadata?.name?.slice(0, 1) ||
+											'#'}</AvatarFallback
+									>
+								</Avatar>
+								{#if summary.unreadCount > 0}
+									<span
+										class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+									>
+										{summary.unreadCount}
+									</span>
+								{/if}
+							</div>
 
 							{#if !collapsed}
-								<div class="min-w-0">
-									<p class="truncate font-medium">{chat.metadata?.name || chat.alias}</p>
+								<div class="min-w-0 flex-1">
+									<div class="flex items-start justify-between gap-2">
+										<p class="truncate font-medium">{chat.metadata?.name || chat.alias}</p>
+									</div>
 									<p class="truncate text-xs text-muted-foreground">
-										{chat.metadata?.description || 'Group chat'}
+										{summary.preview}
 									</p>
 								</div>
 							{/if}
