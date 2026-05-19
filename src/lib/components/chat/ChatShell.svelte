@@ -25,7 +25,7 @@
 	let {
 		groupId = 'general',
 		title = 'Cordn',
-		subtitle = 'Coordinator-assisted messaging'
+		subtitle = 'Private group chat'
 	}: {
 		groupId?: string;
 		title?: string;
@@ -168,7 +168,13 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<ChatHeader {groupId} {title} {subtitle} icon={group?.metadata?.icon} />
+	<ChatHeader
+		{groupId}
+		{title}
+		{subtitle}
+		icon={group?.metadata?.icon}
+		imageUrl={group?.metadata?.imageUrl}
+	/>
 
 	<div class="min-h-0 flex-1">
 		<ChatMessageList {messages} onReply={handleReply} onReact={handleReact} />

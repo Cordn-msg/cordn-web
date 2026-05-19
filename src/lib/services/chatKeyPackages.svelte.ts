@@ -1,7 +1,6 @@
-import { browser } from '$app/environment';
 import {
-	bytesToBase64,
 	base64ToBytes,
+	bytesToBase64,
 	encode,
 	generateKeyPackage,
 	keyPackageEncoder,
@@ -23,10 +22,13 @@ import {
 import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import {
+	getChatStorage,
+	type StoredChatKeyPackageRecord as StoredBinaryChatKeyPackageRecord
+} from '$lib/storage/chatStorage';
 import { normalizePubKey } from '$lib/utils';
 import { bytesToHex } from 'applesauce-core/helpers';
 
-const STORAGE_KEY = 'cordn-chat-key-packages';
 export interface StoredKeyPackageRecord {
 	id: string;
 	ownerPubkey: string;
@@ -42,30 +44,66 @@ export interface StoredKeyPackageRecord {
 	consumedByGroupId?: string;
 }
 
-type PersistedKeyPackages = {
-	keyPackages: StoredKeyPackageRecord[];
-};
-
 export const chatKeyPackagesStore = $state<{ keyPackages: StoredKeyPackageRecord[] }>({
 	keyPackages: []
 });
 
-function saveKeyPackages() {
-	if (!browser) return;
-	const payload: PersistedKeyPackages = { keyPackages: chatKeyPackagesStore.keyPackages };
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+let storageReady: Promise<void> | null = null;
+let persistKeyPackagesPromise: Promise<void> = Promise.resolve();
+
+function fromStoredRecord(record: StoredBinaryChatKeyPackageRecord): StoredKeyPackageRecord {
+	return {
+		id: record.id,
+		ownerPubkey: record.ownerPubkey,
+		label: record.label,
+		isLastResort: record.isLastResort,
+		keyPackageRef: record.keyPackageRef,
+		keyPackageBase64: bytesToBase64(record.keyPackageBytes),
+		privateKeyPackageBase64: bytesToBase64(record.privateKeyPackageBytes),
+		cipherSuite: record.cipherSuite,
+		createdAt: record.createdAt,
+		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys],
+		consumedAt: record.consumedAt,
+		consumedByGroupId: record.consumedByGroupId
+	};
 }
 
-function loadKeyPackages() {
-	if (!browser) return;
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return;
-		const parsed = JSON.parse(raw) as PersistedKeyPackages;
-		chatKeyPackagesStore.keyPackages = parsed.keyPackages ?? [];
-	} catch {
-		chatKeyPackagesStore.keyPackages = [];
-	}
+function toStoredRecord(record: StoredKeyPackageRecord): StoredBinaryChatKeyPackageRecord {
+	return {
+		id: record.id,
+		ownerPubkey: record.ownerPubkey,
+		label: record.label,
+		isLastResort: record.isLastResort,
+		keyPackageRef: record.keyPackageRef,
+		keyPackageBytes: base64ToBytes(record.keyPackageBase64),
+		privateKeyPackageBytes: base64ToBytes(record.privateKeyPackageBase64),
+		cipherSuite: record.cipherSuite,
+		createdAt: record.createdAt,
+		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys],
+		consumedAt: record.consumedAt,
+		consumedByGroupId: record.consumedByGroupId
+	};
+}
+
+async function loadKeyPackages() {
+	const storage = await getChatStorage();
+	const records = await storage.listKeyPackages();
+	chatKeyPackagesStore.keyPackages = records.map(fromStoredRecord);
+}
+
+async function ensureKeyPackagesLoaded() {
+	storageReady ??= loadKeyPackages();
+	await storageReady;
+}
+
+function persistKeyPackages(keyPackages: StoredKeyPackageRecord[]) {
+	persistKeyPackagesPromise = persistKeyPackagesPromise
+		.then(async () => {
+			const storage = await getChatStorage();
+			await storage.replaceKeyPackages(keyPackages.map(toStoredRecord));
+		})
+		.catch(() => undefined);
+	return persistKeyPackagesPromise;
 }
 
 function getActivePubkey(): string {
@@ -76,7 +114,7 @@ async function getCipherSuite() {
 	return getCordnCipherSuite();
 }
 
-loadKeyPackages();
+void ensureKeyPackagesLoaded();
 
 export function listChatKeyPackages(ownerPubkey?: string): StoredKeyPackageRecord[] {
 	const filtered = ownerPubkey
@@ -89,9 +127,9 @@ export function getChatKeyPackage(keyPackageRef: string): StoredKeyPackageRecord
 	return chatKeyPackagesStore.keyPackages.find((entry) => entry.keyPackageRef === keyPackageRef);
 }
 
-function setKeyPackages(keyPackages: StoredKeyPackageRecord[]) {
+async function setKeyPackages(keyPackages: StoredKeyPackageRecord[]) {
 	chatKeyPackagesStore.keyPackages = keyPackages;
-	saveKeyPackages();
+	await persistKeyPackages(keyPackages);
 }
 
 function dedupeStrings(values: string[]): string[] {
@@ -165,7 +203,7 @@ export async function createChatKeyPackage(input?: {
 		publishedCoordinatorKeys: []
 	};
 
-	setKeyPackages([record, ...chatKeyPackagesStore.keyPackages]);
+	await setKeyPackages([record, ...chatKeyPackagesStore.keyPackages]);
 
 	if (input?.publishCoordinatorKey?.trim()) {
 		await publishChatKeyPackage(record.keyPackageRef, input.publishCoordinatorKey);
@@ -209,7 +247,7 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 		kp_64: record.keyPackageBase64
 	});
 	markCoordinatorUsed(normalizedCoordinator);
-	markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
+	await markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
 }
 
 export async function removeChatKeyPackage(
@@ -239,7 +277,7 @@ export async function removeChatKeyPackage(
 
 	if (record) {
 		if (normalizedCoordinator && !input.localOnly) {
-			setKeyPackages(
+			await setKeyPackages(
 				chatKeyPackagesStore.keyPackages.map((entry) =>
 					entry.keyPackageRef !== keyPackageRef
 						? entry
@@ -254,7 +292,7 @@ export async function removeChatKeyPackage(
 			return;
 		}
 
-		setKeyPackages(
+		await setKeyPackages(
 			chatKeyPackagesStore.keyPackages.filter((entry) => entry.keyPackageRef !== keyPackageRef)
 		);
 	}
@@ -290,7 +328,7 @@ export async function reconcilePublishedKeyPackagesForActiveAccount() {
 			.map((entry) => entry.kp_ref);
 	}
 
-	setKeyPackages(
+	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.map((entry) => {
 			if (normalizePubKey(entry.ownerPubkey) !== ownerPubkey) return entry;
 			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.filter((coordinatorKey) =>
@@ -311,13 +349,13 @@ export function shouldReconcilePublishedKeyPackages(ownerPubkey?: string) {
 	return normalizePubKey(ownerPubkey) !== lastReconciledOwnerPubkey;
 }
 
-export function markKeyPackagePublished(
+export async function markKeyPackagePublished(
 	keyPackageRef: string,
 	coordinatorKey: string,
 	isLastResort?: boolean
 ) {
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
-	setKeyPackages(
+	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.map((entry) => {
 			if (entry.keyPackageRef !== keyPackageRef) return entry;
 			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(
@@ -335,8 +373,12 @@ export function markKeyPackagePublished(
 }
 
 export function markKeyPackageConsumed(keyPackageRef: string, groupId: string) {
+	void markKeyPackageConsumedAsync(keyPackageRef, groupId);
+}
+
+async function markKeyPackageConsumedAsync(keyPackageRef: string, groupId: string) {
 	const consumedAt = Date.now();
-	setKeyPackages(
+	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.map((entry) =>
 			entry.keyPackageRef === keyPackageRef
 				? {

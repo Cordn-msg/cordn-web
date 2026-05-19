@@ -367,7 +367,7 @@
 											<div class="min-w-0 space-y-1">
 												<div class="flex items-center gap-2 text-sm text-muted-foreground">
 													<MessageSquare class="size-4" />
-													<span>{group.metadata?.name ?? group.alias ?? 'Untitled group'}</span>
+													<span>{group.metadata?.name ?? group.id ?? 'Untitled group'}</span>
 												</div>
 												<p class="font-mono text-xs break-all text-muted-foreground">{group.id}</p>
 												<p class="text-sm text-muted-foreground">

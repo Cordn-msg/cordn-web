@@ -22,6 +22,8 @@ import {
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
 import type { WelcomeNotificationEntry } from '$lib/services/chatWelcomeNotifications.svelte';
 
+const groupIdDecoder = new TextDecoder();
+
 export interface GroupMetadataInput extends CordnGroupMetadata {
 	name: string;
 }
@@ -82,6 +84,10 @@ export async function createInitialGroupState(params: {
 	});
 }
 
+export function getProtocolGroupId(state: { groupContext: { groupId: Uint8Array } }): string {
+	return groupIdDecoder.decode(state.groupContext.groupId);
+}
+
 export function buildStoredChatGroup(params: {
 	id: string;
 	coordinatorKey: string;
@@ -91,7 +97,6 @@ export function buildStoredChatGroup(params: {
 }): StoredChatGroup {
 	return {
 		id: params.id,
-		alias: params.id,
 		coordinatorKey: params.coordinatorKey,
 		createdAt: params.createdAt ?? Date.now(),
 		stateBase64: params.stateBase64,
@@ -106,7 +111,6 @@ export function buildStoredChatGroup(params: {
 export async function acceptWelcomeToGroup(params: {
 	welcome: WelcomeNotificationEntry;
 	encodeState: (state: Awaited<ReturnType<typeof joinGroupFromWelcome>>) => string;
-	buildGroupId: (name: string, fallback: string) => string;
 }): Promise<StoredChatGroup> {
 	const keyPackageRecord = getChatKeyPackage(params.welcome.kpRef);
 	if (!keyPackageRecord) {
@@ -124,9 +128,8 @@ export async function acceptWelcomeToGroup(params: {
 	});
 
 	const metadata = getCordnGroupMetadataExtension(state) as GroupMetadataInput | undefined;
-	const fallback = `group-${params.welcome.kpRef.slice(0, 8)}`;
 	const group = buildStoredChatGroup({
-		id: params.buildGroupId(metadata?.name || fallback, fallback),
+		id: getProtocolGroupId(state),
 		coordinatorKey: params.welcome.coordinatorKey,
 		stateBase64: params.encodeState(state),
 		metadata

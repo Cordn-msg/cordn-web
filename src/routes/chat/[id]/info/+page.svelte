@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
@@ -61,7 +61,7 @@
 
 	function syncMetadataForm() {
 		if (!group) return;
-		metadataName = group.metadata?.name ?? group.alias;
+		metadataName = group.metadata?.name ?? group.id;
 		metadataDescription = group.metadata?.description ?? '';
 		metadataIcon = group.metadata?.icon ?? '';
 		metadataImageUrl = group.metadata?.imageUrl ?? '';
@@ -72,7 +72,7 @@
 		if (!group) return;
 		const signature = JSON.stringify({
 			id: group.id,
-			name: group.metadata?.name ?? group.alias,
+			name: group.metadata?.name ?? group.id,
 			description: group.metadata?.description ?? '',
 			icon: group.metadata?.icon ?? '',
 			imageUrl: group.metadata?.imageUrl ?? '',
@@ -90,7 +90,7 @@
 		);
 		const formAdminPubkeys = parseAdminPubkeys(metadataAdminPubkeys);
 		return (
-			metadataName.trim() !== (group.metadata?.name ?? group.alias) ||
+			metadataName.trim() !== (group.metadata?.name ?? group.id) ||
 			metadataDescription.trim() !== (group.metadata?.description ?? '') ||
 			metadataIcon.trim() !== (group.metadata?.icon ?? '') ||
 			metadataImageUrl.trim() !== (group.metadata?.imageUrl ?? '') ||
@@ -131,7 +131,7 @@
 </script>
 
 <svelte:head>
-	<title>{group?.metadata?.name || group?.alias || 'Group info'} | Cordn</title>
+	<title>{group?.metadata?.name || group?.id || 'Group info'} | Cordn</title>
 	<meta name="description" content="Inspect Cordn group metadata and membership." />
 </svelte:head>
 
@@ -141,6 +141,13 @@
 			<div class="flex items-start justify-between gap-4">
 				<div class="flex min-w-0 items-center gap-3">
 					<Avatar class="h-12 w-12 border border-border bg-card">
+						{#if group.metadata?.imageUrl}
+							<AvatarImage
+								src={group.metadata.imageUrl}
+								alt={group.metadata?.name || group.id}
+								class="object-cover"
+							/>
+						{/if}
 						<AvatarFallback class="bg-card text-lg">
 							{group.metadata?.icon || '🪢'}
 						</AvatarFallback>
@@ -148,7 +155,7 @@
 					<div class="min-w-0">
 						<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">Group details</p>
 						<h1 class="truncate text-xl font-semibold tracking-tight">
-							{group.metadata?.name || group.alias}
+							{group.metadata?.name || group.id}
 						</h1>
 						<p class="text-sm text-muted-foreground">
 							{group.metadata?.description || 'Coordinator-assisted messaging'}
@@ -183,7 +190,7 @@
 						{#if group.metadata?.imageUrl}
 							<img
 								src={group.metadata.imageUrl}
-								alt={group.metadata?.name || group.alias}
+								alt={group.metadata?.name || group.id}
 								class="max-h-64 w-full rounded-2xl border border-border object-cover"
 							/>
 						{/if}
@@ -196,10 +203,6 @@
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Coordinator</p>
 								<p class="mt-2 font-mono text-xs break-all">{group.coordinatorKey}</p>
-							</div>
-							<div class="rounded-2xl border border-border p-4">
-								<p class="text-xs tracking-wide text-muted-foreground uppercase">Alias</p>
-								<p class="mt-2 text-sm">{group.alias}</p>
 							</div>
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Created</p>

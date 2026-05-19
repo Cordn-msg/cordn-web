@@ -88,7 +88,7 @@
 
 	function getAcceptedGroupLabel(groupId: string) {
 		const group = getChatGroup(groupId);
-		return group?.metadata?.name || group?.alias || 'Joined group';
+		return group?.metadata?.name || group?.id || 'Joined group';
 	}
 
 	async function acceptWelcome(welcomeId: string) {
@@ -224,7 +224,7 @@
 										href={resolve('/chat/[id]', { id: group.id })}
 										class="block rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
 									>
-										<p class="font-medium">{group.metadata?.name || group.alias}</p>
+										<p class="font-medium">{group.metadata?.name || group.id}</p>
 										<p class="mt-1 text-sm text-muted-foreground">
 											{group.metadata?.description || 'Coordinator-assisted messaging'}
 										</p>

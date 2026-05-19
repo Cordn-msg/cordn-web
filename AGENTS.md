@@ -21,6 +21,9 @@
 - Main app routes live in [`src/routes`](src/routes).
 - Shared UI primitives live in [`src/lib/components/ui`](src/lib/components/ui).
 - Chat-specific UI lives in [`src/lib/components/chat`](src/lib/components/chat).
+- Chat persistence is centralized behind [`getChatStorage()`](src/lib/storage/chatStorage.ts:530) with IndexedDB as the primary backend and local-storage/memory fallbacks.
+- Group records persist MLS state bytes, message history, and sync issues through [`src/lib/storage/chatStorage.ts`](src/lib/storage/chatStorage.ts) rather than direct localStorage blobs.
+- Key package persistence is handled through the same storage layer, with binary package material converted at the service boundary in [`src/lib/services/chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1).
 - Prefer small, focused Svelte components and keep route files thin.
 - Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.
 - Active group watching is managed in [`startWatchingGroup()`](src/lib/services/chatGroupWatch.svelte.ts:71) and should remain the default path for keeping an open chat route up to date instead of adding parallel fetch-heavy flows.

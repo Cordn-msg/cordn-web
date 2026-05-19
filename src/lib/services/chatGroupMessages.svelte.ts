@@ -22,7 +22,6 @@ export interface StoredChatMessage {
 	cursor: number;
 	createdAt: number;
 	direction: 'inbound' | 'outbound';
-	opaqueMessageBase64?: string;
 	sender: string;
 	id: string;
 	kind: UnsignedEvent['kind'];
@@ -365,14 +364,7 @@ export async function ingestChatGroupMessages(params: {
 			continue;
 		}
 
-		if (
-			group.messages.some(
-				(stored) =>
-					(stored.direction === 'outbound' &&
-						stored.opaqueMessageBase64 === message.opaqueMessageBase64) ||
-					stored.cursor === message.cursor
-			)
-		) {
+		if (group.messages.some((stored) => stored.cursor === message.cursor)) {
 			group.fetchCursor = message.cursor;
 			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			continue;
@@ -465,13 +457,16 @@ export async function ingestChatGroupMessages(params: {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				direction: 'inbound',
-				opaqueMessageBase64: message.opaqueMessageBase64,
 				sender,
 				id: event.id,
 				kind: event.kind,
 				tags: event.tags,
 				content: event.content
 			};
+
+			if (group.messages.some((existing) => existing.id === stored.id)) {
+				continue;
+			}
 
 			group.messages.push(stored);
 			received.push(stored);

@@ -8,14 +8,14 @@
 </script>
 
 <svelte:head>
-	<title>{group?.metadata?.name || group?.alias || 'Chat'} | Cordn</title>
+	<title>{group?.metadata?.name || group?.id || 'Chat'} | Cordn</title>
 	<meta name="description" content="Cordn group chat route." />
 </svelte:head>
 
 {#if group}
 	<ChatShell
 		groupId={group.id}
-		title={group.metadata?.name || group.alias}
+		title={group.metadata?.name || group.id}
 		subtitle={group.metadata?.description || 'Coordinator-assisted messaging'}
 	/>
 {/if}

@@ -1,5 +1,9 @@
 import { browser } from '$app/environment';
-import { getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
+import {
+	getChatGroup,
+	listChatGroupMessages,
+	listChatGroups
+} from '$lib/services/chatGroups.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 
@@ -59,16 +63,13 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 }
 
 export function getUnreadChatGroupMessageCount(groupId: string): number {
-	const group = getChatGroup(groupId);
-	if (!group) return 0;
-
 	const lastReadCursor = getChatGroupLastReadCursor(groupId);
-	return group.messages.filter((message) => message.cursor > lastReadCursor).length;
+	return listChatGroupMessages(groupId).filter((message) => message.cursor > lastReadCursor).length;
 }
 
 export function getLatestChatGroupMessagePreview(groupId: string): string {
 	const group = getChatGroup(groupId);
-	const latestMessage = group?.messages.at(-1);
+	const latestMessage = listChatGroupMessages(groupId).at(-1);
 	return latestMessage?.content?.trim() || group?.metadata?.description || 'Group chat';
 }
 

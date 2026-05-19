@@ -5,23 +5,23 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 
 	const principles = [
-		'Strong group security through MLS',
-		'Sovereign deployment through ContextVM',
-		'Clear ordering with a coordinator model designed for real-world messaging'
+		'Private group chats with strong end-to-end security',
+		'An identity model based on keys, not usernames and passwords',
+		'Flexible hosting that can be public, self-hosted, or moved when needed'
 	];
 
 	const highlights = [
 		{
 			title: 'What Cordn is',
-			body: 'Cordn is a coordinator-assisted messaging protocol profile designed to make private group communication easier to deploy without giving up strong MLS guarantees.'
+			body: 'Cordn is a private group chat built for people who want strong encryption without handing all control to one big platform.'
 		},
 		{
 			title: 'Why it matters',
-			body: 'It keeps the ordering discipline MLS needs while making hosted, self-hosted, and portable coordinator setups much more practical.'
+			body: 'Most secure messaging tools are either hard to host yourself or hard to move away from. Cordn is designed to keep security strong while making hosting much more practical.'
 		},
 		{
 			title: 'Who it is for',
-			body: 'Teams, communities, and builders who want encrypted group messaging with a more sovereign and flexible deployment model.'
+			body: 'Teams, communities, and builders who want encrypted group messaging with more freedom over where it runs and who operates it.'
 		}
 	];
 </script>
@@ -30,7 +30,7 @@
 	<title>Cordn</title>
 	<meta
 		name="description"
-		content="Cordn is a sovereign MLS messaging experience with deployable coordination over ContextVM."
+		content="Cordn is a private group chat that makes strong encryption easier to use, host, and move."
 	/>
 </svelte:head>
 
@@ -38,14 +38,15 @@
 	<header class="border-b border-border">
 		<div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
 			<a href={resolve('/')} class="flex items-center gap-3 text-lg font-semibold tracking-tight">
-				<span class="text-2xl leading-none">🪢</span>
+				<img src="/cordn-logo-black.svg" alt="Cordn" class="h-8 w-auto dark:hidden" />
+				<img src="/cordn-logo.svg" alt="Cordn" class="hidden h-8 w-auto dark:block" />
 				<span>Cordn</span>
 			</a>
 
 			<nav class="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
 				<a href="#why" class="transition-colors hover:text-foreground">Why Cordn</a>
 				<a href="#how" class="transition-colors hover:text-foreground">How it works</a>
-				<a href="#faq" class="transition-colors hover:text-foreground">Overview</a>
+				<a href="#overview" class="transition-colors hover:text-foreground">Overview</a>
 			</nav>
 
 			<a
@@ -67,19 +68,22 @@
 	</header>
 
 	<main>
-		<section class="mx-auto grid max-w-6xl gap-12 px-6 py-20 md:grid-cols-[1.2fr_0.8fr] md:py-28">
+		<section
+			class="mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)] lg:items-center"
+		>
 			<div class="space-y-8">
 				<div class="space-y-4">
 					<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
-						Private group messaging, deployable by design
+						Private group chat, without the usual platform lock-in
 					</p>
 					<h1 class="max-w-3xl text-4xl font-semibold tracking-tight text-balance md:text-6xl">
-						Cordn brings MLS messaging to a sovereign, firewall-tolerant web experience.
+						Private group messaging that is easier to understand, easier to host, and easier to
+						trust.
 					</h1>
 					<p class="max-w-2xl text-lg leading-8 text-muted-foreground">
-						A simple entry point for understanding Cordn and a direct path into the chat app. Cordn
-						combines strong group security, clear coordination, and a deployment model that does not
-						depend on conventional public server exposure.
+						Cordn is a secure group chat for people who want privacy without needing to become
+						experts in cryptography or infrastructure. It keeps messages encrypted, keeps groups in
+						sync, and gives you more choice over who runs the service.
 					</p>
 				</div>
 
@@ -110,35 +114,20 @@
 				</ul>
 			</div>
 
-			<div class="rounded-2xl border border-border bg-card p-6 shadow-sm">
-				<div class="space-y-5">
-					<div class="flex items-center gap-3 border-b border-border pb-4">
-						<div class="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-lg">
-							🪢
-						</div>
-						<div>
-							<p class="font-medium">Cordn web app</p>
-							<p class="text-sm text-muted-foreground">Landing first, app one click away</p>
-						</div>
-					</div>
-
-					<div class="space-y-3 text-sm text-muted-foreground">
-						<p>
-							This first version keeps the structure intentionally minimal: explain the protocol,
-							show the core ideas, and let users enter the app immediately.
-						</p>
-						<p>
-							As the product evolves, this area can become a UI preview, an interactive demo, or a
-							live activity panel.
-						</p>
-					</div>
-
-					<a
-						href={resolve('/chat')}
-						class="inline-flex w-full items-center justify-center rounded-md bg-secondary px-4 py-3 text-sm font-medium text-secondary-foreground transition-colors hover:bg-muted"
-					>
-						Go to chat placeholder
-					</a>
+			<div class="flex justify-center lg:justify-end">
+				<div
+					class="flex w-full max-w-sm items-center justify-center rounded-3xl border border-border bg-card/70 p-8 shadow-sm backdrop-blur-sm"
+				>
+					<img
+						src="/cordn-logo-black.svg"
+						alt="Cordn logo"
+						class="w-full max-w-[240px] dark:hidden"
+					/>
+					<img
+						src="/cordn-logo.svg"
+						alt="Cordn logo"
+						class="hidden w-full max-w-[240px] dark:block"
+					/>
 				</div>
 			</div>
 		</section>
@@ -150,12 +139,12 @@
 						Why Cordn
 					</p>
 					<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-						A coordinator model that respects how MLS actually works.
+						Cordn keeps secure group chat practical in the real world.
 					</h2>
 					<p class="text-base leading-7 text-muted-foreground">
-						Cordn does not try to remove coordination from secure group messaging. It makes that
-						coordination easier to deploy, easier to move, and more practical for self-hosted or
-						hosted setups alike.
+						Secure group messaging still needs a service that helps keep everyone on the same page.
+						Cordn accepts that reality, then improves it by making that service easier to host,
+						move, and run on your own terms.
 					</p>
 				</div>
 
@@ -176,72 +165,79 @@
 					How it works
 				</p>
 				<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-					Security, coordination, and deployability in one stack.
+					How Cordn works, in plain language.
 				</h2>
 				<p class="text-base leading-7 text-muted-foreground">
-					Cordn uses MLS for secure group state, a coordinator for ordered delivery, and ContextVM
-					for a more portable transport and hosting model.
+					Cordn combines strong encryption for the group, a coordinator that keeps messages in the
+					right order, and a transport model that makes hosting more flexible than a typical public
+					internet service.
 				</p>
 			</div>
 
 			<div class="mt-10 grid gap-4 md:grid-cols-3">
 				<div class="rounded-2xl border border-border p-6">
 					<p class="text-sm text-muted-foreground">01</p>
-					<h3 class="mt-2 text-lg font-medium">Identity and setup</h3>
+					<h3 class="mt-2 text-lg font-medium">You control your identity</h3>
 					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						Users bring key-based identity and connect to a coordinator model designed for group
-						consistency.
+						Cordn uses keys instead of a normal account system, so identity stays closer to the user
+						instead of living inside a platform database.
 					</p>
 				</div>
 				<div class="rounded-2xl border border-border p-6">
 					<p class="text-sm text-muted-foreground">02</p>
-					<h3 class="mt-2 text-lg font-medium">Ordered group messaging</h3>
+					<h3 class="mt-2 text-lg font-medium">The group stays in sync</h3>
 					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						Per-group ordering and fetch semantics make the chat experience dependable instead of
-						guessing over weak dissemination.
+						A coordinator helps the group receive changes in a clear order, which matters for secure
+						group messaging and makes the chat experience much more reliable.
 					</p>
 				</div>
 				<div class="rounded-2xl border border-border p-6">
 					<p class="text-sm text-muted-foreground">03</p>
-					<h3 class="mt-2 text-lg font-medium">Portable deployment</h3>
+					<h3 class="mt-2 text-lg font-medium">Hosting is more flexible</h3>
 					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						Hosted, self-hosted, or temporary coordinators can all fit the same product story.
+						You can use a hosted coordinator, run your own, or move to another one later. That means
+						you are not forced into a single provider forever.
 					</p>
 				</div>
 			</div>
 		</section>
 
-		<section id="faq" class="border-t border-border">
+		<section id="overview" class="border-t border-border">
 			<div class="mx-auto grid max-w-6xl gap-8 px-6 py-16 md:grid-cols-[1fr_0.9fr]">
 				<div class="space-y-4">
 					<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
-						Overview
+						What this means for you
 					</p>
 					<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-						Start simple now, expand later.
+						A friendlier path into private group messaging.
 					</h2>
 					<p class="text-base leading-7 text-muted-foreground">
-						This first landing page is a lightweight foundation. It already gives Cordn a clear
-						identity, explains the product direction, and separates the homepage from the future
-						chat workspace.
+						Cordn is for people who want strong privacy, but also want something grounded in how
+						real systems have to work. It does not promise magic. It offers a clearer tradeoff:
+						encrypted group chat with more control over identity, hosting, and portability.
 					</p>
 				</div>
 
 				<div class="rounded-2xl border border-border bg-card p-6">
 					<div class="space-y-5 text-sm leading-7 text-muted-foreground">
 						<div>
-							<p class="font-medium text-card-foreground">What is live today?</p>
-							<p>A minimal homepage and a dedicated route for the future chat application.</p>
-						</div>
-						<div>
-							<p class="font-medium text-card-foreground">What comes next?</p>
+							<p class="font-medium text-card-foreground">Private by design</p>
 							<p>
-								Refined copy, real app screens, docs links, and a more complete product navigation.
+								Your messages stay encrypted for the group instead of being readable by the service.
 							</p>
 						</div>
 						<div>
-							<p class="font-medium text-card-foreground">Primary action</p>
-							<p>Use the dedicated chat route when the app experience is ready to grow.</p>
+							<p class="font-medium text-card-foreground">Built for real deployment</p>
+							<p>
+								Cordn keeps the coordination secure group chat needs, but makes it easier to host
+								and move.
+							</p>
+						</div>
+						<div>
+							<p class="font-medium text-card-foreground">More user freedom</p>
+							<p>
+								You can start with a hosted service and still keep a path toward self-hosting later.
+							</p>
 						</div>
 					</div>
 				</div>

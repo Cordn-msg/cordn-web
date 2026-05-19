@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -28,12 +28,14 @@
 		groupId,
 		title = 'Cordn',
 		subtitle = 'Coordinator-assisted messaging',
-		icon
+		icon,
+		imageUrl
 	}: {
 		groupId?: string;
 		title?: string;
 		subtitle?: string;
 		icon?: string;
+		imageUrl?: string;
 	} = $props();
 
 	async function fetchMessages() {
@@ -90,10 +92,26 @@
 	<div class="flex items-center justify-between gap-4 px-4 py-3 md:px-6">
 		<div class="flex min-w-0 items-center gap-3">
 			<Avatar class="h-10 w-10 border border-border bg-card">
-				{#if icon}
+				{#if imageUrl}
+					<AvatarImage src={imageUrl} alt={title} class="object-cover" />
+					<AvatarFallback class="bg-card text-base"
+						>{icon || title.slice(0, 1) || '🪢'}</AvatarFallback
+					>
+				{:else if icon}
 					<AvatarFallback class="bg-card text-base">{icon}</AvatarFallback>
 				{:else}
-					<AvatarFallback class="bg-card text-base">🪢</AvatarFallback>
+					<AvatarFallback class="bg-card p-1.5 text-base">
+						<img
+							src="/cordn-logo-black.svg"
+							alt="Cordn"
+							class="h-full w-full object-contain dark:hidden"
+						/>
+						<img
+							src="/cordn-logo.svg"
+							alt="Cordn"
+							class="hidden h-full w-full object-contain dark:block"
+						/>
+					</AvatarFallback>
 				{/if}
 			</Avatar>
 

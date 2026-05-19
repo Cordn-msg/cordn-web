@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -113,7 +113,7 @@
 
 	function getNotificationGroupLabel(groupId: string) {
 		const group = getChatGroup(groupId);
-		return group?.metadata?.name || group?.alias || 'Joined group';
+		return group?.metadata?.name || group?.id || 'Joined group';
 	}
 
 	function getChatSummary(groupId: string) {
@@ -159,9 +159,18 @@
 			title="Chat home"
 		>
 			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-base leading-none"
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background p-1.5"
 			>
-				🪢
+				<img
+					src="/cordn-logo-black.svg"
+					alt="Cordn"
+					class="h-full w-full object-contain dark:hidden"
+				/>
+				<img
+					src="/cordn-logo.svg"
+					alt="Cordn"
+					class="hidden h-full w-full object-contain dark:block"
+				/>
 			</div>
 
 			{#if !collapsed}
@@ -254,6 +263,13 @@
 						>
 							<div class="relative shrink-0">
 								<Avatar class="h-10 w-10 shrink-0 border border-border bg-background">
+									{#if chat.metadata?.imageUrl}
+										<AvatarImage
+											src={chat.metadata.imageUrl}
+											alt={chat.metadata?.name || chat.id}
+											class="object-cover"
+										/>
+									{/if}
 									<AvatarFallback class="bg-background text-sm font-medium"
 										>{chat.metadata?.icon ||
 											chat.metadata?.name?.slice(0, 1) ||
@@ -272,7 +288,7 @@
 							{#if !collapsed}
 								<div class="min-w-0 flex-1">
 									<div class="flex items-start justify-between gap-2">
-										<p class="truncate font-medium">{chat.metadata?.name || chat.alias}</p>
+										<p class="truncate font-medium">{chat.metadata?.name || chat.id}</p>
 									</div>
 									<p class="truncate text-xs text-muted-foreground">
 										{summary.preview}

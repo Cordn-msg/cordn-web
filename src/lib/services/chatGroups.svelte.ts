@@ -1,4 +1,3 @@
-import { browser } from '$app/environment';
 import { SvelteMap } from 'svelte/reactivity';
 import {
 	bytesToBase64,
@@ -48,6 +47,7 @@ import {
 	buildStoredChatGroup,
 	createInitialGroupState,
 	createMemberArtifacts,
+	getProtocolGroupId,
 	type GroupMetadataInput
 } from '$lib/services/chatGroupLifecycle.svelte';
 import {
@@ -55,15 +55,14 @@ import {
 	fetchWelcomeNotifications,
 	removeWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
-import { buildUniqueSlugId, normalizePubKey } from '$lib/utils';
+import { normalizePubKey } from '$lib/utils';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import { getChatStorage, type StoredChatGroupData } from '$lib/storage/chatStorage';
 
-const STORAGE_KEY = 'cordn-chat-groups';
 const groupIdDecoder = new TextDecoder();
 
 export interface StoredChatGroup {
 	id: string;
-	alias: string;
 	coordinatorKey: string;
 	createdAt: number;
 	stateBase64: string;
@@ -83,12 +82,10 @@ export interface CoordinatorAvailableKeyPackage {
 	publishedAt: number;
 }
 
-type PersistedGroups = {
-	groups: StoredChatGroup[];
-};
-
 const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
+let groupsReady: Promise<void> | null = null;
+let persistGroupsPromise: Promise<void> = Promise.resolve();
 
 function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 	return {
@@ -106,25 +103,86 @@ export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 	groups: []
 });
 
-function saveGroups() {
-	if (!browser) return;
-	const payload: PersistedGroups = { groups: chatGroupsStore.groups };
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
+	return {
+		id: group.id,
+		coordinatorKey: group.coordinatorKey,
+		createdAt: group.createdAt,
+		lastCursor: group.lastCursor,
+		fetchCursor: group.fetchCursor,
+		status: group.status,
+		removedAtCursor: group.removedAtCursor,
+		stateBytes: base64ToBytes(group.stateBase64),
+		messages: group.messages.map((message) => ({
+			...message,
+			tags: message.tags.map((tag) => [...tag])
+		})),
+		syncIssues: group.syncIssues.map((issue) => ({ ...issue }))
+	};
 }
 
-function loadGroups() {
-	if (!browser) return;
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return;
-		const parsed = JSON.parse(raw) as PersistedGroups;
-		chatGroupsStore.groups = (parsed.groups ?? []).map(migrateStoredGroup);
-	} catch {
-		chatGroupsStore.groups = [];
-	}
+function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
+	const decoded = clientStateDecoder(group.stateBytes, 0);
+	const metadata = decoded
+		? toPersistedGroupMetadata(getCordnGroupMetadataExtension(decoded[0]))
+		: undefined;
+	return migrateStoredGroup({
+		id: group.id,
+		coordinatorKey: group.coordinatorKey,
+		createdAt: group.createdAt,
+		stateBase64: bytesToBase64(group.stateBytes),
+		lastCursor: group.lastCursor,
+		fetchCursor: group.fetchCursor,
+		messages: group.messages.map((message) => ({
+			...message,
+			tags: message.tags.map((tag) => [...tag])
+		})),
+		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
+		status: group.status,
+		removedAtCursor: group.removedAtCursor,
+		metadata
+	});
 }
 
-loadGroups();
+async function loadGroups() {
+	const storage = await getChatStorage();
+	const groups = await Promise.all(
+		(await storage.listGroups()).map(async (group) => {
+			const fullGroup = await storage.getGroup(group.id);
+			if (!fullGroup) {
+				throw new Error(`Stored group ${group.id} not found`);
+			}
+			return fromStoredGroupData(fullGroup);
+		})
+	);
+	chatGroupsStore.groups = groups;
+}
+
+async function ensureGroupsLoaded() {
+	groupsReady ??= loadGroups();
+	await groupsReady;
+}
+
+function persistGroups(groups: StoredChatGroup[]) {
+	persistGroupsPromise = persistGroupsPromise
+		.then(async () => {
+			const storage = await getChatStorage();
+			const existingGroups = await storage.listGroups();
+			const nextIds = new Set(groups.map((group) => group.id));
+			for (const existing of existingGroups) {
+				if (!nextIds.has(existing.id)) {
+					await storage.deleteGroup(existing.id);
+				}
+			}
+			for (const group of groups) {
+				await storage.putGroup(toStoredGroupData(group));
+			}
+		})
+		.catch(() => undefined);
+	return persistGroupsPromise;
+}
+
+void ensureGroupsLoaded();
 
 function encodeState(state: ClientState): string {
 	return bytesToBase64(encode(clientStateEncoder, state));
@@ -157,7 +215,7 @@ export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean 
 
 function assertChatGroupIsActive(group: StoredChatGroup): void {
 	if (isChatGroupRemoved(group)) {
-		throw new RemovedFromGroupError(group.alias || group.id);
+		throw new RemovedFromGroupError(group.metadata?.name || group.id);
 	}
 }
 
@@ -180,14 +238,14 @@ function requireChatGroup(groupId: string): StoredChatGroup {
 
 function persistGroup(group: StoredChatGroup) {
 	chatGroupsStore.groups = [...chatGroupsStore.groups, group];
-	saveGroups();
+	void persistGroups(chatGroupsStore.groups);
 }
 
 function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	chatGroupsStore.groups = chatGroupsStore.groups.map((group) =>
 		group.id === groupId ? nextGroup : group
 	);
-	saveGroups();
+	void persistGroups(chatGroupsStore.groups);
 }
 
 async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>): Promise<T> {
@@ -260,11 +318,7 @@ export async function createChatGroup(input: {
 	markCoordinatorUsed(normalizedCoordinatorKey);
 
 	const group = buildStoredChatGroup({
-		id: buildUniqueSlugId(
-			chatGroupsStore.groups.map((group) => group.id),
-			input.name,
-			`group-${Date.now()}`
-		),
+		id: getProtocolGroupId(state),
 		coordinatorKey: normalizedCoordinatorKey,
 		stateBase64: encodeState(state),
 		metadata
@@ -287,13 +341,7 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 
 	const group = await acceptWelcomeToGroup({
 		welcome,
-		encodeState,
-		buildGroupId: (name, fallback) =>
-			buildUniqueSlugId(
-				chatGroupsStore.groups.map((group) => group.id),
-				name,
-				fallback
-			)
+		encodeState
 	});
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
@@ -717,7 +765,6 @@ export async function sendChatGroupMessage(input: {
 			cursor: posted.cursor,
 			createdAt: posted.at,
 			direction: 'outbound',
-			opaqueMessageBase64: outbound.opaqueMessageBase64,
 			sender: normalizePubKey(account.pubkey),
 			id: outbound.event.id,
 			kind: outbound.event.kind,
@@ -742,5 +789,5 @@ export async function sendChatGroupMessage(input: {
 
 export function deleteChatGroup(groupId: string): void {
 	chatGroupsStore.groups = chatGroupsStore.groups.filter((group) => group.id !== groupId);
-	saveGroups();
+	void persistGroups(chatGroupsStore.groups);
 }
