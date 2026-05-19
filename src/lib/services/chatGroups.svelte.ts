@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { SvelteMap } from 'svelte/reactivity';
 import {
 	bytesToBase64,
 	base64ToBytes,
@@ -15,7 +16,9 @@ import {
 	findMemberLeafIndexByStablePubkey,
 	getCordnGroupMetadataExtension,
 	parseConsumedPublishedKeyPackage,
+	replaceMemberInGroup,
 	removeMemberFromGroup,
+	updateGroupMetadataExtension,
 	SelfRemovalNotSupportedError,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
@@ -45,11 +48,11 @@ import {
 	buildStoredChatGroup,
 	createInitialGroupState,
 	createMemberArtifacts,
-	markGroupCreatorKeyPackagePublished,
 	type GroupMetadataInput
 } from '$lib/services/chatGroupLifecycle.svelte';
 import {
 	getWelcomeNotification,
+	fetchWelcomeNotifications,
 	removeWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { buildUniqueSlugId, normalizePubKey } from '$lib/utils';
@@ -84,7 +87,7 @@ type PersistedGroups = {
 	groups: StoredChatGroup[];
 };
 
-const groupOperationChains = new Map<string, Promise<unknown>>();
+const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
 
 function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
@@ -231,7 +234,7 @@ export async function createChatGroup(input: {
 	keyPackageLabel?: string;
 	keyPackageIsLastResort?: boolean;
 }) {
-	const account = requireActiveAccount('You must be logged in to create a group');
+	requireActiveAccount('You must be logged in to create a group');
 	const metadata: GroupMetadataInput = {
 		name: input.name,
 		description: input.description,
@@ -253,14 +256,8 @@ export async function createChatGroup(input: {
 		memberArtifacts
 	});
 
-	const coordinatorClient = getCoordinatorClient(account, input.coordinatorKey);
-	await coordinatorClient.PublishKeyPackage({
-		kp_ref: memberArtifacts.keyPackageRef,
-		kp_64: memberArtifacts.keyPackageBase64
-	});
 	const normalizedCoordinatorKey = normalizePubKey(input.coordinatorKey);
 	markCoordinatorUsed(normalizedCoordinatorKey);
-	markGroupCreatorKeyPackagePublished(memberArtifacts.keyPackageRef, normalizedCoordinatorKey);
 
 	const group = buildStoredChatGroup({
 		id: buildUniqueSlugId(
@@ -279,6 +276,10 @@ export async function createChatGroup(input: {
 
 export async function acceptChatWelcome(input: { welcomeId: string }): Promise<StoredChatGroup> {
 	requireActiveAccount('You must be logged in to accept a welcome');
+	const existingWelcome = getWelcomeNotification(input.welcomeId);
+	if (existingWelcome) {
+		await fetchWelcomeNotifications([existingWelcome.coordinatorKey]);
+	}
 	const welcome = getWelcomeNotification(input.welcomeId);
 	if (!welcome) {
 		throw new Error('Stored welcome not found');
@@ -355,11 +356,22 @@ export async function inviteChatGroupMember(input: {
 			stablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
 			publicationEvent: consumeResult.keyPackage.event
 		});
-
-		const commitResult = await addMemberToGroup({
+		const replacedLeafIndex = findMemberLeafIndexByStablePubkey(
 			state,
-			memberKeyPackage
-		});
+			normalizePubKey(consumeResult.keyPackage.pk)
+		);
+
+		const commitResult =
+			replacedLeafIndex < 0
+				? await addMemberToGroup({
+						state,
+						memberKeyPackage
+					})
+				: await replaceMemberInGroup({
+						state,
+						memberKeyPackage,
+						removedLeafIndex: replacedLeafIndex
+					});
 
 		enqueuePendingEpochOperation(pendingEpochOperations, {
 			kind: 'add-member',
@@ -376,6 +388,7 @@ export async function inviteChatGroupMember(input: {
 
 		const syncBaseGroup: StoredChatGroup = {
 			...group,
+			stateBase64: encodeState(commitResult.newState),
 			metadata:
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 				group.metadata
@@ -385,7 +398,7 @@ export async function inviteChatGroupMember(input: {
 			after: group.fetchCursor > 0 ? group.fetchCursor : undefined
 		});
 
-		const workingGroup = createWorkingChatGroupSession(syncBaseGroup, state);
+		const workingGroup = createWorkingChatGroupSession(syncBaseGroup, commitResult.newState);
 		const sync = await syncChatGroupMessages({
 			group,
 			workingGroup,
@@ -491,6 +504,69 @@ export async function removeChatGroupMember(input: {
 			metadata:
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 				group.metadata
+		});
+
+		replaceGroup(group.id, nextGroup);
+		return nextGroup;
+	});
+}
+
+export async function updateChatGroupMetadata(input: {
+	groupId: string;
+	name: string;
+	description?: string;
+	icon?: string;
+	imageUrl?: string;
+	adminPubkeys?: string[];
+}): Promise<StoredChatGroup> {
+	return runGroupOperation(input.groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to update group metadata');
+		const group = requireChatGroup(input.groupId);
+		assertChatGroupIsActive(group);
+		assertCanAdministerGroup({
+			groupId: group.id,
+			metadata: group.metadata,
+			stablePubkey: account.pubkey
+		});
+
+		const metadata: GroupMetadataInput = {
+			name: input.name,
+			description: input.description,
+			icon: input.icon,
+			imageUrl: input.imageUrl,
+			adminPubkeys: input.adminPubkeys
+		};
+		const state = decodeStoredGroupState(group);
+		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
+		const commitResult = await updateGroupMetadataExtension({
+			state,
+			metadata
+		});
+
+		enqueuePendingEpochOperation(pendingEpochOperations, {
+			kind: 'update-group-metadata',
+			groupId: group.id,
+			commitMessageBase64: commitResult.commitMessageBase64
+		});
+
+		await coordinatorClient.PostGroupMessage({
+			msg_64: commitResult.commitMessageBase64
+		});
+
+		const nextGroup = buildPersistedChatGroup({
+			group,
+			workingGroup: createWorkingChatGroupSession(
+				{
+					...group,
+					metadata:
+						toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+						metadata
+				},
+				commitResult.newState
+			),
+			encodeState,
+			metadata:
+				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ?? metadata
 		});
 
 		replaceGroup(group.id, nextGroup);

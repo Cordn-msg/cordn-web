@@ -1,16 +1,32 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
+	import {
+		DropdownMenuRoot,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
+	import { Input } from '$lib/components/ui/input';
+	import {
+		Tooltip,
+		TooltipContent,
+		TooltipProvider,
+		TooltipTrigger
+	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { ProfileModel } from 'applesauce-core/models';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
+	import Plus from '@lucide/svelte/icons/plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import { Metadata } from 'nostr-tools/kinds';
-	import { pubkeyToHexColor } from '$lib/utils';
+	import { cn, pubkeyToHexColor } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 
+	const CUSTOM_REACTIONS_STORAGE_KEY = 'chat-custom-reactions';
 	const REACTIONS = ['♥', '👍'] as const;
 
 	let {
@@ -32,12 +48,18 @@
 		onNavigateToMessage?: (messageId: string) => void;
 		highlighted?: boolean;
 	} = $props();
-	let reactionPickerOpen = $state(false);
+	let reactionMenuOpen = $state(false);
+	let customReactionOpen = $state(false);
+	let customReaction = $state('');
+	let customReactionInput: HTMLInputElement | null = $state(null);
+	let savedReactions = $state<string[]>([]);
 
 	const isOwn = $derived(message.isOwn ?? false);
+	const actionSideClass = $derived(isOwn ? 'right-full mr-2' : 'left-full ml-2');
+	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
 	const bubbleClass = $derived.by(
 		() =>
-			`max-w-full rounded-2xl border px-4 py-3 text-sm leading-7 shadow-sm transition-all ${
+			`max-w-full rounded-3xl border px-4 py-3 text-sm leading-7 shadow-sm transition-all ${
 				isOwn ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card'
 			} ${highlighted ? 'border-amber-400 bg-amber-50/70 ring-4 ring-amber-300/35 shadow-xl scale-[1.015] animate-pulse' : ''}`
 	);
@@ -60,6 +82,64 @@
 
 		return () => sub.unsubscribe();
 	});
+
+	$effect(() => {
+		if (!reactionMenuOpen || !customReactionOpen || !customReactionInput) return;
+		customReactionInput.focus();
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			const stored = localStorage.getItem(CUSTOM_REACTIONS_STORAGE_KEY);
+			if (!stored) return;
+			const parsed = JSON.parse(stored);
+			if (!Array.isArray(parsed)) return;
+			savedReactions = parsed.filter((value): value is string => typeof value === 'string');
+		} catch {
+			savedReactions = [];
+		}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		localStorage.setItem(CUSTOM_REACTIONS_STORAGE_KEY, JSON.stringify(savedReactions));
+	});
+
+	function normalizeCustomReaction(value: string) {
+		const trimmed = value.trim();
+		if (!trimmed) return '';
+		if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+			const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+			const [first] = Array.from(segmenter.segment(trimmed));
+			return first?.segment ?? '';
+		}
+		return Array.from(trimmed)[0] ?? '';
+	}
+
+	function persistCustomReaction(reaction: string) {
+		if (REACTIONS.includes(reaction as (typeof REACTIONS)[number])) return;
+		if (savedReactions.includes(reaction)) return;
+		savedReactions = [...savedReactions, reaction];
+	}
+
+	async function handleCustomReaction() {
+		const reaction = normalizeCustomReaction(customReaction);
+		if (!reaction) return;
+		persistCustomReaction(reaction);
+		await onReact(message, reaction);
+		customReaction = '';
+		customReactionOpen = false;
+		reactionMenuOpen = false;
+	}
+
+	function handleReactionMenuOpenChange(open: boolean) {
+		reactionMenuOpen = open;
+		if (!open) {
+			customReactionOpen = false;
+			customReaction = '';
+		}
+	}
 </script>
 
 <div class="flex flex-col gap-2">
@@ -82,62 +162,126 @@
 		</div>
 
 		<div class="group flex max-w-3xl items-end gap-2" class:flex-row-reverse={isOwn}>
-			<div class="relative flex min-w-0 flex-col gap-1" class:items-end={isOwn}>
-				<div
-					class="pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-					class:-left-18={!isOwn}
-					class:-right-18={isOwn}
-				>
-					<div class="relative">
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							class="pointer-events-auto h-8 w-8 rounded-lg bg-background/90 opacity-100 shadow-sm backdrop-blur-sm"
-							onclick={() => {
-								reactionPickerOpen = !reactionPickerOpen;
-							}}
-							aria-label="Add reaction"
-						>
-							<SmilePlus class="size-4" />
-						</Button>
-
-						{#if reactionPickerOpen}
-							<div
-								class="absolute bottom-full z-10 mb-2 flex items-center gap-1 rounded-xl border border-border bg-popover p-1 shadow-lg"
-								class:right-0={isOwn}
-							>
-								{#each REACTIONS as reaction}
-									<button
+			<div class="relative flex min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
+				<TooltipProvider>
+					<div
+						class={cn(
+							'absolute top-3 z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
+							reactionMenuOpen ? 'opacity-100' : 'opacity-0',
+							actionSideClass
+						)}
+					>
+						<Tooltip>
+							<TooltipTrigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
 										type="button"
-										class="flex h-9 w-9 items-center justify-center rounded-lg text-lg transition-colors hover:bg-accent hover:text-accent-foreground"
-										onclick={async () => {
-											reactionPickerOpen = false;
-											await onReact(message, reaction);
-										}}
-										aria-label={`React with ${reaction}`}
+										variant="ghost"
+										size="icon-sm"
+										class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+										onclick={() => onReply(message)}
+										aria-label="Reply to message"
+									>
+										<CornerUpLeft class="size-4" />
+									</Button>
+								{/snippet}
+							</TooltipTrigger>
+							<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
+						</Tooltip>
+
+						<DropdownMenuRoot
+							bind:open={reactionMenuOpen}
+							onOpenChange={handleReactionMenuOpenChange}
+						>
+							<Tooltip>
+								<TooltipTrigger>
+									{#snippet child({ props })}
+										<DropdownMenuTrigger {...props}>
+											{#snippet child({ props: triggerProps })}
+												<Button
+													{...triggerProps}
+													type="button"
+													variant="ghost"
+													size="icon-sm"
+													class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+													aria-label="Add reaction"
+												>
+													<SmilePlus class="size-4" />
+												</Button>
+											{/snippet}
+										</DropdownMenuTrigger>
+									{/snippet}
+								</TooltipTrigger>
+								<TooltipContent side="top" sideOffset={8}>Add reaction</TooltipContent>
+							</Tooltip>
+
+							<DropdownMenuContent
+								side="top"
+								align={isOwn ? 'start' : 'end'}
+								sideOffset={8}
+								class="flex min-w-0 flex-row items-center gap-1 rounded-2xl p-1"
+							>
+								{#each availableReactions as reaction}
+									<DropdownMenuItem
+										onSelect={() => onReact(message, reaction)}
+										class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
 									>
 										{reaction}
-									</button>
+									</DropdownMenuItem>
 								{/each}
-							</div>
-						{/if}
+								<div class="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
+									{#if customReactionOpen}
+										<form
+											class="flex items-center gap-1"
+											onsubmit={async (event) => {
+												event.preventDefault();
+												await handleCustomReaction();
+											}}
+										>
+											<Input
+												bind:ref={customReactionInput}
+												bind:value={customReaction}
+												class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
+												placeholder=""
+												maxlength={8}
+												aria-label="Custom reaction"
+												oninput={() => {
+													customReaction = normalizeCustomReaction(customReaction);
+												}}
+											/>
+											<Button
+												type="submit"
+												variant="ghost"
+												size="icon-sm"
+												class="rounded-xl bg-background"
+												aria-label="Confirm custom reaction"
+											>
+												<Plus class="size-4" />
+											</Button>
+										</form>
+									{:else}
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											class="rounded-xl bg-background"
+											aria-label="Show custom reaction input"
+											onclick={() => {
+												customReactionOpen = true;
+											}}
+										>
+											<Plus class="size-4" />
+										</Button>
+									{/if}
+								</div>
+							</DropdownMenuContent>
+						</DropdownMenuRoot>
 					</div>
-
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						class="pointer-events-auto h-8 w-8 rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-						onclick={() => onReply(message)}
-						aria-label="Reply to message"
-					>
-						<CornerUpLeft class="size-4" />
-					</Button>
-				</div>
+				</TooltipProvider>
 
 				{#if showAuthor}
-					<p class="max-w-[16rem] truncate px-1 text-xs font-medium text-foreground">
+					<p class="max-w-[16rem] truncate px-1 text-xs font-medium text-foreground/90">
 						{displayName}
 					</p>
 				{/if}
@@ -146,7 +290,12 @@
 					{#if message.replyTo}
 						<button
 							type="button"
-							class="mb-3 block w-full rounded-xl border border-border/70 bg-background/70 px-3 py-2 text-left"
+							class={cn(
+								'mb-3 block w-full rounded-2xl border px-3 py-2 text-left transition-colors',
+								isOwn
+									? 'border-primary-foreground/15 bg-primary-foreground/10 hover:bg-primary-foreground/15'
+									: 'border-border/70 bg-background/70 hover:bg-muted/80'
+							)}
 							onclick={() => onNavigateToMessage(message.replyTo!.id)}
 						>
 							<p class="truncate text-xs font-medium text-muted-foreground">
@@ -160,32 +309,50 @@
 				</div>
 
 				{#if message.reactions?.length}
-					<div class="flex flex-wrap gap-2 px-1 pt-1" class:justify-end={isOwn}>
+					<div class="flex flex-wrap gap-2 px-1 pt-0.5" class:justify-end={isOwn}>
 						{#each message.reactions as reaction (`${message.id}:${reaction.emoji}`)}
-							<div class="group/reaction relative">
-								<div
-									class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground' : 'border-border bg-muted/40 text-muted-foreground'}`}
-								>
-									<span>{reaction.emoji}</span>
-									<span>{reaction.count}</span>
-								</div>
+							<DropdownMenuRoot>
+								<Tooltip>
+									<TooltipTrigger>
+										{#snippet child({ props })}
+											<DropdownMenuTrigger {...props}>
+												{#snippet child({ props: triggerProps })}
+													<button
+														{...triggerProps}
+														type="button"
+														class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+														aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
+														onclick={() => onReact(message, reaction.emoji)}
+													>
+														<span>{reaction.emoji}</span>
+														<span>{reaction.count}</span>
+													</button>
+												{/snippet}
+											</DropdownMenuTrigger>
+										{/snippet}
+									</TooltipTrigger>
+									<TooltipContent side="top" sideOffset={8}>View reactions</TooltipContent>
+								</Tooltip>
 
-								<div
-									class="absolute bottom-full left-1/2 z-20 mb-2 hidden min-w-44 -translate-x-1/2 rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-lg group-hover/reaction:block"
+								<DropdownMenuContent
+									side="top"
+									align={isOwn ? 'start' : 'end'}
+									sideOffset={8}
+									class="min-w-44 rounded-xl p-3"
 								>
 									<div class="flex flex-col gap-2">
 										{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
 											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
 										{/each}
 									</div>
-								</div>
-							</div>
+								</DropdownMenuContent>
+							</DropdownMenuRoot>
 						{/each}
 					</div>
 				{/if}
 			</div>
 
-			<p class="shrink-0 text-[11px] text-muted-foreground">{message.timeLabel}</p>
+			<p class="shrink-0 px-1 text-[11px] text-muted-foreground/80">{message.timeLabel}</p>
 		</div>
 	</article>
 </div>

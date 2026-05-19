@@ -20,6 +20,7 @@ export function listGroupMembers(
 	const leaves = state.ratchetTree as
 		| Array<
 				| {
+						nodeType?: number;
 						leaf?: {
 							credential?: {
 								identity?: Uint8Array;
@@ -34,13 +35,17 @@ export function listGroupMembers(
 
 	const members: Array<{ leafIndex: number; stablePubkey: string }> = [];
 	for (let index = 0; index < leaves.length; index += 1) {
+		if (leaves[index]?.nodeType !== 1) {
+			continue;
+		}
+
 		const leaf = leaves[index]?.leaf;
 		if (!leaf?.credential || !('identity' in leaf.credential) || !leaf.credential.identity) {
 			continue;
 		}
 
 		members.push({
-			leafIndex: Math.floor(index / 2),
+			leafIndex: index / 2,
 			stablePubkey: decodeCredentialIdentity(leaf.credential.identity)
 		});
 	}

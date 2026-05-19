@@ -41,6 +41,9 @@ importers:
       lean-qr:
         specifier: ^2.7.1
         version: 2.7.1
+      mode-watcher:
+        specifier: ^1.1.0
+        version: 1.1.0(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.3)
@@ -48,8 +51,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       ts-mls:
-        specifier: 2.0.0-rc.11
-        version: 2.0.0-rc.11(@noble/ciphers@2.2.0)
+        specifier: 2.0.0-rc.12
+        version: 2.0.0-rc.12(@noble/ciphers@2.2.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -1406,6 +1409,11 @@ packages:
     resolution: {integrity: sha512-MULkVLfKGYDFYejP07QOurDLLQpcjk7Fw+7jXS2R2czRQzR56yHRveU5NDJEOviH+hETZKSkIk5c+T23GjFUMg==}
     engines: {node: 18 || 20 || >=22}
 
+  mode-watcher@1.1.0:
+    resolution: {integrity: sha512-mUT9RRGPDYenk59qJauN1rhsIMKBmWA3xMF+uRwE8MW/tjhaDSCCARqkSuDTq8vr4/2KcAxIGVjACxTjdk5C3g==}
+    peerDependencies:
+      svelte: ^5.27.0
+
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
     engines: {node: '>=4'}
@@ -1712,6 +1720,16 @@ packages:
     resolution: {integrity: sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==}
     engines: {node: '>= 18'}
 
+  runed@0.23.4:
+    resolution: {integrity: sha512-9q8oUiBYeXIDLWNK5DfCWlkL0EW3oGbk845VdKlPeia28l751VpfesaB/+7pI6rnbx1I6rqoZ2fZxptOJLxILA==}
+    peerDependencies:
+      svelte: ^5.7.0
+
+  runed@0.25.0:
+    resolution: {integrity: sha512-7+ma4AG9FT2sWQEA0Egf6mb7PBT2vHyuHail1ie8ropfSjvZGtEAx8YTmUjv/APCsdRRxEVvArNjALk9zFSOrg==}
+    peerDependencies:
+      svelte: ^5.7.0
+
   runed@0.28.0:
     resolution: {integrity: sha512-k2xx7RuO9hWcdd9f+8JoBeqWtYrm5CALfgpkg2YDB80ds/QE4w0qqu34A7fqiAwiBBSBQOid7TLxwxVC27ymWQ==}
     peerDependencies:
@@ -1848,6 +1866,12 @@ packages:
     peerDependencies:
       svelte: ^5.30.2
 
+  svelte-toolbelt@0.7.1:
+    resolution: {integrity: sha512-HcBOcR17Vx9bjaOceUvxkY3nGmbBmCBBbuWLLEWO6jtmWH8f/QoWmbyUfQZrpDINH39en1b8mptfPQT9VKQ1xQ==}
+    engines: {node: '>=18', pnpm: '>=8.7.0'}
+    peerDependencies:
+      svelte: ^5.0.0
+
   svelte@5.55.5:
     resolution: {integrity: sha512-2uCs/LZ9us+AktdzYJM8OcxQ8qnPS1kpaO7syGT/MgO+6Qr1Ybl+TqPq+97u7PHqmmMlye5ZkoyXONy5mjjAbw==}
     engines: {node: '>=18'}
@@ -1908,8 +1932,8 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
-  ts-mls@2.0.0-rc.11:
-    resolution: {integrity: sha512-0LR6sLBeU6k8TdipfC9K3JiG4jJB+cMtbMOkByp1yk9g2b0vr8MUvUI9ZB+NkRhfj4uffsDUVXq5I4CMKjd4eQ==}
+  ts-mls@2.0.0-rc.12:
+    resolution: {integrity: sha512-VAjd6uvRuydk529B/On9GgIinrUiDGGENkf7k8nDCaYZzAN7aOmJIQs9IsG8A2q7o+Ldp1bm0Ds2hhlgeqL7cg==}
     peerDependencies:
       '@hpke/chacha20poly1305': 1.8.0
       '@hpke/dhkem-x448': 1.8.0
@@ -3386,6 +3410,12 @@ snapshots:
     dependencies:
       brace-expansion: 5.0.6
 
+  mode-watcher@1.1.0(svelte@5.55.5(@typescript-eslint/types@8.59.3)):
+    dependencies:
+      runed: 0.25.0(svelte@5.55.5(@typescript-eslint/types@8.59.3))
+      svelte: 5.55.5(@typescript-eslint/types@8.59.3)
+      svelte-toolbelt: 0.7.1(svelte@5.55.5(@typescript-eslint/types@8.59.3))
+
   mri@1.2.0: {}
 
   mrmime@2.0.1: {}
@@ -3633,6 +3663,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  runed@0.23.4(svelte@5.55.5(@typescript-eslint/types@8.59.3)):
+    dependencies:
+      esm-env: 1.2.2
+      svelte: 5.55.5(@typescript-eslint/types@8.59.3)
+
+  runed@0.25.0(svelte@5.55.5(@typescript-eslint/types@8.59.3)):
+    dependencies:
+      esm-env: 1.2.2
+      svelte: 5.55.5(@typescript-eslint/types@8.59.3)
+
   runed@0.28.0(svelte@5.55.5(@typescript-eslint/types@8.59.3)):
     dependencies:
       esm-env: 1.2.2
@@ -3796,6 +3836,13 @@ snapshots:
     transitivePeerDependencies:
       - '@sveltejs/kit'
 
+  svelte-toolbelt@0.7.1(svelte@5.55.5(@typescript-eslint/types@8.59.3)):
+    dependencies:
+      clsx: 2.1.1
+      runed: 0.23.4(svelte@5.55.5(@typescript-eslint/types@8.59.3))
+      style-to-object: 1.0.14
+      svelte: 5.55.5(@typescript-eslint/types@8.59.3)
+
   svelte@5.55.5(@typescript-eslint/types@8.59.3):
     dependencies:
       '@jridgewell/remapping': 2.3.5
@@ -3854,7 +3901,7 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  ts-mls@2.0.0-rc.11(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.12(@noble/ciphers@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0

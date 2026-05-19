@@ -62,7 +62,6 @@ export type coordinatorClient = {
 
 export class cordnClient implements coordinatorClient {
 	static readonly DEFAULT_RELAYS = ['ws://localhost:10547'];
-	// static readonly DEFAULT_RELAYS = ["wss://relay.contextvm.org"];
 	private readonly stableClient: Client;
 	private readonly stableTransport: NostrClientTransport;
 	private readonly stableConnected: Promise<void>;
@@ -86,13 +85,10 @@ export class cordnClient implements coordinatorClient {
 			version: '1.0.0'
 		});
 
-		// Private key precedence: constructor options > config file
 		const resolvedPrivateKey = options.privateKey || '';
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
-		// Use options.relays if provided, otherwise use class DEFAULT_RELAYS
 		const relays = options.relays || cordnClient.DEFAULT_RELAYS;
-		// Use options.relayHandler if provided, otherwise create from relays
 		const relayHandler = options.relayHandler || new ApplesauceRelayPool(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {

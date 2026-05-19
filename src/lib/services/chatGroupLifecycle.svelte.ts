@@ -9,12 +9,12 @@ import type { StoredKeyPackageRecord } from '$lib/services/chatKeyPackages.svelt
 import {
 	decodeStoredKeyPackage,
 	getChatKeyPackage,
-	markKeyPackageConsumed,
-	markKeyPackagePublished
+	markKeyPackageConsumed
 } from '$lib/services/chatKeyPackages.svelte';
 import {
 	getCordnCipherSuite,
 	getCordnGroupMetadataExtension,
+	isLastResortKeyPackage,
 	joinGroupFromWelcome,
 	makeCordnGroupMetadataExtension,
 	type CordnGroupMetadata
@@ -37,7 +37,6 @@ export async function createMemberArtifacts(params: {
 	keyPackage: KeyPackage;
 	privateKeyPackage: PrivateKeyPackage;
 	keyPackageRef: string;
-	keyPackageBase64: string;
 }> {
 	if (params.selectedKeyPackageRef) {
 		const storedRecord = getChatKeyPackage(params.selectedKeyPackageRef);
@@ -46,11 +45,15 @@ export async function createMemberArtifacts(params: {
 		}
 
 		const decoded = decodeStoredKeyPackage(storedRecord);
+		if (storedRecord.isLastResort && !isLastResortKeyPackage(decoded.keyPackage)) {
+			throw new Error(
+				'Legacy last-resort key packages are not compatible with ts-mls rc.12. Generate a new last-resort key package and retry.'
+			);
+		}
 		return {
 			keyPackage: decoded.keyPackage,
 			privateKeyPackage: decoded.privateKeyPackage,
-			keyPackageRef: storedRecord.keyPackageRef,
-			keyPackageBase64: storedRecord.keyPackageBase64
+			keyPackageRef: storedRecord.keyPackageRef
 		};
 	}
 
@@ -58,8 +61,7 @@ export async function createMemberArtifacts(params: {
 	return {
 		keyPackage: createdKeyPackage.keyPackage,
 		privateKeyPackage: createdKeyPackage.privateKeyPackage,
-		keyPackageRef: createdKeyPackage.record.keyPackageRef,
-		keyPackageBase64: createdKeyPackage.record.keyPackageBase64
+		keyPackageRef: createdKeyPackage.record.keyPackageRef
 	};
 }
 
@@ -132,8 +134,4 @@ export async function acceptWelcomeToGroup(params: {
 
 	markKeyPackageConsumed(params.welcome.kpRef, group.id);
 	return group;
-}
-
-export function markGroupCreatorKeyPackagePublished(keyPackageRef: string, coordinatorKey: string) {
-	markKeyPackagePublished(keyPackageRef, coordinatorKey);
 }

@@ -35,8 +35,7 @@ vi.mock('$lib/services/chatGroupLifecycle.svelte', () => ({
 	acceptWelcomeToGroup: vi.fn(),
 	buildStoredChatGroup: vi.fn(),
 	createInitialGroupState: vi.fn(),
-	createMemberArtifacts: vi.fn(),
-	markGroupCreatorKeyPackagePublished: vi.fn()
+	createMemberArtifacts: vi.fn()
 }));
 
 vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({

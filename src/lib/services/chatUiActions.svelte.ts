@@ -1,4 +1,5 @@
 import { goto } from '$app/navigation';
+import { resolve } from '$app/paths';
 import {
 	acceptChatWelcome,
 	deleteChatGroup,
@@ -7,6 +8,7 @@ import {
 	listCoordinatorAvailableKeyPackages,
 	removeChatGroupMember,
 	sendChatGroupMessage,
+	updateChatGroupMetadata,
 	type CoordinatorAvailableKeyPackage
 } from '$lib/services/chatGroups.svelte';
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
@@ -48,10 +50,12 @@ export const chatHeaderActionsStore = $state<{
 export const chatGroupInfoActionsStore = $state<{
 	removeSubmitting: string;
 	deleteSubmitting: boolean;
+	metadataSubmitting: boolean;
 	error: string;
 }>({
 	removeSubmitting: '',
 	deleteSubmitting: false,
+	metadataSubmitting: false,
 	error: ''
 });
 
@@ -151,7 +155,7 @@ export async function deleteGroupAction(groupId: string | undefined) {
 		await stopWatchingGroup(groupId, 'group deleted locally');
 		deleteChatGroup(groupId);
 		removeChatGroupPresence(groupId);
-		await goto('/chat');
+		await goto(resolve('/chat'));
 		return true;
 	} catch (error) {
 		chatGroupInfoActionsStore.error =
@@ -159,6 +163,31 @@ export async function deleteGroupAction(groupId: string | undefined) {
 		return false;
 	} finally {
 		chatGroupInfoActionsStore.deleteSubmitting = false;
+	}
+}
+
+export async function updateGroupMetadataAction(
+	groupId: string | undefined,
+	input: {
+		name: string;
+		description?: string;
+		icon?: string;
+		imageUrl?: string;
+		adminPubkeys?: string[];
+	}
+) {
+	if (!groupId || chatGroupInfoActionsStore.metadataSubmitting) return false;
+	chatGroupInfoActionsStore.metadataSubmitting = true;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		await updateChatGroupMetadata({ groupId, ...input });
+		return true;
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to update group metadata';
+		return false;
+	} finally {
+		chatGroupInfoActionsStore.metadataSubmitting = false;
 	}
 }
 
@@ -241,7 +270,7 @@ export async function acceptWelcomeAction(welcomeId: string) {
 	chatWelcomeNotificationsStore.error = '';
 	try {
 		const group = await acceptChatWelcome({ welcomeId });
-		await goto(`/chat/${group.id}`);
+		await goto(resolve('/chat/[id]', { id: group.id }));
 		return true;
 	} catch (error) {
 		const notification = getWelcomeNotification(welcomeId);

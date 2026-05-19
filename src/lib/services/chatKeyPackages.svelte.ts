@@ -9,7 +9,6 @@ import {
 	makeKeyPackageRef,
 	privateKeyPackageDecoder,
 	privateKeyPackageEncoder,
-	type CustomExtension,
 	type KeyPackage,
 	type PrivateKeyPackage
 } from 'ts-mls';
@@ -17,6 +16,8 @@ import {
 	CLI_CIPHERSUITE,
 	createCordnMetadataCapabilities,
 	createCredential,
+	ensureLastResortKeyPackageExtension,
+	isLastResortKeyPackage,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
 import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
@@ -26,8 +27,6 @@ import { normalizePubKey } from '$lib/utils';
 import { bytesToHex } from 'applesauce-core/helpers';
 
 const STORAGE_KEY = 'cordn-chat-key-packages';
-const LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE = 0x0004;
-
 export interface StoredKeyPackageRecord {
 	id: string;
 	ownerPubkey: string;
@@ -50,38 +49,6 @@ type PersistedKeyPackages = {
 export const chatKeyPackagesStore = $state<{ keyPackages: StoredKeyPackageRecord[] }>({
 	keyPackages: []
 });
-
-function ensureLastResortKeyPackageExtension(extensions: CustomExtension[] = []) {
-	if (
-		extensions.some(
-			(extension) => extension.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE
-		)
-	) {
-		return extensions;
-	}
-
-	return [
-		...extensions,
-		{
-			extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
-			extensionData: new Uint8Array()
-		} as CustomExtension
-	];
-}
-
-function isLastResortKeyPackage(keyPackage: KeyPackage): boolean {
-	return keyPackage.extensions.some((extension) => {
-		if (extension.extensionType !== LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE) {
-			return false;
-		}
-
-		if (extension.extensionData.length !== 0) {
-			throw new Error('Invalid last-resort key package extension data');
-		}
-
-		return true;
-	});
-}
 
 function saveKeyPackages() {
 	if (!browser) return;

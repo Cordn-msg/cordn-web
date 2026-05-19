@@ -24,11 +24,15 @@ import {
 	type GroupContextExtension,
 	type KeyPackage,
 	type PrivateKeyPackage,
-	type Welcome
+	type Welcome,
+	type NodeLeaf,
+	type CredentialBasic
 } from 'ts-mls';
 import { verifyEvent, type NostrEvent } from 'nostr-tools';
 
 export const CORDN_GROUP_METADATA_EXTENSION_TYPE = 0xc04d;
+export const APP_DATA_DICTIONARY_EXTENSION_TYPE = 0x0006;
+export const LAST_RESORT_KEY_PACKAGE_COMPONENT_ID = 0x0004;
 export const CLI_CIPHERSUITE = 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519';
 
 type Decoder<T> = (bytes: Uint8Array, offset: number) => [T, number] | undefined;
@@ -66,11 +70,58 @@ function encodeUint16(value: number): Uint8Array {
 	return Uint8Array.from([(value >> 8) & 0xff, value & 0xff]);
 }
 
+function encodeVarBytes(bytes: Uint8Array): Uint8Array {
+	if (bytes.length < 64) {
+		return Uint8Array.from([bytes.length, ...bytes]);
+	}
+
+	if (bytes.length < 16_384) {
+		return Uint8Array.from([0x40 | ((bytes.length >> 8) & 0x3f), bytes.length & 0xff, ...bytes]);
+	}
+
+	if (bytes.length < 1_073_741_824) {
+		return Uint8Array.from([
+			0x80 | ((bytes.length >> 24) & 0x3f),
+			(bytes.length >> 16) & 0xff,
+			(bytes.length >> 8) & 0xff,
+			bytes.length & 0xff,
+			...bytes
+		]);
+	}
+
+	throw new Error('App data dictionary entry is too large');
+}
+
 function decodeUint16(bytes: Uint8Array, offset: number): number {
 	if (offset + 2 > bytes.length) {
 		throw new Error('Invalid Cordn metadata: unexpected end of data');
 	}
 	return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function decodeVarBytes(bytes: Uint8Array, offset: number): [Uint8Array, number] {
+	if (offset >= bytes.length) {
+		throw new Error('Unexpected end of app data dictionary');
+	}
+
+	const firstByte = bytes[offset];
+	const lengthFieldSize = 1 << ((firstByte & 0xc0) >> 6);
+	if (offset + lengthFieldSize > bytes.length) {
+		throw new Error('Unexpected end of app data dictionary length');
+	}
+
+	let length = firstByte & 0x3f;
+	for (let index = 1; index < lengthFieldSize; index += 1) {
+		length = (length << 8) | bytes[offset + index];
+	}
+
+	const start = offset + lengthFieldSize;
+	const end = start + length;
+	if (end > bytes.length) {
+		throw new Error('Unexpected end of app data dictionary component data');
+	}
+
+	return [bytes.slice(start, end), end];
 }
 
 function encodeField(bytes: Uint8Array): Uint8Array {
@@ -126,7 +177,58 @@ export function createCordnMetadataCapabilities() {
 	if (!capabilities.extensions.includes(CORDN_GROUP_METADATA_EXTENSION_TYPE)) {
 		capabilities.extensions = [...capabilities.extensions, CORDN_GROUP_METADATA_EXTENSION_TYPE];
 	}
+	if (!capabilities.extensions.includes(APP_DATA_DICTIONARY_EXTENSION_TYPE)) {
+		capabilities.extensions = [...capabilities.extensions, APP_DATA_DICTIONARY_EXTENSION_TYPE];
+	}
 	return capabilities;
+}
+
+export function ensureLastResortKeyPackageExtension(extensions: CustomExtension[] = []) {
+	if (extensions.some(isLastResortKeyPackageExtension)) {
+		return extensions;
+	}
+
+	return [
+		...extensions,
+		makeCustomExtension({
+			extensionType: APP_DATA_DICTIONARY_EXTENSION_TYPE,
+			extensionData: encodeVarBytes(
+				new Uint8Array([
+					...encodeUint16(LAST_RESORT_KEY_PACKAGE_COMPONENT_ID),
+					...encodeVarBytes(new Uint8Array())
+				])
+			)
+		}) as CustomExtension
+	];
+}
+
+export function isLastResortKeyPackageExtension(extension: CustomExtension): boolean {
+	if (extension.extensionType !== APP_DATA_DICTIONARY_EXTENSION_TYPE) {
+		return false;
+	}
+
+	const [dictionaryData, dictionaryEnd] = decodeVarBytes(extension.extensionData, 0);
+	if (dictionaryEnd !== extension.extensionData.length) {
+		throw new Error('Invalid app data dictionary trailing data');
+	}
+
+	let offset = 0;
+	while (offset < dictionaryData.length) {
+		const componentId = decodeUint16(dictionaryData, offset);
+		const [componentData, nextOffset] = decodeVarBytes(dictionaryData, offset + 2);
+		if (componentId === LAST_RESORT_KEY_PACKAGE_COMPONENT_ID && componentData.length === 0) {
+			return true;
+		}
+		offset = nextOffset;
+	}
+
+	return false;
+}
+
+export function isLastResortKeyPackage(keyPackage: KeyPackage): boolean {
+	return keyPackage.extensions.some((extension) =>
+		isLastResortKeyPackageExtension(extension as CustomExtension)
+	);
 }
 
 export function createCredential(stablePubkey: string) {
@@ -286,28 +388,61 @@ export async function addMemberToGroup(params: {
 	};
 }
 
+export async function replaceMemberInGroup(params: {
+	state: ClientState;
+	memberKeyPackage: KeyPackage;
+	removedLeafIndex: number;
+}): Promise<{
+	newState: ClientState;
+	welcome: Welcome;
+	commitMessageBase64: string;
+	welcomeBase64: string;
+}> {
+	const cipherSuite = await getCordnCipherSuite();
+	const result = await createCommit({
+		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
+		state: params.state,
+		ratchetTreeExtension: true,
+		extraProposals: [
+			{
+				proposalType: defaultProposalTypes.remove,
+				remove: {
+					removed: params.removedLeafIndex
+				}
+			},
+			{
+				proposalType: defaultProposalTypes.add,
+				add: {
+					keyPackage: params.memberKeyPackage
+				}
+			}
+		]
+	});
+
+	if (!result.welcome) {
+		throw new Error('Commit did not produce a welcome message');
+	}
+
+	return {
+		newState: result.newState,
+		welcome: result.welcome.welcome,
+		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit)),
+		welcomeBase64: encodeWelcomeBase64(result.welcome.welcome)
+	};
+}
+
 export function findMemberLeafIndexByStablePubkey(
 	state: ClientState,
 	stablePubkey: string
 ): number {
 	const target = new TextEncoder().encode(stablePubkey);
-	const leaves = state.ratchetTree as
-		| Array<
-				| {
-						leaf?: {
-							credential?: {
-								identity?: Uint8Array;
-							};
-						};
-				  }
-				| undefined
-		  >
-		| undefined;
+	const leaves = state.ratchetTree;
 
 	if (!leaves) return -1;
 
 	for (let index = 0; index < leaves.length; index += 1) {
-		const identity = leaves[index]?.leaf?.credential?.identity;
+		if (leaves[index]?.nodeType !== 1) continue;
+		const identity = ((leaves[index] as NodeLeaf)?.leaf?.credential as CredentialBasic)?.identity;
 		if (!identity || identity.length !== target.length) continue;
 
 		let matches = true;
@@ -319,7 +454,7 @@ export function findMemberLeafIndexByStablePubkey(
 		}
 
 		if (matches) {
-			return Math.floor(index / 2);
+			return index / 2;
 		}
 	}
 
@@ -350,6 +485,40 @@ export async function removeMemberFromGroup(params: {
 				proposalType: defaultProposalTypes.remove,
 				remove: {
 					removed: params.removedLeafIndex
+				}
+			}
+		]
+	});
+
+	return {
+		newState: result.newState,
+		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit))
+	};
+}
+
+export async function updateGroupMetadataExtension(params: {
+	state: ClientState;
+	metadata: CordnGroupMetadata;
+}): Promise<{
+	newState: ClientState;
+	commitMessageBase64: string;
+}> {
+	const cipherSuite = await getCordnCipherSuite();
+	const extensions = [
+		...params.state.groupContext.extensions.filter(
+			(extension) => extension.extensionType !== CORDN_GROUP_METADATA_EXTENSION_TYPE
+		),
+		makeCordnGroupMetadataExtension(params.metadata)
+	];
+	const result = await createCommit({
+		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
+		state: params.state,
+		ratchetTreeExtension: true,
+		extraProposals: [
+			{
+				proposalType: defaultProposalTypes.group_context_extensions,
+				groupContextExtensions: {
+					extensions
 				}
 			}
 		]

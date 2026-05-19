@@ -14,6 +14,11 @@ export type PendingEpochOperation =
 			groupId: string;
 			commitMessageBase64: string;
 			targetStablePubkey: string;
+	  }
+	| {
+			kind: 'update-group-metadata';
+			groupId: string;
+			commitMessageBase64: string;
 	  };
 
 export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;

@@ -314,8 +314,16 @@ function isStaleGenerationIssue(detail: string): boolean {
 	return detail === 'Desired gen in the past';
 }
 
+function isUndecryptableStaleMessageIssue(detail: string): boolean {
+	return detail.startsWith('OperationError: The operation failed');
+}
+
 function isRemovedMemberCommitIssue(detail: string): boolean {
-	return detail === 'Could not find common ancestor';
+	return (
+		detail === 'Could not find common ancestor' ||
+		detail ===
+			'This error should never occur, if you see this please submit a bug report. Message: No overlap between provided private keys and update path'
+	);
 }
 
 function isRemovedFromGroupState(state: ClientState): boolean {
@@ -350,6 +358,13 @@ export async function ingestChatGroupMessages(params: {
 		const isPendingOperationMessage =
 			params.hasPendingEpochOperation?.(message.opaqueMessageBase64) ?? false;
 
+		if (isPendingOperationMessage) {
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			appliedPendingCommitMessages.add(message.opaqueMessageBase64);
+			continue;
+		}
+
 		if (
 			group.messages.some(
 				(stored) =>
@@ -380,6 +395,7 @@ export async function ingestChatGroupMessages(params: {
 			if (
 				isFormerEpochIssue(detail) ||
 				isStaleGenerationIssue(detail) ||
+				isUndecryptableStaleMessageIssue(detail) ||
 				isRemovedMemberCommitIssue(detail)
 			) {
 				if (isRemovedMemberCommitIssue(detail) && !isPendingOperationMessage) {
@@ -390,19 +406,16 @@ export async function ingestChatGroupMessages(params: {
 					removedLocalMember = true;
 					continue;
 				}
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 
 				const issue = {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
 					detail
 				};
-				group.fetchCursor = message.cursor;
-				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				group.syncIssues.push(issue);
 				issues.push(issue);
-				if (isPendingOperationMessage) {
-					rejectedPendingCommitMessages.add(message.opaqueMessageBase64);
-				}
 				continue;
 			}
 

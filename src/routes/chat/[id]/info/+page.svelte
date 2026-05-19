@@ -4,6 +4,8 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
+	import * as Collapsible from '$lib/components/ui/collapsible';
+	import * as InputGroup from '$lib/components/ui/input-group';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
@@ -16,10 +18,14 @@
 	import {
 		chatGroupInfoActionsStore,
 		deleteGroupAction,
-		removeGroupMemberAction
+		removeGroupMemberAction,
+		updateGroupMetadataAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Save from '@lucide/svelte/icons/save';
 	import Crown from '@lucide/svelte/icons/crown';
 	import Shield from '@lucide/svelte/icons/shield';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -37,6 +43,60 @@
 	const adminPubkeys = $derived.by(() =>
 		(group?.metadata?.adminPubkeys ?? []).map((pubkey) => normalizePubKey(pubkey))
 	);
+	let metadataName = $state('');
+	let metadataDescription = $state('');
+	let metadataIcon = $state('');
+	let metadataImageUrl = $state('');
+	let metadataAdminPubkeys = $state('');
+	let metadataFormOpen = $state(false);
+	let lastMetadataSignature = $state('');
+
+	function parseAdminPubkeys(value: string): string[] {
+		return value
+			.split(/[\n,]/)
+			.map((entry) => entry.trim())
+			.filter(Boolean)
+			.map((entry) => normalizePubKey(entry));
+	}
+
+	function syncMetadataForm() {
+		if (!group) return;
+		metadataName = group.metadata?.name ?? group.alias;
+		metadataDescription = group.metadata?.description ?? '';
+		metadataIcon = group.metadata?.icon ?? '';
+		metadataImageUrl = group.metadata?.imageUrl ?? '';
+		metadataAdminPubkeys = (group.metadata?.adminPubkeys ?? []).join('\n');
+	}
+
+	$effect(() => {
+		if (!group) return;
+		const signature = JSON.stringify({
+			id: group.id,
+			name: group.metadata?.name ?? group.alias,
+			description: group.metadata?.description ?? '',
+			icon: group.metadata?.icon ?? '',
+			imageUrl: group.metadata?.imageUrl ?? '',
+			adminPubkeys: group.metadata?.adminPubkeys ?? []
+		});
+		if (lastMetadataSignature === signature) return;
+		lastMetadataSignature = signature;
+		syncMetadataForm();
+	});
+
+	const metadataDirty = $derived.by(() => {
+		if (!group) return false;
+		const currentAdminPubkeys = (group.metadata?.adminPubkeys ?? []).map((pubkey) =>
+			normalizePubKey(pubkey)
+		);
+		const formAdminPubkeys = parseAdminPubkeys(metadataAdminPubkeys);
+		return (
+			metadataName.trim() !== (group.metadata?.name ?? group.alias) ||
+			metadataDescription.trim() !== (group.metadata?.description ?? '') ||
+			metadataIcon.trim() !== (group.metadata?.icon ?? '') ||
+			metadataImageUrl.trim() !== (group.metadata?.imageUrl ?? '') ||
+			JSON.stringify(formAdminPubkeys) !== JSON.stringify(currentAdminPubkeys)
+		);
+	});
 
 	async function removeMember(pubkey: string) {
 		if (!group) return;
@@ -46,6 +106,27 @@
 	async function deleteGroup() {
 		if (!group) return;
 		await deleteGroupAction(group.id);
+	}
+
+	async function saveMetadata(event: Event) {
+		event.preventDefault();
+		if (!group) return;
+		const saved = await updateGroupMetadataAction(group.id, {
+			name: metadataName.trim(),
+			description: metadataDescription.trim() || undefined,
+			icon: metadataIcon.trim() || undefined,
+			imageUrl: metadataImageUrl.trim() || undefined,
+			adminPubkeys: parseAdminPubkeys(metadataAdminPubkeys)
+		});
+		if (saved) {
+			metadataFormOpen = false;
+		}
+	}
+
+	function cancelMetadataEdit() {
+		syncMetadataForm();
+		chatGroupInfoActionsStore.error = '';
+		metadataFormOpen = false;
 	}
 </script>
 
@@ -125,6 +206,97 @@
 								<p class="mt-2 text-sm">{new Date(group.createdAt).toLocaleString()}</p>
 							</div>
 						</div>
+
+						{#if canManageMembers}
+							<Collapsible.Root bind:open={metadataFormOpen}>
+								<Collapsible.Trigger>
+									{#snippet child({ props })}
+										<Button {...props} type="button" variant="outline" class="gap-2 self-start">
+											<Pencil class="size-4" />
+											{metadataFormOpen ? 'Hide editor' : 'Edit metadata'}
+											<ChevronDown
+												class={`size-4 transition-transform ${metadataFormOpen ? 'rotate-180' : ''}`}
+											/>
+										</Button>
+									{/snippet}
+								</Collapsible.Trigger>
+
+								<Collapsible.Content>
+									<form class="space-y-4 border-t border-border p-4" onsubmit={saveMetadata}>
+										<InputGroup.Root>
+											<InputGroup.Input bind:value={metadataName} placeholder="Group name" />
+											<InputGroup.Addon>
+												<InputGroup.Text>Name</InputGroup.Text>
+											</InputGroup.Addon>
+										</InputGroup.Root>
+
+										<InputGroup.Root>
+											<InputGroup.Input bind:value={metadataIcon} placeholder="🪢" />
+											<InputGroup.Addon>
+												<InputGroup.Text>Icon</InputGroup.Text>
+											</InputGroup.Addon>
+										</InputGroup.Root>
+
+										<InputGroup.Root>
+											<InputGroup.Input
+												bind:value={metadataImageUrl}
+												placeholder="https://example.com/group.png"
+											/>
+											<InputGroup.Addon>
+												<InputGroup.Text>Image</InputGroup.Text>
+											</InputGroup.Addon>
+										</InputGroup.Root>
+
+										<InputGroup.Root>
+											<InputGroup.Textarea
+												bind:value={metadataDescription}
+												placeholder="Describe the group"
+												class="min-h-28"
+											/>
+											<InputGroup.Addon align="block-start">
+												<InputGroup.Text>Description</InputGroup.Text>
+											</InputGroup.Addon>
+										</InputGroup.Root>
+
+										<InputGroup.Root>
+											<InputGroup.Textarea
+												bind:value={metadataAdminPubkeys}
+												placeholder="Optional admin pubkeys, separated by commas or new lines"
+												class="min-h-24 font-mono text-xs"
+											/>
+											<InputGroup.Addon align="block-start">
+												<InputGroup.Text>Admins</InputGroup.Text>
+											</InputGroup.Addon>
+										</InputGroup.Root>
+
+										<div
+											class="flex flex-col gap-3 rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+										>
+											<p>
+												Changes are committed to the MLS group and become visible to participants
+												after sync.
+											</p>
+											<div class="flex gap-2 self-end sm:self-auto">
+												<Button type="button" variant="ghost" onclick={cancelMetadataEdit}>
+													Cancel
+												</Button>
+												<Button
+													type="submit"
+													disabled={chatGroupInfoActionsStore.metadataSubmitting ||
+														!metadataName.trim() ||
+														!metadataDirty}
+												>
+													<Save class="mr-2 size-4" />
+													{chatGroupInfoActionsStore.metadataSubmitting
+														? 'Saving…'
+														: 'Save metadata'}
+												</Button>
+											</div>
+										</div>
+									</form>
+								</Collapsible.Content>
+							</Collapsible.Root>
+						{/if}
 					</Card.Content>
 				</Card.Root>
 
