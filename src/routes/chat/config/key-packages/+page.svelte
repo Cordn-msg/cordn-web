@@ -5,7 +5,6 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		createChatKeyPackage,
@@ -18,7 +17,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	function getCoordinatorHref(coordinatorKey: string) {
-		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey });
+		return `../../coordinators/${coordinatorKey}`;
 	}
 
 	function getCoordinatorLabel(coordinatorKey: string) {

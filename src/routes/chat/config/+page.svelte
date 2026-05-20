@@ -62,7 +62,7 @@
 					</Card.Header>
 					<Card.Content>
 						<div class="grid gap-3 sm:grid-cols-2">
-							<a href="/chat/coordinators" class="block">
+							<a href="../coordinators" class="block">
 								<div
 									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
 								>
@@ -78,7 +78,7 @@
 								</div>
 							</a>
 
-							<a href="/chat/config/key-packages" class="block">
+							<a href="./key-packages" class="block">
 								<div
 									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
 								>
@@ -123,7 +123,7 @@
 					</div>
 				</Card.Content>
 				<Card.Footer class="justify-end">
-					<Button href="/chat/coordinators" variant="outline">Open coordinator hub</Button>
+					<Button href="../coordinators" variant="outline">Open coordinator hub</Button>
 				</Card.Footer>
 			</Card.Root>
 		</div>

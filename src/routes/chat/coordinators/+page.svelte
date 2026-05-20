@@ -349,10 +349,10 @@
 											>
 										{/if}
 										<Button
-											href={`/chat/create-group?coordinator=${coordinator.pubkey}`}
+											href={`../create-group?coordinator=${coordinator.pubkey}`}
 											variant="outline">Create group</Button
 										>
-										<Button href="/chat/config/key-packages" variant="outline"
+										<Button href="../config/key-packages" variant="outline"
 											>Open key packages</Button
 										>
 									</div>
@@ -367,11 +367,11 @@
 						welcomes.
 					</p>
 					<div class="flex gap-2">
-						<Button href="/chat/create-group" variant="outline">
+						<Button href="../create-group" variant="outline">
 							<Bolt class="mr-2 size-4" />
 							Create group
 						</Button>
-						<Button href="/chat/config/key-packages" variant="outline">
+						<Button href="../config/key-packages" variant="outline">
 							<KeyRound class="mr-2 size-4" />
 							Key packages
 						</Button>

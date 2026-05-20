@@ -112,6 +112,18 @@
 		return resolve('/chat');
 	}
 
+	function getCreateGroupHref() {
+		if (page.url.pathname.startsWith('/chat/config/key-packages/')) return '../../create-group';
+		if (page.url.pathname.startsWith('/chat/')) return '../create-group';
+		return '/chat/create-group';
+	}
+
+	function getConfigHref() {
+		if (page.url.pathname.startsWith('/chat/config/key-packages/')) return '../';
+		if (page.url.pathname.startsWith('/chat/')) return '../config';
+		return '/chat/config';
+	}
+
 	function getCoordinatorHref(pubkey: string) {
 		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey: pubkey });
 	}
@@ -252,7 +264,7 @@
 
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-4">
 		<a
-			href="/chat/create-group"
+			href={getCreateGroupHref()}
 			onclick={closeMobileSidebar}
 			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/create-group') ? 'border-primary bg-primary/10 text-foreground' : 'border-dashed border-border text-muted-foreground hover:bg-background hover:text-foreground'}`}
 		>
@@ -490,7 +502,7 @@
 		</Dialog.Root>
 
 		<a
-			href={resolve('/chat/config')}
+			href={getConfigHref()}
 			onclick={closeMobileSidebar}
 			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 		>
