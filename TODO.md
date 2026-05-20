@@ -1,0 +1,1 @@
+- [] Lazy connect with stable client to avoid leak identity when not necessary

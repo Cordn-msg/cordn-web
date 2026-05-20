@@ -15,14 +15,11 @@
 		TooltipTrigger
 	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { addressLoader } from '$lib/services/loaders.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { ProfileModel } from 'applesauce-core/models';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
 	import Plus from '@lucide/svelte/icons/plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { cn, pubkeyToHexColor } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 
@@ -55,11 +52,15 @@
 	let savedReactions = $state<string[]>([]);
 
 	const isOwn = $derived(message.isOwn ?? false);
-	const actionSideClass = $derived(isOwn ? 'right-full mr-2' : 'left-full ml-2');
+	const actionSideClass = $derived(
+		isOwn
+			? 'right-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:right-full sm:top-3 sm:translate-y-0 sm:mr-2'
+			: 'left-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:left-full sm:top-3 sm:translate-y-0 sm:ml-2'
+	);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
 	const bubbleClass = $derived.by(
 		() =>
-			`max-w-full rounded-3xl border px-4 py-3 text-sm leading-7 shadow-sm transition-all ${
+			`max-w-full rounded-3xl border px-3 py-2.5 text-sm leading-6 shadow-sm transition-all sm:px-4 sm:py-3 sm:leading-7 ${
 				isOwn ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card'
 			} ${highlighted ? 'border-amber-400 bg-amber-50/70 ring-4 ring-amber-300/35 shadow-xl scale-[1.015] animate-pulse' : ''}`
 	);
@@ -71,17 +72,6 @@
 			$profile?.nip05 ||
 			`${message.author.slice(0, 12)}…`
 	);
-
-	$effect(() => {
-		if ($profile) return;
-		const sub = addressLoader({
-			kind: Metadata,
-			pubkey: message.author,
-			relays: metadataRelays
-		}).subscribe();
-
-		return () => sub.unsubscribe();
-	});
 
 	$effect(() => {
 		if (!reactionMenuOpen || !customReactionOpen || !customReactionInput) return;
@@ -147,8 +137,8 @@
 		<p class="px-2 text-center text-[11px] font-medium text-muted-foreground">{message.dayLabel}</p>
 	{/if}
 
-	<article class="flex items-end gap-3" class:flex-row-reverse={isOwn}>
-		<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
+	<article class="flex items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
+		<div class="flex h-8 w-8 shrink-0 items-end max-sm:hidden" class:justify-end={isOwn}>
 			{#if showAvatar}
 				{#if $profile?.picture}
 					<img src={$profile.picture} alt={displayName} class="h-8 w-8 rounded-full object-cover" />
@@ -161,12 +151,15 @@
 			{/if}
 		</div>
 
-		<div class="group flex max-w-3xl items-end gap-2" class:flex-row-reverse={isOwn}>
+		<div
+			class="group flex max-w-[min(100%,48rem)] min-w-0 items-end gap-1.5 sm:gap-2"
+			class:flex-row-reverse={isOwn}
+		>
 			<div class="relative flex min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
 				<TooltipProvider>
 					<div
 						class={cn(
-							'absolute top-3 z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
+							'absolute z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
 							reactionMenuOpen ? 'opacity-100' : 'opacity-0',
 							actionSideClass
 						)}
@@ -222,7 +215,7 @@
 								sideOffset={8}
 								class="flex min-w-0 flex-row items-center gap-1 rounded-2xl p-1"
 							>
-								{#each availableReactions as reaction}
+								{#each availableReactions as reaction (reaction)}
 									<DropdownMenuItem
 										onSelect={() => onReact(message, reaction)}
 										class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
@@ -281,7 +274,9 @@
 				</TooltipProvider>
 
 				{#if showAuthor}
-					<p class="max-w-[16rem] truncate px-1 text-xs font-medium text-foreground/90">
+					<p
+						class="max-w-[12rem] truncate px-1 text-xs font-medium text-foreground/90 sm:max-w-[16rem]"
+					>
 						{displayName}
 					</p>
 				{/if}
@@ -293,19 +288,42 @@
 							class={cn(
 								'mb-3 block w-full rounded-2xl border px-3 py-2 text-left transition-colors',
 								isOwn
-									? 'border-primary-foreground/15 bg-primary-foreground/10 hover:bg-primary-foreground/15'
+									? 'border-primary-foreground/20 bg-primary-foreground/12 text-primary-foreground hover:bg-primary-foreground/18'
 									: 'border-border/70 bg-background/70 hover:bg-muted/80'
 							)}
 							onclick={() => onNavigateToMessage(message.replyTo!.id)}
 						>
-							<p class="truncate text-xs font-medium text-muted-foreground">
-								Replying to {message.replyTo.authorLabel ?? message.replyTo.author}
+							<div class="flex items-center gap-1.5 text-xs font-medium">
+								<span class={cn(isOwn ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
+									Replying to
+								</span>
+								<span
+									class={cn(
+										'inline-flex min-w-0 items-center gap-2 rounded-full border px-2 py-1',
+										isOwn
+											? 'border-primary-foreground/25 bg-primary text-primary-foreground'
+											: 'border-border/80 bg-background text-foreground'
+									)}
+								>
+									<ProfileCard
+										pubkey={message.replyTo.author}
+										mode="inline"
+										showInlineAvatar={true}
+									/>
+								</span>
+							</div>
+							<p
+								class={cn(
+									'line-clamp-2 text-sm break-words',
+									isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
+								)}
+							>
+								{message.replyTo.text}
 							</p>
-							<p class="truncate text-sm text-foreground/80">{message.replyTo.text}</p>
 						</button>
 					{/if}
 
-					<p class="[overflow-wrap:anywhere] break-words">{message.text}</p>
+					<p class="[overflow-wrap:anywhere] break-words whitespace-pre-wrap">{message.text}</p>
 				</div>
 
 				{#if message.reactions?.length}
@@ -352,7 +370,9 @@
 				{/if}
 			</div>
 
-			<p class="shrink-0 px-1 text-[11px] text-muted-foreground/80">{message.timeLabel}</p>
+			<p class="shrink-0 px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]">
+				{message.timeLabel}
+			</p>
 		</div>
 	</article>
 </div>

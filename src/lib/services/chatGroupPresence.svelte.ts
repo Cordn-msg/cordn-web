@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import {
+	areChatGroupsLoaded,
 	getChatGroup,
 	listChatGroupMessages,
 	listChatGroups
@@ -74,6 +75,8 @@ export function getLatestChatGroupMessagePreview(groupId: string): string {
 }
 
 export function pruneChatGroupPresence() {
+	if (!areChatGroupsLoaded()) return;
+
 	const validGroupIds = new Set(listChatGroups().map((group) => group.id));
 	const nextEntries = Object.entries(chatGroupPresenceStore.groups).filter(([groupId]) =>
 		validGroupIds.has(groupId)

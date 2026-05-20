@@ -3,6 +3,7 @@
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -13,8 +14,6 @@
 		removeChatKeyPackage
 	} from '$lib/services/chatKeyPackages.svelte';
 	import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
-	import { copyToClipboard } from '$lib/utils';
-	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
@@ -85,10 +84,6 @@
 		} finally {
 			removingKeyPackageRef = '';
 		}
-	}
-
-	async function copyKeyPackageRef(keyPackageRef: string) {
-		await copyToClipboard(keyPackageRef);
 	}
 </script>
 
@@ -213,29 +208,7 @@
 						{:else}
 							{#each keyPackages as keyPackage (keyPackage.keyPackageRef)}
 								<div class="space-y-2 rounded-xl border border-border px-4 py-3">
-									<div class="flex items-center justify-between gap-3">
-										<div>
-											<p class="font-medium">{keyPackage.label}</p>
-										</div>
-										<p class="text-xs text-muted-foreground">
-											{new Date(keyPackage.createdAt).toLocaleString()}
-										</p>
-									</div>
-									{#if keyPackage.isLastResort}
-										<p
-											class="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
-										>
-											<CircleAlert class="size-3" />
-											Last resort
-										</p>
-									{/if}
-									<button
-										type="button"
-										class="text-left font-mono text-xs break-all text-muted-foreground hover:text-foreground"
-										onclick={() => copyKeyPackageRef(keyPackage.keyPackageRef)}
-									>
-										{keyPackage.keyPackageRef}
-									</button>
+									<KeyPackageCard entry={keyPackage} />
 									<p class="text-xs text-muted-foreground">
 										Published to {keyPackage.publishedCoordinatorKeys.length} coordinator{keyPackage
 											.publishedCoordinatorKeys.length === 1

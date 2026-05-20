@@ -149,7 +149,20 @@
 							/>
 						{/if}
 						<AvatarFallback class="bg-card text-lg">
-							{group.metadata?.icon || '🪢'}
+							{#if group.metadata?.icon}
+								{group.metadata.icon}
+							{:else}
+								<img
+									src="/cordn-logo-black.svg"
+									alt="Cordn"
+									class="h-6 w-6 object-contain dark:hidden"
+								/>
+								<img
+									src="/cordn-logo.svg"
+									alt="Cordn"
+									class="hidden h-6 w-6 object-contain dark:block"
+								/>
+							{/if}
 						</AvatarFallback>
 					</Avatar>
 					<div class="min-w-0">

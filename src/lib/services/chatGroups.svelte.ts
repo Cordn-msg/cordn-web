@@ -86,6 +86,7 @@ const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
 let groupsReady: Promise<void> | null = null;
 let persistGroupsPromise: Promise<void> = Promise.resolve();
+let groupsLoaded = false;
 
 function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 	return {
@@ -156,6 +157,7 @@ async function loadGroups() {
 		})
 	);
 	chatGroupsStore.groups = groups;
+	groupsLoaded = true;
 }
 
 async function ensureGroupsLoaded() {
@@ -221,6 +223,10 @@ function assertChatGroupIsActive(group: StoredChatGroup): void {
 
 export function listChatGroups(): StoredChatGroup[] {
 	return [...chatGroupsStore.groups].sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export function areChatGroupsLoaded(): boolean {
+	return groupsLoaded;
 }
 
 export function getChatGroup(groupId: string): StoredChatGroup | undefined {

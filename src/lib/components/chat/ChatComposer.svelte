@@ -3,14 +3,12 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
-	import { ProfileModel } from 'applesauce-core/models';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import Reply from '@lucide/svelte/icons/reply';
 	import SendHorizontal from '@lucide/svelte/icons/send-horizontal';
 	import X from '@lucide/svelte/icons/x';
 	import { Metadata } from 'nostr-tools/kinds';
-	import { pubkeyToHexColor } from '$lib/utils';
+	import ProfileCard from '../ProfileCard.svelte';
 
 	let {
 		value = $bindable(''),
@@ -30,16 +28,6 @@
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
 	let expanded = $state(false);
-	const replyProfile = $derived(replyTo ? eventStore.model(ProfileModel, replyTo.author) : null);
-	const replyDisplayName = $derived.by(
-		() =>
-			replyTo &&
-			($replyProfile?.name ||
-				$replyProfile?.display_name ||
-				$replyProfile?.nip05 ||
-				replyTo.authorLabel ||
-				`${replyTo.author.slice(0, 12)}…`)
-	);
 
 	function handleSubmit(event: Event) {
 		event.preventDefault();
@@ -96,7 +84,7 @@
 </script>
 
 <div class="border-t border-border bg-background">
-	<form class="mx-auto max-w-5xl px-4 py-4 md:px-6" onsubmit={handleSubmit}>
+	<form class="mx-auto max-w-5xl px-3 py-3 sm:px-4 md:px-6" onsubmit={handleSubmit}>
 		{#if replyTo}
 			<div
 				class="mb-3 flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2"
@@ -105,25 +93,9 @@
 					<div class="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
 						<Reply class="size-3.5" />
 						<span>Replying to</span>
-						<div
-							class="inline-flex min-w-0 items-center gap-2 rounded-full border border-border/80 bg-background px-2 py-1 text-foreground"
-						>
-							{#if $replyProfile?.picture}
-								<img
-									src={$replyProfile.picture}
-									alt={replyDisplayName}
-									class="h-4 w-4 rounded-full object-cover"
-								/>
-							{:else}
-								<div
-									class="h-4 w-4 rounded-full"
-									style={`background-color: ${pubkeyToHexColor(replyTo.author)}`}
-								></div>
-							{/if}
-							<span class="max-w-32 truncate">{replyDisplayName}</span>
-						</div>
+						<ProfileCard pubkey={replyTo.author} mode="inline" showInlineAvatar={true} />
 					</div>
-					<p class="truncate text-sm text-foreground/80">{replyTo.text}</p>
+					<p class="line-clamp-2 text-sm break-words text-foreground/80">{replyTo.text}</p>
 				</div>
 				<Button
 					type="button"
@@ -149,7 +121,7 @@
 						onclick={() => (expanded = !expanded)}
 						aria-label={expanded ? 'Collapse composer' : 'Expand composer'}
 					>
-						<ChevronUp class={`size-4 transition-transform ${expanded ? '' : 'rotate-180'}`} />
+						<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
 					</Button>
 				</div>
 				<Textarea
@@ -164,9 +136,12 @@
 					style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
 				/>
 			</div>
-			<Button type="submit" class="h-11 rounded-xl px-4" disabled={disabled || !value.trim()}>
+			<Button
+				type="submit"
+				class="h-11 shrink-0 rounded-xl px-4"
+				disabled={disabled || !value.trim()}
+			>
 				<SendHorizontal class="size-4" />
-				<span class="ml-2">Send</span>
 			</Button>
 		</div>
 	</form>

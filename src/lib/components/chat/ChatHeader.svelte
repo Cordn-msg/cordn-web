@@ -1,6 +1,9 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import { getChatLayoutContext } from '$lib/components/chat/chatLayoutContext';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { resolve } from '$app/paths';
@@ -20,9 +23,11 @@
 	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
+	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
+	import PanelLeft from '@lucide/svelte/icons/panel-left';
 	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
-	import { resetMode, setMode } from 'mode-watcher';
+	import { setMode } from 'mode-watcher';
 
 	let {
 		groupId,
@@ -37,6 +42,8 @@
 		icon?: string;
 		imageUrl?: string;
 	} = $props();
+
+	const { mobileSidebarOpen } = getChatLayoutContext();
 
 	async function fetchMessages() {
 		await fetchGroupMessagesAction(groupId);
@@ -78,25 +85,83 @@
 	const infoHref = $derived.by(() =>
 		groupId ? resolve('/chat/[id]/info', { id: groupId }) : '/chat'
 	);
+	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
+
+	function navigateToInfo() {
+		window.location.href = infoHref;
+	}
+
+	function toggleTheme() {
+		const nextMode = isDarkMode ? 'light' : 'dark';
+		setMode(nextMode);
+		isDarkMode = nextMode === 'dark';
+	}
+
+	const themeLabel = $derived.by(() =>
+		isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'
+	);
 
 	$effect(() => {
 		if (chatHeaderActionsStore.inviteOpen) {
 			void refreshAvailableKeyPackages();
 		}
 	});
+
+	$effect(() => {
+		if (!browser) return;
+
+		const root = document.documentElement;
+		const updateTheme = () => {
+			isDarkMode = root.classList.contains('dark');
+		};
+
+		updateTheme();
+
+		const observer = new MutationObserver(updateTheme);
+		observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+
+		return () => observer.disconnect();
+	});
 </script>
 
 <header
 	class="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
 >
-	<div class="flex items-center justify-between gap-4 px-4 py-3 md:px-6">
-		<div class="flex min-w-0 items-center gap-3">
+	<div class="flex items-start justify-between gap-3 px-4 py-3 sm:items-center md:px-6">
+		<div class="flex min-w-0 flex-1 items-center gap-3 pr-2">
+			<Button
+				type="button"
+				variant="outline"
+				size="icon"
+				class="h-10 w-10 shrink-0 rounded-xl md:hidden"
+				onclick={() => ($mobileSidebarOpen = true)}
+				aria-label="Open chats sidebar"
+				title="Open chats sidebar"
+			>
+				<PanelLeft class="size-4" />
+			</Button>
+
 			<Avatar class="h-10 w-10 border border-border bg-card">
 				{#if imageUrl}
 					<AvatarImage src={imageUrl} alt={title} class="object-cover" />
-					<AvatarFallback class="bg-card text-base"
-						>{icon || title.slice(0, 1) || '🪢'}</AvatarFallback
-					>
+					<AvatarFallback class="bg-card text-base">
+						{#if icon}
+							{icon}
+						{:else if title.length === 1}
+							{title.slice(0, 1)}
+						{:else}
+							<img
+								src="/cordn-logo-black.svg"
+								alt="Cordn"
+								class="h-full w-full object-contain dark:hidden"
+							/>
+							<img
+								src="/cordn-logo.svg"
+								alt="Cordn"
+								class="hidden h-full w-full object-contain dark:block"
+							/>
+						{/if}
+					</AvatarFallback>
 				{:else if icon}
 					<AvatarFallback class="bg-card text-base">{icon}</AvatarFallback>
 				{:else}
@@ -122,35 +187,24 @@
 		</div>
 
 		{#if groupId}
-			<div class="flex items-center gap-2">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								type="button"
-								variant="outline"
-								size="icon"
-								class="relative h-10 w-10 rounded-xl"
-								aria-label="Toggle theme"
-								title="Theme"
-							>
-								<Sun
-									class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 !transition-all dark:scale-0 dark:-rotate-90"
-								/>
-								<Moon
-									class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 !transition-all dark:scale-100 dark:rotate-0"
-								/>
-								<span class="sr-only">Toggle theme</span>
-							</Button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end">
-						<DropdownMenu.Item onclick={() => setMode('light')}>Light</DropdownMenu.Item>
-						<DropdownMenu.Item onclick={() => setMode('dark')}>Dark</DropdownMenu.Item>
-						<DropdownMenu.Item onclick={() => resetMode()}>System</DropdownMenu.Item>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+			<div class="hidden items-center gap-2 sm:flex">
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="relative h-10 w-10 rounded-xl"
+					aria-label={themeLabel}
+					title={themeLabel}
+					onclick={toggleTheme}
+				>
+					<Sun
+						class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 !transition-all dark:scale-0 dark:-rotate-90"
+					/>
+					<Moon
+						class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 !transition-all dark:scale-100 dark:rotate-0"
+					/>
+					<span class="sr-only">{themeLabel}</span>
+				</Button>
 
 				<Button
 					type="button"
@@ -263,35 +317,82 @@
 									</p>
 								{:else}
 									{#each chatHeaderActionsStore.availableKeyPackages as entry (entry.keyPackageRef)}
-										<div
-											class="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/60 px-4 py-3"
-										>
-											<div class="min-w-0 space-y-1">
-												<p class="truncate font-medium">{formatKeyPackageLabel(entry)}</p>
-												<p class="font-mono text-xs break-all text-muted-foreground">
-													{entry.keyPackageRef}
-												</p>
-												<p class="text-xs text-muted-foreground">
-													Published {new Date(
-														entry.publishedAt
-													).toLocaleString()}{entry.isLastResort ? ' · last resort' : ''}
-												</p>
-											</div>
-											<Button
-												type="button"
-												size="sm"
-												onclick={() => inviteMember(entry.keyPackageRef)}
-												disabled={chatHeaderActionsStore.inviteSubmitting}
-											>
-												Invite
-											</Button>
-										</div>
+										<KeyPackageCard
+											entry={{ ...entry, label: formatKeyPackageLabel(entry) }}
+											actionLabel="Invite"
+											actionDisabled={chatHeaderActionsStore.inviteSubmitting}
+											onAction={() => inviteMember(entry.keyPackageRef)}
+										/>
 									{/each}
 								{/if}
 							</div>
 						</div>
 					</Dialog.Content>
 				</Dialog.Root>
+			</div>
+
+			<div class="sm:hidden">
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								type="button"
+								variant="outline"
+								size="icon"
+								class="h-10 w-10 rounded-xl"
+								aria-label="Open chat actions"
+								title="Chat actions"
+							>
+								<MoreHorizontal class="size-4" />
+							</Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" class="w-56">
+						<DropdownMenu.Item onclick={toggleTheme} class="gap-2">
+							{#if isDarkMode}
+								<Sun class="size-4" />
+							{:else}
+								<Moon class="size-4" />
+							{/if}
+							<span>{themeLabel}</span>
+						</DropdownMenu.Item>
+						<DropdownMenu.Item onclick={navigateToInfo} class="gap-2">
+							<Info class="size-4" />
+							<span>Group info</span>
+						</DropdownMenu.Item>
+						<DropdownMenu.Item
+							disabled={!$activeAccount || chatHeaderActionsStore.watchLoading || isRemoved}
+							onclick={toggleWatch}
+							class="gap-2"
+						>
+							{#if isWatching}
+								<EyeOff class="size-4" />
+							{:else}
+								<Eye class="size-4" />
+							{/if}
+							<span>{watchLabel}</span>
+						</DropdownMenu.Item>
+						{#if !isWatching}
+							<DropdownMenu.Item
+								disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading || isRemoved}
+								onclick={fetchMessages}
+								class="gap-2"
+							>
+								<Download class="size-4" />
+								<span>Fetch messages</span>
+							</DropdownMenu.Item>
+						{/if}
+						<DropdownMenu.Item
+							disabled={!$activeAccount || !canInvite}
+							onclick={() => (chatHeaderActionsStore.inviteOpen = true)}
+							class="gap-2"
+						>
+							<UserPlus class="size-4" />
+							<span>Invite member</span>
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			</div>
 		{/if}
 	</div>

@@ -206,14 +206,23 @@ export const chatComposerActionsStore = $state<{
 });
 
 export const coordinatorDetailsActionsStore = $state<{
+	coordinatorKey: string;
 	loadingKeyPackages: boolean;
 	keyPackageError: string;
 	remoteKeyPackages: AvailableKeyPackage[];
 }>({
+	coordinatorKey: '',
 	loadingKeyPackages: false,
 	keyPackageError: '',
 	remoteKeyPackages: []
 });
+
+export function hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey: string) {
+	return (
+		coordinatorDetailsActionsStore.coordinatorKey === coordinatorKey &&
+		coordinatorDetailsActionsStore.remoteKeyPackages.length > 0
+	);
+}
 
 export async function sendGroupMessageAction(
 	groupId: string | undefined,
@@ -242,13 +251,27 @@ export async function sendGroupMessageAction(
 	}
 }
 
-export async function loadCoordinatorRemoteKeyPackagesAction(client: {
-	ListAvailableKeyPackages(args?: object): Promise<{ keyPackages: AvailableKeyPackage[] }>;
-}) {
+export async function loadCoordinatorRemoteKeyPackagesAction(
+	client: {
+		ListAvailableKeyPackages(args?: object): Promise<{ keyPackages: AvailableKeyPackage[] }>;
+	},
+	coordinatorKey?: string,
+	options: { force?: boolean } = {}
+) {
+	if (
+		!options.force &&
+		coordinatorKey &&
+		hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey) &&
+		!coordinatorDetailsActionsStore.keyPackageError
+	) {
+		return;
+	}
+
 	coordinatorDetailsActionsStore.loadingKeyPackages = true;
 	coordinatorDetailsActionsStore.keyPackageError = '';
 	try {
 		const result = await client.ListAvailableKeyPackages({});
+		coordinatorDetailsActionsStore.coordinatorKey = coordinatorKey ?? '';
 		coordinatorDetailsActionsStore.remoteKeyPackages = result.keyPackages;
 	} catch (error) {
 		coordinatorDetailsActionsStore.keyPackageError =

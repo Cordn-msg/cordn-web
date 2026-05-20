@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card';
@@ -19,6 +20,7 @@
 	import {
 		acceptWelcomeAction,
 		coordinatorDetailsActionsStore,
+		hasLoadedCoordinatorRemoteKeyPackages,
 		loadCoordinatorRemoteKeyPackagesAction,
 		refreshCoordinatorWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
@@ -26,9 +28,7 @@
 	import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
-	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import Inbox from '@lucide/svelte/icons/inbox';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Server from '@lucide/svelte/icons/server';
 
 	let { params } = $props();
@@ -48,7 +48,14 @@
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
 	);
-	const remoteKeyPackages = $derived.by(() => coordinatorDetailsActionsStore.remoteKeyPackages);
+	const remoteKeyPackages = $derived.by(() =>
+		coordinatorDetailsActionsStore.coordinatorKey === coordinatorKey
+			? coordinatorDetailsActionsStore.remoteKeyPackages
+			: []
+	);
+	const hasCachedRemoteKeyPackages = $derived.by(() =>
+		hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey)
+	);
 	const ownedRemoteKeyPackages = $derived.by(() =>
 		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
 	);
@@ -74,7 +81,9 @@
 			getCoordinatorClient(
 				requireActiveAccount('You must be logged in to inspect coordinators'),
 				coordinatorKey
-			)
+			),
+			coordinatorKey,
+			{ force: hasCachedRemoteKeyPackages }
 		);
 	}
 
@@ -252,12 +261,7 @@
 								</div>
 							{:else}
 								{#each relatedPublishedKeyPackages as keyPackage (keyPackage.keyPackageRef)}
-									<div class="rounded-xl border border-border px-4 py-3">
-										<p class="font-medium">{keyPackage.label}</p>
-										<p class="mt-1 font-mono text-xs break-all text-muted-foreground">
-											{keyPackage.keyPackageRef}
-										</p>
-									</div>
+									<KeyPackageCard entry={keyPackage} />
 								{/each}
 							{/if}
 						</div>
@@ -292,7 +296,9 @@
 										<Boxes class="mr-2 size-4" />
 										{coordinatorDetailsActionsStore.loadingKeyPackages
 											? 'Loading remote key packages…'
-											: 'Load remote key packages'}
+											: hasCachedRemoteKeyPackages
+												? 'Refresh remote key packages'
+												: 'Load remote key packages'}
 									</Button>
 								</div>
 								{#if coordinatorDetailsActionsStore.keyPackageError}
@@ -318,42 +324,18 @@
 											<p class="text-sm text-destructive">{removeError}</p>
 										{/if}
 										{#each ownedRemoteKeyPackagesWithState as item (item.entry.kp_ref)}
-											<div class="rounded-xl border border-border px-4 py-3">
-												<div class="flex items-center justify-between gap-3">
-													<div>
-														<p class="font-medium">
-															{item.localCopy?.label || 'Remote owned key package'}
-														</p>
-														<p class="font-mono text-xs break-all text-muted-foreground">
-															{item.entry.kp_ref}
-														</p>
-													</div>
-													<span
-														class={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.localCopy ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}
-													>
-														{item.state}
-													</span>
-												</div>
-												<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-													{#if item.entry.last_resort}
-														<CircleAlert class="size-3" />
-														<span>Last resort</span>
-													{/if}
-													<span>{new Date(item.entry.at).toLocaleString()}</span>
-												</div>
-												<div class="mt-3 flex justify-end">
-													<Button
-														type="button"
-														variant="outline"
-														size="sm"
-														disabled={removingKeyPackageRef === item.entry.kp_ref}
-														onclick={() => removeOwnedKeyPackage(item.entry.kp_ref)}
-													>
-														<Trash2 class="mr-2 size-4" />
-														{removingKeyPackageRef === item.entry.kp_ref ? 'Removing…' : 'Remove'}
-													</Button>
-												</div>
-											</div>
+											<KeyPackageCard
+												entry={{
+													...item.entry,
+													label: item.localCopy?.label || 'Remote owned key package'
+												}}
+												badge={item.state}
+												actionLabel={removingKeyPackageRef === item.entry.kp_ref
+													? 'Removing…'
+													: 'Remove'}
+												actionDisabled={removingKeyPackageRef === item.entry.kp_ref}
+												onAction={() => removeOwnedKeyPackage(item.entry.kp_ref)}
+											/>
 										{/each}
 									</div>
 								{/if}
@@ -385,19 +367,7 @@
 								</div>
 							{:else}
 								{#each otherRemoteKeyPackages as entry (entry.kp_ref)}
-									<div class="rounded-xl border border-border px-4 py-3">
-										<div class="mb-2">
-											<ProfileCard pubkey={entry.pk} />
-										</div>
-										<p class="mt-1 font-mono text-xs break-all">{entry.kp_ref}</p>
-										<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-											{#if entry.last_resort}
-												<CircleAlert class="size-3" />
-												<span>Last resort</span>
-											{/if}
-											<span>{new Date(entry.at).toLocaleString()}</span>
-										</div>
-									</div>
+									<KeyPackageCard {entry} />
 								{/each}
 							{/if}
 						</div>

@@ -70,8 +70,10 @@
 	});
 </script>
 
-<div bind:this={container} class="h-full overflow-x-hidden overflow-y-auto">
-	<div class="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+<div bind:this={container} class="h-full overflow-x-hidden overflow-y-auto overscroll-contain">
+	<div
+		class="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 md:gap-6 md:px-6 md:py-8"
+	>
 		{#each groupedMessages as entry (entry.message.id)}
 			<ChatMessageItem
 				message={entry.message}

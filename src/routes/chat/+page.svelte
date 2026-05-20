@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -17,7 +18,6 @@
 		type StoredKeyPackageRecord
 	} from '$lib/services/chatKeyPackages.svelte';
 	import type { StoredCoordinator } from '$lib/services/chatCoordinators.svelte';
-	import { copyToClipboard } from '$lib/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -123,10 +123,6 @@
 
 	function toggleCompletedSteps() {
 		completedStepsExpanded = !completedStepsExpanded;
-	}
-
-	async function copyKeyPackageRef(keyPackageRef: string) {
-		await copyToClipboard(keyPackageRef);
 	}
 </script>
 
@@ -426,20 +422,11 @@
 									{#if coordinatorKeyPackages.length > 0}
 										<div class="mt-3 space-y-2">
 											{#each coordinatorKeyPackages as keyPackage (keyPackage.keyPackageRef)}
-												<div class="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-													<div class="flex items-start justify-between gap-3">
-														<div class="min-w-0">
-															<p class="text-sm font-medium">{keyPackage.label}</p>
-														</div>
-														<button
-															type="button"
-															class="font-mono text-xs break-all text-muted-foreground hover:text-foreground"
-															onclick={() => copyKeyPackageRef(keyPackage.keyPackageRef)}
-														>
-															{keyPackage.keyPackageRef}
-														</button>
-													</div>
-												</div>
+												<KeyPackageCard
+													entry={keyPackage}
+													compact={true}
+													class="border-border/60 bg-muted/20"
+												/>
 											{/each}
 										</div>
 									{:else}

@@ -182,7 +182,7 @@
 
 	{#if isRemoved}
 		<p
-			class="mx-4 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+			class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
 		>
 			You were removed from this group. This local copy is now read-only. Open the info page to
 			delete it from this device.
@@ -190,7 +190,7 @@
 	{/if}
 
 	{#if sendError || chatComposerActionsStore.error}
-		<p class="px-4 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
+		<p class="px-3 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
 	{/if}
 
 	<ChatComposer

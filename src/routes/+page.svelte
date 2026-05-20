@@ -1,8 +1,5 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
-	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { activeAccount } from '$lib/services/accountManager.svelte';
 
 	const principles = [
 		'Private group chats with strong end-to-end security',
@@ -55,15 +52,6 @@
 			>
 				Open chat
 			</a>
-			{#if $activeAccount}
-				<div class="hidden items-center gap-2 sm:flex sm:gap-3">
-					<ProfileCard pubkey={$activeAccount.pubkey} showLogout={true} />
-				</div>
-			{:else}
-				<div class="hidden sm:block">
-					<AccountLoginDialog />
-				</div>
-			{/if}
 		</div>
 	</header>
 

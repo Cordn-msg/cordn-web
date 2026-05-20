@@ -35,7 +35,16 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Inbox from '@lucide/svelte/icons/inbox';
+	import Menu from '@lucide/svelte/icons/menu';
 	import Plus from '@lucide/svelte/icons/plus';
+	import X from '@lucide/svelte/icons/x';
+	import type { Writable } from 'svelte/store';
+
+	let {
+		mobileSidebarOpen
+	}: {
+		mobileSidebarOpen: Writable<boolean>;
+	} = $props();
 
 	let collapsed = $state(false);
 	let notificationsOpen = $state(false);
@@ -120,6 +129,10 @@
 		return chatSummaries[groupId] ?? { preview: 'Group chat', unreadCount: 0 };
 	}
 
+	function closeMobileSidebar() {
+		$mobileSidebarOpen = false;
+	}
+
 	async function refreshWelcomeNotifications() {
 		if (!$activeAccount) return;
 		await refreshWelcomeNotificationsAction();
@@ -148,12 +161,31 @@
 	const sidebarClass = $derived(collapsed ? 'w-20 px-2.5' : 'w-72 px-3');
 </script>
 
+<button
+	type="button"
+	class="fixed top-4 left-4 z-40 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background/95 text-foreground shadow-sm backdrop-blur md:hidden"
+	onclick={() => ($mobileSidebarOpen = true)}
+	aria-label="Open chats sidebar"
+>
+	<Menu class="size-4" />
+</button>
+
+{#if $mobileSidebarOpen}
+	<button
+		type="button"
+		class="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm md:hidden"
+		onclick={closeMobileSidebar}
+		aria-label="Close chats sidebar"
+	></button>
+{/if}
+
 <aside
-	class={`flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-card/60 py-3 transition-[width,padding] duration-200 ${sidebarClass}`}
+	class={`fixed inset-y-0 left-0 z-50 flex h-full w-[min(22rem,calc(100vw-2rem))] shrink-0 flex-col overflow-hidden border-r border-border bg-card/95 py-3 shadow-xl backdrop-blur transition-[transform,width,padding] duration-200 md:static md:z-auto md:w-auto md:translate-x-0 md:bg-card/60 md:shadow-none ${$mobileSidebarOpen ? 'translate-x-0' : '-translate-x-[calc(100%+1rem)]'} ${sidebarClass}`}
 >
 	<div class={`flex items-center pb-4 ${collapsed ? 'justify-center' : 'justify-between gap-2'}`}>
 		<a
 			href={getChatHomeHref()}
+			onclick={closeMobileSidebar}
 			class={`flex min-w-0 items-center gap-3 rounded-xl transition-colors hover:text-foreground ${collapsed ? 'justify-center' : ''} ${isActive(getChatHomeHref()) ? 'text-foreground' : 'text-muted-foreground'}`}
 			aria-label="Open chat home"
 			title="Chat home"
@@ -181,17 +213,29 @@
 			{/if}
 		</a>
 
-		{#if !collapsed}
+		<div class="flex items-center gap-1">
+			{#if !collapsed}
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					class="hidden h-9 w-9 shrink-0 rounded-lg md:inline-flex"
+					onclick={() => (collapsed = !collapsed)}
+				>
+					<ChevronLeft class="size-4" />
+				</Button>
+			{/if}
+
 			<Button
 				type="button"
 				variant="ghost"
 				size="icon"
-				class="h-9 w-9 shrink-0 rounded-lg"
-				onclick={() => (collapsed = !collapsed)}
+				class="h-9 w-9 shrink-0 rounded-lg md:hidden"
+				onclick={closeMobileSidebar}
 			>
-				<ChevronLeft class="size-4" />
+				<X class="size-4" />
 			</Button>
-		{/if}
+		</div>
 	</div>
 
 	{#if collapsed}
@@ -199,7 +243,7 @@
 			type="button"
 			variant="ghost"
 			size="icon"
-			class="mb-4 h-9 w-9 self-center rounded-lg"
+			class="mb-4 hidden h-9 w-9 self-center rounded-lg md:inline-flex"
 			onclick={() => (collapsed = !collapsed)}
 		>
 			<ChevronRight class="size-4" />
@@ -209,6 +253,7 @@
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-4">
 		<a
 			href="/chat/create-group"
+			onclick={closeMobileSidebar}
 			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/create-group') ? 'border-primary bg-primary/10 text-foreground' : 'border-dashed border-border text-muted-foreground hover:bg-background hover:text-foreground'}`}
 		>
 			<div
@@ -240,6 +285,7 @@
 			>
 				<a
 					href={getCoordinatorHref(coordinatorGroup.pubkey)}
+					onclick={closeMobileSidebar}
 					class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
 					aria-label={`Open ${coordinatorGroup.label}`}
 					title={coordinatorGroup.label}
@@ -259,6 +305,7 @@
 						{@const summary = getChatSummary(chat.id)}
 						<a
 							href={getGroupHref(chat.id)}
+							onclick={closeMobileSidebar}
 							class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : 'ml-1'} ${isActive(getGroupHref(chat.id)) ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 						>
 							<div class="relative shrink-0">
@@ -444,6 +491,7 @@
 
 		<a
 			href={resolve('/chat/config')}
+			onclick={closeMobileSidebar}
 			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 		>
 			<div

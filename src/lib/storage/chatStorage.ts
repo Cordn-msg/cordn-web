@@ -4,9 +4,8 @@ import type {
 	StoredChatMessage,
 	StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
-import { base64ToBytes, bytesToBase64 } from 'ts-mls';
 
-export type ChatStorageBackend = 'indexeddb' | 'local-storage' | 'memory';
+export type ChatStorageBackend = 'indexeddb' | 'memory';
 
 export interface StoredChatGroupRecord {
 	id: string;
@@ -73,10 +72,6 @@ export interface ChatStorage {
 	deleteKeyPackage(keyPackageRef: string): Promise<void>;
 }
 
-const GROUPS_STORAGE_KEY = 'cordn-chat-groups-v2';
-const GROUP_MESSAGES_STORAGE_KEY = 'cordn-chat-group-messages-v2';
-const GROUP_SYNC_ISSUES_STORAGE_KEY = 'cordn-chat-group-sync-issues-v2';
-const KEY_PACKAGES_STORAGE_KEY = 'cordn-chat-key-packages-v2';
 const DATABASE_NAME = 'cordn-web';
 const DATABASE_VERSION = 2;
 const GROUP_STORE = 'groups';
@@ -84,27 +79,6 @@ const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
 const SYNC_ISSUE_STORE = 'syncIssues';
 const KEY_PACKAGE_STORE = 'keyPackages';
-
-type LocalStorageGroupsPayload = {
-	groups: Array<StoredChatGroupRecord & { stateBase64: string }>;
-};
-
-type LocalStorageMessagesPayload = {
-	messages: StoredChatMessageRecord[];
-};
-
-type LocalStorageSyncIssuesPayload = {
-	syncIssues: StoredChatSyncIssueRecord[];
-};
-
-type LocalStorageKeyPackagesPayload = {
-	keyPackages: Array<
-		Omit<StoredChatKeyPackageRecord, 'keyPackageBytes' | 'privateKeyPackageBytes'> & {
-			keyPackageBase64: string;
-			privateKeyPackageBase64: string;
-		}
-	>;
-};
 
 function cloneBytes(bytes: Uint8Array): Uint8Array {
 	return new Uint8Array(bytes);
@@ -171,31 +145,6 @@ function compareKeyPackages(a: StoredChatKeyPackageRecord, b: StoredChatKeyPacka
 	return b.createdAt - a.createdAt;
 }
 
-function deserializeLocalStorageGroup(
-	raw: StoredChatGroupRecord & { stateBase64: string }
-): StoredChatGroupRecord & { stateBytes: Uint8Array } {
-	return {
-		id: raw.id,
-		coordinatorKey: raw.coordinatorKey,
-		createdAt: raw.createdAt,
-		lastCursor: raw.lastCursor,
-		fetchCursor: raw.fetchCursor,
-		status: raw.status,
-		removedAtCursor: raw.removedAtCursor,
-		stateBytes: base64ToBytes(raw.stateBase64)
-	};
-}
-
-function serializeLocalStorageGroup(
-	raw: StoredChatGroupData
-): StoredChatGroupRecord & { stateBase64: string } {
-	const { stateBytes, messages: _messages, syncIssues: _syncIssues, ...group } = raw;
-	return {
-		...cloneGroupRecord({ ...group, stateBytes, messages: [], syncIssues: [] }),
-		stateBase64: bytesToBase64(stateBytes)
-	};
-}
-
 function materializeGroupData(params: {
 	group: StoredChatGroupRecord & { stateBytes: Uint8Array };
 	messages: StoredChatMessageRecord[];
@@ -212,36 +161,6 @@ function materializeGroupData(params: {
 			.filter((issue) => issue.groupId === params.group.id)
 			.map(({ groupId: _groupId, ...issue }) => cloneIssue(issue))
 			.sort((a, b) => a.cursor - b.cursor)
-	};
-}
-
-function deserializeLocalStorageKeyPackage(
-	raw: Omit<StoredChatKeyPackageRecord, 'keyPackageBytes' | 'privateKeyPackageBytes'> & {
-		keyPackageBase64: string;
-		privateKeyPackageBase64: string;
-	}
-): StoredChatKeyPackageRecord {
-	return {
-		...raw,
-		keyPackageBytes: base64ToBytes(raw.keyPackageBase64),
-		privateKeyPackageBytes: base64ToBytes(raw.privateKeyPackageBase64),
-		publishedCoordinatorKeys: [...raw.publishedCoordinatorKeys]
-	};
-}
-
-function serializeLocalStorageKeyPackage(raw: StoredChatKeyPackageRecord): Omit<
-	StoredChatKeyPackageRecord,
-	'keyPackageBytes' | 'privateKeyPackageBytes'
-> & {
-	keyPackageBase64: string;
-	privateKeyPackageBase64: string;
-} {
-	const { keyPackageBytes, privateKeyPackageBytes, ...record } = raw;
-	return {
-		...record,
-		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys],
-		keyPackageBase64: bytesToBase64(keyPackageBytes),
-		privateKeyPackageBase64: bytesToBase64(privateKeyPackageBytes)
 	};
 }
 
@@ -312,142 +231,6 @@ class MemoryChatStorage implements ChatStorage {
 
 	async deleteKeyPackage(keyPackageRef: string): Promise<void> {
 		this.keyPackages.delete(keyPackageRef);
-	}
-}
-
-class LocalStorageChatStorage extends MemoryChatStorage {
-	constructor() {
-		super({
-			backend: 'local-storage',
-			persistent: true,
-			binary: false,
-			supportsTransactions: false
-		});
-	}
-
-	override async init(): Promise<void> {
-		if (!browser) return;
-		try {
-			const rawGroups = localStorage.getItem(GROUPS_STORAGE_KEY);
-			const rawMessages = localStorage.getItem(GROUP_MESSAGES_STORAGE_KEY);
-			const rawSyncIssues = localStorage.getItem(GROUP_SYNC_ISSUES_STORAGE_KEY);
-			if (rawGroups) {
-				const parsed = JSON.parse(rawGroups) as LocalStorageGroupsPayload;
-				const parsedMessages = rawMessages
-					? ((JSON.parse(rawMessages) as LocalStorageMessagesPayload).messages ?? [])
-					: [];
-				const parsedSyncIssues = rawSyncIssues
-					? ((JSON.parse(rawSyncIssues) as LocalStorageSyncIssuesPayload).syncIssues ?? [])
-					: [];
-				this.groups = new Map(
-					(parsed.groups ?? []).map((group) => {
-						const deserialized = deserializeLocalStorageGroup(group);
-						return [
-							deserialized.id,
-							materializeGroupData({
-								group: deserialized,
-								messages: parsedMessages,
-								syncIssues: parsedSyncIssues
-							})
-						];
-					})
-				);
-				this.messages = new Map(
-					this.groups
-						.keys()
-						.map((groupId) => [
-							groupId,
-							parsedMessages
-								.filter((message) => message.groupId === groupId)
-								.map(cloneMessageRecord)
-						])
-				);
-				this.syncIssues = new Map(
-					this.groups
-						.keys()
-						.map((groupId) => [
-							groupId,
-							parsedSyncIssues.filter((issue) => issue.groupId === groupId).map(cloneIssueRecord)
-						])
-				);
-			}
-			const rawKeyPackages = localStorage.getItem(KEY_PACKAGES_STORAGE_KEY);
-			if (rawKeyPackages) {
-				const parsed = JSON.parse(rawKeyPackages) as LocalStorageKeyPackagesPayload;
-				this.keyPackages = new Map(
-					(parsed.keyPackages ?? []).map((record) => [
-						record.keyPackageRef,
-						deserializeLocalStorageKeyPackage(record)
-					])
-				);
-			}
-		} catch {
-			this.groups.clear();
-			this.messages.clear();
-			this.syncIssues.clear();
-			this.keyPackages.clear();
-		}
-	}
-
-	private persistGroups() {
-		if (!browser) return;
-		const payload: LocalStorageGroupsPayload = {
-			groups: [...this.groups.values()].map(serializeLocalStorageGroup)
-		};
-		localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(payload));
-	}
-
-	private persistMessages() {
-		if (!browser) return;
-		const payload: LocalStorageMessagesPayload = {
-			messages: [...this.messages.values()].flat().map(cloneMessageRecord)
-		};
-		localStorage.setItem(GROUP_MESSAGES_STORAGE_KEY, JSON.stringify(payload));
-	}
-
-	private persistSyncIssues() {
-		if (!browser) return;
-		const payload: LocalStorageSyncIssuesPayload = {
-			syncIssues: [...this.syncIssues.values()].flat().map(cloneIssueRecord)
-		};
-		localStorage.setItem(GROUP_SYNC_ISSUES_STORAGE_KEY, JSON.stringify(payload));
-	}
-
-	private persistKeyPackages() {
-		if (!browser) return;
-		const payload: LocalStorageKeyPackagesPayload = {
-			keyPackages: [...this.keyPackages.values()].map(serializeLocalStorageKeyPackage)
-		};
-		localStorage.setItem(KEY_PACKAGES_STORAGE_KEY, JSON.stringify(payload));
-	}
-
-	override async putGroup(group: StoredChatGroupData): Promise<void> {
-		await super.putGroup(group);
-		this.persistGroups();
-		this.persistMessages();
-		this.persistSyncIssues();
-	}
-
-	override async deleteGroup(groupId: string): Promise<void> {
-		await super.deleteGroup(groupId);
-		this.persistGroups();
-		this.persistMessages();
-		this.persistSyncIssues();
-	}
-
-	override async putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void> {
-		await super.putKeyPackage(record);
-		this.persistKeyPackages();
-	}
-
-	override async replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void> {
-		await super.replaceKeyPackages(records);
-		this.persistKeyPackages();
-	}
-
-	override async deleteKeyPackage(keyPackageRef: string): Promise<void> {
-		await super.deleteKeyPackage(keyPackageRef);
-		this.persistKeyPackages();
 	}
 }
 
@@ -588,28 +371,31 @@ class IndexedDbChatStorage implements ChatStorage {
 			const groupStore = transaction.objectStore(GROUP_STORE);
 			const stateStore = transaction.objectStore(GROUP_STATE_STORE);
 			const messageStore = transaction.objectStore(MESSAGE_STORE);
-			const messageIndex = messageStore.index('groupId');
 			const syncIssueStore = transaction.objectStore(SYNC_ISSUE_STORE);
-			const syncIssueIndex = syncIssueStore.index('groupId');
 			transaction.onerror = () =>
 				reject(transaction.error ?? new Error('IndexedDB transaction failed'));
 			transaction.oncomplete = () => resolve();
-			groupStore.put(cloneGroupRecord(group));
+
+			const getExistingGroup = groupStore.get(group.id) as IDBRequest<
+				StoredChatGroupRecord | undefined
+			>;
+			getExistingGroup.onerror = () =>
+				reject(getExistingGroup.error ?? new Error('IndexedDB request failed'));
+			getExistingGroup.onsuccess = () => {
+				const existing = getExistingGroup.result;
+				groupStore.put({
+					...cloneGroupRecord(group),
+					lastCursor: Math.max(existing?.lastCursor ?? 0, group.lastCursor),
+					fetchCursor: Math.max(existing?.fetchCursor ?? 0, group.fetchCursor),
+					status: existing?.status === 'removed' ? 'removed' : group.status,
+					removedAtCursor:
+						existing?.removedAtCursor !== undefined && group.removedAtCursor !== undefined
+							? Math.max(existing.removedAtCursor, group.removedAtCursor)
+							: (existing?.removedAtCursor ?? group.removedAtCursor)
+				});
+			};
+
 			stateStore.put({ groupId: group.id, stateBytes: cloneBytes(group.stateBytes) });
-			const deleteMessages = messageIndex.openKeyCursor(IDBKeyRange.only(group.id));
-			deleteMessages.onsuccess = () => {
-				const cursor = deleteMessages.result;
-				if (!cursor) return;
-				messageStore.delete(cursor.primaryKey);
-				cursor.continue();
-			};
-			const deleteIssues = syncIssueIndex.openKeyCursor(IDBKeyRange.only(group.id));
-			deleteIssues.onsuccess = () => {
-				const cursor = deleteIssues.result;
-				if (!cursor) return;
-				syncIssueStore.delete(cursor.primaryKey);
-				cursor.continue();
-			};
 			for (const message of group.messages) {
 				messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
 			}
@@ -738,27 +524,9 @@ async function canUseIndexedDb(): Promise<boolean> {
 	}
 }
 
-function canUseLocalStorage(): boolean {
-	if (!browser) return false;
-	try {
-		const key = 'cordn-storage-probe';
-		localStorage.setItem(key, '1');
-		localStorage.removeItem(key);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 async function createChatStorage(): Promise<ChatStorage> {
 	if (await canUseIndexedDb()) {
 		const storage = new IndexedDbChatStorage();
-		await storage.init();
-		return storage;
-	}
-
-	if (canUseLocalStorage()) {
-		const storage = new LocalStorageChatStorage();
 		await storage.init();
 		return storage;
 	}

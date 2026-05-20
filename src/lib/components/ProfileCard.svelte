@@ -23,6 +23,7 @@
 		showLogout?: boolean;
 		showName?: boolean;
 		showInlineAvatar?: boolean;
+		inlineClass?: string;
 	} = $props();
 
 	const isExtended = $derived(mode === 'extended');
@@ -104,7 +105,7 @@
 	</div>
 {:else if isInline}
 	<span
-		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium break-words text-foreground"
+		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium break-words text-current"
 	>
 		{#if showInlineAvatar}
 			{@render pfp(pubkey, $profile?.picture, 'inline')}

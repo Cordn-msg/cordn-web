@@ -14,8 +14,7 @@ Chat persistence is split by durability and data shape:
 
 - Chat groups and key packages are stored through [`getChatStorage()`](src/lib/storage/chatStorage.ts:530).
 - The primary backend is IndexedDB via [`IndexedDbChatStorage`](src/lib/storage/chatStorage.ts:331).
-- If IndexedDB is unavailable, storage falls back to [`LocalStorageChatStorage`](src/lib/storage/chatStorage.ts:253).
-- If both browser persistence layers are unavailable, the app falls back to in-memory storage via [`MemoryChatStorage`](src/lib/storage/chatStorage.ts:195).
+- If IndexedDB is unavailable, the app falls back to in-memory storage via [`MemoryChatStorage`](src/lib/storage/chatStorage.ts:195).
 
 The canonical persisted chat payload includes:
 
@@ -25,7 +24,7 @@ The canonical persisted chat payload includes:
 - sync issues in [`syncIssues`](src/lib/storage/chatStorage.ts:29)
 - key package material as bytes in [`keyPackageBytes`](src/lib/storage/chatStorage.ts:38) and [`privateKeyPackageBytes`](src/lib/storage/chatStorage.ts:39)
 
-The browser services in [`chatGroups.svelte.ts`](src/lib/services/chatGroups.svelte.ts:1) and [`chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1) still expose the same app-facing APIs, but persistence now routes through the storage layer instead of directly writing large JSON blobs to browser local storage.
+The browser services in [`chatGroups.svelte.ts`](src/lib/services/chatGroups.svelte.ts:1) and [`chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1) still expose the same app-facing APIs, but persistence routes through the storage layer instead of directly writing large JSON blobs to browser storage.
 
 ## Development
 
