@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -62,7 +63,7 @@
 					</Card.Header>
 					<Card.Content>
 						<div class="grid gap-3 sm:grid-cols-2">
-							<a href="../coordinators" class="block">
+							<a href={resolve('/chat/coordinators')} class="block">
 								<div
 									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
 								>
@@ -78,7 +79,7 @@
 								</div>
 							</a>
 
-							<a href="./key-packages" class="block">
+							<a href={resolve('/chat/config/key-packages')} class="block">
 								<div
 									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
 								>
@@ -123,7 +124,9 @@
 					</div>
 				</Card.Content>
 				<Card.Footer class="justify-end">
-					<Button href="../coordinators" variant="outline">Open coordinator hub</Button>
+					<Button href={resolve('/chat/coordinators')} variant="outline"
+						>Open coordinator hub</Button
+					>
 				</Card.Footer>
 			</Card.Root>
 		</div>

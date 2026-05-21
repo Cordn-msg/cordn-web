@@ -113,15 +113,11 @@
 	}
 
 	function getCreateGroupHref() {
-		if (page.url.pathname.startsWith('/chat/config/key-packages/')) return '../../create-group';
-		if (page.url.pathname.startsWith('/chat/')) return '../create-group';
-		return '/chat/create-group';
+		return resolve('/chat/create-group');
 	}
 
 	function getConfigHref() {
-		if (page.url.pathname.startsWith('/chat/config/key-packages/')) return '../';
-		if (page.url.pathname.startsWith('/chat/')) return '../config';
-		return '/chat/config';
+		return resolve('/chat/config');
 	}
 
 	function getCoordinatorHref(pubkey: string) {

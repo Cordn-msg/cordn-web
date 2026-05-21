@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -349,10 +350,10 @@
 											>
 										{/if}
 										<Button
-											href={`../create-group?coordinator=${coordinator.pubkey}`}
+											href={`${resolve('/chat/create-group')}?coordinator=${coordinator.pubkey}`}
 											variant="outline">Create group</Button
 										>
-										<Button href="../config/key-packages" variant="outline"
+										<Button href={resolve('/chat/config/key-packages')} variant="outline"
 											>Open key packages</Button
 										>
 									</div>
@@ -367,11 +368,11 @@
 						welcomes.
 					</p>
 					<div class="flex gap-2">
-						<Button href="../create-group" variant="outline">
+						<Button href={resolve('/chat/create-group')} variant="outline">
 							<Bolt class="mr-2 size-4" />
 							Create group
 						</Button>
-						<Button href="../config/key-packages" variant="outline">
+						<Button href={resolve('/chat/config/key-packages')} variant="outline">
 							<KeyRound class="mr-2 size-4" />
 							Key packages
 						</Button>

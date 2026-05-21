@@ -223,18 +223,20 @@
 														>
 															{settingDefaultCoordinator ? 'Saving…' : 'Use default coordinator'}
 														</Button>
-														<Button href="./coordinators" variant="outline">
+														<Button href={resolve('/chat/coordinators')} variant="outline">
 															Open coordinators
 														</Button>
 													</div>
 												</div>
 											{:else if step.title === 'Create a key package'}
 												<div class="flex flex-wrap gap-2">
-													<Button href="./config/key-packages">Open key packages</Button>
+													<Button href={resolve('/chat/config/key-packages')}
+														>Open key packages</Button
+													>
 												</div>
 											{:else if step.title === 'Create your first group'}
 												<div class="flex flex-wrap gap-2">
-													<Button href="./create-group">Create group</Button>
+													<Button href={resolve('/chat/create-group')}>Create group</Button>
 												</div>
 											{/if}
 										</div>
@@ -387,7 +389,10 @@
 						{/if}
 					</Card.Content>
 					<Card.Footer class="pt-0">
-						<Button href="./create-group" variant={hasGroups ? 'outline' : 'default'}>
+						<Button
+							href={resolve('/chat/create-group')}
+							variant={hasGroups ? 'outline' : 'default'}
+						>
 							Create group
 						</Button>
 					</Card.Footer>
