@@ -143,7 +143,9 @@
 
 		<section class="border-y border-border bg-muted/30">
 			<div class="mx-auto max-w-6xl px-6 py-12">
-				<div class="grid gap-6 rounded-3xl border border-border bg-background p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+				<div
+					class="grid gap-6 rounded-3xl border border-border bg-background p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"
+				>
 					<div class="space-y-3">
 						<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
 							Run your own coordinator
@@ -164,9 +166,10 @@
 					>
 						Deployment docs
 					</a>
-					<div class="md:col-span-2 rounded-2xl border border-border bg-card p-4">
+					<div class="rounded-2xl border border-border bg-card p-4 md:col-span-2">
 						<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-							<pre class="overflow-x-auto text-sm text-foreground"><code>{deploymentCommand}</code></pre>
+							<pre class="overflow-x-auto text-sm text-foreground"><code>{deploymentCommand}</code
+								></pre>
 							<button
 								type="button"
 								onclick={() => copyToClipboard(deploymentCommand)}
@@ -281,9 +284,7 @@
 						</div>
 						<div>
 							<p class="font-medium text-card-foreground">Encrypted before transport</p>
-							<p>
-								Messages are encrypted on your device before they are sent through the network.
-							</p>
+							<p>Messages are encrypted on your device before they are sent through the network.</p>
 						</div>
 						<div>
 							<p class="font-medium text-card-foreground">Open and censorship resistant</p>
