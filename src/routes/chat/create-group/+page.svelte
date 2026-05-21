@@ -172,7 +172,7 @@
 						<InputGroup.Textarea
 							bind:value={coordinatorRelays}
 							class="min-h-24 font-mono text-xs"
-							placeholder="ws://localhost:10547"
+							placeholder="wss://relay.example.org"
 						/>
 						<InputGroup.Addon align="block-start">
 							<InputGroup.Text>Relays</InputGroup.Text>

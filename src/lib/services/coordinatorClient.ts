@@ -5,10 +5,10 @@ import {
 	NostrClientTransport,
 	type NostrTransportOptions,
 	PrivateKeySigner,
-	ApplesauceRelayPool,
-	EncryptionMode
+	ApplesauceRelayPool
 } from '@contextvm/sdk';
 import type { ZodType } from 'zod';
+import { defaultRelays } from './relay-pool';
 import {
 	type ConsumeKeyPackageInput,
 	consumeKeyPackageOutputSchema,
@@ -61,10 +61,9 @@ export type coordinatorClient = {
 };
 
 export class cordnClient implements coordinatorClient {
-	static readonly DEFAULT_RELAYS = ['ws://localhost:10547'];
 	private readonly stableClient: Client;
 	private readonly stableTransport: NostrClientTransport;
-	private readonly stableConnected: Promise<void>;
+	private stableConnected: Promise<void> | null = null;
 	private readonly ephemeralClient: Client;
 	private readonly ephemeralTransport: NostrClientTransport;
 	private readonly ephemeralConnected: Promise<void>;
@@ -88,7 +87,7 @@ export class cordnClient implements coordinatorClient {
 		const resolvedPrivateKey = options.privateKey || '';
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
-		const relays = options.relays || cordnClient.DEFAULT_RELAYS;
+		const relays = options.relays || [];
 		const relayHandler = options.relayHandler || new ApplesauceRelayPool(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {
@@ -114,9 +113,9 @@ export class cordnClient implements coordinatorClient {
 			serverPubkey,
 			signer: stableSigner,
 			relayHandler,
+			fallbackOperationalRelayUrls: defaultRelays,
 			isStateless: true,
 			logLevel: 'silent',
-			encryptionMode: EncryptionMode.DISABLED,
 			openStream: {
 				enabled: true
 			},
@@ -130,9 +129,9 @@ export class cordnClient implements coordinatorClient {
 			serverPubkey,
 			signer: ephemeralSigner,
 			relayHandler,
+			fallbackOperationalRelayUrls: defaultRelays,
 			isStateless: true,
 			logLevel: 'silent',
-			encryptionMode: EncryptionMode.DISABLED,
 			openStream: {
 				enabled: true
 			},
@@ -142,11 +141,6 @@ export class cordnClient implements coordinatorClient {
 			...rest
 		});
 
-		// Auto-connect in constructor
-		this.stableConnected = this.stableClient.connect(this.stableTransport).catch((error) => {
-			console.error(`Failed to connect stable client to server: ${error}`);
-			throw error;
-		});
 		this.ephemeralConnected = this.ephemeralClient
 			.connect(this.ephemeralTransport)
 			.catch((error) => {
@@ -157,13 +151,24 @@ export class cordnClient implements coordinatorClient {
 
 	async disconnect(): Promise<void> {
 		await Promise.all([
-			this.stableConnected.catch(() => undefined),
+			this.stableConnected?.catch(() => undefined),
 			this.ephemeralConnected.catch(() => undefined)
 		]);
 		await Promise.all([
 			this.stableTransport.close().catch(() => undefined),
 			this.ephemeralTransport.close().catch(() => undefined)
 		]);
+	}
+
+	private connectStable(): Promise<void> {
+		if (!this.stableConnected) {
+			this.stableConnected = this.stableClient.connect(this.stableTransport).catch((error) => {
+				console.error(`Failed to connect stable client to server: ${error}`);
+				throw error;
+			});
+		}
+
+		return this.stableConnected;
 	}
 
 	private async call<T = unknown>(
@@ -173,7 +178,7 @@ export class cordnClient implements coordinatorClient {
 		schema?: ZodType<T>
 	): Promise<T> {
 		const client = transportKind === 'stable' ? this.stableClient : this.ephemeralClient;
-		const connected = transportKind === 'stable' ? this.stableConnected : this.ephemeralConnected;
+		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
 		await connected;
 		const result = await client.callTool({

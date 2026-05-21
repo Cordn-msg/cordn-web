@@ -26,7 +26,8 @@ import {
 import type { AvailableKeyPackage } from '$lib/contracts';
 import type {
 	ChatMessageReactionTarget,
-	ChatMessageReplyTarget
+	ChatMessageReplyTarget,
+	StoredChatMessage
 } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
@@ -229,19 +230,18 @@ export async function sendGroupMessageAction(
 	content: string,
 	replyTo?: ChatMessageReplyTarget,
 	reactionTo?: ChatMessageReactionTarget
-) {
+): Promise<StoredChatMessage | false> {
 	const text = content.trim();
 	if ((!text && !reactionTo) || !groupId || chatComposerActionsStore.sending) return false;
 	chatComposerActionsStore.error = '';
 	chatComposerActionsStore.sending = true;
 	try {
-		await sendChatGroupMessage({
+		return await sendChatGroupMessage({
 			groupId,
 			content: reactionTo ? content : text,
 			replyTo,
 			reactionTo
 		});
-		return true;
 	} catch (error) {
 		chatComposerActionsStore.error =
 			error instanceof Error ? error.message : 'Failed to send message';

@@ -22,7 +22,7 @@
 
 	let label = $state('');
 	let pubkey = $state('');
-	let relays = $state('ws://localhost:10547');
+	let relays = $state('');
 	let color = $state('');
 	let isDefault = $state(false);
 	let error = $state('');
@@ -74,7 +74,7 @@
 			});
 			label = '';
 			pubkey = '';
-			relays = 'ws://localhost:10547';
+			relays = '';
 			color = '';
 			isDefault = false;
 		} catch (err) {
@@ -164,7 +164,7 @@
 									<InputGroup.Textarea
 										bind:value={relays}
 										class="min-h-24 font-mono text-xs"
-										placeholder="ws://localhost:10547&#10;wss://relay.example.org"
+										placeholder="wss://relay.example.org"
 									/>
 									<InputGroup.Addon align="block-start">
 										<InputGroup.Text>Relays</InputGroup.Text>

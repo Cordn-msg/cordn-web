@@ -7,6 +7,7 @@ export interface ChatMessage {
 	timeLabel: string;
 	dayLabel: string;
 	isOwn?: boolean;
+	deliveryState?: 'sending' | 'sent' | 'error';
 	reactions?: Array<{
 		emoji: string;
 		count: number;

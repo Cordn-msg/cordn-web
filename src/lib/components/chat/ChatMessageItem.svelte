@@ -17,7 +17,9 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { eventStore } from '$lib/services/eventStore';
 	import { ProfileModel } from 'applesauce-core/models';
+	import Check from '@lucide/svelte/icons/check';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
+	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import { cn, pubkeyToHexColor } from '$lib/utils';
@@ -58,10 +60,20 @@
 			: 'left-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:left-full sm:top-3 sm:translate-y-0 sm:ml-2'
 	);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
+	function getDeliveryStateLabel() {
+		if (message.deliveryState === 'sending') return 'Sending';
+		if (message.deliveryState === 'sent') return 'Sent';
+		if (message.deliveryState === 'error') return 'Failed';
+		return '';
+	}
 	const bubbleClass = $derived.by(
 		() =>
 			`max-w-full rounded-3xl border px-3 py-2.5 text-sm leading-6 shadow-sm transition-all sm:px-4 sm:py-3 sm:leading-7 ${
-				isOwn ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card'
+				isOwn
+					? message.deliveryState === 'error'
+						? 'border-destructive/40 bg-primary text-primary-foreground'
+						: 'border-primary bg-primary text-primary-foreground'
+					: 'border-border bg-card'
 			} ${highlighted ? 'border-amber-400 bg-amber-50/70 ring-4 ring-amber-300/35 shadow-xl scale-[1.015] animate-pulse' : ''}`
 	);
 	const profile = $derived(eventStore.model(ProfileModel, message.author));
@@ -370,9 +382,30 @@
 				{/if}
 			</div>
 
-			<p class="shrink-0 px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]">
-				{message.timeLabel}
-			</p>
+			<div
+				class="flex shrink-0 items-center gap-1 px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
+			>
+				<p>{message.timeLabel}</p>
+				{#if message.isOwn && message.deliveryState === 'sent'}
+					<span
+						class="inline-flex items-center"
+						aria-label={getDeliveryStateLabel()}
+						title={getDeliveryStateLabel()}
+					>
+						<Check class="size-3" />
+					</span>
+				{:else if message.isOwn && message.deliveryState === 'error'}
+					<span
+						class="inline-flex items-center text-destructive"
+						aria-label={getDeliveryStateLabel()}
+						title={getDeliveryStateLabel()}
+					>
+						<X class="size-3" />
+					</span>
+				{:else if message.isOwn && message.deliveryState === 'sending'}
+					<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
+				{/if}
+			</div>
 		</div>
 	</article>
 </div>

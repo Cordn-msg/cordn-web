@@ -1,33 +1,56 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { copyToClipboard } from '$lib/utils';
 
 	const principles = [
-		'Private group chats with strong end-to-end security',
-		'An identity model based on keys, not usernames and passwords',
-		'Flexible hosting that can be public, self-hosted, or moved when needed'
+		'Use your existing Nostr identity',
+		'No email, phone number, or platform account required',
+		'Chat with fresh ephemeral keys when you want to'
 	];
 
 	const highlights = [
 		{
-			title: 'What Cordn is',
-			body: 'Cordn is a private group chat built for people who want strong encryption without handing all control to one big platform.'
+			title: 'Use your own identity',
+			body: 'Bring an existing Nostr profile, or just spin up a fresh key. No email, phone number, or new account needed.'
 		},
 		{
-			title: 'Why it matters',
-			body: 'Most secure messaging tools are either hard to host yourself or hard to move away from. Cordn is designed to keep security strong while making hosting much more practical.'
+			title: 'Keep more private',
+			body: 'Messages are encrypted before they are sent, and regular chat activity can use ephemeral keys instead of your stable public key.'
 		},
 		{
-			title: 'Who it is for',
-			body: 'Teams, communities, and builders who want encrypted group messaging with more freedom over where it runs and who operates it.'
+			title: 'Stay in control',
+			body: 'Use a hosted coordinator, run your own, or move later. Cordn keeps a path out instead of locking you in.'
 		}
 	];
+
+	const modelCards = [
+		{
+			step: '01',
+			title: 'Coordinator',
+			body: 'Cordn uses an MLS coordinator to keep group state and message order clear. It is exposed through ContextVM instead of needing a normal public server.',
+			linkLabel: 'contextvm.org',
+			linkHref: 'https://contextvm.org/'
+		},
+		{
+			step: '02',
+			title: 'Nostr relays',
+			body: 'Public Nostr relays carry the transport. That makes deployment simpler, even behind NATs, firewalls, and more constrained networks.'
+		},
+		{
+			step: '03',
+			title: 'Clients',
+			body: 'Clients connect through relays to reach coordinators over ContextVM. Messages are encrypted before they leave the device, then delivered to the group in order.'
+		}
+	];
+
+	const deploymentCommand = 'docker run --rm ghcr.io/cordn-msg/cordn:latest';
 </script>
 
 <svelte:head>
 	<title>Cordn</title>
 	<meta
 		name="description"
-		content="Cordn is a private group chat that makes strong encryption easier to use, host, and move."
+		content="Cordn is private group messaging you can own, with Nostr-based identity, end-to-end encryption, and flexible deployment."
 	/>
 </svelte:head>
 
@@ -57,21 +80,19 @@
 
 	<main>
 		<section
-			class="mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)] lg:items-center"
+			class="mx-auto grid min-h-[calc(100vh-73px)] max-w-6xl gap-12 px-6 py-20 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)] lg:items-center"
 		>
 			<div class="space-y-8">
 				<div class="space-y-4">
 					<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
-						Private group chat, without the usual platform lock-in
+						Private group chat, without platform lock-in
 					</p>
 					<h1 class="max-w-3xl text-4xl font-semibold tracking-tight text-balance md:text-6xl">
-						Private group messaging that is easier to understand, easier to host, and easier to
-						trust.
+						Private messaging that you own.
 					</h1>
 					<p class="max-w-2xl text-lg leading-8 text-muted-foreground">
-						Cordn is a secure group chat for people who want privacy without needing to become
-						experts in cryptography or infrastructure. It keeps messages encrypted, keeps groups in
-						sync, and gives you more choice over who runs the service.
+						Cordn is end-to-end encrypted group chat built on Nostr keys. Use an identity you
+						already have, or spin up a fresh one, without giving up privacy or a way out.
 					</p>
 				</div>
 
@@ -120,6 +141,45 @@
 			</div>
 		</section>
 
+		<section class="border-y border-border bg-muted/30">
+			<div class="mx-auto max-w-6xl px-6 py-12">
+				<div class="grid gap-6 rounded-3xl border border-border bg-background p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+					<div class="space-y-3">
+						<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
+							Run your own coordinator
+						</p>
+						<h2 class="text-2xl font-semibold tracking-tight md:text-3xl">
+							Start with one command.
+						</h2>
+						<p class="max-w-2xl text-sm leading-7 text-muted-foreground">
+							Self-hosting is simple. Start fast with Docker, then see the repo for more deployment
+							options and config.
+						</p>
+					</div>
+					<a
+						href="https://github.com/Cordn-msg/cordn"
+						target="_blank"
+						rel="noreferrer"
+						class="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
+					>
+						Deployment docs
+					</a>
+					<div class="md:col-span-2 rounded-2xl border border-border bg-card p-4">
+						<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+							<pre class="overflow-x-auto text-sm text-foreground"><code>{deploymentCommand}</code></pre>
+							<button
+								type="button"
+								onclick={() => copyToClipboard(deploymentCommand)}
+								class="inline-flex items-center justify-center rounded-md border border-border bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
+							>
+								Copy command
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
 		<section id="why" class="border-y border-border bg-muted/30">
 			<div class="mx-auto max-w-6xl px-6 py-16">
 				<div class="max-w-3xl space-y-4">
@@ -127,12 +187,11 @@
 						Why Cordn
 					</p>
 					<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-						Cordn keeps secure group chat practical in the real world.
+						Private chat without platform lock-in.
 					</h2>
 					<p class="text-base leading-7 text-muted-foreground">
-						Secure group messaging still needs a service that helps keep everyone on the same page.
-						Cordn accepts that reality, then improves it by making that service easier to host,
-						move, and run on your own terms.
+						Most secure chat still pushes you toward one service and one account system. Cordn keeps
+						your messages encrypted, lets you use Nostr keys, and gives you real exit options.
 					</p>
 				</div>
 
@@ -148,45 +207,51 @@
 		</section>
 
 		<section id="how" class="mx-auto max-w-6xl px-6 py-16">
-			<div class="max-w-2xl space-y-4">
+			<div class="max-w-3xl space-y-4">
 				<p class="text-sm font-medium tracking-[0.2em] text-muted-foreground uppercase">
 					How it works
 				</p>
 				<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-					How Cordn works, in plain language.
+					A simple model for private group chat.
 				</h2>
 				<p class="text-base leading-7 text-muted-foreground">
-					Cordn combines strong encryption for the group, a coordinator that keeps messages in the
-					right order, and a transport model that makes hosting more flexible than a typical public
-					internet service.
+					Cordn keeps the model simple: one coordinator for ordered group state, public relays for
+					transport, and clients that connect through ContextVM.
 				</p>
 			</div>
 
 			<div class="mt-10 grid gap-4 md:grid-cols-3">
-				<div class="rounded-2xl border border-border p-6">
-					<p class="text-sm text-muted-foreground">01</p>
-					<h3 class="mt-2 text-lg font-medium">You control your identity</h3>
-					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						Cordn uses keys instead of a normal account system, so identity stays closer to the user
-						instead of living inside a platform database.
-					</p>
-				</div>
-				<div class="rounded-2xl border border-border p-6">
-					<p class="text-sm text-muted-foreground">02</p>
-					<h3 class="mt-2 text-lg font-medium">The group stays in sync</h3>
-					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						A coordinator helps the group receive changes in a clear order, which matters for secure
-						group messaging and makes the chat experience much more reliable.
-					</p>
-				</div>
-				<div class="rounded-2xl border border-border p-6">
-					<p class="text-sm text-muted-foreground">03</p>
-					<h3 class="mt-2 text-lg font-medium">Hosting is more flexible</h3>
-					<p class="mt-3 text-sm leading-7 text-muted-foreground">
-						You can use a hosted coordinator, run your own, or move to another one later. That means
-						you are not forced into a single provider forever.
-					</p>
-				</div>
+				{#each modelCards as card (card.step)}
+					<div class="rounded-2xl border border-border p-6">
+						<p class="text-sm text-muted-foreground">{card.step}</p>
+						<h3 class="mt-2 text-lg font-medium">{card.title}</h3>
+						<p class="mt-3 text-sm leading-7 text-muted-foreground">
+							{card.body}
+							{#if card.linkHref}
+								<a
+									href={card.linkHref}
+									target="_blank"
+									rel="noreferrer"
+									class="underline underline-offset-4"
+								>
+									{card.linkLabel}
+								</a>
+							{/if}
+						</p>
+					</div>
+				{/each}
+			</div>
+
+			<div class="mt-8 max-w-4xl space-y-4 text-sm leading-7 text-muted-foreground">
+				<p>
+					Coordinators learn little from normal usage. Regular actions can use ephemeral keys, so a
+					coordinator does not need to know who is participating where. If you run your own
+					coordinator, that privacy story gets even stronger.
+				</p>
+				<p>
+					On relays, Cordn traffic blends into other ContextVM traffic. That makes it harder for a
+					middleman to single it out as a separate messaging stream.
+				</p>
 			</div>
 		</section>
 
@@ -197,34 +262,64 @@
 						What this means for you
 					</p>
 					<h2 class="text-3xl font-semibold tracking-tight md:text-4xl">
-						A friendlier path into private group messaging.
+						What makes Cordn different.
 					</h2>
 					<p class="text-base leading-7 text-muted-foreground">
-						Cordn is for people who want strong privacy, but also want something grounded in how
-						real systems have to work. It does not promise magic. It offers a clearer tradeoff:
-						encrypted group chat with more control over identity, hosting, and portability.
+						Cordn is still in beta, but the goal is simple: private messaging should be encrypted,
+						portable, and open source.
 					</p>
 				</div>
 
 				<div class="rounded-2xl border border-border bg-card p-6">
 					<div class="space-y-5 text-sm leading-7 text-muted-foreground">
 						<div>
-							<p class="font-medium text-card-foreground">Private by design</p>
+							<p class="font-medium text-card-foreground">Less exposed traffic</p>
 							<p>
-								Your messages stay encrypted for the group instead of being readable by the service.
+								Cordn traffic blends into wider ContextVM traffic instead of standing out as its own
+								public messaging stream.
 							</p>
 						</div>
 						<div>
-							<p class="font-medium text-card-foreground">Built for real deployment</p>
+							<p class="font-medium text-card-foreground">Encrypted before transport</p>
 							<p>
-								Cordn keeps the coordination secure group chat needs, but makes it easier to host
-								and move.
+								Messages are encrypted on your device before they are sent through the network.
 							</p>
 						</div>
 						<div>
-							<p class="font-medium text-card-foreground">More user freedom</p>
+							<p class="font-medium text-card-foreground">Open and censorship resistant</p>
 							<p>
-								You can start with a hosted service and still keep a path toward self-hosting later.
+								Cordn is open source. You can run your own coordinator and use public relays to stay
+								reachable.
+							</p>
+						</div>
+						<div>
+							<p class="font-medium text-card-foreground">No fixed identity required</p>
+							<p>
+								Use an existing Nostr profile, or create a fresh ephemeral key for routine chat use.
+							</p>
+						</div>
+						<div class="border-t border-border pt-5">
+							<p class="font-medium text-card-foreground">Open source and in beta</p>
+							<p>
+								See the projects on
+								<a
+									href="https://github.com/Cordn-msg/cordn"
+									target="_blank"
+									rel="noreferrer"
+									class="underline underline-offset-4"
+								>
+									GitHub
+								</a>
+								for the coordinator and
+								<a
+									href="https://github.com/Cordn-msg/cordn-web"
+									target="_blank"
+									rel="noreferrer"
+									class="underline underline-offset-4"
+								>
+									GitHub
+								</a>
+								for the web app.
 							</p>
 						</div>
 					</div>

@@ -2,7 +2,6 @@ import { browser } from '$app/environment';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
-const DEFAULT_RELAYS = ['ws://localhost:10547'];
 
 export interface StoredCoordinator {
 	id: string;
@@ -35,7 +34,7 @@ function normalizeRelay(relay: string): string {
 }
 
 function normalizeRelays(relays?: string[]): string[] {
-	const source = relays?.length ? relays : DEFAULT_RELAYS;
+	const source = relays?.length ? relays : [];
 	return [...new Set(source.map(normalizeRelay))];
 }
 

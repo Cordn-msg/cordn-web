@@ -21,6 +21,7 @@
 		isChatGroupRemoved,
 		listChatGroupMessages
 	} from '$lib/services/chatGroups.svelte';
+	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 	let {
 		groupId = 'general',
@@ -32,17 +33,34 @@
 		subtitle?: string;
 	} = $props();
 
+	const MAX_OPTIMISTIC_MESSAGES = 20;
+
 	let draft = $state('');
 	let sendError = $state('');
 	let replyTarget = $state<ChatMessageReplyTarget | null>(null);
 	let replyTargetAuthor = $state('');
 	let composerFocusKey = $state(0);
+	let optimisticMessages = $state<ChatMessage[]>([]);
+	let optimisticMessageSequence = 0;
 	const activePubkey = $derived.by(() => {
 		const pubkey = manager.getActive()?.pubkey;
 		return pubkey ? normalizePubKey(pubkey) : '';
 	});
 	const group = $derived.by(() => getChatGroup(groupId));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
+	function toChatMessage(message: StoredChatMessage): ChatMessage {
+		return {
+			id: `${message.id}:${message.cursor}`,
+			eventId: message.id,
+			author: message.sender,
+			text: message.content,
+			timeLabel: formatUnixTimestamp(message.createdAt, true, false),
+			dayLabel: formatUnixTimestamp(message.createdAt, false, true),
+			isOwn: normalizePubKey(message.sender) === activePubkey,
+			deliveryState: normalizePubKey(message.sender) === activePubkey ? 'sent' : undefined
+		};
+	}
+
 	const messages = $derived.by<ChatMessage[]>(() => {
 		const storedMessages = listChatGroupMessages(groupId);
 		const byEventId = new Map(storedMessages.map((message) => [message.id, message]));
@@ -67,7 +85,7 @@
 			reactionMap.set(reactionReference.targetId, byEmoji);
 		}
 
-		return storedMessages
+		const confirmedMessages = storedMessages
 			.filter((message) => message.kind !== 7)
 			.map((message) => {
 				const threadReference = getMessageThreadReference(message.tags);
@@ -75,13 +93,7 @@
 				const reactions = reactionMap.get(message.id);
 
 				return {
-					id: `${message.id}:${message.cursor}`,
-					eventId: message.id,
-					author: message.sender,
-					text: message.content,
-					timeLabel: formatUnixTimestamp(message.createdAt, true, false),
-					dayLabel: formatUnixTimestamp(message.createdAt, false, true),
-					isOwn: normalizePubKey(message.sender) === activePubkey,
+					...toChatMessage(message),
 					reactions: reactions
 						? Array.from(reactions.values()).map((entry) => ({
 								emoji: entry.emoji,
@@ -99,6 +111,8 @@
 						: undefined
 				};
 			});
+
+		return [...confirmedMessages, ...optimisticMessages];
 	});
 
 	const composerReplyPreview = $derived.by(() =>
@@ -111,16 +125,65 @@
 			: null
 	);
 
+	function setOptimisticMessages(messages: ChatMessage[]) {
+		optimisticMessages = messages.slice(-MAX_OPTIMISTIC_MESSAGES);
+	}
+
 	async function handleSubmit() {
 		if (!draft.trim() || !group) {
 			return;
 		}
-		const sent = await sendGroupMessageAction(groupId, draft, replyTarget ?? undefined);
+
+		const messageText = draft.trim();
+		const currentReplyTarget = replyTarget;
+		const currentReplyTargetAuthor = replyTargetAuthor;
+		const optimisticCreatedAt = Date.now();
+		const optimisticId = `optimistic:${groupId}:${optimisticMessageSequence++}`;
+		const optimisticReplyTarget = currentReplyTarget
+			? {
+					id: currentReplyTarget.id,
+					author: currentReplyTarget.pubkey,
+					authorLabel: currentReplyTargetAuthor || currentReplyTarget.pubkey,
+					text: currentReplyTarget.content
+				}
+			: undefined;
+
+		setOptimisticMessages([
+			...optimisticMessages,
+			{
+				id: optimisticId,
+				eventId: optimisticId,
+				author: activePubkey,
+				text: messageText,
+				timeLabel: formatUnixTimestamp(optimisticCreatedAt, true, false),
+				dayLabel: formatUnixTimestamp(optimisticCreatedAt, false, true),
+				isOwn: true,
+				deliveryState: 'sending',
+				reactions: [],
+				replyTo: optimisticReplyTarget
+			}
+		]);
+
+		draft = '';
+		clearReplyTarget();
+
+		const sent = await sendGroupMessageAction(
+			groupId,
+			messageText,
+			currentReplyTarget ?? undefined
+		);
 		sendError = chatComposerActionsStore.error;
+
 		if (sent) {
-			draft = '';
-			clearReplyTarget();
+			optimisticMessages = optimisticMessages.filter((message) => message.id !== optimisticId);
+			return;
 		}
+
+		setOptimisticMessages(
+			optimisticMessages.map((message) =>
+				message.id === optimisticId ? { ...message, deliveryState: 'error' } : message
+			)
+		);
 	}
 
 	function handleReply(message: ChatMessage) {
