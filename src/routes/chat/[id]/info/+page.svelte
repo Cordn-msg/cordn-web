@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -140,6 +141,7 @@
 		<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
 			<div class="flex items-start justify-between gap-4">
 				<div class="flex min-w-0 items-center gap-3">
+					<ChatMobileSidebarButton />
 					<Avatar class="h-12 w-12 border border-border bg-card">
 						{#if group.metadata?.imageUrl}
 							<AvatarImage

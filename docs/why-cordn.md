@@ -12,7 +12,7 @@ Cordn exists to resolve that tension with a different set of tradeoffs.
 
 ## What Cordn is
 
-[`Cordn`](../README.md) is a coordinator-assisted MLS protocol profile that uses [`ContextVM`](../../docs/cvm/quick-overview.md) as its deployment and transport layer.
+Cordn is a coordinator-assisted MLS protocol profile that uses ContextVM as its deployment and transport layer.
 
 It keeps the part MLS actually needs:
 
@@ -38,7 +38,7 @@ Conventional MLS deployments are valid and often simpler to reason about operati
 - harder self-hosting for ordinary users,
 - and, in many deployments, separate authentication or identity services.
 
-Cordn keeps the coordinator role but relocates it into a more sovereign deployment model through [`ContextVM`](../../docs/cvm/quick-overview.md). This makes it practical for users to run their own coordinator from home, behind a firewall, or even from more temporary environments without giving up MLS-style coordination.
+Cordn keeps the coordinator role but relocates it into a more sovereign deployment model through ContextVM. This makes it practical for users to run their own coordinator from home, behind a firewall, or even from more temporary environments without giving up MLS-style coordination.
 
 ## Why not just run MLS directly over public relays?
 
@@ -48,11 +48,11 @@ Weakly ordered public dissemination makes that much harder. Competing commits, s
 
 Cordn deliberately avoids that mistake.
 
-It keeps a single active coordinator per group and preserves strong per-group message ordering through monotonic group-scoped cursors, as defined in [`cordn/spec/00.md`](../spec/00.md). This is one of the central Cordn tradeoffs: preserve the coordination discipline MLS needs, but make the coordinator easier to deploy and move.
+It keeps a single active coordinator per group and preserves strong per-group message ordering through monotonic group-scoped cursors. This is one of the central Cordn tradeoffs: preserve the coordination discipline MLS needs, but make the coordinator easier to deploy and move.
 
 ## Why ContextVM matters
 
-[`ContextVM`](../../docs/cvm/quick-overview.md) is a general-purpose protocol for exposing services through Nostr relays without requiring direct public server exposure. That matters for Cordn in several ways.
+ContextVM is a general-purpose protocol for exposing services through Nostr relays without requiring direct public server exposure. That matters for Cordn in several ways.
 
 ### Easier deployment
 
@@ -77,7 +77,7 @@ Cordn traffic is carried inside a broader encrypted ContextVM transport environm
 
 Cordn takes inspiration from Marmot's simpler identity approach while remaining more conservative about transport coordination.
 
-In [`cordn/spec/00.md`](../spec/00.md), Cordn uses MLS `BasicCredential` tied to a stable Nostr public key identity for KeyPackage publication and retrieval. The identity binding is strengthened through signed publication payloads that clients verify independently.
+In Cordn, MLS `BasicCredential` is tied to a stable Nostr public key identity for KeyPackage publication and retrieval. The identity binding is strengthened through signed publication payloads that clients verify independently.
 
 This has several advantages:
 
@@ -124,7 +124,7 @@ Using a public coordinator is therefore a reasonable tradeoff for many users: go
 
 If a group has higher privacy requirements, Cordn's self-hosting model becomes especially compelling.
 
-Because coordinators are easy to deploy through [`ContextVM`](../../docs/cvm/quick-overview.md), users can:
+Because coordinators are easy to deploy through ContextVM, users can:
 
 - run a personal coordinator from home,
 - operate a private coordinator for a small social circle,
@@ -152,7 +152,7 @@ Cordn optimizes for a very specific combination of goals:
 
 - **Strong group security** through MLS.
 - **Simple, sovereign identity** through Nostr-style key-based authentication rather than external account systems.
-- **Firewall-tolerant coordinator deployment** through [`ContextVM`](../../docs/cvm/quick-overview.md).
+- **Firewall-tolerant coordinator deployment** through ContextVM.
 - **Clear ordering semantics** through a single active coordinator and per-group cursors.
 - **Flexible privacy tradeoffs** ranging from public hosted coordinators to fully self-hosted or even ephemeral coordinators.
 - **Censorship resistance and portability** without discarding the coordinator model MLS needs.
@@ -171,7 +171,6 @@ Cordn optimizes for a very specific combination of goals:
 - **Coordinators still observe activity**: they can learn that a group is active and see traffic patterns.
 - **Availability trust remains**: a coordinator can still delay, drop, or censor delivery.
 - **Cordn does not eliminate coordination**: it preserves it and improves its deployment profile.
-- **ContextVM introduces its own ecosystem assumptions**: Cordn gains a lot from ContextVM, but also depends on its transport environment and operational model.
 - **This is a tradeoff, not magic**: stronger self-hosting and sovereignty are bought by accepting a coordinator-centered design rather than trying to fully dissolve coordination into public relay transport.
 
 ## Bottom line
@@ -183,7 +182,7 @@ MLS needs coordination. Traditional coordinators are often too exposed, too heav
 - keep the coordinator,
 - keep strong ordering,
 - simplify identity,
-- use [`ContextVM`](../../docs/cvm/quick-overview.md) to make deployment sovereign and firewall-tolerant,
+- use ContextVM to make deployment sovereign and firewall-tolerant,
 - and let users choose the privacy/convenience point that fits their needs.
 
 For users who want easy hosted operation, Cordn can work with public coordinators while preserving strong encryption guarantees. For users who need stronger sovereignty or privacy, Cordn makes self-hosting and even ephemeral coordinator deployment realistic. That is the core reason Cordn exists.

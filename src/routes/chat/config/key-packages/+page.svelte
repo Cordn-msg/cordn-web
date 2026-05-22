@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Card from '$lib/components/ui/card';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
@@ -94,6 +95,7 @@
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
 	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
 		<div class="flex items-center gap-3">
+			<ChatMobileSidebarButton />
 			<div
 				class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
 			>

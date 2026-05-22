@@ -150,7 +150,7 @@
 	{/if}
 
 	<article class="flex items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
-		<div class="flex h-8 w-8 shrink-0 items-end max-sm:hidden" class:justify-end={isOwn}>
+		<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
 			{#if showAvatar}
 				{#if $profile?.picture}
 					<img src={$profile.picture} alt={displayName} class="h-8 w-8 rounded-full object-cover" />
@@ -160,6 +160,8 @@
 						style={`background-color: ${pubkeyToHexColor(message.author)}`}
 					></div>
 				{/if}
+			{:else}
+				<div class="h-8 w-8" aria-hidden="true"></div>
 			{/if}
 		</div>
 

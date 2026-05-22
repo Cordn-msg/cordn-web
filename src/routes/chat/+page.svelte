@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -14,6 +15,7 @@
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
+		createChatKeyPackage,
 		listChatKeyPackages,
 		type StoredKeyPackageRecord
 	} from '$lib/services/chatKeyPackages.svelte';
@@ -90,6 +92,8 @@
 	let completedStepsExpanded = $state(false);
 	let setupGuideDismissed = $state(false);
 	let settingDefaultCoordinator = $state(false);
+	let keyPackageActionError = $state('');
+	let creatingKeyPackage = $state(false);
 
 	function getCoordinatorLabel(coordinator: StoredCoordinator | undefined) {
 		if (!coordinator) return 'No default coordinator yet';
@@ -100,6 +104,7 @@
 		try {
 			settingDefaultCoordinator = true;
 			coordinatorSetupError = '';
+			keyPackageActionError = '';
 			upsertChatCoordinator({
 				pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
 				label: 'Default coordinator',
@@ -110,6 +115,28 @@
 				error instanceof Error ? error.message : 'Failed to save the default coordinator';
 		} finally {
 			settingDefaultCoordinator = false;
+		}
+	}
+
+	async function createAndPublishKeyPackage() {
+		const coordinatorKey = defaultCoordinator?.pubkey;
+
+		if (!coordinatorKey) {
+			keyPackageActionError = 'Set a default coordinator before creating a key package';
+			return;
+		}
+
+		try {
+			creatingKeyPackage = true;
+			keyPackageActionError = '';
+			await createChatKeyPackage({
+				publishCoordinatorKey: coordinatorKey
+			});
+		} catch (error) {
+			keyPackageActionError =
+				error instanceof Error ? error.message : 'Failed to create and publish key package';
+		} finally {
+			creatingKeyPackage = false;
 		}
 	}
 
@@ -136,8 +163,9 @@
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
 	<header class="border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:px-6">
-		<div class="mx-auto flex w-full max-w-6xl items-start justify-between gap-4">
+		<div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
 			<div class="flex items-start gap-3">
+				<ChatMobileSidebarButton />
 				<div
 					class="flex h-11 w-11 items-center justify-center rounded-2xl border border-border bg-card"
 				>
@@ -145,14 +173,14 @@
 				</div>
 				<div class="space-y-1">
 					<h1 class="text-xl font-semibold tracking-tight">Chat home</h1>
-					<p class="max-w-2xl text-sm text-muted-foreground">
-						Use this space to finish setup quickly and keep a clear view of your Cordn coordinators,
-						key packages, and groups.
-					</p>
 				</div>
 			</div>
 			{#if hasGroups && latestGroup}
-				<Button href={resolve('/chat/[id]', { id: latestGroup.id })} variant="outline">
+				<Button
+					href={resolve('/chat/[id]', { id: latestGroup.id })}
+					variant="outline"
+					class="w-full sm:w-fit"
+				>
 					Open latest group
 				</Button>
 			{/if}
@@ -229,10 +257,39 @@
 													</div>
 												</div>
 											{:else if step.title === 'Create a key package'}
-												<div class="flex flex-wrap gap-2">
-													<Button href={resolve('/chat/config/key-packages')}
-														>Open key packages</Button
+												<div class="space-y-3">
+													<div
+														class="rounded-xl border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
 													>
+														Create and publish a key package to your default coordinator without
+														leaving this page.
+													</div>
+													{#if defaultCoordinator}
+														<p class="text-sm text-muted-foreground">
+															Publishing to <span class="font-medium text-foreground"
+																>{getCoordinatorLabel(defaultCoordinator)}</span
+															>
+														</p>
+													{:else}
+														<p class="text-sm text-muted-foreground">
+															Add or choose a default coordinator first to publish the generated
+															package.
+														</p>
+													{/if}
+													{#if keyPackageActionError}
+														<p class="text-sm text-destructive">{keyPackageActionError}</p>
+													{/if}
+													<div class="flex flex-wrap gap-2">
+														<Button
+															onclick={createAndPublishKeyPackage}
+															disabled={creatingKeyPackage || !defaultCoordinator}
+														>
+															{creatingKeyPackage ? 'Creating…' : 'Create and publish key package'}
+														</Button>
+														<Button href={resolve('/chat/config/key-packages')} variant="outline">
+															Manage key packages
+														</Button>
+													</div>
 												</div>
 											{:else if step.title === 'Create your first group'}
 												<div class="flex flex-wrap gap-2">
@@ -291,14 +348,14 @@
 				</Card.Root>
 			{/if}
 
-			<div class="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+			<div class="flex flex-col gap-6">
 				<Card.Root>
 					<Card.Header class="space-y-1">
 						<Card.Description>Configuration shortcuts</Card.Description>
 						<Card.Title>Coordinators and key packages</Card.Title>
 					</Card.Header>
 					<Card.Content class="space-y-4">
-						<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+						<div class="flex flex-col gap-4">
 							<a
 								href={resolve('/chat/coordinators')}
 								class="group rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"

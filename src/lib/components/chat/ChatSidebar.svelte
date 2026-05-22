@@ -35,7 +35,6 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Inbox from '@lucide/svelte/icons/inbox';
-	import Menu from '@lucide/svelte/icons/menu';
 	import Plus from '@lucide/svelte/icons/plus';
 	import X from '@lucide/svelte/icons/x';
 	import type { Writable } from 'svelte/store';
@@ -168,15 +167,6 @@
 
 	const sidebarClass = $derived(collapsed ? 'w-20 px-2.5' : 'w-72 px-3');
 </script>
-
-<button
-	type="button"
-	class="fixed top-4 left-4 z-40 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background/95 text-foreground shadow-sm backdrop-blur md:hidden"
-	onclick={() => ($mobileSidebarOpen = true)}
-	aria-label="Open chats sidebar"
->
-	<Menu class="size-4" />
-</button>
 
 {#if $mobileSidebarOpen}
 	<button

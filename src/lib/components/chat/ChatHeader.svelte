@@ -2,8 +2,8 @@
 	import { browser } from '$app/environment';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
-	import { getChatLayoutContext } from '$lib/components/chat/chatLayoutContext';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { resolve } from '$app/paths';
@@ -24,7 +24,6 @@
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
-	import PanelLeft from '@lucide/svelte/icons/panel-left';
 	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import { setMode } from 'mode-watcher';
@@ -42,8 +41,6 @@
 		icon?: string;
 		imageUrl?: string;
 	} = $props();
-
-	const { mobileSidebarOpen } = getChatLayoutContext();
 
 	async function fetchMessages() {
 		await fetchGroupMessagesAction(groupId);
@@ -129,17 +126,7 @@
 >
 	<div class="flex items-start justify-between gap-3 px-4 py-3 sm:items-center md:px-6">
 		<div class="flex min-w-0 flex-1 items-center gap-3 pr-2">
-			<Button
-				type="button"
-				variant="outline"
-				size="icon"
-				class="h-10 w-10 shrink-0 rounded-xl md:hidden"
-				onclick={() => ($mobileSidebarOpen = true)}
-				aria-label="Open chats sidebar"
-				title="Open chats sidebar"
-			>
-				<PanelLeft class="size-4" />
-			</Button>
+			<ChatMobileSidebarButton />
 
 			<Avatar class="h-10 w-10 border border-border bg-card">
 				{#if imageUrl}
