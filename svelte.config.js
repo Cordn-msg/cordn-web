@@ -14,7 +14,8 @@ const config = {
 			relative: false
 		},
 		prerender: {
-			entries: ['*']
+			entries: ['*'],
+			handleUnseenRoutes: 'ignore'
 		},
 		alias: {
        		"@/*": "./path/to/lib/*",
