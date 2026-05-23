@@ -116,9 +116,6 @@ export async function acceptWelcomeToGroup(params: {
 	if (!keyPackageRecord) {
 		throw new Error(`Missing local key package for welcome ${params.welcome.kpRef}`);
 	}
-	if (keyPackageRecord.consumedAt) {
-		throw new Error(`Key package ${params.welcome.kpRef} was already consumed`);
-	}
 
 	const { keyPackage, privateKeyPackage } = decodeStoredKeyPackage(keyPackageRecord);
 	const state = await joinGroupFromWelcome({
