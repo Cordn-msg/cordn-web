@@ -132,6 +132,10 @@
 		return group?.metadata?.name || group?.id || 'Joined group';
 	}
 
+	function getWelcomeAvatarFallback(notification: (typeof welcomeNotifications)[number]) {
+		return notification.preview?.icon || notification.preview?.name?.slice(0, 1) || 'W';
+	}
+
 	function getChatSummary(groupId: string) {
 		return chatSummaries[groupId] ?? { preview: 'Group chat', unreadCount: 0 };
 	}
@@ -165,7 +169,7 @@
 		pruneChatGroupPresence();
 	});
 
-	const sidebarClass = $derived(collapsed ? 'w-20 px-2.5' : 'w-72 px-3');
+	const sidebarClass = $derived(collapsed ? 'md:w-20 px-2.5' : 'md:w-72 px-3');
 </script>
 
 {#if $mobileSidebarOpen}
@@ -178,7 +182,7 @@
 {/if}
 
 <aside
-	class={`fixed inset-y-0 left-0 z-50 flex h-full w-[min(22rem,calc(100vw-2rem))] shrink-0 flex-col overflow-hidden border-r border-border bg-card/95 py-3 shadow-xl backdrop-blur transition-[transform,width,padding] duration-200 md:static md:z-auto md:w-auto md:translate-x-0 md:bg-card/60 md:shadow-none ${$mobileSidebarOpen ? 'translate-x-0' : '-translate-x-[calc(100%+1rem)]'} ${sidebarClass}`}
+	class={`fixed inset-y-0 left-0 z-50 flex h-full w-[min(22rem,calc(100vw-2rem))] shrink-0 flex-col overflow-hidden border-r border-border bg-card/95 py-3 shadow-xl backdrop-blur transition-[transform,width,padding] duration-200 md:static md:z-auto md:translate-x-0 md:bg-card/60 md:shadow-none ${$mobileSidebarOpen ? 'translate-x-0' : '-translate-x-[calc(100%+1rem)]'} ${sidebarClass}`}
 >
 	<div class={`flex items-center pb-4 ${collapsed ? 'justify-center' : 'justify-between gap-2'}`}>
 		<a
@@ -331,11 +335,11 @@
 							</div>
 
 							{#if !collapsed}
-								<div class="min-w-0 flex-1">
+								<div class="min-w-0 flex-1 overflow-hidden">
 									<div class="flex items-start justify-between gap-2">
 										<p class="truncate font-medium">{chat.metadata?.name || chat.id}</p>
 									</div>
-									<p class="truncate text-xs text-muted-foreground">
+									<p class="truncate text-xs leading-5 text-muted-foreground">
 										{summary.preview}
 									</p>
 								</div>
@@ -433,21 +437,40 @@
 									class={`rounded-xl border px-4 py-3 ${notification.readAt ? 'border-border bg-background/50' : 'border-primary/40 bg-primary/5'}`}
 								>
 									<div class="flex items-start justify-between gap-3">
-										<div class="min-w-0 space-y-1">
-											<p class="font-medium">
-												{getNotificationCoordinatorLabel(notification.coordinatorKey)}
-											</p>
-											<p class="font-mono text-xs break-all text-muted-foreground">
-												{notification.kpRef}
-											</p>
-											<p class="text-xs text-muted-foreground">
-												{new Date(notification.at).toLocaleString()}
-											</p>
-											{#if notification.acceptedGroupId}
-												<p class="text-xs text-emerald-600 dark:text-emerald-400">
-													Accepted into {getNotificationGroupLabel(notification.acceptedGroupId)}
+										<div class="flex min-w-0 gap-3">
+											<Avatar class="h-10 w-10 shrink-0 border border-border bg-background">
+												{#if notification.preview?.imageUrl}
+													<AvatarImage
+														src={notification.preview.imageUrl}
+														alt={notification.preview.name}
+														class="object-cover"
+													/>
+												{/if}
+												<AvatarFallback class="bg-background text-sm font-medium">
+													{getWelcomeAvatarFallback(notification)}
+												</AvatarFallback>
+											</Avatar>
+											<div class="min-w-0 space-y-1">
+												<p class="font-medium">
+													{notification.preview?.name || 'Pending welcome'}
 												</p>
-											{/if}
+												{#if notification.preview?.description}
+													<p class="line-clamp-2 text-sm text-muted-foreground">
+														{notification.preview.description}
+													</p>
+												{/if}
+												<p class="text-xs text-muted-foreground">
+													{getNotificationCoordinatorLabel(notification.coordinatorKey)}
+												</p>
+												<p class="text-xs text-muted-foreground">
+													{new Date(notification.at).toLocaleString()}
+												</p>
+												{#if notification.acceptedGroupId}
+													<p class="text-xs text-emerald-600 dark:text-emerald-400">
+														Accepted into {getNotificationGroupLabel(notification.acceptedGroupId)}
+													</p>
+												{/if}
+											</div>
 										</div>
 										<div class="flex shrink-0 gap-2">
 											{#if !notification.acceptedGroupId}

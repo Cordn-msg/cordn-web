@@ -4,6 +4,7 @@
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
+	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -103,6 +104,10 @@
 
 	async function acceptWelcome(welcomeId: string) {
 		await acceptWelcomeAction(welcomeId);
+	}
+
+	function getWelcomeAvatarFallback(welcome: (typeof pendingWelcomes)[number]) {
+		return welcome.preview?.icon || welcome.preview?.name?.slice(0, 1) || 'W';
 	}
 
 	async function removeOwnedKeyPackage(keyPackageRef: string) {
@@ -414,19 +419,35 @@
 									{#each pendingWelcomes as welcome (welcome.id)}
 										<div class="rounded-xl border border-border px-4 py-3">
 											<div class="flex items-start justify-between gap-3">
-												<div>
-													<p class="font-medium">Welcome for key package</p>
-													<p class="mt-1 font-mono text-xs break-all text-muted-foreground">
-														{welcome.kpRef}
-													</p>
-													<p class="mt-2 text-xs text-muted-foreground">
-														{new Date(welcome.at).toLocaleString()}
-													</p>
-													{#if welcome.acceptedGroupId}
-														<p class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
-															Accepted into {getAcceptedGroupLabel(welcome.acceptedGroupId)}
+												<div class="flex min-w-0 gap-3">
+													<Avatar class="h-12 w-12 shrink-0 border border-border bg-background">
+														{#if welcome.preview?.imageUrl}
+															<AvatarImage
+																src={welcome.preview.imageUrl}
+																alt={welcome.preview.name}
+																class="object-cover"
+															/>
+														{/if}
+														<AvatarFallback class="bg-background text-base font-medium">
+															{getWelcomeAvatarFallback(welcome)}
+														</AvatarFallback>
+													</Avatar>
+													<div class="min-w-0">
+														<p class="font-medium">{welcome.preview?.name || 'Pending welcome'}</p>
+														{#if welcome.preview?.description}
+															<p class="mt-1 text-sm text-muted-foreground">
+																{welcome.preview.description}
+															</p>
+														{/if}
+														<p class="mt-2 text-xs text-muted-foreground">
+															{new Date(welcome.at).toLocaleString()}
 														</p>
-													{/if}
+														{#if welcome.acceptedGroupId}
+															<p class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+																Accepted into {getAcceptedGroupLabel(welcome.acceptedGroupId)}
+															</p>
+														{/if}
+													</div>
 												</div>
 												<div class="flex shrink-0 gap-2">
 													{#if !welcome.acceptedGroupId}

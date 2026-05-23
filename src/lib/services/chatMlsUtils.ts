@@ -10,6 +10,7 @@ import {
 	defaultCredentialTypes,
 	getCiphersuiteImpl,
 	joinGroup,
+	joinGroupWithExtensions,
 	keyPackageDecoder,
 	makeCustomExtension,
 	mlsMessageEncoder,
@@ -43,6 +44,13 @@ export interface CordnGroupMetadata {
 	icon?: string;
 	imageUrl?: string;
 	adminPubkeys?: string[];
+}
+
+export interface CordnGroupMetadataPreview {
+	name: string;
+	description?: string;
+	icon?: string;
+	imageUrl?: string;
 }
 
 function decodeExact<T>(bytes: Uint8Array, decoder: Decoder<T>, label: string): T {
@@ -350,6 +358,30 @@ export async function joinGroupFromWelcome(params: {
 		keyPackage: params.keyPackage,
 		privateKeys: params.privateKeyPackage
 	});
+}
+
+export async function previewGroupMetadataFromWelcome(params: {
+	welcomeBase64: string;
+	keyPackage: KeyPackage;
+	privateKeyPackage: PrivateKeyPackage;
+}): Promise<CordnGroupMetadataPreview | undefined> {
+	const cipherSuite = await getCordnCipherSuite();
+	const result = await joinGroupWithExtensions({
+		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
+		welcome: decodeWelcomeBase64(params.welcomeBase64),
+		keyPackage: params.keyPackage,
+		privateKeys: params.privateKeyPackage
+	});
+
+	const metadata = getCordnGroupMetadataExtension(result.state);
+	if (!metadata) return undefined;
+
+	return {
+		name: metadata.name,
+		description: metadata.description,
+		icon: metadata.icon,
+		imageUrl: metadata.imageUrl
+	};
 }
 
 export async function addMemberToGroup(params: {

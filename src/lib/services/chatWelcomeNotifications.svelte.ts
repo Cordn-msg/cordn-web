@@ -3,7 +3,13 @@ import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 import { listChatGroups } from '$lib/services/chatGroups.svelte';
-import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+import {
+	decodeStoredKeyPackage,
+	getChatKeyPackage,
+	listChatKeyPackages
+} from '$lib/services/chatKeyPackages.svelte';
+import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
+import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
@@ -15,6 +21,7 @@ export interface WelcomeNotificationEntry {
 	kpRef: string;
 	at: number;
 	welcomeBase64: string;
+	preview?: CordnGroupMetadataPreview;
 	readAt?: number;
 	fetchedAt: number;
 	acceptedAt?: number;
@@ -111,6 +118,38 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 	saveNotifications();
 }
 
+async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
+	if (entry.preview) return entry.preview;
+
+	const record = getChatKeyPackage(entry.kpRef);
+	if (!record) return undefined;
+
+	const { keyPackage, privateKeyPackage } = decodeStoredKeyPackage(record);
+	const preview = await previewGroupMetadataFromWelcome({
+		welcomeBase64: entry.welcomeBase64,
+		keyPackage,
+		privateKeyPackage
+	});
+	if (!preview) return undefined;
+
+	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((candidate) =>
+		candidate.id === entry.id ? { ...candidate, preview } : candidate
+	);
+	saveNotifications();
+	return preview;
+}
+
+async function resolveFetchedWelcomePreviews() {
+	for (const entry of chatWelcomeNotificationsStore.entries) {
+		try {
+			await resolveWelcomePreview(entry);
+		} catch {
+			// Ignore preview failures so the welcome remains accept/reject capable.
+		}
+	}
+	return chatWelcomeNotificationsStore.entries;
+}
+
 export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);
 	if (keys.length === 0) {
@@ -127,6 +166,7 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 			const result = await client.FetchPendingWelcomes({});
 			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
 		}
+		await resolveFetchedWelcomePreviews();
 	} catch (error) {
 		chatWelcomeNotificationsStore.error =
 			error instanceof Error ? error.message : 'Failed to fetch welcome notifications';

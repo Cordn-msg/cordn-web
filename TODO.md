@@ -1,1 +1,4 @@
-- [] Lazy connect with stable client to avoid leak identity when not necessary
+- [x] Lazy connect with stable client to avoid leak identity when not necessary
+- When reacting to a message it always scrolls to the bottom of the chat
+- Make app pwa
+- Fix other reported bugs

@@ -105,7 +105,7 @@
 		</div>
 
 		<article class="prose max-w-none prose-neutral dark:prose-invert">
-			{#each blocks as block}
+			{#each blocks as block (`${block.type}:${block.type === 'heading' ? `${block.level}:${block.text}` : block.type === 'paragraph' ? block.text : block.items.join('|')}`)}
 				{#if block.type === 'heading'}
 					{#if block.level === 1}
 						<h1>{@html block.text}</h1>
@@ -118,7 +118,7 @@
 					<p>{@html block.text}</p>
 				{:else}
 					<ul>
-						{#each block.items as item}
+						{#each block.items as item (item)}
 							<li>{@html item}</li>
 						{/each}
 					</ul>

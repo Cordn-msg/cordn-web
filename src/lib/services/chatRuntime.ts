@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import { cordnClient } from '$lib/services/coordinatorClient';
@@ -51,6 +52,7 @@ class AccountCoordinatorClientRegistry {
 }
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
+let disconnectActiveClientsPromise: Promise<void> | null = null;
 
 function getAccountRegistryKey(account: IAccount): string {
 	return account.id;
@@ -92,4 +94,32 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 
 	await registry.disconnect();
 	accountClientRegistries.delete(registryKey);
+}
+
+async function disconnectActiveCoordinatorClients(): Promise<void> {
+	if (disconnectActiveClientsPromise) {
+		return disconnectActiveClientsPromise;
+	}
+
+	disconnectActiveClientsPromise = disconnectCoordinatorClients().finally(() => {
+		disconnectActiveClientsPromise = null;
+	});
+
+	return disconnectActiveClientsPromise;
+}
+
+if (browser) {
+	const invalidateActiveCoordinatorClients = () => {
+		console.log('invalidating active coordinator clients');
+		void disconnectActiveCoordinatorClients();
+	};
+
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'visible') {
+			invalidateActiveCoordinatorClients();
+		}
+	});
+
+	window.addEventListener('pageshow', invalidateActiveCoordinatorClients);
+	window.addEventListener('online', invalidateActiveCoordinatorClients);
 }

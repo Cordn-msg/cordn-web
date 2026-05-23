@@ -7,6 +7,7 @@ import {
 } from '$lib/services/chatGroups.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
+const MAX_PREVIEW_LENGTH = 80;
 
 type GroupPresenceRecord = {
 	lastReadCursor: number;
@@ -71,7 +72,14 @@ export function getUnreadChatGroupMessageCount(groupId: string): number {
 export function getLatestChatGroupMessagePreview(groupId: string): string {
 	const group = getChatGroup(groupId);
 	const latestMessage = listChatGroupMessages(groupId).at(-1);
-	return latestMessage?.content?.trim() || group?.metadata?.description || 'Group chat';
+	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();
+	if (preview) {
+		return preview.length > MAX_PREVIEW_LENGTH
+			? `${preview.slice(0, MAX_PREVIEW_LENGTH - 1).trimEnd()}…`
+			: preview;
+	}
+
+	return group?.metadata?.description || 'Group chat';
 }
 
 export function pruneChatGroupPresence() {
