@@ -62,7 +62,7 @@
 
 	function syncMetadataForm() {
 		if (!group) return;
-		metadataName = group.metadata?.name ?? group.id;
+		metadataName = group.metadata?.name ?? '';
 		metadataDescription = group.metadata?.description ?? '';
 		metadataIcon = group.metadata?.icon ?? '';
 		metadataImageUrl = group.metadata?.imageUrl ?? '';
@@ -73,7 +73,7 @@
 		if (!group) return;
 		const signature = JSON.stringify({
 			id: group.id,
-			name: group.metadata?.name ?? group.id,
+			name: group.metadata?.name ?? '',
 			description: group.metadata?.description ?? '',
 			icon: group.metadata?.icon ?? '',
 			imageUrl: group.metadata?.imageUrl ?? '',
@@ -91,7 +91,7 @@
 		);
 		const formAdminPubkeys = parseAdminPubkeys(metadataAdminPubkeys);
 		return (
-			metadataName.trim() !== (group.metadata?.name ?? group.id) ||
+			metadataName.trim() !== (group.metadata?.name ?? '') ||
 			metadataDescription.trim() !== (group.metadata?.description ?? '') ||
 			metadataIcon.trim() !== (group.metadata?.icon ?? '') ||
 			metadataImageUrl.trim() !== (group.metadata?.imageUrl ?? '') ||
@@ -132,7 +132,7 @@
 </script>
 
 <svelte:head>
-	<title>{group?.metadata?.name || group?.id || 'Group info'} | Cordn</title>
+	<title>{group?.metadata?.name || 'Group info'} | Cordn</title>
 	<meta name="description" content="Inspect Cordn group metadata and membership." />
 </svelte:head>
 
@@ -170,7 +170,7 @@
 					<div class="min-w-0">
 						<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">Group details</p>
 						<h1 class="truncate text-xl font-semibold tracking-tight">
-							{group.metadata?.name || group.id}
+							{group.metadata?.name || 'Unnamed chat'}
 						</h1>
 						<p class="text-sm text-muted-foreground">
 							{group.metadata?.description || 'Coordinator-assisted messaging'}

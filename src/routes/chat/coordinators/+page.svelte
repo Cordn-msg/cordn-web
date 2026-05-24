@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { SvelteSet } from 'svelte/reactivity';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -33,7 +34,7 @@
 	const groups = $derived.by(() => listChatGroups());
 	const localKeyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const knownCoordinatorKeys = $derived.by(() => {
-		const keys = new Set<string>();
+		const keys = new SvelteSet<string>();
 		for (const coordinator of coordinators) keys.add(coordinator.pubkey);
 		for (const group of groups) keys.add(group.coordinatorKey);
 		for (const keyPackage of localKeyPackages) {
@@ -343,7 +344,11 @@
 									</div>
 
 									<div class="mt-4 flex flex-wrap gap-2">
-										<Button href={`/chat/coordinators/${coordinator.pubkey}`}>Open detail</Button>
+										<Button
+											href={resolve('/chat/coordinators/[coordinatorKey]', {
+												coordinatorKey: coordinator.pubkey
+											})}>Open detail</Button
+										>
 										{#if !coordinator.isSaved}
 											<Button
 												type="button"

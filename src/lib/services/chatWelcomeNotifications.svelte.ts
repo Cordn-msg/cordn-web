@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
@@ -77,7 +78,7 @@ function loadNotifications() {
 loadNotifications();
 
 export function listKnownCoordinatorKeys(): string[] {
-	const keys = new Set<string>();
+	const keys = new SvelteSet<string>();
 	for (const coordinator of listChatCoordinators()) keys.add(coordinator.pubkey);
 	for (const group of listChatGroups()) keys.add(group.coordinatorKey);
 	for (const keyPackage of listChatKeyPackages(manager.getActive()?.pubkey)) {
@@ -88,7 +89,7 @@ export function listKnownCoordinatorKeys(): string[] {
 
 function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]) {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
-	const existingById = new Map(
+	const existingById = new SvelteMap(
 		chatWelcomeNotificationsStore.entries.map((entry) => [entry.id, entry])
 	);
 	const fetchedAt = Date.now();

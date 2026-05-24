@@ -95,15 +95,12 @@ export class cordnClient implements coordinatorClient {
 				'Missing coordinator server pubkey. Pass serverPubkey explicitly or configure the CLI entrypoint to provide one.'
 			);
 		}
-		const {
-			privateKey: _,
-			ephemeralPrivateKey: ____,
-			serverPubkey: __,
-			relays: ___,
-			relayHandler: _____,
-			signer: providedSigner,
-			...rest
-		} = options;
+		const { signer: providedSigner, ...rest } = options;
+		delete (rest as Partial<typeof options>).privateKey;
+		delete (rest as Partial<typeof options>).ephemeralPrivateKey;
+		delete (rest as Partial<typeof options>).serverPubkey;
+		delete (rest as Partial<typeof options>).relays;
+		delete (rest as Partial<typeof options>).relayHandler;
 		const stableSigner = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
 		const ephemeralSigner = resolvedEphemeralPrivateKey
 			? new PrivateKeySigner(resolvedEphemeralPrivateKey)

@@ -62,6 +62,9 @@ import {
 import { normalizePubKey } from '$lib/utils';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 import { getChatStorage, type StoredChatGroupData } from '$lib/storage/chatStorage';
+import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+import { queryClient } from '$lib/query-client';
+import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 
 const groupIdDecoder = new TextDecoder();
 
@@ -292,7 +295,7 @@ function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataI
 }
 
 export async function createChatGroup(input: {
-	name: string;
+	name?: string;
 	description?: string;
 	icon?: string;
 	imageUrl?: string;
@@ -304,7 +307,7 @@ export async function createChatGroup(input: {
 }) {
 	requireActiveAccount('You must be logged in to create a group');
 	const metadata: GroupMetadataInput = {
-		name: input.name,
+		name: input.name?.trim() ?? '',
 		description: input.description,
 		icon: input.icon,
 		imageUrl: input.imageUrl,
@@ -372,9 +375,12 @@ export async function listCoordinatorAvailableKeyPackages(
 		throw new Error('Group not found');
 	}
 
-	const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
-	const result = await coordinatorClient.ListAvailableKeyPackages();
-	return result.keyPackages
+	const result = await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(group.coordinatorKey),
+		staleTime: 30 * 1000
+	});
+	return result
 		.filter((entry) => normalizePubKey(entry.pk) !== normalizePubKey(account.pubkey))
 		.map((entry) => ({
 			stablePubkey: normalizePubKey(entry.pk),
@@ -404,6 +410,9 @@ export async function inviteChatGroupMember(input: {
 
 		const consumeResult = await coordinatorClient.ConsumeKeyPackage({
 			id: input.identifier.trim()
+		});
+		void queryClient.invalidateQueries({
+			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey)
 		});
 
 		if (!consumeResult.keyPackage) {
@@ -588,7 +597,7 @@ export async function updateChatGroupMetadata(input: {
 		});
 
 		const metadata: GroupMetadataInput = {
-			name: input.name,
+			name: input.name.trim(),
 			description: input.description,
 			icon: input.icon,
 			imageUrl: input.imageUrl,

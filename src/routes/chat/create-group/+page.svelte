@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -77,7 +78,7 @@
 					.map((value) => value.trim())
 					.filter(Boolean)
 			});
-			await goto(`/chat/${group.id}`);
+			await goto(resolve('/chat/[id]', { id: group.id }));
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create group';
 		} finally {

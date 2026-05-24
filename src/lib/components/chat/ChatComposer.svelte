@@ -193,7 +193,7 @@
 	}
 
 	$effect(() => {
-		focusKey;
+		void focusKey;
 		if (!textareaRef || disabled) return;
 		textareaRef.focus();
 		const length = textareaRef.value.length;
@@ -241,7 +241,7 @@
 	});
 
 	$effect(() => {
-		expanded;
+		void expanded;
 		resizeTextarea();
 	});
 </script>

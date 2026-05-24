@@ -1,11 +1,15 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { Input } from '$lib/components/ui/input';
 	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
@@ -15,6 +19,9 @@
 		toggleGroupWatchAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
+	import { eventStore } from '$lib/services/eventStore';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import { getChatGroup, isChatGroupRemoved } from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
@@ -26,7 +33,9 @@
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
+	import { ProfileModel } from 'applesauce-core/models';
 	import { setMode } from 'mode-watcher';
+	import { Metadata } from 'nostr-tools/kinds';
 
 	let {
 		groupId,
@@ -83,9 +92,26 @@
 		groupId ? resolve('/chat/[id]/info', { id: groupId }) : '/chat'
 	);
 	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
+	let inviteKeyPackageSearch = $state('');
+	let inviteKeyPackageProfileHints = $state<
+		Record<string, { name?: string; displayName?: string; nip05?: string }>
+	>({});
 
-	function navigateToInfo() {
-		window.location.href = infoHref;
+	const filteredInviteKeyPackages = $derived.by(() =>
+		chatHeaderActionsStore.availableKeyPackages.filter((entry) =>
+			matchesKeyPackageSearch({
+				pubkey: entry.stablePubkey,
+				keyPackageRef: entry.keyPackageRef,
+				isLastResort: entry.isLastResort,
+				profileHints: inviteKeyPackageProfileHints,
+				search: inviteKeyPackageSearch
+			})
+		)
+	);
+
+	async function navigateToInfo() {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(infoHref);
 	}
 
 	function toggleTheme() {
@@ -102,6 +128,43 @@
 		if (chatHeaderActionsStore.inviteOpen) {
 			void refreshAvailableKeyPackages();
 		}
+	});
+
+	$effect(() => {
+		if (!chatHeaderActionsStore.inviteOpen) return;
+		const uniquePubkeys = [
+			...new Set(chatHeaderActionsStore.availableKeyPackages.map((entry) => entry.stablePubkey))
+		];
+		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
+			addressLoader({
+				kind: Metadata,
+				pubkey,
+				relays: metadataRelays
+			}).subscribe(),
+			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+				const current = untrack(() => inviteKeyPackageProfileHints[pubkey]);
+				const next = {
+					name: profile?.name,
+					displayName: profile?.display_name,
+					nip05: profile?.nip05
+				};
+
+				if (
+					current?.name === next.name &&
+					current?.displayName === next.displayName &&
+					current?.nip05 === next.nip05
+				) {
+					return;
+				}
+
+				inviteKeyPackageProfileHints = {
+					...untrack(() => inviteKeyPackageProfileHints),
+					[pubkey]: next
+				};
+			})
+		]);
+
+		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	$effect(() => {
@@ -275,8 +338,9 @@
 						<div class="space-y-3">
 							<div class="flex items-center justify-between gap-2">
 								<p class="text-sm text-muted-foreground">
-									{chatHeaderActionsStore.availableKeyPackages.length} available key package{chatHeaderActionsStore
-										.availableKeyPackages.length === 1
+									{filteredInviteKeyPackages.length} of {chatHeaderActionsStore.availableKeyPackages
+										.length} available key package{chatHeaderActionsStore.availableKeyPackages
+										.length === 1
 										? ''
 										: 's'}
 								</p>
@@ -291,6 +355,12 @@
 								</Button>
 							</div>
 
+							<Input
+								bind:value={inviteKeyPackageSearch}
+								placeholder="Search by pubkey, package reference, or last resort"
+								aria-label="Search invite key packages"
+							/>
+
 							<div
 								class="max-h-[24rem] space-y-2 overflow-y-auto rounded-xl border border-border p-3"
 							>
@@ -302,8 +372,10 @@
 									<p class="text-sm text-muted-foreground">
 										No coordinator key packages available for invitation.
 									</p>
+								{:else if filteredInviteKeyPackages.length === 0}
+									<p class="text-sm text-muted-foreground">No key packages match your search.</p>
 								{:else}
-									{#each chatHeaderActionsStore.availableKeyPackages as entry (entry.keyPackageRef)}
+									{#each filteredInviteKeyPackages as entry (entry.keyPackageRef)}
 										<KeyPackageCard
 											entry={{ ...entry, label: formatKeyPackageLabel(entry) }}
 											actionLabel="Invite"

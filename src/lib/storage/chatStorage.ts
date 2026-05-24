@@ -128,12 +128,10 @@ function cloneKeyPackage(record: StoredChatKeyPackageRecord): StoredChatKeyPacka
 }
 
 function cloneGroupRecord(group: StoredChatGroupData): StoredChatGroupRecord {
-	const {
-		stateBytes: _stateBytes,
-		messages: _messages,
-		syncIssues: _syncIssues,
-		...record
-	} = group;
+	const record = { ...group };
+	delete (record as Partial<StoredChatGroupData>).stateBytes;
+	delete (record as Partial<StoredChatGroupData>).messages;
+	delete (record as Partial<StoredChatGroupData>).syncIssues;
 	return { ...record };
 }
 
@@ -155,11 +153,17 @@ function materializeGroupData(params: {
 		stateBytes: cloneBytes(params.group.stateBytes),
 		messages: params.messages
 			.filter((message) => message.groupId === params.group.id)
-			.map(({ groupId: _groupId, ...message }) => cloneMessage(message))
+			.map(({ groupId, ...message }) => {
+				void groupId;
+				return cloneMessage(message);
+			})
 			.sort((a, b) => a.cursor - b.cursor),
 		syncIssues: params.syncIssues
 			.filter((issue) => issue.groupId === params.group.id)
-			.map(({ groupId: _groupId, ...issue }) => cloneIssue(issue))
+			.map(({ groupId, ...issue }) => {
+				void groupId;
+				return cloneIssue(issue);
+			})
 			.sort((a, b) => a.cursor - b.cursor)
 	};
 }

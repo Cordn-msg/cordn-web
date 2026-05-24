@@ -14,7 +14,6 @@ import {
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
 import {
 	chatWelcomeNotificationsStore,
-	fetchWelcomeNotifications,
 	getWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
@@ -24,6 +23,11 @@ import {
 	stopWatchingGroup
 } from '$lib/services/chatGroupWatch.svelte';
 import type { AvailableKeyPackage } from '$lib/contracts';
+import { queryClient } from '$lib/query-client';
+import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
+import { requireActiveAccount } from '$lib/services/chatRuntime';
 import type {
 	ChatMessageDeleteTarget,
 	ChatMessageEditTarget,
@@ -194,12 +198,6 @@ export async function updateGroupMetadataAction(
 	}
 }
 
-export const chatWelcomeActionsStore = $state<{
-	lastFetchedAccountPubkey: string;
-}>({
-	lastFetchedAccountPubkey: ''
-});
-
 export const chatComposerActionsStore = $state<{
 	error: string;
 	sending: boolean;
@@ -261,9 +259,6 @@ export async function sendGroupMessageAction(
 }
 
 export async function loadCoordinatorRemoteKeyPackagesAction(
-	client: {
-		ListAvailableKeyPackages(args?: object): Promise<{ keyPackages: AvailableKeyPackage[] }>;
-	},
 	coordinatorKey?: string,
 	options: { force?: boolean } = {}
 ) {
@@ -279,9 +274,14 @@ export async function loadCoordinatorRemoteKeyPackagesAction(
 	coordinatorDetailsActionsStore.loadingKeyPackages = true;
 	coordinatorDetailsActionsStore.keyPackageError = '';
 	try {
-		const result = await client.ListAvailableKeyPackages({});
+		const account = requireActiveAccount('You must be logged in to inspect coordinators');
+		const result = await queryClient.fetchQuery({
+			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
+			queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
+			staleTime: options.force ? 0 : 30 * 1000
+		});
 		coordinatorDetailsActionsStore.coordinatorKey = coordinatorKey ?? '';
-		coordinatorDetailsActionsStore.remoteKeyPackages = result.keyPackages;
+		coordinatorDetailsActionsStore.remoteKeyPackages = result;
 	} catch (error) {
 		coordinatorDetailsActionsStore.keyPackageError =
 			error instanceof Error ? error.message : 'Failed to load remote key packages';
@@ -291,11 +291,27 @@ export async function loadCoordinatorRemoteKeyPackagesAction(
 }
 
 export async function refreshWelcomeNotificationsAction() {
-	await fetchWelcomeNotifications();
+	const account = requireActiveAccount('You must be logged in to fetch welcomes');
+	await queryClient.invalidateQueries({
+		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey)
+	});
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
+		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey),
+		staleTime: 0
+	});
 }
 
 export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKey: string) {
-	await fetchWelcomeNotifications([coordinatorKey]);
+	const account = requireActiveAccount('You must be logged in to fetch welcomes');
+	await queryClient.invalidateQueries({
+		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey, coordinatorKey)
+	});
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey, coordinatorKey),
+		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey),
+		staleTime: 0
+	});
 }
 
 export async function acceptWelcomeAction(welcomeId: string) {

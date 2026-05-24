@@ -96,7 +96,7 @@
 	});
 
 	$effect(() => {
-		messages.length;
+		void messages.length;
 		if (!browser || !container) return;
 
 		const shouldScroll = wasAtBottom;
@@ -104,7 +104,7 @@
 			if (suppressNextAutoScroll) {
 				suppressNextAutoScroll = false;
 			} else if (shouldScroll) {
-				container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+				container?.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
 			}
 			wasAtBottom = isAtBottom();
 			markVisibleUnreadReferences();

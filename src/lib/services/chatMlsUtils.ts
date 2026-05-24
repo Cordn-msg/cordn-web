@@ -247,10 +247,6 @@ export function createCredential(stablePubkey: string) {
 }
 
 export function encodeCordnGroupMetadata(metadata: CordnGroupMetadata): Uint8Array {
-	if (!metadata.name.trim()) {
-		throw new Error('Group metadata name is required');
-	}
-
 	const encoder = new TextEncoder();
 	const adminPubkeys = normalizeAdminPubkeys(metadata.adminPubkeys);
 	return new Uint8Array([
@@ -287,10 +283,6 @@ export function decodeCordnGroupMetadata(bytes: Uint8Array): CordnGroupMetadata 
 	}
 
 	const name = decoder.decode(nameBytes).trim();
-	if (!name) {
-		throw new Error('Group metadata name is required');
-	}
-
 	const description = decoder.decode(descriptionBytes).trim();
 	const icon = decoder.decode(iconBytes).trim();
 	const imageUrl = decoder.decode(imageUrlBytes).trim();

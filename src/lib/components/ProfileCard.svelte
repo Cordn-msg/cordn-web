@@ -25,7 +25,6 @@
 		showLogout?: boolean;
 		showName?: boolean;
 		showInlineAvatar?: boolean;
-		inlineClass?: string;
 	} = $props();
 
 	let showLogoutDialog = $state(false);

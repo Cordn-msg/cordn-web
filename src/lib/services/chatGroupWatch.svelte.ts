@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	decodeStoredGroupState,
@@ -13,6 +14,8 @@ import {
 	onCoordinatorClientsRefresh,
 	requireActiveAccount
 } from '$lib/services/chatRuntime';
+import { queryClient } from '$lib/query-client';
+import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 
 type GroupWatchTask = {
 	groupId: string;
@@ -29,13 +32,13 @@ export const chatGroupWatchStore = $state<{
 	error: ''
 });
 
-const currentWatches = new Map<string, GroupWatchTask>();
-const autoWatchDisabledGroupIds = new Set<string>();
+const currentWatches = new SvelteMap<string, GroupWatchTask>();
+const autoWatchDisabledGroupIds = new SvelteSet<string>();
 let lastActiveAccountId = '';
 const groupIdDecoder = new TextDecoder();
 const COORDINATOR_CLIENTS_REFRESHED_REASON = 'coordinator clients refreshed';
 const WATCH_INGEST_BATCH_SIZE = 50;
-const WATCH_INGEST_FLUSH_MS = 100;
+const WATCH_INGEST_FLUSH_MS = 50;
 
 type WatchIncomingMessage = {
 	cursor: number;
@@ -78,6 +81,7 @@ if (browser) {
 
 		void stopWatchingGroup(undefined, 'active account changed');
 		if (previousAccount) {
+			queryClient.removeQueries({ queryKey: chatQueryKeys.account(previousAccount.pubkey) });
 			void disconnectCoordinatorClients(previousAccount);
 		}
 	});

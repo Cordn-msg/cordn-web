@@ -1,10 +1,14 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
-	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
@@ -13,48 +17,63 @@
 		listChatCoordinators,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
-		createChatKeyPackage,
-		listChatKeyPackages,
-		type StoredKeyPackageRecord
-	} from '$lib/services/chatKeyPackages.svelte';
+		createChatGroup,
+		inviteChatGroupMember,
+		listChatGroupMembers,
+		listChatGroups
+	} from '$lib/services/chatGroups.svelte';
+	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import type { StoredCoordinator } from '$lib/services/chatCoordinators.svelte';
+	import {
+		coordinatorDetailsActionsStore,
+		loadCoordinatorRemoteKeyPackagesAction
+	} from '$lib/services/chatUiActions.svelte';
+	import { getLatestChatGroupMessagePreview } from '$lib/services/chatGroupPresence.svelte';
+	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
+	import { goto } from '$app/navigation';
+	import { eventStore } from '$lib/services/eventStore';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
 	import CircleDashed from '@lucide/svelte/icons/circle-dashed';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import KeyRound from '@lucide/svelte/icons/key-round';
-	import MessageSquare from '@lucide/svelte/icons/message-square';
 	import Server from '@lucide/svelte/icons/server';
 	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import X from '@lucide/svelte/icons/x';
+	import { ProfileModel } from 'applesauce-core/models';
+	import { Metadata } from 'nostr-tools/kinds';
 
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const groups = $derived.by(() => listChatGroups());
+	const sortedGroups = $derived.by(() =>
+		[...groups].sort((a, b) => getGroupActivityAt(b) - getGroupActivityAt(a))
+	);
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
+	const remoteKeyPackages = $derived.by(() =>
+		coordinatorDetailsActionsStore.remoteKeyPackages.filter(
+			(entry) => entry.pk !== $activeAccount?.pubkey
+		)
+	);
+	const filteredRemoteKeyPackages = $derived.by(() =>
+		remoteKeyPackages.filter((entry) =>
+			matchesKeyPackageSearch({
+				pubkey: entry.pk,
+				keyPackageRef: entry.kp_ref,
+				isLastResort: entry.last_resort,
+				profileHints: keyPackageProfileHints,
+				search: keyPackageDirectorySearch
+			})
+		)
+	);
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const hasAccount = $derived.by(() => Boolean($activeAccount));
 	const hasCoordinator = $derived.by(() => coordinators.length > 0);
 	const hasKeyPackages = $derived.by(() => keyPackages.length > 0);
 	const hasGroups = $derived.by(() => groups.length > 0);
-	const latestGroup = $derived.by(() => groups.at(-1));
-	const keyPackagesByCoordinator = $derived.by(() => {
-		const grouped: Record<string, StoredKeyPackageRecord[]> = {};
-
-		for (const keyPackage of keyPackages) {
-			for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) {
-				grouped[coordinatorKey] = [...(grouped[coordinatorKey] ?? []), keyPackage];
-			}
-		}
-
-		return grouped;
-	});
-
-	function getCoordinatorKeyPackages(coordinatorKey: string) {
-		return keyPackagesByCoordinator[coordinatorKey] ?? [];
-	}
+	const latestGroup = $derived.by(() => sortedGroups.at(0));
 	const pendingOnboardingSteps = $derived.by(() =>
 		onboardingSteps.filter((step) => !step.complete)
 	);
@@ -71,15 +90,10 @@
 			complete: hasAccount
 		},
 		{
-			title: 'Save a coordinator',
+			title: 'Bootstrap messaging',
 			description:
-				'Add a coordinator profile so the client knows where to publish and inspect state.',
-			complete: hasCoordinator
-		},
-		{
-			title: 'Create a key package',
-			description: 'Generate at least one MLS key package for invitations and welcomes.',
-			complete: hasKeyPackages
+				'Use the default coordinator and publish one last-resort key package so people can invite you.',
+			complete: hasCoordinator && hasKeyPackages
 		},
 		{
 			title: 'Create your first group',
@@ -88,12 +102,19 @@
 		}
 	]);
 
-	let coordinatorSetupError = $state('');
 	let completedStepsExpanded = $state(false);
 	let setupGuideDismissed = $state(false);
 	let settingDefaultCoordinator = $state(false);
 	let keyPackageActionError = $state('');
 	let creatingKeyPackage = $state(false);
+	let bootstrapAdvancedOpen = $state(false);
+	let quickChatError = $state('');
+	let quickChatStartingRef = $state('');
+	let keyPackageDirectoryLoaded = $state(false);
+	let keyPackageDirectorySearch = $state('');
+	let keyPackageProfileHints = $state<
+		Record<string, { name?: string; displayName?: string; nip05?: string }>
+	>({});
 
 	function getCoordinatorLabel(coordinator: StoredCoordinator | undefined) {
 		if (!coordinator) return 'No default coordinator yet';
@@ -103,7 +124,6 @@
 	async function addDefaultCoordinator() {
 		try {
 			settingDefaultCoordinator = true;
-			coordinatorSetupError = '';
 			keyPackageActionError = '';
 			upsertChatCoordinator({
 				pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
@@ -111,10 +131,36 @@
 				isDefault: true
 			});
 		} catch (error) {
-			coordinatorSetupError =
+			keyPackageActionError =
 				error instanceof Error ? error.message : 'Failed to save the default coordinator';
 		} finally {
 			settingDefaultCoordinator = false;
+		}
+	}
+
+	async function bootstrapCoordinatorAndKeyPackage() {
+		try {
+			settingDefaultCoordinator = true;
+			creatingKeyPackage = true;
+			keyPackageActionError = '';
+
+			if (!defaultCoordinator) {
+				upsertChatCoordinator({
+					pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
+					label: 'Default coordinator',
+					isDefault: true
+				});
+			}
+
+			await createChatKeyPackage({
+				isLastResort: true,
+				publishCoordinatorKey: defaultCoordinator?.pubkey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+			});
+		} catch (error) {
+			keyPackageActionError = error instanceof Error ? error.message : 'Failed to finish bootstrap';
+		} finally {
+			settingDefaultCoordinator = false;
+			creatingKeyPackage = false;
 		}
 	}
 
@@ -142,6 +188,110 @@
 
 	function getGroupHref(groupId: string) {
 		return resolve('/chat/[id]', { id: groupId });
+	}
+
+	function getGroupActivityAt(group: (typeof groups)[number]) {
+		return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
+	}
+
+	function getGroupTitle(group: (typeof groups)[number]) {
+		return getChatGroupDisplayTitle({
+			group,
+			activePubkey: $activeAccount?.pubkey,
+			profileHints: keyPackageProfileHints,
+			memberPubkeys: listChatGroupMembers(group.id).map((member) => member.stablePubkey)
+		});
+	}
+
+	function getGroupPreview(groupId: string) {
+		return getLatestChatGroupMessagePreview(groupId);
+	}
+
+	function getRemoteKeyPackageCoordinatorLabel() {
+		return coordinatorDetailsActionsStore.coordinatorKey
+			? getCoordinatorLabel(
+					coordinators.find(
+						(entry) => entry.pubkey === coordinatorDetailsActionsStore.coordinatorKey
+					)
+				)
+			: 'All known coordinators';
+	}
+
+	async function refreshKeyPackageDirectory() {
+		keyPackageDirectoryLoaded = true;
+		await loadCoordinatorRemoteKeyPackagesAction(undefined, { force: true });
+	}
+
+	async function loadKeyPackageDirectory() {
+		keyPackageDirectoryLoaded = true;
+		await loadCoordinatorRemoteKeyPackagesAction(undefined);
+	}
+
+	$effect(() => {
+		const uniquePubkeys = [...new Set(remoteKeyPackages.map((entry) => entry.pk))];
+		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
+			addressLoader({
+				kind: Metadata,
+				pubkey,
+				relays: metadataRelays
+			}).subscribe(),
+			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+				const current = untrack(() => keyPackageProfileHints[pubkey]);
+				const next = {
+					name: profile?.name,
+					displayName: profile?.display_name,
+					nip05: profile?.nip05
+				};
+
+				if (
+					current?.name === next.name &&
+					current?.displayName === next.displayName &&
+					current?.nip05 === next.nip05
+				) {
+					return;
+				}
+
+				keyPackageProfileHints = {
+					...untrack(() => keyPackageProfileHints),
+					[pubkey]: next
+				};
+			})
+		]);
+
+		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
+	});
+
+	$effect(() => {
+		if ($activeAccount && coordinators.length > 0 && !keyPackageDirectoryLoaded) {
+			void loadKeyPackageDirectory();
+		}
+	});
+
+	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
+		const coordinatorKey = defaultCoordinator?.pubkey ?? coordinators[0]?.pubkey;
+		if (!coordinatorKey) {
+			quickChatError = 'Add a coordinator before starting a chat';
+			return;
+		}
+
+		try {
+			quickChatStartingRef = keyPackage.kp_ref;
+			quickChatError = '';
+			const group = await createChatGroup({
+				name: '',
+				coordinatorKey,
+				keyPackageIsLastResort: true
+			});
+			await inviteChatGroupMember({
+				groupId: group.id,
+				identifier: keyPackage.kp_ref
+			});
+			await goto(getGroupHref(group.id));
+		} catch (error) {
+			quickChatError = error instanceof Error ? error.message : 'Failed to start chat';
+		} finally {
+			quickChatStartingRef = '';
+		}
 	}
 
 	function dismissSetupGuide() {
@@ -230,65 +380,64 @@
 												<div>
 													<AccountLoginDialog />
 												</div>
-											{:else if step.title === 'Save a coordinator'}
+											{:else if step.title === 'Bootstrap messaging'}
 												<div class="space-y-3">
 													<div
 														class="rounded-xl border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
 													>
-														Use the default coordinator or open the coordinator settings to manage
-														others.
+														One action saves the default coordinator and publishes a last-resort key
+														package for inbound welcomes.
 													</div>
-													<p class="font-mono text-xs break-all text-muted-foreground">
-														{DEFAULT_CHAT_COORDINATOR_PUBKEY}
-													</p>
-													{#if coordinatorSetupError}
-														<p class="text-sm text-destructive">{coordinatorSetupError}</p>
-													{/if}
-													<div class="flex flex-wrap gap-2">
-														<Button
-															onclick={addDefaultCoordinator}
-															disabled={settingDefaultCoordinator}
-														>
-															{settingDefaultCoordinator ? 'Saving…' : 'Use default coordinator'}
-														</Button>
-														<Button href={resolve('/chat/coordinators')} variant="outline">
-															Open coordinators
-														</Button>
-													</div>
-												</div>
-											{:else if step.title === 'Create a key package'}
-												<div class="space-y-3">
-													<div
-														class="rounded-xl border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
-													>
-														Create and publish a key package to your default coordinator without
-														leaving this page.
-													</div>
-													{#if defaultCoordinator}
-														<p class="text-sm text-muted-foreground">
-															Publishing to <span class="font-medium text-foreground"
-																>{getCoordinatorLabel(defaultCoordinator)}</span
-															>
-														</p>
-													{:else}
-														<p class="text-sm text-muted-foreground">
-															Add or choose a default coordinator first to publish the generated
-															package.
-														</p>
-													{/if}
 													{#if keyPackageActionError}
 														<p class="text-sm text-destructive">{keyPackageActionError}</p>
 													{/if}
 													<div class="flex flex-wrap gap-2">
 														<Button
-															onclick={createAndPublishKeyPackage}
-															disabled={creatingKeyPackage || !defaultCoordinator}
+															onclick={bootstrapCoordinatorAndKeyPackage}
+															disabled={creatingKeyPackage ||
+																settingDefaultCoordinator ||
+																!hasAccount}
 														>
-															{creatingKeyPackage ? 'Creating…' : 'Create and publish key package'}
+															{creatingKeyPackage ? 'Bootstrapping…' : 'Use recommended setup'}
 														</Button>
-														<Button href={resolve('/chat/config/key-packages')} variant="outline">
-															Manage key packages
-														</Button>
+													</div>
+													<div class="rounded-xl border border-border p-3">
+														<button
+															type="button"
+															class="flex w-full items-center justify-between gap-3 text-left text-sm font-medium"
+															onclick={() => (bootstrapAdvancedOpen = !bootstrapAdvancedOpen)}
+														>
+															<span>Advanced options</span>
+															{#if bootstrapAdvancedOpen}<ChevronUp
+																	class="size-4"
+																/>{:else}<ChevronDown class="size-4" />{/if}
+														</button>
+														{#if bootstrapAdvancedOpen}
+															<div class="mt-3 flex flex-wrap gap-2">
+																<Button
+																	onclick={addDefaultCoordinator}
+																	disabled={settingDefaultCoordinator}
+																	variant="outline"
+																>
+																	{settingDefaultCoordinator
+																		? 'Saving…'
+																		: 'Use default coordinator'}
+																</Button>
+																<Button
+																	onclick={createAndPublishKeyPackage}
+																	disabled={creatingKeyPackage || !defaultCoordinator}
+																	variant="outline"
+																>
+																	{creatingKeyPackage ? 'Creating…' : 'Create regular key package'}
+																</Button>
+																<Button href={resolve('/chat/coordinators')} variant="ghost"
+																	>Open coordinators</Button
+																>
+																<Button href={resolve('/chat/config/key-packages')} variant="ghost"
+																	>Manage key packages</Button
+																>
+															</div>
+														{/if}
 													</div>
 												</div>
 											{:else if step.title === 'Create your first group'}
@@ -350,6 +499,131 @@
 
 			<div class="flex flex-col gap-6">
 				<Card.Root>
+					<Card.Header>
+						<Card.Title>Groups</Card.Title>
+						<Card.Description>
+							Open recent groups first, with the same visual preview used in the sidebar.
+						</Card.Description>
+					</Card.Header>
+					<Card.Content class="space-y-4">
+						{#if hasGroups}
+							<div class="space-y-3">
+								{#each sortedGroups as group (group.id)}
+									<a
+										href={getGroupHref(group.id)}
+										class="group flex items-center gap-3 rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
+									>
+										<ChatGroupAvatar
+											{group}
+											class="h-12 w-12"
+											fallbackClass="text-base font-medium"
+										/>
+										<div class="min-w-0 flex-1 space-y-1">
+											<div class="flex items-center gap-2">
+												<p class="truncate font-medium text-foreground">{getGroupTitle(group)}</p>
+												{#if group.metadata?.description}
+													<span class="hidden text-xs text-muted-foreground sm:inline">•</span>
+													<p class="hidden truncate text-xs text-muted-foreground sm:block">
+														{group.metadata.description}
+													</p>
+												{/if}
+											</div>
+											<p class="truncate text-sm text-muted-foreground">
+												{getGroupPreview(group.id)}
+											</p>
+										</div>
+										<ExternalLink
+											class="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+										/>
+									</a>
+								{/each}
+							</div>
+						{:else}
+							<div
+								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+							>
+								No groups yet. Create one after your account, coordinator, and key package are
+								ready.
+							</div>
+						{/if}
+					</Card.Content>
+					<Card.Footer class="pt-0">
+						<Button
+							href={resolve('/chat/create-group')}
+							variant={hasGroups ? 'outline' : 'default'}
+						>
+							Create group
+						</Button>
+					</Card.Footer>
+				</Card.Root>
+
+				<Card.Root>
+					<Card.Header class="flex flex-row items-start justify-between gap-4 space-y-0">
+						<div class="space-y-1.5">
+							<Card.Title>Available key packages</Card.Title>
+							<Card.Description>
+								Directory of public key packages in {getRemoteKeyPackageCoordinatorLabel()}.
+							</Card.Description>
+						</div>
+						<Button
+							onclick={refreshKeyPackageDirectory}
+							disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
+							variant="outline"
+						>
+							{coordinatorDetailsActionsStore.loadingKeyPackages ? 'Refreshing…' : 'Refresh'}
+						</Button>
+					</Card.Header>
+					<Card.Content class="space-y-3">
+						{#if quickChatError}
+							<p class="text-sm text-destructive">{quickChatError}</p>
+						{/if}
+						{#if coordinatorDetailsActionsStore.keyPackageError}
+							<p class="text-sm text-destructive">
+								{coordinatorDetailsActionsStore.keyPackageError}
+							</p>
+						{/if}
+						<Input
+							bind:value={keyPackageDirectorySearch}
+							placeholder="Search by pubkey, package reference, or last resort"
+							aria-label="Search available key packages"
+						/>
+						{#if !$activeAccount}
+							<div
+								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+							>
+								Log in to browse coordinator key packages.
+							</div>
+						{:else if filteredRemoteKeyPackages.length > 0}
+							<div class="space-y-3">
+								{#each filteredRemoteKeyPackages as keyPackage (keyPackage.kp_ref)}
+									<KeyPackageCard
+										entry={keyPackage}
+										actionLabel={quickChatStartingRef === keyPackage.kp_ref
+											? 'Starting…'
+											: 'Start chat'}
+										actionDisabled={quickChatStartingRef === keyPackage.kp_ref}
+										onAction={() => startChatWithKeyPackage(keyPackage)}
+										class="bg-muted/20"
+									/>
+								{/each}
+							</div>
+						{:else if remoteKeyPackages.length > 0}
+							<div
+								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+							>
+								No key packages match your search.
+							</div>
+						{:else}
+							<div
+								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+							>
+								No public key packages found yet. Refresh after adding coordinators.
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root>
 					<Card.Header class="space-y-1">
 						<Card.Description>Configuration shortcuts</Card.Description>
 						<Card.Title>Coordinators and key packages</Card.Title>
@@ -385,13 +659,11 @@
 									<div class="space-y-1">
 										<div class="flex items-center gap-2 text-sm text-muted-foreground">
 											<KeyRound class="size-4" />
-											<span>Key packages</span>
+											<span>Your key packages</span>
 										</div>
 										<p class="text-2xl font-semibold text-foreground">{keyPackages.length}</p>
 										<p class="text-sm text-muted-foreground">
-											{hasKeyPackages
-												? 'Open your key package inventory and publish more when needed.'
-												: 'Create your first key package to receive welcomes.'}
+											Manage local packages used to receive welcomes.
 										</p>
 									</div>
 									<ExternalLink
@@ -400,113 +672,6 @@
 								</div>
 							</a>
 						</div>
-					</Card.Content>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Groups</Card.Title>
-						<Card.Description>
-							Open an existing group directly from here or create a new one.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						{#if hasGroups}
-							<div class="space-y-3">
-								{#each [...groups].reverse() as group (group.id)}
-									<a
-										href={getGroupHref(group.id)}
-										class="group block rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
-									>
-										<div class="flex items-start justify-between gap-3">
-											<div class="min-w-0 space-y-1">
-												<div class="flex items-center gap-2 text-sm text-muted-foreground">
-													<MessageSquare class="size-4" />
-													<span>{group.metadata?.name ?? group.id ?? 'Untitled group'}</span>
-												</div>
-												<p class="font-mono text-xs break-all text-muted-foreground">{group.id}</p>
-												<p class="text-sm text-muted-foreground">
-													Created {new Date(group.createdAt).toLocaleString()}
-												</p>
-											</div>
-											<ExternalLink
-												class="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
-											/>
-										</div>
-									</a>
-								{/each}
-							</div>
-						{:else}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								No groups yet. Create one after your account, coordinator, and key package are
-								ready.
-							</div>
-						{/if}
-					</Card.Content>
-					<Card.Footer class="pt-0">
-						<Button
-							href={resolve('/chat/create-group')}
-							variant={hasGroups ? 'outline' : 'default'}
-						>
-							Create group
-						</Button>
-					</Card.Footer>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Available key packages by coordinator</Card.Title>
-						<Card.Description>
-							See which coordinators already have local key packages assigned.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="space-y-3">
-						{#if coordinators.length > 0}
-							{#each coordinators as coordinator (coordinator.pubkey)}
-								{@const coordinatorKeyPackages = getCoordinatorKeyPackages(coordinator.pubkey)}
-								<div class="rounded-xl border border-border px-4 py-3">
-									<div class="flex items-start justify-between gap-3">
-										<div class="min-w-0 space-y-2">
-											<p class="font-medium text-foreground">{getCoordinatorLabel(coordinator)}</p>
-											<ProfileCard pubkey={coordinator.pubkey} />
-										</div>
-										<span
-											class="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground"
-										>
-											{coordinatorKeyPackages.length} key package{coordinatorKeyPackages.length ===
-											1
-												? ''
-												: 's'}
-										</span>
-									</div>
-									{#if coordinatorKeyPackages.length > 0}
-										<div class="mt-3 space-y-2">
-											{#each coordinatorKeyPackages as keyPackage (keyPackage.keyPackageRef)}
-												<KeyPackageCard
-													entry={keyPackage}
-													compact={true}
-													class="border-border/60 bg-muted/20"
-												/>
-											{/each}
-										</div>
-									{:else}
-										<div
-											class="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
-										>
-											No local key packages published here yet.
-										</div>
-									{/if}
-								</div>
-							{/each}
-						{:else}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								Add a coordinator first to start organizing key packages.
-							</div>
-						{/if}
 					</Card.Content>
 				</Card.Root>
 			</div>

@@ -108,17 +108,22 @@
 			{#each blocks as block (`${block.type}:${block.type === 'heading' ? `${block.level}:${block.text}` : block.type === 'paragraph' ? block.text : block.items.join('|')}`)}
 				{#if block.type === 'heading'}
 					{#if block.level === 1}
+						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 						<h1>{@html block.text}</h1>
 					{:else if block.level === 2}
+						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 						<h2>{@html block.text}</h2>
 					{:else}
+						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 						<h3>{@html block.text}</h3>
 					{/if}
 				{:else if block.type === 'paragraph'}
+					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 					<p>{@html block.text}</p>
 				{:else}
 					<ul>
 						{#each block.items as item (item)}
+							<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 							<li>{@html item}</li>
 						{/each}
 					</ul>

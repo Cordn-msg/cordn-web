@@ -2,6 +2,7 @@
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
+	import { getChatGroupDisplayTitle } from './chatGroupDisplay';
 	import type { ChatMentionCandidate, ChatMentionReference, ChatMessage } from './chat.types';
 	import {
 		listUnreadChatGroupReferenceTargets,
@@ -32,6 +33,13 @@
 	} from '$lib/services/chatGroups.svelte';
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 	import { serializeChatProfileMentions } from '$lib/services/chatMentions';
+	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
+	import { eventStore } from '$lib/services/eventStore';
+	import { ProfileModel } from 'applesauce-core/models';
+	import { Metadata } from 'nostr-tools/kinds';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { untrack } from 'svelte';
 
 	let {
 		groupId = 'general',
@@ -56,6 +64,9 @@
 	let selectedMentions = $state<ChatMentionReference[]>([]);
 	let composerFocusKey = $state(0);
 	let optimisticMessages = $state<ChatMessage[]>([]);
+	let groupProfileHints = $state<
+		Record<string, { name?: string; displayName?: string; nip05?: string }>
+	>({});
 	let optimisticMessageSequence = 0;
 	let messageListRef: {
 		scrollToBottom: () => Promise<void>;
@@ -72,11 +83,22 @@
 			pubkey: member.stablePubkey
 		}))
 	);
+	const displayTitle = $derived.by(() =>
+		group
+			? getChatGroupDisplayTitle({
+					group,
+					activePubkey,
+					profileHints: groupProfileHints,
+					memberPubkeys: mentionCandidates.map((candidate) => candidate.pubkey)
+				})
+			: title
+	);
+	const displaySubtitle = $derived.by(() => group?.metadata?.description || subtitle);
 	const unreadReferenceTargets = $derived.by(() =>
 		activePubkey ? listUnreadChatGroupReferenceTargets(groupId, activePubkey) : []
 	);
 	const unreadReferenceCursorByTargetId = $derived.by(() => {
-		const cursors = new Map<string, number>();
+		const cursors = new SvelteMap<string, number>();
 		for (const entry of unreadReferenceTargets) {
 			const current = cursors.get(entry.target.id) ?? 0;
 			if (entry.reference.cursor > current) {
@@ -157,10 +179,13 @@
 
 	const messages = $derived.by<ChatMessage[]>(() => {
 		const storedMessages = listChatGroupMessages(groupId);
-		const byEventId = new Map(storedMessages.map((message) => [message.id, message]));
-		const reactionMap = new Map<string, Map<string, { emoji: string; authors: Set<string> }>>();
-		const editMap = new Map<string, StoredChatMessage>();
-		const deletedMessageIds = new Set<string>();
+		const byEventId = new SvelteMap(storedMessages.map((message) => [message.id, message]));
+		const reactionMap = new SvelteMap<
+			string,
+			SvelteMap<string, { emoji: string; authors: SvelteSet<string> }>
+		>();
+		const editMap = new SvelteMap<string, StoredChatMessage>();
+		const deletedMessageIds = new SvelteSet<string>();
 
 		for (const message of storedMessages) {
 			const reactionReference = getMessageReactionReference(
@@ -170,10 +195,10 @@
 			);
 			if (!reactionReference) continue;
 
-			const byEmoji = reactionMap.get(reactionReference.targetId) ?? new Map();
+			const byEmoji = reactionMap.get(reactionReference.targetId) ?? new SvelteMap();
 			const entry = byEmoji.get(reactionReference.reaction) ?? {
 				emoji: reactionReference.reaction,
-				authors: new Set<string>()
+				authors: new SvelteSet<string>()
 			};
 
 			entry.authors.add(normalizePubKey(message.sender));
@@ -443,13 +468,44 @@
 		if (!groupId || !group) return;
 		markChatGroupRead(groupId, group.lastCursor);
 	});
+
+	$effect(() => {
+		const pubkeys = [
+			...new Set(
+				mentionCandidates
+					.map((candidate) => normalizePubKey(candidate.pubkey))
+					.filter((pubkey) => pubkey && pubkey !== activePubkey)
+			)
+		];
+		const subscriptions = pubkeys.flatMap((pubkey) => [
+			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
+			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+				const current = untrack(() => groupProfileHints[pubkey]);
+				const next = {
+					name: profile?.name,
+					displayName: profile?.display_name,
+					nip05: profile?.nip05
+				};
+				if (
+					current?.name === next.name &&
+					current?.displayName === next.displayName &&
+					current?.nip05 === next.nip05
+				) {
+					return;
+				}
+				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
+			})
+		]);
+
+		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
 	<ChatHeader
 		{groupId}
-		{title}
-		{subtitle}
+		title={displayTitle}
+		subtitle={displaySubtitle}
 		icon={group?.metadata?.icon}
 		imageUrl={group?.metadata?.imageUrl}
 	/>

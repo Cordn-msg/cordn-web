@@ -2,6 +2,11 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import {
+		getChatGroupDisplayTitle,
+		getDirectChatTargetPubkeyFromWelcome,
+		resolveWelcomeDisplayName
+	} from '$lib/components/chat/chatGroupDisplay';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
@@ -13,7 +18,11 @@
 		getCoordinatorColor,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import { getChatGroup, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import {
+		getChatGroup,
+		listChatGroupMembers,
+		listChatGroups
+	} from '$lib/services/chatGroups.svelte';
 	import {
 		chatWelcomeNotificationsStore,
 		listWelcomeNotificationsForCoordinator,
@@ -27,11 +36,16 @@
 		refreshCoordinatorWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
-	import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Server from '@lucide/svelte/icons/server';
+	import { ProfileModel } from 'applesauce-core/models';
+	import { Metadata } from 'nostr-tools/kinds';
+	import { untrack } from 'svelte';
+	import { eventStore } from '$lib/services/eventStore';
+	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
 
 	let { params } = $props();
 
@@ -66,6 +80,40 @@
 	);
 	let removingKeyPackageRef = $state('');
 	let removeError = $state('');
+	let welcomeProfileHints = $state<
+		Record<string, { name?: string; displayName?: string; nip05?: string }>
+	>({});
+
+	$effect(() => {
+		const welcomePubkeys = [
+			...new Set(
+				pendingWelcomes
+					.map((n) => getDirectChatTargetPubkeyFromWelcome(n.preview?.name ?? ''))
+					.filter((pubkey) => pubkey && pubkey !== activePubkey)
+			)
+		];
+		const subscriptions = welcomePubkeys.flatMap((pubkey) => [
+			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
+			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+				const current = untrack(() => welcomeProfileHints[pubkey]);
+				const next = {
+					name: profile?.name,
+					displayName: profile?.display_name,
+					nip05: profile?.nip05
+				};
+				if (
+					current?.name === next.name &&
+					current?.displayName === next.displayName &&
+					current?.nip05 === next.nip05
+				) {
+					return;
+				}
+				welcomeProfileHints = { ...untrack(() => welcomeProfileHints), [pubkey]: next };
+			})
+		]);
+
+		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
+	});
 
 	const ownedRemoteKeyPackagesWithState = $derived.by(() =>
 		ownedRemoteKeyPackages.map((entry) => {
@@ -79,14 +127,9 @@
 	);
 
 	async function loadRemoteKeyPackages() {
-		await loadCoordinatorRemoteKeyPackagesAction(
-			getCoordinatorClient(
-				requireActiveAccount('You must be logged in to inspect coordinators'),
-				coordinatorKey
-			),
-			coordinatorKey,
-			{ force: hasCachedRemoteKeyPackages }
-		);
+		await loadCoordinatorRemoteKeyPackagesAction(coordinatorKey, {
+			force: hasCachedRemoteKeyPackages
+		});
 	}
 
 	async function loadPendingWelcomes() {
@@ -99,7 +142,16 @@
 
 	function getAcceptedGroupLabel(groupId: string) {
 		const group = getChatGroup(groupId);
-		return group?.metadata?.name || group?.id || 'Joined group';
+		return group ? getRelatedGroupTitle(group) : 'Joined group';
+	}
+
+	function getRelatedGroupTitle(group: (typeof relatedGroups)[number]) {
+		return getChatGroupDisplayTitle({
+			group,
+			activePubkey,
+			profileHints: welcomeProfileHints,
+			memberPubkeys: listChatGroupMembers(group.id).map((member) => member.stablePubkey)
+		});
 	}
 
 	async function acceptWelcome(welcomeId: string) {
@@ -107,7 +159,7 @@
 	}
 
 	function getWelcomeAvatarFallback(welcome: (typeof pendingWelcomes)[number]) {
-		return welcome.preview?.icon || welcome.preview?.name?.slice(0, 1) || 'W';
+		return welcome.preview?.icon || welcome.preview?.name?.slice(0, 1) || '#';
 	}
 
 	async function removeOwnedKeyPackage(keyPackageRef: string) {
@@ -213,8 +265,10 @@
 								>Save locally</Button
 							>
 						{/if}
-						<Button href="/chat/coordinators" variant="outline">Back to coordinators</Button>
-						<Button href={`/chat/create-group?coordinator=${coordinatorKey}`}
+						<Button href={resolve('/chat/coordinators')} variant="outline"
+							>Back to coordinators</Button
+						>
+						<Button href={`${resolve('/chat/create-group')}?coordinator=${coordinatorKey}`}
 							>Create group here</Button
 						>
 					</Card.Footer>
@@ -240,7 +294,7 @@
 										href={resolve('/chat/[id]', { id: group.id })}
 										class="block rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
 									>
-										<p class="font-medium">{group.metadata?.name || group.id}</p>
+										<p class="font-medium">{getRelatedGroupTitle(group)}</p>
 										<p class="mt-1 text-sm text-muted-foreground">
 											{group.metadata?.description || 'Coordinator-assisted messaging'}
 										</p>
@@ -433,7 +487,12 @@
 														</AvatarFallback>
 													</Avatar>
 													<div class="min-w-0">
-														<p class="font-medium">{welcome.preview?.name || 'Pending welcome'}</p>
+														<p class="font-medium">
+															{resolveWelcomeDisplayName({
+																welcomeName: welcome.preview?.name ?? '',
+																profileHints: welcomeProfileHints
+															})}
+														</p>
 														{#if welcome.preview?.description}
 															<p class="mt-1 text-sm text-muted-foreground">
 																{welcome.preview.description}

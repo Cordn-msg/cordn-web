@@ -3,6 +3,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Toaster } from 'svelte-sonner';
 	import { ModeWatcher } from 'mode-watcher';
+	import { QueryClientProvider } from '@tanstack/svelte-query';
+	import { queryClient } from '$lib/query-client';
 
 	let { children } = $props();
 </script>
@@ -10,7 +12,9 @@
 <Toaster />
 <ModeWatcher />
 
-<svelte:head><link rel="icon" href={'/cordn-logo.svg'} /></svelte:head>
-<Tooltip.Provider>
-	{@render children()}
-</Tooltip.Provider>
+<svelte:head><link rel="icon" href="/favicon.svg" /></svelte:head>
+<QueryClientProvider client={queryClient}>
+	<Tooltip.Provider>
+		{@render children()}
+	</Tooltip.Provider>
+</QueryClientProvider>

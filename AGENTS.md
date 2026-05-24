@@ -28,6 +28,23 @@
 - Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.
 - Active group watching is managed in [`startWatchingGroup()`](src/lib/services/chatGroupWatch.svelte.ts:71) and should remain the default path for keeping an open chat route up to date instead of adding parallel fetch-heavy flows.
 
+## Fetching and caching strategy
+
+- The project uses `@tanstack/svelte-query` as a **remote coordinator cache and async orchestration layer**, not as a replacement for local durable chat state.
+- All query configuration lives in [`src/lib/query-client.ts`](src/lib/query-client.ts). The root layout wraps the app in [`QueryClientProvider`](src/routes/+layout.svelte:16).
+- Query keys are centralized in [`src/lib/queries/chatQueryKeys.ts`](src/lib/queries/chatQueryKeys.ts) and must be used for every Svelte Query read or invalidation. Query keys include the active stable pubkey to prevent cross-account cache leakage.
+- The query key structure supports `undefined` coordinator keys via a dedicated `'all-coordinators'` segment so the same key tree can represent both per-coordinator and cross-coordinator lookups.
+- Remote reads currently managed through Svelte Query:
+  - **Available key packages** — fetched via [`fetchCoordinatorAvailableKeyPackages()`](src/lib/queries/chatKeyPackageQueries.ts:8) and consumed by [`listCoordinatorAvailableKeyPackages()`](src/lib/services/chatGroups.svelte.ts:369), [`reconcilePublishedKeyPackagesForActiveAccount()`](src/lib/services/chatKeyPackages.svelte.ts:312), and the coordinator detail UI.
+  - **Welcome notifications** — fetched via [`welcomeNotificationsQueryOptions()`](src/lib/queries/chatWelcomeQueries.ts:9) with `refetchOnWindowFocus: true` because `FetchPendingWelcomes` is a destructive drain operation and explicit manual refresh is the primary trigger.
+- Svelte Query owns **remote read caching, deduplication, and in-flight request sharing**. The existing stores and IndexedDB layer continue to own durable local state.
+- These coordinator operations are **not** moved into Svelte Query because they are mutations, streaming state, or durable local writes:
+  - [`PublishKeyPackage`](src/lib/services/coordinatorClient.ts:197), [`RemoveKeyPackages`](src/lib/services/coordinatorClient.ts:220), [`ConsumeKeyPackage`](src/lib/services/coordinatorClient.ts:211), [`PostGroupMessage`](src/lib/services/coordinatorClient.ts:278), [`StoreWelcome`](src/lib/services/coordinatorClient.ts:264), [`FetchGroupMessages`](src/lib/services/coordinatorClient.ts:293), and [`SubscribeGroupMessages`](src/lib/services/coordinatorClient.ts:302).
+- Invalidation rules:
+  - After publishing, removing, or consuming a key package, invalidate the matching `available-key-packages` query key.
+  - After account change, remove all queries scoped to the previous account via [`queryClient.removeQueries()`](src/lib/services/chatGroupWatch.svelte.ts:82).
+- When adding new remote-read queries, follow the same pattern: centralize keys in [`chatQueryKeys`](src/lib/queries/chatQueryKeys.ts), add fetch helpers in `src/lib/queries/`, and wire invalidation in the service layer that performs the mutation.
+
 ## Code style
 
 - Follow Svelte 5 patterns and runes where appropriate.

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -16,10 +17,6 @@
 	import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
-
-	function getCoordinatorHref(coordinatorKey: string) {
-		return `../../coordinators/${coordinatorKey}`;
-	}
 
 	function getCoordinatorLabel(coordinatorKey: string) {
 		return (
@@ -220,7 +217,7 @@
 										<div class="space-y-2 pt-1">
 											{#each keyPackage.publishedCoordinatorKeys as coordinatorKey (coordinatorKey)}
 												<a
-													href={getCoordinatorHref(coordinatorKey)}
+													href={resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey })}
 													class="block rounded-lg border border-border/60 px-3 py-2 transition-colors hover:bg-background"
 												>
 													<div class="flex items-center justify-between gap-3">

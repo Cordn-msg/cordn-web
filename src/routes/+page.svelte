@@ -260,6 +260,7 @@
 						<p class="mt-3 text-sm leading-7 text-muted-foreground">
 							{card.body}
 							{#if card.linkHref}
+								<!-- eslint-disable svelte/no-navigation-without-resolve -->
 								<a
 									href={card.linkHref}
 									target="_blank"
@@ -268,6 +269,7 @@
 								>
 									{card.linkLabel}
 								</a>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							{/if}
 						</p>
 					</div>

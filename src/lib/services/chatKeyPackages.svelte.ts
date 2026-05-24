@@ -28,6 +28,9 @@ import {
 } from '$lib/storage/chatStorage';
 import { normalizePubKey } from '$lib/utils';
 import { bytesToHex } from 'applesauce-core/helpers';
+import { queryClient } from '$lib/query-client';
+import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 
 export interface StoredKeyPackageRecord {
 	id: string;
@@ -248,6 +251,9 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	});
 	markCoordinatorUsed(normalizedCoordinator);
 	await markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
+	void queryClient.invalidateQueries({
+		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, normalizedCoordinator)
+	});
 }
 
 export async function removeChatKeyPackage(
@@ -258,12 +264,13 @@ export async function removeChatKeyPackage(
 	const normalizedCoordinator = input.coordinatorKey?.trim()
 		? normalizePubKey(input.coordinatorKey)
 		: undefined;
+	const shouldRemoveRemotely = !input.localOnly && !record?.consumedAt;
 
 	if (!record && !normalizedCoordinator) {
 		throw new Error('Key package not found');
 	}
 
-	if (!input.localOnly) {
+	if (shouldRemoveRemotely) {
 		const account = requireActiveAccount('You must be logged in to manage key packages');
 		const coordinatorKeys = normalizedCoordinator
 			? [normalizedCoordinator]
@@ -272,11 +279,14 @@ export async function removeChatKeyPackage(
 		for (const coordinatorKey of coordinatorKeys) {
 			const client = getCoordinatorClient(account, coordinatorKey);
 			await client.RemoveKeyPackages({ kp_refs: [keyPackageRef] });
+			void queryClient.invalidateQueries({
+				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
+			});
 		}
 	}
 
 	if (record) {
-		if (normalizedCoordinator && !input.localOnly) {
+		if (normalizedCoordinator && shouldRemoveRemotely) {
 			await setKeyPackages(
 				chatKeyPackagesStore.keyPackages.map((entry) =>
 					entry.keyPackageRef !== keyPackageRef
@@ -321,9 +331,12 @@ export async function reconcilePublishedKeyPackagesForActiveAccount() {
 
 	const availableRefsByCoordinator: Record<string, string[]> = {};
 	for (const coordinatorKey of coordinatorKeys) {
-		const client = getCoordinatorClient(account, coordinatorKey);
-		const result = await client.ListAvailableKeyPackages({});
-		availableRefsByCoordinator[coordinatorKey] = result.keyPackages
+		const result = await queryClient.fetchQuery({
+			queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, coordinatorKey),
+			queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
+			staleTime: 30 * 1000
+		});
+		availableRefsByCoordinator[coordinatorKey] = result
 			.filter((entry) => normalizePubKey(entry.pk) === ownerPubkey)
 			.map((entry) => entry.kp_ref);
 	}
