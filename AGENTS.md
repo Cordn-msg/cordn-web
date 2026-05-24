@@ -27,6 +27,8 @@
 - Prefer small, focused Svelte components and keep route files thin.
 - Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.
 - Active group watching is managed in [`startWatchingGroup()`](src/lib/services/chatGroupWatch.svelte.ts:71) and should remain the default path for keeping an open chat route up to date instead of adding parallel fetch-heavy flows.
+- Long group histories are virtualized with [`@tanstack/svelte-virtual`](package.json:65) in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:55). Preserve [`scrollToMessage()`](src/lib/components/chat/ChatMessageList.svelte:75), stable message keys, and [`data-message-id`](src/lib/components/chat/ChatMessageList.svelte:212) anchors when changing reference, mention, or unread navigation behavior.
+- Chat message render optimizations live in [`chatMessageRenderCache.ts`](src/lib/components/chat/chatMessageRenderCache.ts:1) and [`ChatMessageItem.svelte`](src/lib/components/chat/ChatMessageItem.svelte:1). Keep expensive derived text parsing cached, avoid per-row localStorage effects, and lazily mount menu/tooltip-heavy controls when extending message actions.
 
 ## Fetching and caching strategy
 

@@ -1,0 +1,140 @@
+<script lang="ts">
+	import { browser } from '$app/environment';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
+	import { onMount, tick, untrack } from 'svelte';
+	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import type { AvailableKeyPackage } from '$lib/contracts';
+	import type { CoordinatorAvailableKeyPackage } from '$lib/services/chatGroups.svelte';
+	import type { StoredKeyPackageRecord } from '$lib/services/chatKeyPackages.svelte';
+
+	type KeyPackageEntry =
+		| StoredKeyPackageRecord
+		| AvailableKeyPackage
+		| CoordinatorAvailableKeyPackage;
+
+	export type VirtualKeyPackageListItem = {
+		id: string;
+		entry: KeyPackageEntry;
+		actionLabel?: string;
+		actionDisabled?: boolean;
+		onAction?: () => void | Promise<void>;
+		badge?: string;
+		compact?: boolean;
+		className?: string;
+	};
+
+	const ESTIMATED_ROW_HEIGHT = 132;
+	const VIRTUAL_OVERSCAN = 6;
+
+	type Props = {
+		items: VirtualKeyPackageListItem[];
+		emptyMessage?: string;
+		maxHeightClass?: string;
+		contentClass?: string;
+		onVisibleItemsChange?: (itemIds: string[]) => void;
+	};
+
+	let {
+		items,
+		emptyMessage = 'No key packages available.',
+		maxHeightClass = 'max-h-[24rem]',
+		contentClass = 'rounded-xl border border-border p-3',
+		onVisibleItemsChange
+	}: Props = $props();
+
+	let container = $state<HTMLDivElement | null>(null);
+	let mounted = $state(false);
+
+	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => container,
+		estimateSize: () => ESTIMATED_ROW_HEIGHT,
+		overscan: VIRTUAL_OVERSCAN,
+		getItemKey: (index) => items[index]?.id ?? index
+	});
+
+	const virtualItems = $derived($virtualizer.getVirtualItems());
+	const totalSize = $derived($virtualizer.getTotalSize());
+
+	function measureVisibleItems() {
+		if (!browser || !container) return;
+		for (const element of container.querySelectorAll<HTMLDivElement>('[data-virtual-item]')) {
+			$virtualizer.measureElement(element);
+		}
+	}
+
+	onMount(() => {
+		mounted = true;
+		void tick().then(() => {
+			untrack(() => {
+				$virtualizer.setOptions({
+					count: items.length,
+					getScrollElement: () => container,
+					getItemKey: (index) => items[index]?.id ?? index
+				});
+				$virtualizer.measure();
+			});
+			measureVisibleItems();
+		});
+		return () => {
+			mounted = false;
+		};
+	});
+
+	$effect(() => {
+		if (!mounted) return;
+		items.length;
+		void tick().then(() => {
+			untrack(() => {
+				$virtualizer.setOptions({
+					count: items.length,
+					getScrollElement: () => container,
+					getItemKey: (index) => items[index]?.id ?? index
+				});
+				$virtualizer.measure();
+			});
+			measureVisibleItems();
+		});
+	});
+
+	$effect(() => {
+		if (!onVisibleItemsChange) return;
+		const visibleItemIds = virtualItems
+			.map((virtualItem) => items[virtualItem.index]?.id)
+			.filter((itemId): itemId is string => Boolean(itemId));
+		onVisibleItemsChange(visibleItemIds);
+	});
+</script>
+
+{#if items.length === 0}
+	<div
+		class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+	>
+		{emptyMessage}
+	</div>
+{:else}
+	<div bind:this={container} class={`${maxHeightClass} overflow-y-auto`}>
+		<div class={`relative ${contentClass}`} style={`height: ${totalSize}px;`}>
+			{#each virtualItems as virtualItem (virtualItem.key)}
+				{@const item = items[virtualItem.index]}
+				{#if item}
+					<div
+						data-virtual-item
+						class="absolute top-0 left-0 w-full"
+						style={`transform: translateY(${virtualItem.start}px);`}
+					>
+						<KeyPackageCard
+							entry={item.entry}
+							actionLabel={item.actionLabel}
+							actionDisabled={item.actionDisabled}
+							onAction={item.onAction}
+							badge={item.badge}
+							compact={item.compact}
+							class={item.className}
+						/>
+					</div>
+				{/if}
+			{/each}
+		</div>
+	</div>
+{/if}

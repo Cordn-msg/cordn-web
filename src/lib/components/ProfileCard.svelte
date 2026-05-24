@@ -60,14 +60,14 @@
 			alt="pfp"
 			class={cn(
 				'rounded-full object-cover',
-				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-4 w-4 shrink-0' : 'h-8 w-8'
+				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
 			)}
 		/>
 	{:else}
 		<div
 			class={cn(
 				'rounded-full',
-				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-4 w-4 shrink-0' : 'h-8 w-8'
+				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
 			)}
 			style="background-color: {pubkeyToHexColor(pubkey)}"
 		></div>

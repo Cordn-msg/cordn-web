@@ -2,13 +2,13 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
+	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
@@ -115,6 +115,30 @@
 	let keyPackageProfileHints = $state<
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
+	let visibleDirectoryKeyPackageIds = $state<string[]>([]);
+
+	const visibleDirectoryKeyPackagePubkeys = $derived.by(() => {
+		const visibleIds = new Set(visibleDirectoryKeyPackageIds);
+		const pubkeys = new Set<string>();
+		for (const entry of filteredRemoteKeyPackages) {
+			if (visibleIds.has(entry.kp_ref)) {
+				pubkeys.add(entry.pk);
+			}
+		}
+		return [...pubkeys];
+	});
+
+	const visibleDirectoryKeyPackageItems = $derived.by(() =>
+		filteredRemoteKeyPackages.map((keyPackage) => ({
+			id: keyPackage.kp_ref,
+			entry: keyPackage,
+			pubkey: keyPackage.pk,
+			actionLabel: quickChatStartingRef === keyPackage.kp_ref ? 'Starting…' : 'Start chat',
+			actionDisabled: quickChatStartingRef === keyPackage.kp_ref,
+			onAction: () => startChatWithKeyPackage(keyPackage),
+			className: 'bg-muted/20'
+		}))
+	);
 
 	function getCoordinatorLabel(coordinator: StoredCoordinator | undefined) {
 		if (!coordinator) return 'No default coordinator yet';
@@ -228,7 +252,8 @@
 	}
 
 	$effect(() => {
-		const uniquePubkeys = [...new Set(remoteKeyPackages.map((entry) => entry.pk))];
+		const uniquePubkeys = [...new Set(visibleDirectoryKeyPackagePubkeys)];
+		if (uniquePubkeys.length === 0) return;
 		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
 			addressLoader({
 				kind: Metadata,
@@ -236,25 +261,12 @@
 				relays: metadataRelays
 			}).subscribe(),
 			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => keyPackageProfileHints[pubkey]);
 				const next = {
 					name: profile?.name,
 					displayName: profile?.display_name,
 					nip05: profile?.nip05
 				};
-
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-
-				keyPackageProfileHints = {
-					...untrack(() => keyPackageProfileHints),
-					[pubkey]: next
-				};
+				keyPackageProfileHints = mergeProfileHint(keyPackageProfileHints, pubkey, next);
 			})
 		]);
 
@@ -594,19 +606,14 @@
 								Log in to browse coordinator key packages.
 							</div>
 						{:else if filteredRemoteKeyPackages.length > 0}
-							<div class="space-y-3">
-								{#each filteredRemoteKeyPackages as keyPackage (keyPackage.kp_ref)}
-									<KeyPackageCard
-										entry={keyPackage}
-										actionLabel={quickChatStartingRef === keyPackage.kp_ref
-											? 'Starting…'
-											: 'Start chat'}
-										actionDisabled={quickChatStartingRef === keyPackage.kp_ref}
-										onAction={() => startChatWithKeyPackage(keyPackage)}
-										class="bg-muted/20"
-									/>
-								{/each}
-							</div>
+							<VirtualKeyPackageList
+								items={visibleDirectoryKeyPackageItems}
+								maxHeightClass="max-h-[32rem]"
+								contentClass="rounded-xl border border-border p-3"
+								onVisibleItemsChange={(itemIds) => {
+									visibleDirectoryKeyPackageIds = itemIds;
+								}}
+							/>
 						{:else if remoteKeyPackages.length > 0}
 							<div
 								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"

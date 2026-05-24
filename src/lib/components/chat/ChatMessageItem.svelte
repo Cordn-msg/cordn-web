@@ -1,5 +1,8 @@
+<script lang="ts" module>
+	let sharedSavedReactions = $state<string[] | null>(null);
+</script>
+
 <script lang="ts">
-	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		DropdownMenuRoot,
@@ -28,9 +31,12 @@
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import { cn, pubkeyToHexColor } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
-	import { parseChatProfileMentions } from '$lib/services/chatMentions';
+	import {
+		getCachedChatMessageParts,
+		loadCustomChatReactions,
+		saveCustomChatReactions
+	} from './chatMessageRenderCache';
 
-	const CUSTOM_REACTIONS_STORAGE_KEY = 'chat-custom-reactions';
 	const REACTIONS = ['♥', '👍'] as const;
 
 	let {
@@ -61,7 +67,7 @@
 	let customReactionOpen = $state(false);
 	let customReaction = $state('');
 	let customReactionInput: HTMLInputElement | null = $state(null);
-	let savedReactions = $state<string[]>([]);
+	let interactionControlsActive = $state(false);
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -80,7 +86,11 @@
 			? 'right-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:right-full sm:top-3 sm:translate-y-0 sm:mr-2'
 			: 'left-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:left-full sm:top-3 sm:translate-y-0 sm:ml-2'
 	);
+	const savedReactions = $derived(sharedSavedReactions ?? []);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
+	const shouldMountInteractionControls = $derived(
+		interactionControlsActive || reactionMenuOpen || actionsMenuOpen || customReactionOpen
+	);
 	const replySwipeDirection = $derived(isOwn ? -1 : 1);
 	const replySwipeProgress = $derived(Math.min(Math.abs(swipeOffset) / SWIPE_REPLY_THRESHOLD, 1));
 	const replySwipeActive = $derived(Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD);
@@ -108,9 +118,9 @@
 		() =>
 			$profile?.name || $profile?.display_name || $profile?.nip05 || `${authorNpub.slice(0, 12)}…`
 	);
-	const messageParts = $derived(parseChatProfileMentions(message.text));
+	const messageParts = $derived(getCachedChatMessageParts(message.id, message.text));
 	const replyParts = $derived.by(() =>
-		message.replyTo ? parseChatProfileMentions(message.replyTo.text) : []
+		message.replyTo ? getCachedChatMessageParts(message.replyTo.id, message.replyTo.text) : []
 	);
 
 	$effect(() => {
@@ -119,21 +129,9 @@
 	});
 
 	$effect(() => {
-		if (!browser) return;
-		try {
-			const stored = localStorage.getItem(CUSTOM_REACTIONS_STORAGE_KEY);
-			if (!stored) return;
-			const parsed = JSON.parse(stored);
-			if (!Array.isArray(parsed)) return;
-			savedReactions = parsed.filter((value): value is string => typeof value === 'string');
-		} catch {
-			savedReactions = [];
+		if (sharedSavedReactions === null) {
+			sharedSavedReactions = loadCustomChatReactions();
 		}
-	});
-
-	$effect(() => {
-		if (!browser) return;
-		localStorage.setItem(CUSTOM_REACTIONS_STORAGE_KEY, JSON.stringify(savedReactions));
 	});
 
 	function normalizeCustomReaction(value: string) {
@@ -150,7 +148,17 @@
 	function persistCustomReaction(reaction: string) {
 		if (REACTIONS.includes(reaction as (typeof REACTIONS)[number])) return;
 		if (savedReactions.includes(reaction)) return;
-		savedReactions = [...savedReactions, reaction];
+		sharedSavedReactions = [...savedReactions, reaction];
+		saveCustomChatReactions(sharedSavedReactions);
+	}
+
+	function activateInteractionControls() {
+		interactionControlsActive = true;
+	}
+
+	function handleShowCustomReactionInput() {
+		activateInteractionControls();
+		customReactionOpen = true;
 	}
 
 	async function handleCustomReaction() {
@@ -167,6 +175,7 @@
 
 	function handleReactionMenuOpenChange(open: boolean) {
 		reactionMenuOpen = open;
+		if (open) activateInteractionControls();
 		if (!open) {
 			customReactionOpen = false;
 			customReaction = '';
@@ -177,6 +186,11 @@
 		if (!isOwn || message.deleted) return;
 		actionsMenuOpen = false;
 		onEdit(message);
+	}
+
+	function handleActionsMenuOpenChange(open: boolean) {
+		actionsMenuOpen = open;
+		if (open) activateInteractionControls();
 	}
 
 	async function deleteMessage() {
@@ -214,6 +228,7 @@
 		clearLongPressTimer();
 
 		longPressTimer = setTimeout(() => {
+			activateInteractionControls();
 			longPressTriggered = true;
 			if (isOwn) {
 				actionsMenuOpen = true;
@@ -282,174 +297,180 @@
 		</div>
 
 		<div
+			role="presentation"
 			class="group flex max-w-[min(100%,48rem)] min-w-0 items-end gap-1.5 sm:gap-2"
 			class:flex-row-reverse={isOwn}
+			onpointerenter={activateInteractionControls}
+			onfocusin={activateInteractionControls}
 		>
 			<div class="relative flex min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
-				<TooltipProvider>
-					<div
-						class={cn(
-							'absolute z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
-							reactionMenuOpen ? 'opacity-100' : 'opacity-0',
-							actionSideClass
-						)}
-					>
-						{#if !message.deleted}
-							<Tooltip>
-								<TooltipTrigger>
-									{#snippet child({ props })}
-										<Button
-											{...props}
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-											onclick={() => onReply(message)}
-											aria-label="Reply to message"
-										>
-											<CornerUpLeft class="size-4" />
-										</Button>
-									{/snippet}
-								</TooltipTrigger>
-								<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
-							</Tooltip>
-						{/if}
-
-						{#if !message.deleted}
-							<DropdownMenuRoot
-								bind:open={reactionMenuOpen}
-								onOpenChange={handleReactionMenuOpenChange}
-							>
+				{#if shouldMountInteractionControls}
+					<TooltipProvider>
+						<div
+							class={cn(
+								'absolute z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
+								reactionMenuOpen ? 'opacity-100' : 'opacity-0',
+								actionSideClass
+							)}
+						>
+							{#if !message.deleted}
 								<Tooltip>
 									<TooltipTrigger>
 										{#snippet child({ props })}
-											<DropdownMenuTrigger {...props}>
-												{#snippet child({ props: triggerProps })}
-													<Button
-														{...triggerProps}
-														type="button"
-														variant="ghost"
-														size="icon-sm"
-														class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-														aria-label="Add reaction"
-													>
-														<SmilePlus class="size-4" />
-													</Button>
-												{/snippet}
-											</DropdownMenuTrigger>
-										{/snippet}
-									</TooltipTrigger>
-									<TooltipContent side="top" sideOffset={8}>Add reaction</TooltipContent>
-								</Tooltip>
-
-								<DropdownMenuContent
-									side="top"
-									align={isOwn ? 'start' : 'end'}
-									sideOffset={8}
-									class="flex min-w-0 flex-row items-center gap-1 rounded-2xl p-1"
-								>
-									{#each availableReactions as reaction (reaction)}
-										<DropdownMenuItem
-											onSelect={() => onReact(message, reaction)}
-											class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
-										>
-											{reaction}
-										</DropdownMenuItem>
-									{/each}
-									<div class="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
-										{#if customReactionOpen}
-											<form
-												class="flex items-center gap-1"
-												onsubmit={async (event) => {
-													event.preventDefault();
-													await handleCustomReaction();
-												}}
-											>
-												<Input
-													bind:ref={customReactionInput}
-													bind:value={customReaction}
-													class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-													placeholder=""
-													maxlength={8}
-													aria-label="Custom reaction"
-													oninput={() => {
-														customReaction = normalizeCustomReaction(customReaction);
-													}}
-												/>
-												<Button
-													type="submit"
-													variant="ghost"
-													size="icon-sm"
-													class="rounded-xl bg-background"
-													aria-label="Confirm custom reaction"
-												>
-													<Plus class="size-4" />
-												</Button>
-											</form>
-										{:else}
 											<Button
+												{...props}
 												type="button"
 												variant="ghost"
 												size="icon-sm"
-												class="rounded-xl bg-background"
-												aria-label="Show custom reaction input"
-												onclick={() => {
-													customReactionOpen = true;
-												}}
+												class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+												onclick={() => onReply(message)}
+												aria-label="Reply to message"
 											>
-												<Plus class="size-4" />
+												<CornerUpLeft class="size-4" />
 											</Button>
-										{/if}
-									</div>
-								</DropdownMenuContent>
-							</DropdownMenuRoot>
-						{/if}
-
-						{#if isOwn}
-							<DropdownMenuRoot bind:open={actionsMenuOpen}>
-								<Tooltip>
-									<TooltipTrigger>
-										{#snippet child({ props })}
-											<DropdownMenuTrigger {...props}>
-												{#snippet child({ props: triggerProps })}
-													<Button
-														{...triggerProps}
-														type="button"
-														variant="ghost"
-														size="icon-sm"
-														class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-														aria-label="Open message actions"
-													>
-														<Ellipsis class="size-4" />
-													</Button>
-												{/snippet}
-											</DropdownMenuTrigger>
 										{/snippet}
 									</TooltipTrigger>
-									<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
+									<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
 								</Tooltip>
+							{/if}
 
-								<DropdownMenuContent
-									side="top"
-									align={isOwn ? 'start' : 'end'}
-									sideOffset={8}
-									class="w-40 rounded-xl"
+							{#if !message.deleted}
+								<DropdownMenuRoot
+									bind:open={reactionMenuOpen}
+									onOpenChange={handleReactionMenuOpenChange}
 								>
-									{#if !message.deleted}
-										<DropdownMenuItem onSelect={startEditing} class="gap-2">
-											<Pencil class="size-4" />
-											<span>Edit</span>
-										</DropdownMenuItem>
-										<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
-											<Trash2 class="size-4" />
-											<span>Delete</span>
-										</DropdownMenuItem>
-									{/if}
-								</DropdownMenuContent>
-							</DropdownMenuRoot>
-						{/if}
-					</div>
-				</TooltipProvider>
+									<Tooltip>
+										<TooltipTrigger>
+											{#snippet child({ props })}
+												<DropdownMenuTrigger {...props}>
+													{#snippet child({ props: triggerProps })}
+														<Button
+															{...triggerProps}
+															type="button"
+															variant="ghost"
+															size="icon-sm"
+															class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+															aria-label="Add reaction"
+														>
+															<SmilePlus class="size-4" />
+														</Button>
+													{/snippet}
+												</DropdownMenuTrigger>
+											{/snippet}
+										</TooltipTrigger>
+										<TooltipContent side="top" sideOffset={8}>Add reaction</TooltipContent>
+									</Tooltip>
+
+									<DropdownMenuContent
+										side="top"
+										align={isOwn ? 'start' : 'end'}
+										sideOffset={8}
+										class="flex min-w-0 flex-row items-center gap-1 rounded-2xl p-1"
+									>
+										{#each availableReactions as reaction (reaction)}
+											<DropdownMenuItem
+												onSelect={() => onReact(message, reaction)}
+												class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
+											>
+												{reaction}
+											</DropdownMenuItem>
+										{/each}
+										<div class="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
+											{#if customReactionOpen}
+												<form
+													class="flex items-center gap-1"
+													onsubmit={async (event) => {
+														event.preventDefault();
+														await handleCustomReaction();
+													}}
+												>
+													<Input
+														bind:ref={customReactionInput}
+														bind:value={customReaction}
+														class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
+														placeholder=""
+														maxlength={8}
+														aria-label="Custom reaction"
+														oninput={() => {
+															customReaction = normalizeCustomReaction(customReaction);
+														}}
+													/>
+													<Button
+														type="submit"
+														variant="ghost"
+														size="icon-sm"
+														class="rounded-xl bg-background"
+														aria-label="Confirm custom reaction"
+													>
+														<Plus class="size-4" />
+													</Button>
+												</form>
+											{:else}
+												<Button
+													type="button"
+													variant="ghost"
+													size="icon-sm"
+													class="rounded-xl bg-background"
+													aria-label="Show custom reaction input"
+													onclick={handleShowCustomReactionInput}
+												>
+													<Plus class="size-4" />
+												</Button>
+											{/if}
+										</div>
+									</DropdownMenuContent>
+								</DropdownMenuRoot>
+							{/if}
+
+							{#if isOwn}
+								<DropdownMenuRoot
+									bind:open={actionsMenuOpen}
+									onOpenChange={handleActionsMenuOpenChange}
+								>
+									<Tooltip>
+										<TooltipTrigger>
+											{#snippet child({ props })}
+												<DropdownMenuTrigger {...props}>
+													{#snippet child({ props: triggerProps })}
+														<Button
+															{...triggerProps}
+															type="button"
+															variant="ghost"
+															size="icon-sm"
+															class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+															aria-label="Open message actions"
+														>
+															<Ellipsis class="size-4" />
+														</Button>
+													{/snippet}
+												</DropdownMenuTrigger>
+											{/snippet}
+										</TooltipTrigger>
+										<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
+									</Tooltip>
+
+									<DropdownMenuContent
+										side="top"
+										align={isOwn ? 'start' : 'end'}
+										sideOffset={8}
+										class="w-40 rounded-xl"
+									>
+										{#if !message.deleted}
+											<DropdownMenuItem onSelect={startEditing} class="gap-2">
+												<Pencil class="size-4" />
+												<span>Edit</span>
+											</DropdownMenuItem>
+											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
+												<Trash2 class="size-4" />
+												<span>Delete</span>
+											</DropdownMenuItem>
+										{/if}
+									</DropdownMenuContent>
+								</DropdownMenuRoot>
+							{/if}
+						</div>
+					</TooltipProvider>
+				{/if}
 
 				{#if showAuthor}
 					<p
@@ -569,42 +590,56 @@
 				{#if !message.deleted && message.reactions?.length}
 					<div class="flex flex-wrap gap-2 px-1 pt-0.5" class:justify-end={isOwn}>
 						{#each message.reactions as reaction (`${message.id}:${reaction.emoji}`)}
-							<DropdownMenuRoot>
-								<Tooltip>
-									<TooltipTrigger>
-										{#snippet child({ props })}
-											<DropdownMenuTrigger {...props}>
-												{#snippet child({ props: triggerProps })}
-													<button
-														{...triggerProps}
-														type="button"
-														class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-														aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
-														onclick={() => onReact(message, reaction.emoji)}
-													>
-														<span>{reaction.emoji}</span>
-														<span>{reaction.count}</span>
-													</button>
-												{/snippet}
-											</DropdownMenuTrigger>
-										{/snippet}
-									</TooltipTrigger>
-									<TooltipContent side="top" sideOffset={8}>View reactions</TooltipContent>
-								</Tooltip>
+							{#if interactionControlsActive}
+								<DropdownMenuRoot>
+									<Tooltip>
+										<TooltipTrigger>
+											{#snippet child({ props })}
+												<DropdownMenuTrigger {...props}>
+													{#snippet child({ props: triggerProps })}
+														<button
+															{...triggerProps}
+															type="button"
+															class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+															aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
+															onclick={() => onReact(message, reaction.emoji)}
+														>
+															<span>{reaction.emoji}</span>
+															<span>{reaction.count}</span>
+														</button>
+													{/snippet}
+												</DropdownMenuTrigger>
+											{/snippet}
+										</TooltipTrigger>
+										<TooltipContent side="top" sideOffset={8}>View reactions</TooltipContent>
+									</Tooltip>
 
-								<DropdownMenuContent
-									side="top"
-									align={isOwn ? 'start' : 'end'}
-									sideOffset={8}
-									class="min-w-44 rounded-xl p-3"
+									<DropdownMenuContent
+										side="top"
+										align={isOwn ? 'start' : 'end'}
+										sideOffset={8}
+										class="min-w-44 rounded-xl p-3"
+									>
+										<div class="flex flex-col gap-2">
+											{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
+												<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
+											{/each}
+										</div>
+									</DropdownMenuContent>
+								</DropdownMenuRoot>
+							{:else}
+								<button
+									type="button"
+									class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+									aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
+									onclick={() => onReact(message, reaction.emoji)}
+									onpointerenter={activateInteractionControls}
+									onfocus={activateInteractionControls}
 								>
-									<div class="flex flex-col gap-2">
-										{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
-											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
-										{/each}
-									</div>
-								</DropdownMenuContent>
-							</DropdownMenuRoot>
+									<span>{reaction.emoji}</span>
+									<span>{reaction.count}</span>
+								</button>
+							{/if}
 						{/each}
 					</div>
 				{/if}

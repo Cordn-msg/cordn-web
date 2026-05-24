@@ -2,6 +2,7 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import {
 		getChatGroupDisplayTitle,
 		getDirectChatTargetPubkeyFromWelcome,
@@ -124,6 +125,27 @@
 				state: localCopy ? 'owned + local copy available' : 'owned + local copy missing'
 			};
 		})
+	);
+	const ownedRemoteKeyPackageItems = $derived.by(() =>
+		ownedRemoteKeyPackagesWithState.map((item) => ({
+			id: item.entry.kp_ref,
+			entry: {
+				...item.entry,
+				label: item.localCopy?.label || 'Remote owned key package'
+			},
+			pubkey: item.entry.pk,
+			badge: item.state,
+			actionLabel: removingKeyPackageRef === item.entry.kp_ref ? 'Removing…' : 'Remove',
+			actionDisabled: removingKeyPackageRef === item.entry.kp_ref,
+			onAction: () => removeOwnedKeyPackage(item.entry.kp_ref)
+		}))
+	);
+	const otherRemoteKeyPackageItems = $derived.by(() =>
+		otherRemoteKeyPackages.map((entry) => ({
+			id: entry.kp_ref,
+			entry,
+			pubkey: entry.pk
+		}))
 	);
 
 	async function loadRemoteKeyPackages() {
@@ -384,20 +406,7 @@
 										{#if removeError}
 											<p class="text-sm text-destructive">{removeError}</p>
 										{/if}
-										{#each ownedRemoteKeyPackagesWithState as item (item.entry.kp_ref)}
-											<KeyPackageCard
-												entry={{
-													...item.entry,
-													label: item.localCopy?.label || 'Remote owned key package'
-												}}
-												badge={item.state}
-												actionLabel={removingKeyPackageRef === item.entry.kp_ref
-													? 'Removing…'
-													: 'Remove'}
-												actionDisabled={removingKeyPackageRef === item.entry.kp_ref}
-												onAction={() => removeOwnedKeyPackage(item.entry.kp_ref)}
-											/>
-										{/each}
+										<VirtualKeyPackageList items={ownedRemoteKeyPackageItems} />
 									</div>
 								{/if}
 							</div>
@@ -427,9 +436,7 @@
 									No remote key packages from other identities are currently visible.
 								</div>
 							{:else}
-								{#each otherRemoteKeyPackages as entry (entry.kp_ref)}
-									<KeyPackageCard {entry} />
-								{/each}
+								<VirtualKeyPackageList items={otherRemoteKeyPackageItems} />
 							{/if}
 						</div>
 					</Card.Content>

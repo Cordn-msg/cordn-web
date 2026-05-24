@@ -12,4 +12,4 @@
 - [x] Edit and delete messages
 - Allow renovating ephemeral identity
 - [x] Failed messages always appear at the bottom of the chat, even if there are newer messages
-- Use tanstack query for centralizing fetching strategy and lists for virtualized lists for chats with many messages
+- [x] Use tanstack query for centralizing fetching strategy and lists for virtualized lists for chats with many messages

@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
+	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
+	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -96,6 +96,7 @@
 	let inviteKeyPackageProfileHints = $state<
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
+	let visibleInviteKeyPackageIds = $state<string[]>([]);
 
 	const filteredInviteKeyPackages = $derived.by(() =>
 		chatHeaderActionsStore.availableKeyPackages.filter((entry) =>
@@ -107,6 +108,26 @@
 				search: inviteKeyPackageSearch
 			})
 		)
+	);
+	const visibleInviteKeyPackagePubkeys = $derived.by(() => {
+		const visibleIds = new Set(visibleInviteKeyPackageIds);
+		const pubkeys = new Set<string>();
+		for (const entry of filteredInviteKeyPackages) {
+			if (visibleIds.has(entry.keyPackageRef)) {
+				pubkeys.add(entry.stablePubkey);
+			}
+		}
+		return [...pubkeys];
+	});
+	const visibleInviteKeyPackageItems = $derived.by(() =>
+		filteredInviteKeyPackages.map((entry) => ({
+			id: entry.keyPackageRef,
+			entry: { ...entry, label: formatKeyPackageLabel(entry) },
+			pubkey: entry.stablePubkey,
+			actionLabel: 'Invite',
+			actionDisabled: chatHeaderActionsStore.inviteSubmitting,
+			onAction: () => inviteMember(entry.keyPackageRef)
+		}))
 	);
 
 	async function navigateToInfo() {
@@ -132,9 +153,8 @@
 
 	$effect(() => {
 		if (!chatHeaderActionsStore.inviteOpen) return;
-		const uniquePubkeys = [
-			...new Set(chatHeaderActionsStore.availableKeyPackages.map((entry) => entry.stablePubkey))
-		];
+		const uniquePubkeys = [...new Set(visibleInviteKeyPackagePubkeys)];
+		if (uniquePubkeys.length === 0) return;
 		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
 			addressLoader({
 				kind: Metadata,
@@ -142,25 +162,12 @@
 				relays: metadataRelays
 			}).subscribe(),
 			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => inviteKeyPackageProfileHints[pubkey]);
 				const next = {
 					name: profile?.name,
 					displayName: profile?.display_name,
 					nip05: profile?.nip05
 				};
-
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-
-				inviteKeyPackageProfileHints = {
-					...untrack(() => inviteKeyPackageProfileHints),
-					[pubkey]: next
-				};
+				inviteKeyPackageProfileHints = mergeProfileHint(inviteKeyPackageProfileHints, pubkey, next);
 			})
 		]);
 
@@ -361,9 +368,7 @@
 								aria-label="Search invite key packages"
 							/>
 
-							<div
-								class="max-h-[24rem] space-y-2 overflow-y-auto rounded-xl border border-border p-3"
-							>
+							<div>
 								{#if !$activeAccount}
 									<p class="text-sm text-muted-foreground">Log in to invite members.</p>
 								{:else if chatHeaderActionsStore.inviteLoading && chatHeaderActionsStore.availableKeyPackages.length === 0}
@@ -375,14 +380,12 @@
 								{:else if filteredInviteKeyPackages.length === 0}
 									<p class="text-sm text-muted-foreground">No key packages match your search.</p>
 								{:else}
-									{#each filteredInviteKeyPackages as entry (entry.keyPackageRef)}
-										<KeyPackageCard
-											entry={{ ...entry, label: formatKeyPackageLabel(entry) }}
-											actionLabel="Invite"
-											actionDisabled={chatHeaderActionsStore.inviteSubmitting}
-											onAction={() => inviteMember(entry.keyPackageRef)}
-										/>
-									{/each}
+									<VirtualKeyPackageList
+										items={visibleInviteKeyPackageItems}
+										onVisibleItemsChange={(itemIds) => {
+											visibleInviteKeyPackageIds = itemIds;
+										}}
+									/>
 								{/if}
 							</div>
 						</div>

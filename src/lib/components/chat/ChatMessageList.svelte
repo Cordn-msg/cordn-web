@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { onMount, tick } from 'svelte';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
+	import { onMount, tick, untrack } from 'svelte';
 	import ChatMessageItem from './ChatMessageItem.svelte';
 	import type { ChatMessage } from './chat.types';
 
@@ -22,8 +23,12 @@
 	let container: HTMLDivElement | null = $state(null);
 	let highlightedMessageId = $state('');
 	let highlightTimeout: number | null = null;
+	let unreadReferenceFrame: number | null = null;
 	let wasAtBottom = true;
 	let suppressNextAutoScroll = false;
+
+	const ESTIMATED_MESSAGE_HEIGHT = 128;
+	const VIRTUAL_OVERSCAN = 8;
 
 	const groupedMessages = $derived.by(() =>
 		messages.map((message, index) => {
@@ -38,6 +43,17 @@
 			};
 		})
 	);
+
+	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => container,
+		estimateSize: () => ESTIMATED_MESSAGE_HEIGHT,
+		overscan: VIRTUAL_OVERSCAN,
+		getItemKey: (index) => messages[index]?.id ?? index
+	});
+
+	const virtualItems = $derived($virtualizer.getVirtualItems());
+	const totalSize = $derived($virtualizer.getTotalSize());
 
 	export async function scrollToBottom() {
 		await tick();
@@ -62,9 +78,13 @@
 		if (!browser || !container) return;
 		const containerRect = container.getBoundingClientRect();
 
-		for (const message of messages) {
+		for (const virtualItem of virtualItems) {
+			const message = messages[virtualItem.index];
+			if (!message) continue;
 			if (!message.unreadReference) continue;
-			const element = container.querySelector<HTMLElement>(`[data-message-id="${message.id}"]`);
+			const element = container.querySelector<HTMLElement>(
+				`[data-index="${virtualItem.index}"] [data-message-id]`
+			);
 			if (!element) continue;
 
 			const elementRect = element.getBoundingClientRect();
@@ -76,9 +96,18 @@
 		}
 	}
 
+	function scheduleVisibleUnreadReferenceCheck() {
+		if (!browser) return;
+		if (unreadReferenceFrame !== null) return;
+		unreadReferenceFrame = window.requestAnimationFrame(() => {
+			unreadReferenceFrame = null;
+			markVisibleUnreadReferences();
+		});
+	}
+
 	function handleScroll() {
 		wasAtBottom = isAtBottom();
-		markVisibleUnreadReferences();
+		scheduleVisibleUnreadReferenceCheck();
 	}
 
 	function centerMessage(element: HTMLElement) {
@@ -91,16 +120,44 @@
 		container.scrollTo({ top: Math.max(0, currentTop + delta), behavior: 'instant' });
 	}
 
+	function measureVisibleItems() {
+		if (!browser || !container) return;
+		for (const element of container.querySelectorAll<HTMLDivElement>('[data-virtual-item]')) {
+			$virtualizer.measureElement(element);
+		}
+	}
+
 	onMount(() => {
-		scrollToBottom();
+		void tick().then(() => {
+			untrack(() => {
+				$virtualizer.setOptions({
+					count: messages.length,
+					getScrollElement: () => container,
+					getItemKey: (index) => messages[index]?.id ?? index
+				});
+				$virtualizer.measure();
+			});
+			void scrollToBottom();
+		});
 	});
 
 	$effect(() => {
-		void messages.length;
+		const messageCount = messages.length;
+		const lastMessageId = messages.at(-1)?.id;
 		if (!browser || !container) return;
+		untrack(() => {
+			$virtualizer.setOptions({
+				count: messageCount,
+				getScrollElement: () => container,
+				getItemKey: (index) => messages[index]?.id ?? index
+			});
+		});
 
 		const shouldScroll = wasAtBottom;
 		void tick().then(() => {
+			void messageCount;
+			void lastMessageId;
+			measureVisibleItems();
 			if (suppressNextAutoScroll) {
 				suppressNextAutoScroll = false;
 			} else if (shouldScroll) {
@@ -113,8 +170,18 @@
 
 	async function navigateToMessage(messageId: string) {
 		if (!browser || !container) return;
+		const messageIndex = messages.findIndex((message) => message.id === messageId);
+		if (messageIndex === -1) return;
 
-		const element = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+		suppressNextAutoScroll = true;
+		$virtualizer.scrollToIndex(messageIndex, { align: 'center' });
+		await tick();
+		measureVisibleItems();
+		await tick();
+
+		const element = container.querySelector<HTMLElement>(
+			`[data-index="${messageIndex}"] [data-message-id]`
+		);
 		if (!element) return;
 
 		highlightedMessageId = messageId;
@@ -125,7 +192,6 @@
 			highlightedMessageId = '';
 		}, 2400);
 
-		suppressNextAutoScroll = true;
 		centerMessage(element);
 		await tick();
 		centerMessage(element);
@@ -135,10 +201,18 @@
 
 	$effect(() => {
 		return () => {
+			if (unreadReferenceFrame !== null) {
+				window.cancelAnimationFrame(unreadReferenceFrame);
+			}
 			if (highlightTimeout) {
 				clearTimeout(highlightTimeout);
 			}
 		};
+	});
+
+	$effect(() => {
+		void virtualItems;
+		void tick().then(measureVisibleItems);
 	});
 </script>
 
@@ -147,22 +221,33 @@
 	class="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
 	onscroll={handleScroll}
 >
-	<div
-		class="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 md:gap-6 md:px-6 md:py-8"
-	>
-		{#each groupedMessages as entry (entry.message.id)}
-			<ChatMessageItem
-				message={entry.message}
-				showAuthor={entry.showAuthor}
-				showAvatar={entry.showAvatar}
-				showDayLabel={entry.showDayLabel}
-				{onReply}
-				{onReact}
-				{onEdit}
-				{onDelete}
-				onNavigateToMessage={navigateToMessage}
-				highlighted={highlightedMessageId === entry.message.id}
-			/>
-		{/each}
+	<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
+		<div class="relative w-full" style={`height: ${totalSize}px;`}>
+			{#each virtualItems as virtualItem (virtualItem.key)}
+				{@const entry = groupedMessages[virtualItem.index]}
+				{#if entry}
+					<div
+						data-index={virtualItem.index}
+						data-virtual-item
+						data-message-id={entry.message.id}
+						class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
+						style={`transform: translateY(${virtualItem.start}px);`}
+					>
+						<ChatMessageItem
+							message={entry.message}
+							showAuthor={entry.showAuthor}
+							showAvatar={entry.showAvatar}
+							showDayLabel={entry.showDayLabel}
+							{onReply}
+							{onReact}
+							{onEdit}
+							{onDelete}
+							onNavigateToMessage={navigateToMessage}
+							highlighted={highlightedMessageId === entry.message.id}
+						/>
+					</div>
+				{/if}
+			{/each}
+		</div>
 	</div>
 </div>

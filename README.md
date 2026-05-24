@@ -26,6 +26,14 @@ The canonical persisted chat payload includes:
 
 The browser services in [`chatGroups.svelte.ts`](src/lib/services/chatGroups.svelte.ts:1) and [`chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1) still expose the same app-facing APIs, but persistence routes through the storage layer instead of directly writing large JSON blobs to browser storage.
 
+## Chat rendering performance
+
+Long group histories are rendered with [`@tanstack/svelte-virtual`](package.json:65) in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:55). The message list only mounts the visible message window plus overscan while preserving stable message ids for reply/reference navigation and unread-reference visibility checks.
+
+When changing chat history rendering, keep [`scrollToMessage()`](src/lib/components/chat/ChatMessageList.svelte:75) and message [`data-message-id`](src/lib/components/chat/ChatMessageList.svelte:212) anchors working so references, mentions, and unread jumps can still navigate to off-screen messages through the virtualizer.
+
+Per-message render work is reduced by caching parsed mention parts in [`chatMessageRenderCache.ts`](src/lib/components/chat/chatMessageRenderCache.ts:1), sharing custom reaction persistence across mounted rows, lazily mounting heavy menu/tooltip controls in [`ChatMessageItem.svelte`](src/lib/components/chat/ChatMessageItem.svelte:88), and throttling unread-reference visibility checks with `requestAnimationFrame` in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:97).
+
 ## Development
 
 - Install dependencies: `pnpm install`
