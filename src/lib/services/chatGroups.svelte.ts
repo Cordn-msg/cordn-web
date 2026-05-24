@@ -24,10 +24,14 @@ import {
 import { assertCanAdministerGroup, listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
 	createApplicationMessageBase64,
+	createDeleteMessageTags,
+	createEditMessageTags,
 	createReactionMessageTags,
 	createReplyMessageTags,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	type ChatMessageDeleteTarget,
+	type ChatMessageEditTarget,
 	type ChatMessageReactionTarget,
 	type ChatMessageReplyTarget,
 	type StoredChatMessage,
@@ -731,8 +735,11 @@ export async function ingestIncomingChatGroupMessages(
 export async function sendChatGroupMessage(input: {
 	groupId: string;
 	content: string;
+	tags?: string[][];
 	replyTo?: ChatMessageReplyTarget;
 	reactionTo?: ChatMessageReactionTarget;
+	editTo?: ChatMessageEditTarget;
+	deleteTo?: ChatMessageDeleteTarget;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
@@ -740,25 +747,33 @@ export async function sendChatGroupMessage(input: {
 		assertChatGroupIsActive(group);
 
 		const isReaction = Boolean(input.reactionTo);
+		const isEdit = Boolean(input.editTo);
+		const isDelete = Boolean(input.deleteTo);
 		const content = isReaction ? input.content : input.content.trim();
-		if (!content) {
+		if (!content && !isDelete) {
 			throw new Error('Message content is required');
 		}
 
 		const state = decodeStoredGroupState(group);
 		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
+		const tags = input.reactionTo
+			? createReactionMessageTags(input.reactionTo)
+			: input.deleteTo
+				? createDeleteMessageTags(input.deleteTo)
+				: input.editTo
+					? createEditMessageTags(input.editTo, input.tags)
+					: [
+							...(input.replyTo ? createReplyMessageTags(input.replyTo) : []),
+							...(input.tags ?? [])
+						];
 
 		const outbound = await createApplicationMessageBase64({
 			state,
 			event: createUnsignedCordnMessageEvent({
 				pubkey: normalizePubKey(account.pubkey),
 				content,
-				kind: input.reactionTo ? 7 : input.replyTo ? 1111 : 9,
-				tags: input.reactionTo
-					? createReactionMessageTags(input.reactionTo)
-					: input.replyTo
-						? createReplyMessageTags(input.replyTo)
-						: []
+				kind: input.reactionTo ? 7 : isEdit ? 1010 : isDelete ? 5 : input.replyTo ? 1111 : 9,
+				tags
 			}),
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
 		});

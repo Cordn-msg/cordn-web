@@ -10,6 +10,7 @@ import {
 	type ClientState,
 	type IncomingMessageCallback
 } from 'ts-mls';
+import { SvelteSet } from 'svelte/reactivity';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import {
@@ -43,6 +44,18 @@ export interface ChatMessageReactionTarget {
 	kind: number;
 }
 
+export interface ChatMessageEditTarget {
+	id: string;
+	pubkey: string;
+	kind: number;
+}
+
+export interface ChatMessageDeleteTarget {
+	id: string;
+	pubkey: string;
+	kind: number;
+}
+
 export interface ChatMessageThreadReference {
 	rootId: string;
 	rootPubkey: string;
@@ -57,6 +70,15 @@ export interface ChatMessageReactionReference {
 	targetPubkey: string;
 	targetKind: number;
 	reaction: string;
+}
+
+export interface ChatMessageEditReference {
+	targetId: string;
+}
+
+export interface ChatMessageDeleteReference {
+	targetId: string;
+	targetKind: number;
 }
 
 export interface StoredChatSyncIssue {
@@ -147,6 +169,25 @@ export function createReactionMessageTags(target: ChatMessageReactionTarget): st
 	];
 }
 
+export function createEditMessageTags(
+	target: ChatMessageEditTarget,
+	tags: string[][] = []
+): string[][] {
+	return [
+		['e', target.id, '', target.pubkey],
+		['p', target.pubkey],
+		['k', String(target.kind)],
+		...tags
+	];
+}
+
+export function createDeleteMessageTags(target: ChatMessageDeleteTarget): string[][] {
+	return [
+		['e', target.id, '', target.pubkey],
+		['k', String(target.kind)]
+	];
+}
+
 export function getMessageThreadReference(tags: string[][]): ChatMessageThreadReference | null {
 	const rootEventTag = findTag(tags, 'E');
 	const rootKindTag = findTag(tags, 'K');
@@ -207,6 +248,45 @@ export function getMessageReactionReference(
 		targetPubkey: pubkeyTag[1],
 		targetKind: Number(kindTag[1]),
 		reaction
+	};
+}
+
+export function getMessageEditReference(
+	kind: number,
+	content: string,
+	tags: string[][]
+): ChatMessageEditReference | null {
+	if (kind !== 1010 || !content.trim()) {
+		return null;
+	}
+
+	const eventTag = findTag(tags, 'e');
+	if (!eventTag?.[1]) {
+		return null;
+	}
+
+	return {
+		targetId: eventTag[1]
+	};
+}
+
+export function getMessageDeleteReference(
+	kind: number,
+	tags: string[][]
+): ChatMessageDeleteReference | null {
+	if (kind !== 5) {
+		return null;
+	}
+
+	const eventTag = findTag(tags, 'e');
+	const kindTag = findTag(tags, 'k');
+	if (!eventTag?.[1] || !isFiniteKind(kindTag?.[1])) {
+		return null;
+	}
+
+	return {
+		targetId: eventTag[1],
+		targetKind: Number(kindTag[1])
 	};
 }
 
@@ -349,8 +429,10 @@ export async function ingestChatGroupMessages(params: {
 	const { group, messages } = params;
 	const received: StoredChatMessage[] = [];
 	const issues: StoredChatSyncIssue[] = [];
-	const appliedPendingCommitMessages = new Set<string>();
-	const rejectedPendingCommitMessages = new Set<string>();
+	const seenCursors = new SvelteSet(group.messages.map((stored) => stored.cursor));
+	const seenMessageIds = new SvelteSet(group.messages.map((stored) => stored.id));
+	const appliedPendingCommitMessages = new SvelteSet<string>();
+	const rejectedPendingCommitMessages = new SvelteSet<string>();
 	let removedLocalMember = false;
 
 	for (const message of messages) {
@@ -364,7 +446,7 @@ export async function ingestChatGroupMessages(params: {
 			continue;
 		}
 
-		if (group.messages.some((stored) => stored.cursor === message.cursor)) {
+		if (seenCursors.has(message.cursor)) {
 			group.fetchCursor = message.cursor;
 			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			continue;
@@ -464,10 +546,13 @@ export async function ingestChatGroupMessages(params: {
 				content: event.content
 			};
 
-			if (group.messages.some((existing) => existing.id === stored.id)) {
+			seenCursors.add(message.cursor);
+
+			if (seenMessageIds.has(stored.id)) {
 				continue;
 			}
 
+			seenMessageIds.add(stored.id);
 			group.messages.push(stored);
 			received.push(stored);
 			continue;

@@ -92,7 +92,7 @@
 
 			// Generate nostr connect URI with app metadata and permissions
 			const uri = signer.getNostrConnectURI({
-				name: 'ContextVM-Site',
+				name: 'Cordn-web',
 				url: window.location.origin,
 				image: `${window.location.origin}/favicon.svg`
 			});

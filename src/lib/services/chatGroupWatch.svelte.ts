@@ -10,6 +10,7 @@ import {
 import {
 	disconnectCoordinatorClients,
 	getCoordinatorClient,
+	onCoordinatorClientsRefresh,
 	requireActiveAccount
 } from '$lib/services/chatRuntime';
 
@@ -32,6 +33,15 @@ const currentWatches = new Map<string, GroupWatchTask>();
 const autoWatchDisabledGroupIds = new Set<string>();
 let lastActiveAccountId = '';
 const groupIdDecoder = new TextDecoder();
+const COORDINATOR_CLIENTS_REFRESHED_REASON = 'coordinator clients refreshed';
+const WATCH_INGEST_BATCH_SIZE = 50;
+const WATCH_INGEST_FLUSH_MS = 100;
+
+type WatchIncomingMessage = {
+	cursor: number;
+	createdAt: number;
+	opaqueMessageBase64: string;
+};
 
 function syncWatchingGroupIds() {
 	chatGroupWatchStore.watchingGroupIds = [...currentWatches.keys()];
@@ -71,6 +81,32 @@ if (browser) {
 			void disconnectCoordinatorClients(previousAccount);
 		}
 	});
+
+	onCoordinatorClientsRefresh(async (refreshClients) => {
+		const watchedGroupIds = [...currentWatches.keys()];
+
+		if (watchedGroupIds.length > 0) {
+			chatGroupWatchStore.error = '';
+			await stopWatchingGroup(undefined, COORDINATOR_CLIENTS_REFRESHED_REASON);
+		}
+
+		await refreshClients();
+
+		if (watchedGroupIds.length === 0) {
+			return;
+		}
+
+		await Promise.allSettled(
+			watchedGroupIds
+				.filter((groupId) => {
+					const group = getChatGroup(groupId);
+					return group && !isChatGroupRemoved(group) && !autoWatchDisabledGroupIds.has(groupId);
+				})
+				.map((groupId) => startWatchingGroup(groupId))
+		);
+
+		chatGroupWatchStore.error = '';
+	});
 }
 
 export function isWatchingGroup(groupId?: string): boolean {
@@ -84,6 +120,17 @@ async function closeWatch(handle: GroupWatchTask, reason: string) {
 
 function isExpectedAbort(detail: string, reason?: string) {
 	return reason !== undefined && detail === `Open stream aborted: ${reason}`;
+}
+
+function isExpectedWatchTeardown(detail: string, reason?: string) {
+	if (isExpectedAbort(detail, reason)) {
+		return true;
+	}
+
+	return (
+		reason === COORDINATOR_CLIENTS_REFRESHED_REASON &&
+		(detail.includes('Connection closed') || detail.includes('Failed to publish event'))
+	);
 }
 
 export function stopWatchingGroup(groupId?: string, reason = 'user stopped watching') {
@@ -149,9 +196,54 @@ export async function startWatchingGroup(groupId: string) {
 		});
 
 		handle.task = (async () => {
+			const pendingMessages: WatchIncomingMessage[] = [];
+			let flushTimer: ReturnType<typeof setTimeout> | undefined;
+			let flushPromise = Promise.resolve(false);
+
+			const reportFlushError = (error: unknown) => {
+				const detail = error instanceof Error ? error.message : String(error);
+				if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
+					return;
+				}
+
+				chatGroupWatchStore.error =
+					error instanceof Error ? error.message : 'Failed to ingest watched group messages';
+			};
+
+			const clearFlushTimer = () => {
+				if (!flushTimer) return;
+				clearTimeout(flushTimer);
+				flushTimer = undefined;
+			};
+
+			const flushPendingMessages = () => {
+				flushPromise = flushPromise.then(async () => {
+					clearFlushTimer();
+					if (pendingMessages.length === 0) return false;
+
+					const batch = pendingMessages.splice(0, pendingMessages.length);
+					const result = await ingestIncomingChatGroupMessages(groupId, batch);
+					if (isChatGroupRemoved(result.group)) {
+						await abort('removed from group');
+						return true;
+					}
+
+					return false;
+				});
+				return flushPromise;
+			};
+
+			const scheduleFlush = () => {
+				if (flushTimer) return;
+				flushTimer = setTimeout(() => {
+					flushTimer = undefined;
+					void flushPendingMessages().catch(reportFlushError);
+				}, WATCH_INGEST_FLUSH_MS);
+			};
+
 			void subscription.result.catch((error) => {
 				const detail = error instanceof Error ? error.message : String(error);
-				if (closing && isExpectedAbort(detail, expectedAbortReason)) {
+				if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
 					return;
 				}
 
@@ -165,7 +257,7 @@ export async function startWatchingGroup(groupId: string) {
 
 				return subscription.abort(reason).catch((error) => {
 					const detail = error instanceof Error ? error.message : String(error);
-					if (isExpectedAbort(detail, reason)) {
+					if (isExpectedWatchTeardown(detail, reason)) {
 						return;
 					}
 
@@ -176,33 +268,36 @@ export async function startWatchingGroup(groupId: string) {
 
 			try {
 				for await (const message of subscription.stream) {
-					const result = await ingestIncomingChatGroupMessages(groupId, [
-						{
-							cursor: message.cursor,
-							createdAt: message.at,
-							opaqueMessageBase64: message.msg_64
+					pendingMessages.push({
+						cursor: message.cursor,
+						createdAt: message.at,
+						opaqueMessageBase64: message.msg_64
+					});
+
+					if (pendingMessages.length >= WATCH_INGEST_BATCH_SIZE) {
+						if (await flushPendingMessages()) {
+							return;
 						}
-					]);
-					if (isChatGroupRemoved(result.group)) {
-						await abort('removed from group');
-						return;
+					} else {
+						scheduleFlush();
 					}
 				}
 			} catch (error) {
 				const detail = error instanceof Error ? error.message : String(error);
-				if (isExpectedAbort(detail, expectedAbortReason)) {
+				if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
 					return;
 				}
 
 				throw error;
 			} finally {
+				await flushPendingMessages().catch(() => undefined);
 				clearCurrentWatch(handle);
 			}
 		})();
 
 		void handle.task.catch((error) => {
 			const detail = error instanceof Error ? error.message : String(error);
-			if (isExpectedAbort(detail, expectedAbortReason)) {
+			if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
 				return;
 			}
 

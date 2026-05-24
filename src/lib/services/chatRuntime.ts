@@ -24,6 +24,7 @@ function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 
 class AccountCoordinatorClientRegistry {
 	private readonly clients = new Map<string, cordnClient>();
+	private readonly coordinatorKeys = new Map<string, string>();
 
 	constructor(private readonly signer: NostrSigner) {}
 
@@ -32,6 +33,7 @@ class AccountCoordinatorClientRegistry {
 		const existingClient = this.clients.get(target.serverPubkey);
 
 		if (existingClient) {
+			this.coordinatorKeys.set(target.serverPubkey, coordinatorKey);
 			return existingClient;
 		}
 
@@ -42,17 +44,32 @@ class AccountCoordinatorClientRegistry {
 		} as ConstructorParameters<typeof cordnClient>[0]);
 
 		this.clients.set(target.serverPubkey, client);
+		this.coordinatorKeys.set(target.serverPubkey, coordinatorKey);
 		return client;
+	}
+
+	listCoordinatorKeys(): string[] {
+		return [...this.coordinatorKeys.values()];
+	}
+
+	primeClients(coordinatorKeys: Iterable<string>) {
+		for (const coordinatorKey of coordinatorKeys) {
+			this.getClient(coordinatorKey);
+		}
 	}
 
 	async disconnect(): Promise<void> {
 		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
 		this.clients.clear();
+		this.coordinatorKeys.clear();
 	}
 }
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
-let disconnectActiveClientsPromise: Promise<void> | null = null;
+let refreshActiveClientsPromise: Promise<void> | null = null;
+
+type CoordinatorClientRefreshHandler = (refreshClients: () => Promise<void>) => Promise<void>;
+const coordinatorClientRefreshHandlers = new Set<CoordinatorClientRefreshHandler>();
 
 function getAccountRegistryKey(account: IAccount): string {
 	return account.id;
@@ -80,6 +97,11 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 	return getAccountCoordinatorClientRegistry(account).getClient(coordinatorKey);
 }
 
+export function onCoordinatorClientsRefresh(handler: CoordinatorClientRefreshHandler): () => void {
+	coordinatorClientRefreshHandlers.add(handler);
+	return () => coordinatorClientRefreshHandlers.delete(handler);
+}
+
 export async function disconnectCoordinatorClients(account?: IAccount): Promise<void> {
 	const targetAccount = account ?? manager.getActive();
 	if (!targetAccount) {
@@ -96,30 +118,47 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 	accountClientRegistries.delete(registryKey);
 }
 
-async function disconnectActiveCoordinatorClients(): Promise<void> {
-	if (disconnectActiveClientsPromise) {
-		return disconnectActiveClientsPromise;
+async function replaceActiveCoordinatorClients(): Promise<void> {
+	if (refreshActiveClientsPromise) {
+		return refreshActiveClientsPromise;
 	}
 
-	disconnectActiveClientsPromise = disconnectCoordinatorClients().finally(() => {
-		disconnectActiveClientsPromise = null;
+	const account = manager.getActive();
+	if (!account) {
+		return;
+	}
+
+	const registryKey = getAccountRegistryKey(account);
+	const existingRegistry = accountClientRegistries.get(registryKey);
+	if (!existingRegistry) {
+		return;
+	}
+
+	const nextRegistry = new AccountCoordinatorClientRegistry(account.signer);
+	nextRegistry.primeClients(existingRegistry.listCoordinatorKeys());
+	accountClientRegistries.set(registryKey, nextRegistry);
+
+	refreshActiveClientsPromise = existingRegistry.disconnect().finally(() => {
+		refreshActiveClientsPromise = null;
 	});
 
-	return disconnectActiveClientsPromise;
+	return refreshActiveClientsPromise;
+}
+
+async function refreshActiveCoordinatorClients(): Promise<void> {
+	const refreshClients = () => replaceActiveCoordinatorClients();
+	const handlers = [...coordinatorClientRefreshHandlers];
+
+	if (handlers.length === 0) {
+		await refreshClients();
+		return;
+	}
+
+	await Promise.allSettled(handlers.map((handler) => handler(refreshClients)));
 }
 
 if (browser) {
-	const invalidateActiveCoordinatorClients = () => {
-		console.log('invalidating active coordinator clients');
-		void disconnectActiveCoordinatorClients();
-	};
-
-	document.addEventListener('visibilitychange', () => {
-		if (document.visibilityState === 'visible') {
-			invalidateActiveCoordinatorClients();
-		}
+	window.addEventListener('online', () => {
+		void refreshActiveCoordinatorClients();
 	});
-
-	window.addEventListener('pageshow', invalidateActiveCoordinatorClients);
-	window.addEventListener('online', invalidateActiveCoordinatorClients);
 }

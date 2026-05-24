@@ -5,12 +5,14 @@ import {
 	listChatGroupMessages,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
+import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 const MAX_PREVIEW_LENGTH = 80;
 
 type GroupPresenceRecord = {
 	lastReadCursor: number;
+	lastReadMentionCursor?: number;
 };
 
 type PersistedGroupPresence = {
@@ -58,7 +60,27 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 	chatGroupPresenceStore.groups = {
 		...chatGroupPresenceStore.groups,
 		[groupId]: {
+			...chatGroupPresenceStore.groups[groupId],
 			lastReadCursor: nextCursor
+		}
+	};
+	savePresence();
+}
+
+export function getChatGroupLastReadMentionCursor(groupId: string): number {
+	return chatGroupPresenceStore.groups[groupId]?.lastReadMentionCursor ?? 0;
+}
+
+export function markChatGroupMentionsRead(groupId: string, cursor: number) {
+	const previous = getChatGroupLastReadMentionCursor(groupId);
+	if (cursor <= previous) return;
+
+	chatGroupPresenceStore.groups = {
+		...chatGroupPresenceStore.groups,
+		[groupId]: {
+			...chatGroupPresenceStore.groups[groupId],
+			lastReadCursor: chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0,
+			lastReadMentionCursor: cursor
 		}
 	};
 	savePresence();
@@ -67,6 +89,33 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 export function getUnreadChatGroupMessageCount(groupId: string): number {
 	const lastReadCursor = getChatGroupLastReadCursor(groupId);
 	return listChatGroupMessages(groupId).filter((message) => message.cursor > lastReadCursor).length;
+}
+
+export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
+	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
+	const messages = listChatGroupMessages(groupId);
+	const byEventId = new Map(messages.map((message) => [message.id, message]));
+
+	return messages
+		.filter(
+			(message) =>
+				message.cursor > lastReadMentionCursor &&
+				message.sender !== pubkey &&
+				chatMessageReferencesPubkey(message.tags, pubkey)
+		)
+		.map((message) => {
+			if (message.kind !== 7) {
+				return { reference: message, target: message };
+			}
+
+			const targetId = message.tags.find((tag) => tag[0] === 'e')?.[1];
+			const target = targetId ? byEventId.get(targetId) : undefined;
+			return { reference: message, target: target ?? message };
+		});
+}
+
+export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
+	return listUnreadChatGroupReferenceTargets(groupId, pubkey).length;
 }
 
 export function getLatestChatGroupMessagePreview(groupId: string): string {

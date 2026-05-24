@@ -4,10 +4,12 @@
 	import { eventStore } from '../services/eventStore';
 	import { ProfileModel } from 'applesauce-core/models';
 	import Button from './ui/button/button.svelte';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import { logout } from '$lib/services/accountManager.svelte';
 	import { pubkeyToHexColor } from '$lib/utils';
 	import { Metadata } from 'nostr-tools/kinds';
+	import { nip19 } from 'nostr-tools';
 	import { cn } from '$lib/utils';
 	import { copyToClipboard } from '$lib/utils';
 
@@ -26,17 +28,20 @@
 		inlineClass?: string;
 	} = $props();
 
+	let showLogoutDialog = $state(false);
+
 	const isExtended = $derived(mode === 'extended');
 	const isInline = $derived(mode === 'inline');
 	const canShowLogout = $derived(mode === 'compact' && showLogout);
 
 	const profile = $derived(eventStore.model(ProfileModel, pubkey));
+	const npub = $derived(nip19.npubEncode(pubkey));
 	const displayName = $derived(
-		$profile?.name || $profile?.display_name || $profile?.nip05 || pubkey.slice(0, 8)
+		$profile?.name || $profile?.display_name || $profile?.nip05 || `${npub.slice(0, 12)}…`
 	);
 
 	async function copyPubkey() {
-		await copyToClipboard(pubkey);
+		await copyToClipboard(npub);
 	}
 	$effect(() => {
 		if ($profile) return;
@@ -92,7 +97,12 @@
 				</div>
 
 				{#if showLogout}
-					<Button variant="ghost" size="icon" onclick={logout} aria-label="Logout">
+					<Button
+						variant="ghost"
+						size="icon"
+						onclick={() => (showLogoutDialog = true)}
+						aria-label="Logout"
+					>
 						<LogOut class="h-4 w-4" />
 					</Button>
 				{/if}
@@ -133,9 +143,38 @@
 		{/if}
 
 		{#if canShowLogout}
-			<Button variant="ghost" size="icon" onclick={logout} aria-label="Logout">
+			<Button
+				variant="ghost"
+				size="icon"
+				onclick={() => (showLogoutDialog = true)}
+				aria-label="Logout"
+			>
 				<LogOut class="h-4 w-4" />
 			</Button>
 		{/if}
 	</div>
 {/if}
+
+<Dialog.Root bind:open={showLogoutDialog}>
+	<Dialog.Content class="sm:max-w-[425px]">
+		<Dialog.Header>
+			<Dialog.Title>Log out?</Dialog.Title>
+			<Dialog.Description>
+				Your account will be removed from this device. If you haven't backed up your keys, your data
+				will be lost.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showLogoutDialog = false)}>Cancel</Button>
+			<Button
+				variant="destructive"
+				onclick={() => {
+					showLogoutDialog = false;
+					logout();
+				}}
+			>
+				Log out
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

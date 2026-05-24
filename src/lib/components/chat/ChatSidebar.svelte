@@ -8,6 +8,7 @@
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import {
 		getLatestChatGroupMessagePreview,
+		getUnreadChatGroupReferenceCount,
 		getUnreadChatGroupMessageCount,
 		pruneChatGroupPresence
 	} from '$lib/services/chatGroupPresence.svelte';
@@ -57,7 +58,10 @@
 				chat.id,
 				{
 					preview: getLatestChatGroupMessagePreview(chat.id),
-					unreadCount: getUnreadChatGroupMessageCount(chat.id)
+					unreadCount: getUnreadChatGroupMessageCount(chat.id),
+					unreadReferenceCount: $activeAccount?.pubkey
+						? getUnreadChatGroupReferenceCount(chat.id, $activeAccount.pubkey)
+						: 0
 				}
 			])
 		)
@@ -137,7 +141,9 @@
 	}
 
 	function getChatSummary(groupId: string) {
-		return chatSummaries[groupId] ?? { preview: 'Group chat', unreadCount: 0 };
+		return (
+			chatSummaries[groupId] ?? { preview: 'Group chat', unreadCount: 0, unreadReferenceCount: 0 }
+		);
 	}
 
 	function closeMobileSidebar() {
@@ -330,6 +336,14 @@
 										class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
 									>
 										{summary.unreadCount}
+									</span>
+								{/if}
+								{#if summary.unreadReferenceCount > 0}
+									<span
+										class="absolute -right-1 -bottom-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] leading-none font-semibold text-white"
+										aria-label={`${summary.unreadReferenceCount} unread reference${summary.unreadReferenceCount === 1 ? '' : 's'}`}
+									>
+										@
 									</span>
 								{/if}
 							</div>

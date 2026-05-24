@@ -25,6 +25,8 @@ import {
 } from '$lib/services/chatGroupWatch.svelte';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import type {
+	ChatMessageDeleteTarget,
+	ChatMessageEditTarget,
 	ChatMessageReactionTarget,
 	ChatMessageReplyTarget,
 	StoredChatMessage
@@ -229,10 +231,14 @@ export async function sendGroupMessageAction(
 	groupId: string | undefined,
 	content: string,
 	replyTo?: ChatMessageReplyTarget,
-	reactionTo?: ChatMessageReactionTarget
+	reactionTo?: ChatMessageReactionTarget,
+	tags: string[][] = [],
+	editTo?: ChatMessageEditTarget,
+	deleteTo?: ChatMessageDeleteTarget
 ): Promise<StoredChatMessage | false> {
 	const text = content.trim();
-	if ((!text && !reactionTo) || !groupId || chatComposerActionsStore.sending) return false;
+	if ((!text && !reactionTo && !deleteTo) || !groupId || chatComposerActionsStore.sending)
+		return false;
 	chatComposerActionsStore.error = '';
 	chatComposerActionsStore.sending = true;
 	try {
@@ -240,7 +246,10 @@ export async function sendGroupMessageAction(
 			groupId,
 			content: reactionTo ? content : text,
 			replyTo,
-			reactionTo
+			reactionTo,
+			tags,
+			editTo,
+			deleteTo
 		});
 	} catch (error) {
 		chatComposerActionsStore.error =
