@@ -37,7 +37,7 @@
 		saveCustomChatReactions
 	} from './chatMessageRenderCache';
 
-	const REACTIONS = ['♥', '👍'] as const;
+	const REACTIONS = ['👍', '❤️', '😂', '😮', '🎉', '🔥'] as const;
 
 	let {
 		message,
@@ -365,17 +365,19 @@
 										side="top"
 										align={isOwn ? 'start' : 'end'}
 										sideOffset={8}
-										class="flex min-w-0 flex-row items-center gap-1 rounded-2xl p-1"
+										class="flex min-w-0 flex-row items-start gap-1 rounded-2xl p-1"
 									>
-										{#each availableReactions as reaction (reaction)}
-											<DropdownMenuItem
-												onSelect={() => onReact(message, reaction)}
-												class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
-											>
-												{reaction}
-											</DropdownMenuItem>
-										{/each}
-										<div class="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
+										<div class="grid max-h-[172px] grid-cols-6 gap-1 overflow-y-auto">
+											{#each availableReactions as reaction (reaction)}
+												<DropdownMenuItem
+													onSelect={() => onReact(message, reaction)}
+													class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
+												>
+													{reaction}
+												</DropdownMenuItem>
+											{/each}
+										</div>
+										<div class="flex items-center gap-1 border-l border-border/70 pl-2">
 											{#if customReactionOpen}
 												<form
 													class="flex items-center gap-1"

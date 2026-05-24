@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
+	import * as InputGroup from '$lib/components/ui/input-group';
 	import {
 		getChatGroupDisplayTitle,
 		getDirectChatTargetPubkeyFromWelcome,
@@ -40,6 +41,7 @@
 		acceptWelcomeAction,
 		refreshWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
@@ -47,6 +49,7 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
 	import { ProfileModel } from 'applesauce-core/models';
 	import { Metadata } from 'nostr-tools/kinds';
@@ -65,6 +68,8 @@
 
 	let collapsed = $state(false);
 	let notificationsOpen = $state(false);
+	let searchQuery = $state('');
+	let debouncedSearchQuery = $state('');
 	let groupProfileHints = $state<
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
@@ -78,6 +83,14 @@
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
+	const searchResults = $derived.by(() =>
+		searchChatMessages(debouncedSearchQuery, {
+			limit: 50,
+			activePubkey: $activeAccount?.pubkey,
+			profileHints: groupProfileHints
+		})
+	);
+	const isSearching = $derived(debouncedSearchQuery.trim().length >= 2);
 	const chatSummaries = $derived.by(() =>
 		Object.fromEntries(
 			chats.map((chat) => [
@@ -137,6 +150,10 @@
 		return resolve('/chat/[id]', { id: groupId });
 	}
 
+	function getMessageHref(groupId: string, messageKey: string) {
+		return `${getGroupHref(groupId)}?message=${encodeURIComponent(messageKey)}`;
+	}
+
 	function getChatHomeHref() {
 		return resolve('/chat');
 	}
@@ -185,6 +202,15 @@
 		$mobileSidebarOpen = false;
 	}
 
+	function formatSearchResultTime(createdAt: number) {
+		return new Date(createdAt).toLocaleString(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
+	}
+
 	async function refreshWelcomeNotifications() {
 		if (!$activeAccount) return;
 		await refreshWelcomeNotificationsAction();
@@ -201,6 +227,15 @@
 	$effect(() => {
 		void chats.length;
 		pruneChatGroupPresence();
+	});
+
+	$effect(() => {
+		const nextQuery = searchQuery;
+		const timer = setTimeout(() => {
+			debouncedSearchQuery = nextQuery;
+		}, 200);
+
+		return () => clearTimeout(timer);
 	});
 
 	$effect(() => {
@@ -328,6 +363,27 @@
 		</Button>
 	{/if}
 
+	{#if !collapsed}
+		<div class="pb-3">
+			<InputGroup.Root>
+				<InputGroup.Input
+					bind:value={searchQuery}
+					type="search"
+					placeholder="Search messages..."
+					aria-label="Search messages"
+				/>
+				<InputGroup.Addon>
+					<Search class="size-4" />
+				</InputGroup.Addon>
+				{#if isSearching}
+					<InputGroup.Addon align="inline-end">
+						<InputGroup.Text>{searchResults.length} results</InputGroup.Text>
+					</InputGroup.Addon>
+				{/if}
+			</InputGroup.Root>
+		</div>
+	{/if}
+
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-4">
 		<a
 			href={getCreateGroupHref()}
@@ -348,78 +404,117 @@
 			{/if}
 		</a>
 
-		{#if chats.length === 0 && !collapsed}
+		{#if isSearching && !collapsed}
+			<div class="space-y-2">
+				<div class="flex items-center justify-between px-1">
+					<p class="text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+						Search results
+					</p>
+					<p class="text-xs text-muted-foreground">Max 50</p>
+				</div>
+
+				{#if searchResults.length === 0}
+					<div
+						class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
+					>
+						No messages found for “{debouncedSearchQuery.trim()}”.
+					</div>
+				{:else}
+					<div class="space-y-1">
+						{#each searchResults as result (result.messageKey)}
+							<a
+								href={getMessageHref(result.groupId, result.messageKey)}
+								onclick={closeMobileSidebar}
+								class="block rounded-xl border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<p class="truncate font-medium text-foreground">{result.groupTitle}</p>
+									<p class="shrink-0 text-[10px] text-muted-foreground">
+										{formatSearchResultTime(result.createdAt)}
+									</p>
+								</div>
+								<p class="mt-1 line-clamp-2 text-xs leading-5">{result.snippet}</p>
+								<p class="mt-1 truncate text-[10px] text-muted-foreground">
+									{result.sender.slice(0, 12)}…
+								</p>
+							</a>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{:else if chats.length === 0 && !collapsed}
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>
 				No groups yet. Create your first group.
 			</div>
-		{/if}
-
-		{#each groupedChats as coordinatorGroup (coordinatorGroup.pubkey)}
-			<div
-				class={`space-y-2 border-l-4 pl-2 ${collapsed ? 'py-1' : 'rounded-r-xl border-y border-r border-border/60 bg-background/40 p-2 pl-2'}`}
-				style={`border-left-color: ${coordinatorGroup.color};`}
-			>
-				<a
-					href={getCoordinatorHref(coordinatorGroup.pubkey)}
-					onclick={closeMobileSidebar}
-					class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-					aria-label={`Open ${coordinatorGroup.label}`}
-					title={coordinatorGroup.label}
+		{:else}
+			{#each groupedChats as coordinatorGroup (coordinatorGroup.pubkey)}
+				<div
+					class={`space-y-2 border-l-4 pl-2 ${collapsed ? 'py-1' : 'rounded-r-xl border-y border-r border-border/60 bg-background/40 p-2 pl-2'}`}
+					style={`border-left-color: ${coordinatorGroup.color};`}
 				>
-					{#if collapsed}
-						<span class="sr-only">{coordinatorGroup.label}</span>
-						<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"></span>
-					{:else}
-						<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
-							{coordinatorGroup.label}
-						</p>
-					{/if}
-				</a>
+					<a
+						href={getCoordinatorHref(coordinatorGroup.pubkey)}
+						onclick={closeMobileSidebar}
+						class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+						aria-label={`Open ${coordinatorGroup.label}`}
+						title={coordinatorGroup.label}
+					>
+						{#if collapsed}
+							<span class="sr-only">{coordinatorGroup.label}</span>
+							<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"
+							></span>
+						{:else}
+							<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
+								{coordinatorGroup.label}
+							</p>
+						{/if}
+					</a>
 
-				<div class="space-y-1">
-					{#each coordinatorGroup.chats as chat (chat.id)}
-						{@const summary = getChatSummary(chat.id)}
-						<a
-							href={getGroupHref(chat.id)}
-							onclick={closeMobileSidebar}
-							class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : 'ml-1'} ${isActive(getGroupHref(chat.id)) ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
-						>
-							<div class="relative shrink-0">
-								<ChatGroupAvatar group={chat} />
-								{#if summary.unreadCount > 0}
-									<span
-										class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-									>
-										{summary.unreadCount}
-									</span>
-								{/if}
-								{#if summary.unreadReferenceCount > 0}
-									<span
-										class="absolute -right-1 -bottom-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] leading-none font-semibold text-white"
-										aria-label={`${summary.unreadReferenceCount} unread reference${summary.unreadReferenceCount === 1 ? '' : 's'}`}
-									>
-										@
-									</span>
-								{/if}
-							</div>
-
-							{#if !collapsed}
-								<div class="min-w-0 flex-1 overflow-hidden">
-									<div class="flex items-start justify-between gap-2">
-										<p class="truncate font-medium">{getChatTitle(chat)}</p>
-									</div>
-									<p class="truncate text-xs leading-5 text-muted-foreground">
-										{summary.preview}
-									</p>
+					<div class="space-y-1">
+						{#each coordinatorGroup.chats as chat (chat.id)}
+							{@const summary = getChatSummary(chat.id)}
+							<a
+								href={getGroupHref(chat.id)}
+								onclick={closeMobileSidebar}
+								class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : 'ml-1'} ${isActive(getGroupHref(chat.id)) ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+							>
+								<div class="relative shrink-0">
+									<ChatGroupAvatar group={chat} />
+									{#if summary.unreadCount > 0}
+										<span
+											class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+										>
+											{summary.unreadCount}
+										</span>
+									{/if}
+									{#if summary.unreadReferenceCount > 0}
+										<span
+											class="absolute -right-1 -bottom-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] leading-none font-semibold text-white"
+											aria-label={`${summary.unreadReferenceCount} unread reference${summary.unreadReferenceCount === 1 ? '' : 's'}`}
+										>
+											@
+										</span>
+									{/if}
 								</div>
-							{/if}
-						</a>
-					{/each}
+
+								{#if !collapsed}
+									<div class="min-w-0 flex-1 overflow-hidden">
+										<div class="flex items-start justify-between gap-2">
+											<p class="truncate font-medium">{getChatTitle(chat)}</p>
+										</div>
+										<p class="truncate text-xs leading-5 text-muted-foreground">
+											{summary.preview}
+										</p>
+									</div>
+								{/if}
+							</a>
+						{/each}
+					</div>
 				</div>
-			</div>
-		{/each}
+			{/each}
+		{/if}
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">

@@ -1,11 +1,11 @@
 - [x] Lazy connect with stable client to avoid leak identity when not necessary
 - [x] When reacting to a message it always scrolls to the bottom of the chat
-- Make app pwa
+- [x] Make app pwa
 - Fix other reported bugs
-- Make onboarding more straightforward and publish a last resort key package, hide advanced with toggles to show other options like just publish regular key packages during onboarding
+- [x] Make onboarding more straightforward and publish a last resort key package, hide advanced with toggles to show other options like just publish regular key packages during onboarding
 - Allow backing up generated keys and edit profile
 - [x]User tagging in chat '@user' 
-- More default reactions
+- [x] More default reactions
 - [x]Reply/reaction is a bit awkward on mobile, maybe slide to reply, long press to react?
 - [x] Would be nice to have a "Sure you want to log out" dialog
 - [x] Improve msg ingestion on catch up. Currently it works well, but feels linear. Maybe we can have an 'ingestMany' method or just allow ingesting a bunch of messages at once
@@ -13,3 +13,4 @@
 - Allow renovating ephemeral identity
 - [x] Failed messages always appear at the bottom of the chat, even if there are newer messages
 - [x] Use tanstack query for centralizing fetching strategy and lists for virtualized lists for chats with many messages
+- [x] Add search functionality to chats

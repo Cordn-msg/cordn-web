@@ -87,7 +87,7 @@
 			error = '';
 
 			const signer = new NostrConnectSigner({
-				relays: ['wss://relay.nsec.app', 'wss://relay.damus.io']
+				relays: ['wss://relay.primal.net', 'wss://relay.nostr.net', 'wss://relay.damus.io']
 			});
 
 			// Generate nostr connect URI with app metadata and permissions

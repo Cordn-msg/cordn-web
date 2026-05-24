@@ -2,6 +2,7 @@
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
+	import { page } from '$app/state';
 	import { getChatGroupDisplayTitle } from './chatGroupDisplay';
 	import type { ChatMentionCandidate, ChatMentionReference, ChatMessage } from './chat.types';
 	import {
@@ -64,6 +65,7 @@
 	let selectedMentions = $state<ChatMentionReference[]>([]);
 	let composerFocusKey = $state(0);
 	let optimisticMessages = $state<ChatMessage[]>([]);
+	let handledMessageTarget = $state('');
 	let groupProfileHints = $state<
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
@@ -467,6 +469,14 @@
 	$effect(() => {
 		if (!groupId || !group) return;
 		markChatGroupRead(groupId, group.lastCursor);
+	});
+
+	$effect(() => {
+		const targetMessage = page.url.searchParams.get('message') ?? '';
+		if (!targetMessage || targetMessage === handledMessageTarget || messages.length === 0) return;
+
+		handledMessageTarget = targetMessage;
+		void messageListRef?.scrollToMessage(targetMessage);
 	});
 
 	$effect(() => {
