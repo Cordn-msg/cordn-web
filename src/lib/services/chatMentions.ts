@@ -10,10 +10,12 @@ export interface SerializedChatMentions {
 
 export type ChatMentionTextPart =
 	| { type: 'text'; text: string }
-	| { type: 'profile'; text: string; pubkey: string };
+	| { type: 'profile'; text: string; pubkey: string }
+	| { type: 'link'; text: string; href: string };
 
 const NOSTR_PROFILE_REFERENCE_PATTERN =
 	/nostr:((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
+const URL_PATTERN = /https?:\/\/[^\s<]+[^\s<.,!?;:()\[\]{}"']/g;
 const TYPED_NPUB_PATTERN =
 	/(?:^|\s)(?:nostr:)?((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
 const TYPED_HEX_PUBKEY_PATTERN = /(?:^|\s)([0-9a-fA-F]{64})(?=$|\s|[.,!?;:])/g;
@@ -72,6 +74,26 @@ export function serializeChatProfileMentions(
 	};
 }
 
+function appendTextWithLinks(parts: ChatMentionTextPart[], text: string) {
+	let lastIndex = 0;
+
+	for (const match of text.matchAll(URL_PATTERN)) {
+		const index = match.index ?? 0;
+		const href = match[0];
+
+		if (index > lastIndex) {
+			parts.push({ type: 'text', text: text.slice(lastIndex, index) });
+		}
+
+		parts.push({ type: 'link', text: href, href });
+		lastIndex = index + href.length;
+	}
+
+	if (lastIndex < text.length) {
+		parts.push({ type: 'text', text: text.slice(lastIndex) });
+	}
+}
+
 export function parseChatProfileMentions(content: string): ChatMentionTextPart[] {
 	const parts: ChatMentionTextPart[] = [];
 	let lastIndex = 0;
@@ -82,7 +104,7 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 		const index = match.index ?? 0;
 
 		if (index > lastIndex) {
-			parts.push({ type: 'text', text: content.slice(lastIndex, index) });
+			appendTextWithLinks(parts, content.slice(lastIndex, index));
 		}
 
 		try {
@@ -92,17 +114,17 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 			} else if (decoded.type === 'nprofile') {
 				parts.push({ type: 'profile', text, pubkey: decoded.data.pubkey });
 			} else {
-				parts.push({ type: 'text', text });
+				appendTextWithLinks(parts, text);
 			}
 		} catch {
-			parts.push({ type: 'text', text });
+			appendTextWithLinks(parts, text);
 		}
 
 		lastIndex = index + text.length;
 	}
 
 	if (lastIndex < content.length) {
-		parts.push({ type: 'text', text: content.slice(lastIndex) });
+		appendTextWithLinks(parts, content.slice(lastIndex));
 	}
 
 	return parts.length ? parts : [{ type: 'text', text: content }];

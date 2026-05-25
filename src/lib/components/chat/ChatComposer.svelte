@@ -257,7 +257,9 @@
 						<Pencil class="size-3.5" />
 						<span>Editing message</span>
 					</div>
-					<p class="line-clamp-2 text-sm break-words text-foreground/80">{editTo.text}</p>
+					<p class="line-clamp-2 text-sm [overflow-wrap:anywhere] break-words text-foreground/80">
+						{editTo.text}
+					</p>
 				</div>
 				<Button
 					type="button"
@@ -282,7 +284,9 @@
 						<span>Replying to</span>
 						<ProfileCard pubkey={replyTo.author} mode="inline" showInlineAvatar={true} />
 					</div>
-					<p class="line-clamp-2 text-sm break-words text-foreground/80">{replyTo.text}</p>
+					<p class="line-clamp-2 text-sm [overflow-wrap:anywhere] break-words text-foreground/80">
+						{replyTo.text}
+					</p>
 				</div>
 				<Button
 					type="button"
@@ -352,7 +356,7 @@
 					{disabled}
 					onkeydown={handleKeyDown}
 					oninput={handleInput}
-					class="min-h-11 w-full rounded-xl border border-input bg-card text-sm shadow-xs"
+					class="min-h-11 w-full min-w-0 overflow-x-hidden rounded-xl border border-input bg-card text-sm break-all whitespace-pre-wrap shadow-xs"
 					style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
 				/>
 			</div>

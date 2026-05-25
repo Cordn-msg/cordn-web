@@ -280,7 +280,7 @@
 		<p class="px-2 text-center text-[11px] font-medium text-muted-foreground">{message.dayLabel}</p>
 	{/if}
 
-	<article class="flex items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
+	<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
 		<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
 			{#if showAvatar}
 				{#if $profile?.picture}
@@ -298,7 +298,7 @@
 
 		<div
 			role="presentation"
-			class="group flex max-w-[min(100%,48rem)] min-w-0 items-end gap-1.5 sm:gap-2"
+			class="group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2"
 			class:flex-row-reverse={isOwn}
 			onpointerenter={activateInteractionControls}
 			onfocusin={activateInteractionControls}
@@ -551,7 +551,7 @@
 								</div>
 								<p
 									class={cn(
-										'line-clamp-2 text-sm break-words',
+										'line-clamp-2 text-sm [overflow-wrap:anywhere] break-words',
 										isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
 									)}
 								>
@@ -560,6 +560,20 @@
 											<span class="inline-flex rounded-full font-semibold">
 												@<ProfileCard pubkey={part.pubkey} mode="inline" />
 											</span>
+										{:else if part.type === 'link'}
+											<a
+												href={part.href}
+												target="_blank"
+												rel="noreferrer noopener"
+												class={cn(
+													'break-all underline underline-offset-2',
+													isOwn
+														? 'text-primary-foreground hover:text-primary-foreground/80'
+														: 'text-foreground hover:text-foreground/80'
+												)}
+											>
+												{part.text}
+											</a>
 										{:else}
 											{part.text}
 										{/if}
@@ -569,7 +583,7 @@
 						{/if}
 
 						{#if !message.deleted}
-							<p class="[overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+							<p class="min-w-0 break-all whitespace-pre-wrap">
 								{#each messageParts as part, index (`${message.id}:part:${index}`)}
 									{#if part.type === 'profile'}
 										<span
@@ -580,6 +594,20 @@
 										>
 											@<ProfileCard pubkey={part.pubkey} mode="inline" />
 										</span>
+									{:else if part.type === 'link'}
+										<a
+											href={part.href}
+											target="_blank"
+											rel="noreferrer noopener"
+											class={cn(
+												'break-all underline underline-offset-2',
+												isOwn
+													? 'text-primary-foreground hover:text-primary-foreground/80'
+													: 'text-foreground hover:text-foreground/80'
+											)}
+										>
+											{part.text}
+										</a>
 									{:else}
 										{part.text}
 									{/if}
@@ -648,7 +676,7 @@
 			</div>
 
 			<div
-				class="flex shrink-0 items-center gap-1 px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
+				class="flex shrink-0 items-center gap-1 self-end px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
 			>
 				<p>{message.timeLabel}</p>
 				{#if message.edited}
