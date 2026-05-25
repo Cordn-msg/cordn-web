@@ -167,8 +167,13 @@ async function loadGroups(ownerPubkey?: string) {
 		groupsLoaded = false;
 		return;
 	}
+	const groupRecords = await storage.listGroups();
+	const hasLegacyGroups = groupRecords.some((group) => !group.ownerPubkey);
+	const recordsToLoad = hasLegacyGroups
+		? groupRecords
+		: groupRecords.filter((group) => normalizePubKey(group.ownerPubkey ?? '') === normalizedOwner);
 	const groups = await Promise.all(
-		(await storage.listGroups(normalizedOwner)).map(async (group) => {
+		recordsToLoad.map(async (group) => {
 			const fullGroup = await storage.getGroup(group.id);
 			if (!fullGroup) {
 				throw new Error(`Stored group ${group.id} not found`);
@@ -176,7 +181,28 @@ async function loadGroups(ownerPubkey?: string) {
 			return fromStoredGroupData(fullGroup);
 		})
 	);
-	chatGroupsStore.groups = groups;
+	const visibleGroups = hasLegacyGroups
+		? groups.filter((group) => {
+				if (group.ownerPubkey) {
+					return normalizePubKey(group.ownerPubkey) === normalizedOwner;
+				}
+
+				try {
+					return listGroupMembers(decodeStoredGroupState(group)).some(
+						(member) => normalizePubKey(member.stablePubkey) === normalizedOwner
+					);
+				} catch {
+					return false;
+				}
+			})
+		: groups;
+	const migratedGroups = visibleGroups.map((group) =>
+		group.ownerPubkey ? group : { ...group, ownerPubkey: normalizedOwner }
+	);
+	chatGroupsStore.groups = migratedGroups;
+	if (migratedGroups.some((group, index) => group !== visibleGroups[index])) {
+		void persistGroups(migratedGroups);
+	}
 	groupsLoaded = true;
 }
 
