@@ -513,9 +513,6 @@
 									<p class="mt-1 text-sm text-muted-foreground">
 										{group.metadata?.description || 'Coordinator-assisted messaging'}
 									</p>
-									<p class="mt-2 font-mono text-xs break-all text-muted-foreground">
-										{group.id}
-									</p>
 								</a>
 							{/each}
 						{/if}

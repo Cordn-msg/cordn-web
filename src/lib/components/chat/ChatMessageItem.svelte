@@ -38,6 +38,14 @@
 	} from './chatMessageRenderCache';
 
 	const REACTIONS = ['👍', '❤️', '😂', '😮', '🎉', '🔥'] as const;
+	const MESSAGE_TEXT_WRAP_CLASS =
+		'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere] break-words';
+	const MESSAGE_LINK_WRAP_CLASS =
+		'underline underline-offset-2 [overflow-wrap:anywhere] break-words';
+
+	function openExternalLink(href: string) {
+		window.open(href, '_blank', 'noopener,noreferrer');
+	}
 
 	let {
 		message,
@@ -551,7 +559,7 @@
 								</div>
 								<p
 									class={cn(
-										'line-clamp-2 text-sm [overflow-wrap:anywhere] break-words',
+										`line-clamp-2 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
 										isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
 									)}
 								>
@@ -566,7 +574,7 @@
 												target="_blank"
 												rel="noreferrer noopener"
 												class={cn(
-													'break-all underline underline-offset-2',
+													MESSAGE_LINK_WRAP_CLASS,
 													isOwn
 														? 'text-primary-foreground hover:text-primary-foreground/80'
 														: 'text-foreground hover:text-foreground/80'
@@ -583,7 +591,7 @@
 						{/if}
 
 						{#if !message.deleted}
-							<p class="min-w-0 break-all whitespace-pre-wrap">
+							<p class={MESSAGE_TEXT_WRAP_CLASS}>
 								{#each messageParts as part, index (`${message.id}:part:${index}`)}
 									{#if part.type === 'profile'}
 										<span
@@ -595,19 +603,18 @@
 											@<ProfileCard pubkey={part.pubkey} mode="inline" />
 										</span>
 									{:else if part.type === 'link'}
-										<a
-											href={part.href}
-											target="_blank"
-											rel="noreferrer noopener"
+										<button
+											type="button"
+											onclick={() => openExternalLink(part.href)}
 											class={cn(
-												'break-all underline underline-offset-2',
+												MESSAGE_LINK_WRAP_CLASS,
 												isOwn
 													? 'text-primary-foreground hover:text-primary-foreground/80'
 													: 'text-foreground hover:text-foreground/80'
 											)}
 										>
 											{part.text}
-										</a>
+										</button>
 									{:else}
 										{part.text}
 									{/if}

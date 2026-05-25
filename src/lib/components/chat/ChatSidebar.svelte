@@ -5,44 +5,25 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
+	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
-	import {
-		getChatGroupDisplayTitle,
-		getDirectChatTargetPubkeyFromWelcome,
-		resolveWelcomeDisplayName
-	} from '$lib/components/chat/chatGroupDisplay';
-	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
+	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import {
 		getLatestChatGroupMessagePreview,
 		getUnreadChatGroupReferenceCount,
 		getUnreadChatGroupMessageCount,
 		pruneChatGroupPresence
 	} from '$lib/services/chatGroupPresence.svelte';
-	import {
-		getChatGroup,
-		listChatGroupMembers,
-		listChatGroups
-	} from '$lib/services/chatGroups.svelte';
+	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getCoordinatorColor,
 		getChatCoordinator,
 		listChatCoordinators
 	} from '$lib/services/chatCoordinators.svelte';
-	import {
-		getUnreadWelcomeNotificationCount,
-		listWelcomeNotifications,
-		markAllWelcomeNotificationsRead,
-		markWelcomeNotificationRead,
-		chatWelcomeNotificationsStore
-	} from '$lib/services/chatWelcomeNotifications.svelte';
-	import {
-		acceptWelcomeAction,
-		refreshWelcomeNotificationsAction
-	} from '$lib/services/chatUiActions.svelte';
+	import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -53,14 +34,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
-	import { untrack } from 'svelte';
 	import type { Writable } from 'svelte/store';
-	import { eventStore } from '$lib/services/eventStore';
-	import { addressLoader } from '$lib/services/loaders.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
-	import { normalizePubKey } from '$lib/utils';
 
 	let {
 		mobileSidebarOpen
@@ -83,7 +57,6 @@
 		})
 	);
 	const coordinators = $derived.by(() => listChatCoordinators());
-	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
 	const searchResults = $derived.by(() =>
 		searchChatMessages(debouncedSearchQuery, {
@@ -152,14 +125,11 @@
 		return resolve('/chat/[id]', { id: groupId });
 	}
 
-	function getMessageHref(groupId: string, messageKey: string) {
-		const targetHref = resolve('/chat/[id]', { id: groupId });
-		return `${targetHref}?message=${encodeURIComponent(messageKey)}`;
-	}
-
 	async function navigateToMessage(groupId: string, messageKey: string) {
 		closeMobileSidebar();
-		await goto(getMessageHref(groupId, messageKey));
+		const targetUrl = new URL(resolve('/chat/[id]', { id: groupId }), page.url);
+		targetUrl.searchParams.set('message', messageKey);
+		await goto(targetUrl);
 	}
 
 	function getChatHomeHref() {
@@ -174,21 +144,16 @@
 		return resolve('/chat/config');
 	}
 
+	function getNotificationsButtonLabel() {
+		if (unreadWelcomeNotifications > 0) {
+			return `${unreadWelcomeNotifications} unread welcome${unreadWelcomeNotifications === 1 ? '' : 's'}`;
+		}
+
+		return 'No unread welcomes';
+	}
+
 	function getCoordinatorHref(pubkey: string) {
 		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey: pubkey });
-	}
-
-	function getNotificationCoordinatorLabel(pubkey: string) {
-		return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
-	}
-
-	function getNotificationGroupLabel(groupId: string) {
-		const group = getChatGroup(groupId);
-		return group ? getChatTitle(group) : 'Joined group';
-	}
-
-	function getWelcomeAvatarFallback(notification: (typeof welcomeNotifications)[number]) {
-		return notification.preview?.icon || notification.preview?.name?.slice(0, 1) || '#';
 	}
 
 	function getChatSummary(groupId: string) {
@@ -219,19 +184,6 @@
 		});
 	}
 
-	async function refreshWelcomeNotifications() {
-		if (!$activeAccount) return;
-		await refreshWelcomeNotificationsAction();
-	}
-
-	async function acceptWelcome(notificationId: string) {
-		if (!$activeAccount) return;
-		const accepted = await acceptWelcomeAction(notificationId);
-		if (accepted) {
-			notificationsOpen = false;
-		}
-	}
-
 	$effect(() => {
 		void chats.length;
 		pruneChatGroupPresence();
@@ -244,48 +196,6 @@
 		}, 200);
 
 		return () => clearTimeout(timer);
-	});
-
-	$effect(() => {
-		const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
-		const chatPubkeys = [
-			...new Set(
-				chats.flatMap((chat) =>
-					listChatGroupMembers(chat.id)
-						.map((member) => normalizePubKey(member.stablePubkey))
-						.filter((pubkey) => pubkey && pubkey !== activePubkey)
-				)
-			)
-		];
-		const welcomePubkeys = [
-			...new Set(
-				welcomeNotifications
-					.map((n) => getDirectChatTargetPubkeyFromWelcome(n.preview?.name ?? ''))
-					.filter((pubkey) => pubkey && pubkey !== activePubkey)
-			)
-		];
-		const allPubkeys = [...new Set([...chatPubkeys, ...welcomePubkeys])];
-		const subscriptions = allPubkeys.flatMap((pubkey) => [
-			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => groupProfileHints[pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	const sidebarClass = $derived(collapsed ? 'md:w-20 px-2.5' : 'md:w-72 px-3');
@@ -515,195 +425,65 @@
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		<Dialog.Root bind:open={notificationsOpen}>
-			<Dialog.Trigger
-				class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${notificationsOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
-			>
-				<div
-					class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+		<div class="grid grid-cols-2 gap-2">
+			<Dialog.Root bind:open={notificationsOpen}>
+				<Dialog.Trigger
+					class={`relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${notificationsOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+					aria-label="Open notifications"
+					title={getNotificationsButtonLabel()}
 				>
-					<Inbox class="size-4" />
-					{#if unreadWelcomeNotifications > 0}
-						<span
-							class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-						>
-							{unreadWelcomeNotifications}
-						</span>
-					{/if}
-				</div>
-
-				{#if !collapsed}
-					<div class="min-w-0 flex-1 text-left">
-						<p class="truncate font-medium">Notifications</p>
-						<p class="truncate text-xs text-muted-foreground">
-							{unreadWelcomeNotifications > 0
-								? `${unreadWelcomeNotifications} unread welcome${unreadWelcomeNotifications === 1 ? '' : 's'}`
-								: 'No unread welcomes'}
-						</p>
-					</div>
-				{/if}
-			</Dialog.Trigger>
-
-			<Dialog.Content class="sm:max-w-2xl">
-				<Dialog.Header>
-					<Dialog.Title>Welcome notifications</Dialog.Title>
-					<Dialog.Description>
-						Unified inbox for welcomes fetched across known coordinators.
-					</Dialog.Description>
-				</Dialog.Header>
-
-				<div class="flex items-center justify-between gap-2">
-					<p class="text-sm text-muted-foreground">
-						{welcomeNotifications.length} welcome{welcomeNotifications.length === 1 ? '' : 's'} cached
-					</p>
-					<div class="flex gap-2">
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onclick={markAllWelcomeNotificationsRead}
-						>
-							Mark all as read
-						</Button>
-						<Button
-							type="button"
-							size="sm"
-							onclick={refreshWelcomeNotifications}
-							disabled={chatWelcomeNotificationsStore.loading || !$activeAccount}
-						>
-							{chatWelcomeNotificationsStore.loading ? 'Refreshing…' : 'Refresh'}
-						</Button>
-					</div>
-				</div>
-
-				{#if chatWelcomeNotificationsStore.error}
-					<p class="text-sm text-destructive">{chatWelcomeNotificationsStore.error}</p>
-				{/if}
-
-				<ScrollArea.Root class="mt-4 h-[26rem] rounded-xl border border-border">
-					<div class="space-y-3 p-3">
-						{#if !$activeAccount}
-							<div
-								class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+					<div
+						class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+					>
+						<Inbox class="size-4" />
+						{#if unreadWelcomeNotifications > 0}
+							<span
+								class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
 							>
-								Log in to fetch welcomes.
-							</div>
-						{:else if welcomeNotifications.length === 0}
-							<div
-								class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-							>
-								No welcomes fetched yet.
-							</div>
-						{:else}
-							{#each welcomeNotifications as notification (notification.id)}
-								<div
-									class={`rounded-xl border px-4 py-3 ${notification.readAt ? 'border-border bg-background/50' : 'border-primary/40 bg-primary/5'}`}
-								>
-									<div class="flex items-start justify-between gap-3">
-										<div class="flex min-w-0 gap-3">
-											<Avatar class="h-10 w-10 shrink-0 border border-border bg-background">
-												{#if notification.preview?.imageUrl}
-													<AvatarImage
-														src={notification.preview.imageUrl}
-														alt={notification.preview.name}
-														class="object-cover"
-													/>
-												{/if}
-												<AvatarFallback class="bg-background text-sm font-medium">
-													{getWelcomeAvatarFallback(notification)}
-												</AvatarFallback>
-											</Avatar>
-											<div class="min-w-0 space-y-1">
-												<p class="font-medium">
-													{resolveWelcomeDisplayName({
-														welcomeName: notification.preview?.name ?? '',
-														profileHints: groupProfileHints
-													})}
-												</p>
-												{#if notification.preview?.description}
-													<p class="line-clamp-2 text-sm text-muted-foreground">
-														{notification.preview.description}
-													</p>
-												{/if}
-												<p class="text-xs text-muted-foreground">
-													{getNotificationCoordinatorLabel(notification.coordinatorKey)}
-												</p>
-												<p class="text-xs text-muted-foreground">
-													{new Date(notification.at).toLocaleString()}
-												</p>
-												{#if notification.acceptedGroupId}
-													<p class="text-xs text-emerald-600 dark:text-emerald-400">
-														Accepted into {getNotificationGroupLabel(notification.acceptedGroupId)}
-													</p>
-												{/if}
-											</div>
-										</div>
-										<div class="flex shrink-0 gap-2">
-											{#if !notification.acceptedGroupId}
-												<Button
-													type="button"
-													size="sm"
-													onclick={() => acceptWelcome(notification.id)}
-												>
-													Accept
-												</Button>
-											{/if}
-											{#if !notification.readAt}
-												<Button
-													type="button"
-													variant="outline"
-													size="sm"
-													onclick={() => markWelcomeNotificationRead(notification.id)}
-												>
-													Mark read
-												</Button>
-											{/if}
-											<Button
-												href={getCoordinatorHref(notification.coordinatorKey)}
-												variant="outline"
-												size="sm"
-											>
-												Open coordinator
-											</Button>
-										</div>
-									</div>
-								</div>
-							{/each}
+								{unreadWelcomeNotifications}
+							</span>
 						{/if}
 					</div>
-					<ScrollArea.Scrollbar orientation="vertical" />
-				</ScrollArea.Root>
-			</Dialog.Content>
-		</Dialog.Root>
+				</Dialog.Trigger>
 
-		<a
-			href={getConfigHref()}
-			onclick={closeMobileSidebar}
-			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
-		>
-			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
-			>
-				<Bolt class="size-4" />
-			</div>
+				<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),42rem)] sm:max-w-2xl">
+					<Dialog.Header>
+						<Dialog.Title>Welcome notifications</Dialog.Title>
+						<Dialog.Description>
+							Unified inbox for welcomes fetched across known coordinators.
+						</Dialog.Description>
+					</Dialog.Header>
 
-			{#if !collapsed}
-				<div class="min-w-0">
-					<p class="truncate font-medium">Config</p>
-					<p class="truncate text-xs text-muted-foreground">Preferences</p>
-				</div>
-			{/if}
-		</a>
+					<WelcomeNotificationsPanel maxHeightClass="h-[min(26rem,60vh)]" />
+				</Dialog.Content>
+			</Dialog.Root>
 
-		{#if $activeAccount}
 			<a
 				href={getConfigHref()}
 				onclick={closeMobileSidebar}
-				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+				class={`flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 				aria-label="Open config"
+				title="Open config"
 			>
-				<ProfileCard pubkey={$activeAccount.pubkey} showName={!collapsed} />
+				<div
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+				>
+					<Bolt class="size-4" />
+				</div>
 			</a>
+		</div>
+
+		{#if $activeAccount}
+			<div
+				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+			>
+				<ProfileCard
+					pubkey={$activeAccount.pubkey}
+					showName={!collapsed}
+					showLogout={true}
+					logoutButtonVariant="destructive"
+				/>
+			</div>
 		{:else}
 			<div
 				class={`rounded-xl border border-border bg-background px-3 py-3 ${collapsed ? 'flex justify-center px-2' : ''}`}

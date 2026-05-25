@@ -15,7 +15,7 @@ export type ChatMentionTextPart =
 
 const NOSTR_PROFILE_REFERENCE_PATTERN =
 	/nostr:((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
-const URL_PATTERN = /https?:\/\/[^\s<]+[^\s<.,!?;:()\[\]{}"']/g;
+const URL_PATTERN = /https?:\/\/[^\s<]+[^\s<.,!?;:()[\]{}"']/g;
 const TYPED_NPUB_PATTERN =
 	/(?:^|\s)(?:nostr:)?((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
 const TYPED_HEX_PUBKEY_PATTERN = /(?:^|\s)([0-9a-fA-F]{64})(?=$|\s|[.,!?;:])/g;

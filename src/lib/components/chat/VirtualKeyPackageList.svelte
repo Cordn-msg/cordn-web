@@ -31,6 +31,8 @@
 		emptyMessage?: string;
 		maxHeightClass?: string;
 		contentClass?: string;
+		itemHeight?: number;
+		itemGap?: number;
 		onVisibleItemsChange?: (itemIds: string[]) => void;
 	};
 
@@ -39,6 +41,8 @@
 		emptyMessage = 'No key packages available.',
 		maxHeightClass = 'max-h-[24rem]',
 		contentClass = 'rounded-xl border border-border p-3',
+		itemHeight = ESTIMATED_ROW_HEIGHT,
+		itemGap = 12,
 		onVisibleItemsChange
 	}: Props = $props();
 
@@ -48,7 +52,7 @@
 	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
 		count: 0,
 		getScrollElement: () => container,
-		estimateSize: () => ESTIMATED_ROW_HEIGHT,
+		estimateSize: () => itemHeight + itemGap,
 		overscan: VIRTUAL_OVERSCAN,
 		getItemKey: (index) => items[index]?.id ?? index
 	});
@@ -61,8 +65,11 @@
 		return left.length === right.length && left.every((value, index) => value === right[index]);
 	}
 
+	const shouldMeasureDynamically = $derived(itemHeight <= 0);
+
 	function measureVisibleItems() {
 		if (!browser || !container) return;
+		if (!shouldMeasureDynamically) return;
 		for (const element of container.querySelectorAll<HTMLDivElement>('[data-virtual-item]')) {
 			$virtualizer.measureElement(element);
 		}
@@ -70,6 +77,11 @@
 
 	function measureVirtualItem(node: HTMLDivElement) {
 		if (!browser) return;
+		if (!shouldMeasureDynamically) {
+			return {
+				destroy() {}
+			};
+		}
 		$virtualizer.measureElement(node);
 		const observer = new ResizeObserver(() => {
 			$virtualizer.measureElement(node);
@@ -90,6 +102,7 @@
 				$virtualizer.setOptions({
 					count: items.length,
 					getScrollElement: () => container,
+					estimateSize: () => itemHeight + itemGap,
 					getItemKey: (index) => items[index]?.id ?? index
 				});
 				$virtualizer.measure();
@@ -109,6 +122,7 @@
 				$virtualizer.setOptions({
 					count: itemCount,
 					getScrollElement: () => container,
+					estimateSize: () => itemHeight + itemGap,
 					getItemKey: (index) => items[index]?.id ?? index
 				});
 				$virtualizer.measure();
@@ -144,18 +158,20 @@
 						use:measureVirtualItem
 						data-virtual-item
 						data-index={virtualItem.index}
-						class="absolute top-0 left-0 w-full pb-3"
+						class="absolute top-0 left-0 w-full"
 						style={`transform: translateY(${virtualItem.start}px);`}
 					>
-						<KeyPackageCard
-							entry={item.entry}
-							actionLabel={item.actionLabel}
-							actionDisabled={item.actionDisabled}
-							onAction={item.onAction}
-							badge={item.badge}
-							compact={item.compact}
-							class={item.className}
-						/>
+						<div style={`padding-bottom: ${itemGap}px;`}>
+							<KeyPackageCard
+								entry={item.entry}
+								actionLabel={item.actionLabel}
+								actionDisabled={item.actionDisabled}
+								onAction={item.onAction}
+								badge={item.badge}
+								compact={item.compact}
+								class={item.className}
+							/>
+						</div>
 					</div>
 				{/if}
 			{/each}

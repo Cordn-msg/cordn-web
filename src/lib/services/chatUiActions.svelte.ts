@@ -14,7 +14,8 @@ import {
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
 import {
 	chatWelcomeNotificationsStore,
-	getWelcomeNotification
+	getWelcomeNotification,
+	removeWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
 	chatGroupWatchStore,
@@ -351,6 +352,21 @@ export async function acceptWelcomeAction(welcomeId: string) {
 			error instanceof Error
 				? error.message
 				: `Failed to accept welcome${notification ? ` ${notification.kpRef}` : ''}`;
+		return false;
+	}
+}
+
+export async function rejectWelcomeAction(welcomeId: string) {
+	chatWelcomeNotificationsStore.error = '';
+	try {
+		removeWelcomeNotification(welcomeId);
+		return true;
+	} catch (error) {
+		const notification = getWelcomeNotification(welcomeId);
+		chatWelcomeNotificationsStore.error =
+			error instanceof Error
+				? error.message
+				: `Failed to reject welcome${notification ? ` ${notification.kpRef}` : ''}`;
 		return false;
 	}
 }

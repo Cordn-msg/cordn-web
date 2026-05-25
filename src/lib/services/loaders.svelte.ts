@@ -3,6 +3,7 @@ import { commonRelays, metadataRelays, relayPool } from './relay-pool';
 import { eventStore } from './eventStore';
 import { getOutboxes } from 'applesauce-core/helpers';
 import { kinds } from 'nostr-tools';
+import { SvelteSet } from 'svelte/reactivity';
 // Create address loader
 export const addressLoader = createAddressLoader(relayPool, { eventStore });
 export const eventLoader = createEventLoader(relayPool, {
@@ -22,16 +23,15 @@ export const createUserRelayListByPubkeyLoader = (pubkey: string, relays?: strin
 export const getUserRelayListFromStore = (pubkey: string): string[] => {
 	const relayList = eventStore.getReplaceable(kinds.RelayList, pubkey);
 	if (!relayList) return [];
+	const uniqueRelays = new SvelteSet(
+		getOutboxes(relayList)
+			.map((relay) => relay.trim())
+			.filter(Boolean)
+	);
 
-	return [
-		...new Set(
-			getOutboxes(relayList)
-				.map((relay) => relay.trim())
-				.filter(Boolean)
-		)
-	];
+	return [...uniqueRelays];
 };
 
 export const getMetadataLookupRelays = (pubkey: string): string[] => {
-	return [...new Set([...getUserRelayListFromStore(pubkey), ...metadataRelays])];
+	return [...new SvelteSet([...getUserRelayListFromStore(pubkey), ...metadataRelays])];
 };

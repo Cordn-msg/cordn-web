@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Collapsible from '$lib/components/ui/collapsible';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -28,6 +29,8 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Save from '@lucide/svelte/icons/save';
+	import Eye from '@lucide/svelte/icons/eye';
+	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Crown from '@lucide/svelte/icons/crown';
 	import Shield from '@lucide/svelte/icons/shield';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -58,6 +61,8 @@
 	let metadataAdminPubkeys = $state<string[]>([]);
 	let metadataFormOpen = $state(false);
 	let lastMetadataSignature = $state('');
+	let showDeleteGroupDialog = $state(false);
+	let showGroupId = $state(false);
 
 	function syncMetadataForm() {
 		if (!group) return;
@@ -106,6 +111,7 @@
 
 	async function deleteGroup() {
 		if (!group) return;
+		showDeleteGroupDialog = false;
 		await deleteGroupAction(group.id);
 	}
 
@@ -212,8 +218,25 @@
 
 						<div class="grid gap-4 md:grid-cols-2">
 							<div class="rounded-2xl border border-border p-4">
-								<p class="text-xs tracking-wide text-muted-foreground uppercase">Group id</p>
-								<p class="mt-2 font-mono text-xs break-all">{group.id}</p>
+								<div class="flex items-center justify-between gap-3">
+									<p class="text-xs tracking-wide text-muted-foreground uppercase">Group id</p>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										class="h-8 px-2"
+										onclick={() => (showGroupId = !showGroupId)}
+									>
+										{#if showGroupId}
+											<EyeOff class="mr-1 size-4" />Hide
+										{:else}
+											<Eye class="mr-1 size-4" />Show
+										{/if}
+									</Button>
+								</div>
+								<p class="mt-2 font-mono text-xs break-all text-muted-foreground">
+									{showGroupId ? group.id : 'Hidden until revealed'}
+								</p>
 							</div>
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Coordinator</p>
@@ -331,7 +354,7 @@
 						<Button
 							type="button"
 							variant="destructive"
-							onclick={deleteGroup}
+							onclick={() => (showDeleteGroupDialog = true)}
 							disabled={chatGroupInfoActionsStore.deleteSubmitting}
 						>
 							<Trash2 class="mr-2 size-4" />
@@ -442,5 +465,33 @@
 				</Card.Root>
 			</div>
 		</ScrollArea.Root>
+
+		<Dialog.Root bind:open={showDeleteGroupDialog}>
+			<Dialog.Content class="sm:max-w-[425px]">
+				<Dialog.Header>
+					<Dialog.Title>Delete local group?</Dialog.Title>
+					<Dialog.Description>
+						This only removes the saved copy of this group from this browser. Messages and group
+						membership on other devices or coordinators are not affected.
+					</Dialog.Description>
+				</Dialog.Header>
+				<Dialog.Footer>
+					<Button
+						variant="outline"
+						onclick={() => (showDeleteGroupDialog = false)}
+						disabled={chatGroupInfoActionsStore.deleteSubmitting}
+					>
+						Cancel
+					</Button>
+					<Button
+						variant="destructive"
+						onclick={deleteGroup}
+						disabled={chatGroupInfoActionsStore.deleteSubmitting}
+					>
+						{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete local group'}
+					</Button>
+				</Dialog.Footer>
+			</Dialog.Content>
+		</Dialog.Root>
 	</div>
 {/if}

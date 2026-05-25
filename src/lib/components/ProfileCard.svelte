@@ -3,7 +3,7 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '../services/eventStore';
 	import { ProfileModel } from 'applesauce-core/models';
-	import Button from './ui/button/button.svelte';
+	import Button, { type ButtonVariant } from './ui/button/button.svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import { logout } from '$lib/services/accountManager.svelte';
@@ -20,13 +20,15 @@
 		mode = 'compact',
 		showLogout = false,
 		showName = true,
-		showInlineAvatar = false
+		showInlineAvatar = false,
+		logoutButtonVariant = 'ghost'
 	}: {
 		pubkey: string;
 		mode?: 'compact' | 'extended' | 'inline';
 		showLogout?: boolean;
 		showName?: boolean;
 		showInlineAvatar?: boolean;
+		logoutButtonVariant?: ButtonVariant;
 	} = $props();
 
 	let showLogoutDialog = $state(false);
@@ -118,7 +120,7 @@
 
 				{#if showLogout}
 					<Button
-						variant="ghost"
+						variant={logoutButtonVariant}
 						size="icon"
 						onclick={() => (showLogoutDialog = true)}
 						aria-label="Logout"
@@ -160,7 +162,7 @@
 
 		{#if canShowLogout}
 			<Button
-				variant="ghost"
+				variant={logoutButtonVariant}
 				size="icon"
 				onclick={() => (showLogoutDialog = true)}
 				aria-label="Logout"

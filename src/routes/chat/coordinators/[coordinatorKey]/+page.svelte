@@ -26,8 +26,7 @@
 	} from '$lib/services/chatGroups.svelte';
 	import {
 		chatWelcomeNotificationsStore,
-		listWelcomeNotificationsForCoordinator,
-		markWelcomeNotificationRead
+		listWelcomeNotificationsForCoordinator
 	} from '$lib/services/chatWelcomeNotifications.svelte';
 	import {
 		acceptWelcomeAction,
@@ -523,16 +522,6 @@
 															onclick={() => acceptWelcome(welcome.id)}
 														>
 															Accept
-														</Button>
-													{/if}
-													{#if !welcome.readAt}
-														<Button
-															type="button"
-															variant="outline"
-															size="sm"
-															onclick={() => markWelcomeNotificationRead(welcome.id)}
-														>
-															Mark read
 														</Button>
 													{/if}
 												</div>

@@ -32,6 +32,15 @@ import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 
+function isMissingRemoteKeyPackageRemovalError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const message = error.message.toLowerCase();
+	return (
+		message.includes('invalid input: expected object, received undefined') ||
+		message.includes('expected object, received undefined')
+	);
+}
+
 export interface StoredKeyPackageRecord {
 	id: string;
 	ownerPubkey: string;
@@ -287,9 +296,15 @@ export async function removeChatKeyPackage(
 			: dedupeStrings(record?.publishedCoordinatorKeys ?? []);
 
 		for (const coordinatorKey of coordinatorKeys) {
-			await withCoordinatorClient(account, coordinatorKey, (client) =>
-				client.RemoveKeyPackages({ kp_refs: [keyPackageRef] })
-			);
+			try {
+				await withCoordinatorClient(account, coordinatorKey, (client) =>
+					client.RemoveKeyPackages({ kp_refs: [keyPackageRef] })
+				);
+			} catch (error) {
+				if (!isMissingRemoteKeyPackageRemovalError(error)) {
+					throw error;
+				}
+			}
 			void queryClient.invalidateQueries({
 				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
 			});

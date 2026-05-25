@@ -3,6 +3,7 @@
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
@@ -45,6 +46,7 @@
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
 	import CircleDashed from '@lucide/svelte/icons/circle-dashed';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import Inbox from '@lucide/svelte/icons/inbox';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Server from '@lucide/svelte/icons/server';
 	import Sparkles from '@lucide/svelte/icons/sparkles';
@@ -79,7 +81,6 @@
 	const hasCoordinator = $derived.by(() => coordinators.length > 0);
 	const hasKeyPackages = $derived.by(() => keyPackages.length > 0);
 	const hasGroups = $derived.by(() => groups.length > 0);
-	const latestGroup = $derived.by(() => sortedGroups.at(0));
 	const pendingOnboardingSteps = $derived.by(() =>
 		onboardingSteps.filter((step) => !step.complete)
 	);
@@ -218,6 +219,21 @@
 		} finally {
 			creatingKeyPackage = false;
 		}
+	}
+
+	async function createDirectoryKeyPackage() {
+		if (!$activeAccount) {
+			keyPackageActionError = 'Log in before creating a key package';
+			return;
+		}
+
+		if (!defaultCoordinator) {
+			keyPackageActionError = 'Set a default coordinator before creating a key package';
+			return;
+		}
+
+		quickChatError = '';
+		await createAndPublishKeyPackage();
 	}
 
 	function getGroupHref(groupId: string) {
@@ -360,15 +376,6 @@
 					<h1 class="text-xl font-semibold tracking-tight">Chat home</h1>
 				</div>
 			</div>
-			{#if hasGroups && latestGroup}
-				<Button
-					href={resolve('/chat/[id]', { id: latestGroup.id })}
-					variant="outline"
-					class="w-full sm:w-fit"
-				>
-					Open latest group
-				</Button>
-			{/if}
 		</div>
 	</header>
 
@@ -534,6 +541,28 @@
 
 			<div class="flex flex-col gap-6">
 				<Card.Root>
+					<Card.Header class="flex flex-row items-start justify-between gap-4 space-y-0">
+						<div class="space-y-1.5">
+							<Card.Title>Welcome notifications</Card.Title>
+							<Card.Description>
+								Unified inbox for welcomes fetched across known coordinators.
+							</Card.Description>
+						</div>
+						<div
+							class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground"
+						>
+							<Inbox class="size-4" />
+						</div>
+					</Card.Header>
+					<Card.Content>
+						<WelcomeNotificationsPanel
+							maxHeightClass="h-[min(24rem,55vh)]"
+							emptyClass="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+						/>
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root>
 					<Card.Header>
 						<Card.Title>Groups</Card.Title>
 					</Card.Header>
@@ -604,15 +633,27 @@
 								Directory of public key packages in {getRemoteKeyPackageCoordinatorLabel()}.
 							</Card.Description>
 						</div>
-						<Button
-							onclick={refreshKeyPackageDirectory}
-							disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
-							variant="outline"
-						>
-							{coordinatorDetailsActionsStore.loadingKeyPackages ? 'Refreshing…' : 'Refresh'}
-						</Button>
+						<div class="flex flex-wrap justify-end gap-2">
+							<Button
+								onclick={createDirectoryKeyPackage}
+								disabled={creatingKeyPackage || !$activeAccount || !defaultCoordinator}
+								variant="outline"
+							>
+								{creatingKeyPackage ? 'Creating…' : 'Create key package'}
+							</Button>
+							<Button
+								onclick={refreshKeyPackageDirectory}
+								disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
+								variant="outline"
+							>
+								{coordinatorDetailsActionsStore.loadingKeyPackages ? 'Refreshing…' : 'Refresh'}
+							</Button>
+						</div>
 					</Card.Header>
 					<Card.Content class="space-y-3">
+						{#if keyPackageActionError}
+							<p class="text-sm text-destructive">{keyPackageActionError}</p>
+						{/if}
 						{#if quickChatError}
 							<p class="text-sm text-destructive">{quickChatError}</p>
 						{/if}
@@ -637,6 +678,7 @@
 								items={visibleDirectoryKeyPackageItems}
 								maxHeightClass="max-h-[32rem]"
 								contentClass="rounded-xl border border-border p-3"
+								itemHeight={126}
 								onVisibleItemsChange={(itemIds) => {
 									if (areStringArraysEqual(itemIds, visibleDirectoryKeyPackageIds)) return;
 									visibleDirectoryKeyPackageIds = itemIds;

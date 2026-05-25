@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { cn, copyToClipboard } from '$lib/utils';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
+	import type { Snippet } from 'svelte';
 	import type { AvailableKeyPackage } from '$lib/contracts';
 	import type { CoordinatorAvailableKeyPackage } from '$lib/services/chatGroups.svelte';
 	import type { StoredKeyPackageRecord } from '$lib/services/chatKeyPackages.svelte';
@@ -23,6 +24,7 @@
 		actionDisabled = false,
 		badge,
 		compact = false,
+		details,
 		class: className = ''
 	}: {
 		entry: StoredKeyPackageRecord | AvailableKeyPackage | CoordinatorAvailableKeyPackage;
@@ -31,6 +33,7 @@
 		actionDisabled?: boolean;
 		badge?: string;
 		compact?: boolean;
+		details?: Snippet;
 		class?: string;
 	} = $props();
 
@@ -125,4 +128,10 @@
 			</Button>
 		{/if}
 	</div>
+
+	{#if details}
+		<div class="text-xs text-muted-foreground">
+			{@render details()}
+		</div>
+	{/if}
 </div>

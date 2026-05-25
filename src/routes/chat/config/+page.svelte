@@ -4,7 +4,6 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -33,7 +32,7 @@
 	</header>
 
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
-		<div class="mx-auto grid max-w-4xl gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+		<div class="lg:grid-cols mx-auto grid max-w-4xl gap-6">
 			<div class="space-y-6">
 				<Card.Root>
 					<Card.Header>
@@ -44,7 +43,12 @@
 					</Card.Header>
 					<Card.Content>
 						{#if $activeAccount}
-							<ProfileCard pubkey={$activeAccount.pubkey} mode="extended" showLogout={true} />
+							<ProfileCard
+								pubkey={$activeAccount.pubkey}
+								mode="extended"
+								showLogout={true}
+								logoutButtonVariant="destructive"
+							/>
 						{:else}
 							<div class="space-y-3">
 								<p class="text-sm text-muted-foreground">
@@ -100,37 +104,6 @@
 					</Card.Content>
 				</Card.Root>
 			</div>
-
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Overview</Card.Title>
-					<Card.Description
-						>Use the coordinator hub as the primary operational surface for Cordn transport and
-						discovery.</Card.Description
-					>
-				</Card.Header>
-				<Card.Content>
-					<div class="space-y-3 text-sm text-muted-foreground">
-						<p>
-							• Coordinators now model real reachable profiles with relays, defaults, and color
-							identity.
-						</p>
-						<p>
-							• The coordinator hub is where users should inspect remote key package directories and
-							pending welcomes.
-						</p>
-						<p>
-							• Key packages remain a personal local inventory page, while coordinator pages
-							represent remote state.
-						</p>
-					</div>
-				</Card.Content>
-				<Card.Footer class="justify-end">
-					<Button href={resolve('/chat/coordinators')} variant="outline"
-						>Open coordinator hub</Button
-					>
-				</Card.Footer>
-			</Card.Root>
 		</div>
 	</div>
 </div>

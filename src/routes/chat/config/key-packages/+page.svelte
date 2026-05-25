@@ -10,6 +10,7 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { listChatGroups, type StoredChatGroup } from '$lib/services/chatGroups.svelte';
 	import {
 		createChatKeyPackage,
 		listChatKeyPackages,
@@ -28,6 +29,14 @@
 		localCopy: ReturnType<typeof listChatKeyPackages>[number] | undefined;
 	};
 
+	type KeyPackageUsageGroup = {
+		id: string;
+		name: string;
+		coordinatorLabel: string;
+		createdAt?: number;
+		missing: boolean;
+	};
+
 	function getCoordinatorLabel(coordinatorKey: string) {
 		return (
 			coordinators.find((entry) => entry.pubkey === coordinatorKey)?.label ||
@@ -37,6 +46,11 @@
 
 	function getCoordinator(pubkey: string) {
 		return coordinators.find((entry) => entry.pubkey === pubkey);
+	}
+
+	function getGroupLabel(group: StoredChatGroup) {
+		const trimmedName = group.metadata?.name?.trim();
+		return trimmedName || `Group ${group.id.slice(0, 8)}`;
 	}
 
 	let loading = $state(false);
@@ -53,10 +67,46 @@
 	let ownedRemoteKeyPackages = $state<OwnedRemoteKeyPackage[]>([]);
 
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
+	const chatGroups = $derived.by(() => listChatGroups());
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
 	);
+	const keyPackageUsageGroupsByRef = $derived.by(() => {
+		const groupsById = new SvelteMap(chatGroups.map((group) => [group.id, group]));
+		const usageGroupsByRef = new SvelteMap<string, KeyPackageUsageGroup[]>();
+
+		for (const keyPackage of keyPackages) {
+			if (!keyPackage.consumedByGroupId) continue;
+
+			const existing = usageGroupsByRef.get(keyPackage.keyPackageRef) ?? [];
+			const group = groupsById.get(keyPackage.consumedByGroupId);
+			existing.push(
+				group
+					? {
+							id: group.id,
+							name: getGroupLabel(group),
+							coordinatorLabel: getCoordinatorLabel(group.coordinatorKey),
+							createdAt: group.createdAt,
+							missing: false
+						}
+					: {
+							id: keyPackage.consumedByGroupId,
+							name: `Group ${keyPackage.consumedByGroupId.slice(0, 8)}`,
+							coordinatorLabel: 'Group not available locally',
+							createdAt: keyPackage.consumedAt,
+							missing: true
+						}
+			);
+			usageGroupsByRef.set(keyPackage.keyPackageRef, existing);
+		}
+
+		for (const entry of usageGroupsByRef.values()) {
+			entry.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+		}
+
+		return usageGroupsByRef;
+	});
 	const remoteKeyPackagesByCoordinator = $derived.by(() => {
 		const groups = new SvelteMap<string, OwnedRemoteKeyPackage[]>();
 		for (const entry of ownedRemoteKeyPackages) {
@@ -76,6 +126,10 @@
 	const orphanedRemoteKeyPackageCount = $derived.by(
 		() => ownedRemoteKeyPackages.filter((entry) => !entry.localCopy).length
 	);
+
+	function getUsageGroups(keyPackageRef: string): KeyPackageUsageGroup[] {
+		return keyPackageUsageGroupsByRef.get(keyPackageRef) ?? [];
+	}
 
 	async function handleCreate() {
 		try {
@@ -289,7 +343,31 @@
 						{:else}
 							{#each keyPackages as keyPackage (keyPackage.keyPackageRef)}
 								<div class="space-y-2 rounded-xl border border-border px-4 py-3">
-									<KeyPackageCard entry={keyPackage} />
+									<KeyPackageCard entry={keyPackage}>
+										{#snippet details()}
+											{@const usageGroups = getUsageGroups(keyPackage.keyPackageRef)}
+											{#if usageGroups.length > 0}
+												<div class="space-y-2">
+													<p class="font-medium text-foreground">
+														Used in {usageGroups.length} group{usageGroups.length === 1 ? '' : 's'}
+													</p>
+													<div class="space-y-2">
+														{#each usageGroups as usageGroup (usageGroup.id)}
+															<div class="rounded-lg border border-border/60 px-3 py-2">
+																<p class="text-sm font-medium text-foreground">{usageGroup.name}</p>
+																<p class="mt-1 text-xs text-muted-foreground">
+																	{usageGroup.coordinatorLabel}
+																	{#if usageGroup.missing}
+																		· no local group record
+																	{/if}
+																</p>
+															</div>
+														{/each}
+													</div>
+												</div>
+											{/if}
+										{/snippet}
+									</KeyPackageCard>
 									<p class="text-xs text-muted-foreground">
 										Published to {keyPackage.publishedCoordinatorKeys.length} coordinator{keyPackage
 											.publishedCoordinatorKeys.length === 1
@@ -469,7 +547,39 @@
 															badge={remoteEntry.localCopy
 																? 'remote + local copy'
 																: 'orphaned remote'}
-														/>
+														>
+															{#snippet details()}
+																{#if remoteEntry.localCopy}
+																	{@const usageGroups = getUsageGroups(
+																		remoteEntry.localCopy.keyPackageRef
+																	)}
+																	{#if usageGroups.length > 0}
+																		<div class="space-y-2">
+																			<p class="font-medium text-foreground">
+																				Used in {usageGroups.length} group{usageGroups.length === 1
+																					? ''
+																					: 's'}
+																			</p>
+																			<div class="space-y-2">
+																				{#each usageGroups as usageGroup (usageGroup.id)}
+																					<div class="rounded-lg border border-border/60 px-3 py-2">
+																						<p class="text-sm font-medium text-foreground">
+																							{usageGroup.name}
+																						</p>
+																						<p class="mt-1 text-xs text-muted-foreground">
+																							{usageGroup.coordinatorLabel}
+																							{#if usageGroup.missing}
+																								· no local group record
+																							{/if}
+																						</p>
+																					</div>
+																				{/each}
+																			</div>
+																		</div>
+																	{/if}
+																{/if}
+															{/snippet}
+														</KeyPackageCard>
 														{#if remoteEntry.localCopy}
 															<p class="text-xs text-muted-foreground">
 																Local label: {remoteEntry.localCopy.label}

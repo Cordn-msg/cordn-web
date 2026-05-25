@@ -25,6 +25,7 @@
 - Chat persistence is centralized behind [`getChatStorage()`](src/lib/storage/chatStorage.ts:530) with IndexedDB as the primary backend and local-storage/memory fallbacks.
 - Group records persist MLS state bytes, message history, and sync issues through [`src/lib/storage/chatStorage.ts`](src/lib/storage/chatStorage.ts) rather than direct localStorage blobs.
 - Key package persistence is handled through the same storage layer, with binary package material converted at the service boundary in [`src/lib/services/chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1).
+- The key package config route in [`src/routes/chat/config/key-packages/+page.svelte`](src/routes/chat/config/key-packages/+page.svelte) should stay forgiving of stale coordinator removals and prefer locally derived group-usage details on key package cards instead of extra remote reads.
 - Prefer small, focused Svelte components and keep route files thin.
 - Keep private-key UX minimal: when adjusting [`AccountLoginDialog.svelte`](src/lib/components/AccountLoginDialog.svelte), prefer simple local reveal/hide behavior over additional backup flows.
 - Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.

@@ -28,10 +28,7 @@
 	let icon = $state('');
 	let imageUrl = $state('');
 	let coordinatorKey = $state(getDefaultChatCoordinator()?.pubkey ?? '');
-	let coordinatorRelays = $state(getDefaultChatCoordinator()?.relays.join('\n') ?? '');
 	let selectedKeyPackageRef = $state('');
-	let keyPackageLabel = $state('');
-	let keyPackageIsLastResort = $state(false);
 	let selectedMemberPubkeys = $state<string[]>([]);
 	let selectedAdminPubkeys = $state<string[]>([]);
 	let loading = $state(false);
@@ -92,24 +89,14 @@
 		};
 	});
 
-	function parseRelayList(value: string): string[] {
-		return value
-			.split(/[\n,]/)
-			.map((entry) => entry.trim())
-			.filter(Boolean);
-	}
-
 	function selectCoordinator(pubkey: string) {
 		coordinatorKey = pubkey;
-		const coordinator = coordinators.find((entry) => entry.pubkey === pubkey);
-		coordinatorRelays = coordinator?.relays.join('\n') ?? '';
 	}
 
 	function saveTypedCoordinator() {
 		if (!coordinatorKey.trim()) return;
 		upsertChatCoordinator({
-			pubkey: coordinatorKey.trim(),
-			relays: parseRelayList(coordinatorRelays)
+			pubkey: coordinatorKey.trim()
 		});
 	}
 
@@ -140,6 +127,9 @@
 		try {
 			loading = true;
 			error = '';
+			const adminPubkeys = selectedAdminPubkeys.length
+				? Array.from(new Set([$activeAccount.pubkey, ...selectedAdminPubkeys]))
+				: [];
 			const group = await createChatGroup({
 				name,
 				description,
@@ -147,9 +137,7 @@
 				imageUrl,
 				coordinatorKey,
 				keyPackageRef: selectedKeyPackageRef || undefined,
-				keyPackageLabel: selectedKeyPackageRef ? undefined : keyPackageLabel,
-				keyPackageIsLastResort: selectedKeyPackageRef ? undefined : keyPackageIsLastResort,
-				adminPubkeys: selectedAdminPubkeys
+				adminPubkeys
 			});
 			for (const pubkey of selectedMemberPubkeys) {
 				await inviteChatGroupMember({ groupId: group.id, identifier: pubkey });
@@ -248,17 +236,6 @@
 					</InputGroup.Root>
 
 					<InputGroup.Root>
-						<InputGroup.Textarea
-							bind:value={coordinatorRelays}
-							class="min-h-24 font-mono text-xs"
-							placeholder="wss://relay.example.org"
-						/>
-						<InputGroup.Addon align="block-start">
-							<InputGroup.Text>Relays</InputGroup.Text>
-						</InputGroup.Addon>
-					</InputGroup.Root>
-
-					<InputGroup.Root>
 						<InputGroup.Input
 							value={selectedKeyPackageRef
 								? availableKeyPackages.find(
@@ -299,51 +276,6 @@
 						</InputGroup.Addon>
 					</InputGroup.Root>
 
-					{#if !selectedKeyPackageRef}
-						<InputGroup.Root>
-							<InputGroup.Input
-								bind:value={keyPackageLabel}
-								placeholder="Optional label for the new key package"
-							/>
-							<InputGroup.Addon>
-								<InputGroup.Text>KP label</InputGroup.Text>
-							</InputGroup.Addon>
-						</InputGroup.Root>
-
-						<label class="flex items-center gap-2 text-sm text-muted-foreground">
-							<input
-								bind:checked={keyPackageIsLastResort}
-								type="checkbox"
-								class="h-4 w-4 rounded border-border"
-							/>
-							Generate as last resort key package
-						</label>
-					{/if}
-
-					<ChatPubkeyMultiSelect
-						label="Members"
-						helperText="Invite members from the selected coordinator's available key packages."
-						placeholder="Search available members…"
-						emptyLabel={coordinatorKey.trim()
-							? loadingCoordinatorMembers
-								? 'Loading coordinator key packages…'
-								: 'No available key packages found for this coordinator.'
-							: 'Select a coordinator to load available key packages.'}
-						options={coordinatorMemberOptions}
-						bind:selectedPubkeys={selectedMemberPubkeys}
-					/>
-
-					<ChatPubkeyMultiSelect
-						label="Admins"
-						helperText="Pick admins from the members selected above. Leave empty to keep the group egalitarian."
-						placeholder="Search selected members…"
-						emptyLabel="Select members first to choose admins."
-						options={coordinatorMemberOptions.filter((option) =>
-							selectedMemberPubkeys.includes(option.pubkey)
-						)}
-						bind:selectedPubkeys={selectedAdminPubkeys}
-					/>
-
 					<InputGroup.Root>
 						<InputGroup.Input bind:value={icon} placeholder="🪢" />
 						<InputGroup.Addon>
@@ -368,6 +300,32 @@
 							<InputGroup.Text>Description</InputGroup.Text>
 						</InputGroup.Addon>
 					</InputGroup.Root>
+
+					<div class="space-y-5 border-t border-border pt-5">
+						<ChatPubkeyMultiSelect
+							label="Members"
+							helperText="Invite members from the selected coordinator's available key packages."
+							placeholder="Search available members…"
+							emptyLabel={coordinatorKey.trim()
+								? loadingCoordinatorMembers
+									? 'Loading coordinator key packages…'
+									: 'No available key packages found for this coordinator.'
+								: 'Select a coordinator to load available key packages.'}
+							options={coordinatorMemberOptions}
+							bind:selectedPubkeys={selectedMemberPubkeys}
+						/>
+
+						<ChatPubkeyMultiSelect
+							label="Admins"
+							helperText="Pick admins from the selected members. If you choose any admins, your active account is also included automatically. Leave empty to keep the group egalitarian."
+							placeholder="Search selected members…"
+							emptyLabel="Select members first to choose admins."
+							options={coordinatorMemberOptions.filter((option) =>
+								selectedMemberPubkeys.includes(option.pubkey)
+							)}
+							bind:selectedPubkeys={selectedAdminPubkeys}
+						/>
+					</div>
 
 					{#if error}
 						<p class="text-sm text-destructive">{error}</p>
