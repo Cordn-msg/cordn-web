@@ -78,6 +78,7 @@
 
 			<a
 				href={resolve('/chat')}
+				data-sveltekit-preload-data="off"
 				class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
 			>
 				Open chat
@@ -106,6 +107,7 @@
 				<div class="flex flex-col gap-3 sm:flex-row">
 					<a
 						href={resolve('/chat')}
+						data-sveltekit-preload-data="off"
 						class="inline-flex items-center justify-center rounded-md bg-primary px-5 py-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
 					>
 						Open chat

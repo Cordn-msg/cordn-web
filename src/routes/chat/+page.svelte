@@ -34,6 +34,7 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { goto } from '$app/navigation';
 	import { eventStore } from '$lib/services/eventStore';
+	import { SvelteSet } from 'svelte/reactivity';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -117,9 +118,13 @@
 	>({});
 	let visibleDirectoryKeyPackageIds = $state<string[]>([]);
 
+	function areStringArraysEqual(left: string[], right: string[]) {
+		return left.length === right.length && left.every((value, index) => value === right[index]);
+	}
+
 	const visibleDirectoryKeyPackagePubkeys = $derived.by(() => {
-		const visibleIds = new Set(visibleDirectoryKeyPackageIds);
-		const pubkeys = new Set<string>();
+		const visibleIds = new SvelteSet(visibleDirectoryKeyPackageIds);
+		const pubkeys = new SvelteSet<string>();
 		for (const entry of filteredRemoteKeyPackages) {
 			if (visibleIds.has(entry.kp_ref)) {
 				pubkeys.add(entry.pk);
@@ -274,9 +279,12 @@
 	});
 
 	$effect(() => {
-		if ($activeAccount && coordinators.length > 0 && !keyPackageDirectoryLoaded) {
+		if (!$activeAccount || coordinators.length === 0 || keyPackageDirectoryLoaded) return;
+		const timeout = setTimeout(() => {
 			void loadKeyPackageDirectory();
-		}
+		}, 100);
+
+		return () => clearTimeout(timeout);
 	});
 
 	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
@@ -611,6 +619,7 @@
 								maxHeightClass="max-h-[32rem]"
 								contentClass="rounded-xl border border-border p-3"
 								onVisibleItemsChange={(itemIds) => {
+									if (areStringArraysEqual(itemIds, visibleDirectoryKeyPackageIds)) return;
 									visibleDirectoryKeyPackageIds = itemIds;
 								}}
 							/>

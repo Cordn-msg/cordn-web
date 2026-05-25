@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
@@ -152,6 +153,11 @@
 
 	function getMessageHref(groupId: string, messageKey: string) {
 		return `${getGroupHref(groupId)}?message=${encodeURIComponent(messageKey)}`;
+	}
+
+	async function navigateToMessage(groupId: string, messageKey: string) {
+		closeMobileSidebar();
+		await goto(getMessageHref(groupId, messageKey));
 	}
 
 	function getChatHomeHref() {
@@ -422,9 +428,9 @@
 				{:else}
 					<div class="space-y-1">
 						{#each searchResults as result (result.messageKey)}
-							<a
-								href={getMessageHref(result.groupId, result.messageKey)}
-								onclick={closeMobileSidebar}
+							<button
+								type="button"
+								onclick={() => navigateToMessage(result.groupId, result.messageKey)}
 								class="block rounded-xl border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
 							>
 								<div class="flex items-start justify-between gap-2">
@@ -437,7 +443,7 @@
 								<p class="mt-1 truncate text-[10px] text-muted-foreground">
 									{result.sender.slice(0, 12)}…
 								</p>
-							</a>
+							</button>
 						{/each}
 					</div>
 				{/if}

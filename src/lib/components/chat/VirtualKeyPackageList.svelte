@@ -23,7 +23,7 @@
 		className?: string;
 	};
 
-	const ESTIMATED_ROW_HEIGHT = 132;
+	const ESTIMATED_ROW_HEIGHT = 180;
 	const VIRTUAL_OVERSCAN = 6;
 
 	type Props = {
@@ -55,12 +55,32 @@
 
 	const virtualItems = $derived($virtualizer.getVirtualItems());
 	const totalSize = $derived($virtualizer.getTotalSize());
+	let lastVisibleItemIds: string[] = [];
+
+	function areStringArraysEqual(left: string[], right: string[]) {
+		return left.length === right.length && left.every((value, index) => value === right[index]);
+	}
 
 	function measureVisibleItems() {
 		if (!browser || !container) return;
 		for (const element of container.querySelectorAll<HTMLDivElement>('[data-virtual-item]')) {
 			$virtualizer.measureElement(element);
 		}
+	}
+
+	function measureVirtualItem(node: HTMLDivElement) {
+		if (!browser) return;
+		$virtualizer.measureElement(node);
+		const observer = new ResizeObserver(() => {
+			$virtualizer.measureElement(node);
+		});
+		observer.observe(node);
+
+		return {
+			destroy() {
+				observer.disconnect();
+			}
+		};
 	}
 
 	onMount(() => {
@@ -83,11 +103,11 @@
 
 	$effect(() => {
 		if (!mounted) return;
-		items.length;
+		const itemCount = items.length;
 		void tick().then(() => {
 			untrack(() => {
 				$virtualizer.setOptions({
-					count: items.length,
+					count: itemCount,
 					getScrollElement: () => container,
 					getItemKey: (index) => items[index]?.id ?? index
 				});
@@ -102,6 +122,8 @@
 		const visibleItemIds = virtualItems
 			.map((virtualItem) => items[virtualItem.index]?.id)
 			.filter((itemId): itemId is string => Boolean(itemId));
+		if (areStringArraysEqual(visibleItemIds, lastVisibleItemIds)) return;
+		lastVisibleItemIds = visibleItemIds;
 		onVisibleItemsChange(visibleItemIds);
 	});
 </script>
@@ -119,8 +141,10 @@
 				{@const item = items[virtualItem.index]}
 				{#if item}
 					<div
+						use:measureVirtualItem
 						data-virtual-item
-						class="absolute top-0 left-0 w-full"
+						data-index={virtualItem.index}
+						class="absolute top-0 left-0 w-full pb-3"
 						style={`transform: translateY(${virtualItem.start}px);`}
 					>
 						<KeyPackageCard

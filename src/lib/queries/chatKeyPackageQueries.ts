@@ -3,6 +3,7 @@ import { browser } from '$app/environment';
 import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
@@ -16,23 +17,24 @@ async function fetchSingleCoordinatorAvailableKeyPackages(
 }
 
 export async function fetchCoordinatorAvailableKeyPackages(
-	coordinatorKey?: string
+	coordinatorKey?: string,
+	options: { force?: boolean } = {}
 ): Promise<AvailableKeyPackage[]> {
 	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
 	if (coordinatorKey?.trim()) {
 		return fetchSingleCoordinatorAvailableKeyPackages(coordinatorKey);
 	}
 
-	const { listKnownCoordinatorKeys } =
-		await import('$lib/services/chatWelcomeNotifications.svelte');
-	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys().map(normalizePubKey))];
+	const coordinatorKeys = [
+		...new Set(listChatCoordinators().map((entry) => normalizePubKey(entry.pubkey)))
+	];
 
 	const results = await Promise.all(
 		coordinatorKeys.map((key) =>
 			queryClient.fetchQuery({
 				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
 				queryFn: () => fetchSingleCoordinatorAvailableKeyPackages(key),
-				staleTime: 30 * 1000
+				staleTime: options.force ? 0 : 30 * 1000
 			})
 		)
 	);

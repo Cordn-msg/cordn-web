@@ -319,14 +319,17 @@ export async function startWatchingGroup(groupId: string) {
 
 export async function startWatchingAllGroups() {
 	const groups = listChatGroups();
-	await Promise.allSettled(
-		groups
-			.filter(
-				(group) =>
-					getCurrentWatch(group.id) === undefined &&
-					!autoWatchDisabledGroupIds.has(group.id) &&
-					!isChatGroupRemoved(group)
-			)
-			.map((group) => startWatchingGroup(group.id))
+	const groupsToWatch = groups.filter(
+		(group) =>
+			getCurrentWatch(group.id) === undefined &&
+			!autoWatchDisabledGroupIds.has(group.id) &&
+			!isChatGroupRemoved(group)
 	);
+
+	for (const group of groupsToWatch) {
+		await startWatchingGroup(group.id).catch((error) => {
+			console.warn('Failed to start group watch', group.id, error);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
 }

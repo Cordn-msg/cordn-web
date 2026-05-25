@@ -36,6 +36,7 @@
 	import { ProfileModel } from 'applesauce-core/models';
 	import { setMode } from 'mode-watcher';
 	import { Metadata } from 'nostr-tools/kinds';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	let {
 		groupId,
@@ -110,8 +111,8 @@
 		)
 	);
 	const visibleInviteKeyPackagePubkeys = $derived.by(() => {
-		const visibleIds = new Set(visibleInviteKeyPackageIds);
-		const pubkeys = new Set<string>();
+		const visibleIds = new SvelteSet(visibleInviteKeyPackageIds);
+		const pubkeys = new SvelteSet<string>();
 		for (const entry of filteredInviteKeyPackages) {
 			if (visibleIds.has(entry.keyPackageRef)) {
 				pubkeys.add(entry.stablePubkey);
