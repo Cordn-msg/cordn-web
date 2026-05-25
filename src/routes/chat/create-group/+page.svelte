@@ -2,6 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
+	import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import type { AvailableKeyPackage } from '$lib/contracts';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
@@ -12,12 +15,13 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-	import { createChatGroup } from '$lib/services/chatGroups.svelte';
+	import { createChatGroup, inviteChatGroupMember } from '$lib/services/chatGroups.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Info from '@lucide/svelte/icons/info';
+	import { nip19 } from 'nostr-tools';
 
 	let name = $state('');
 	let description = $state('');
@@ -28,11 +32,65 @@
 	let selectedKeyPackageRef = $state('');
 	let keyPackageLabel = $state('');
 	let keyPackageIsLastResort = $state(false);
-	let adminPubkeys = $state('');
+	let selectedMemberPubkeys = $state<string[]>([]);
+	let selectedAdminPubkeys = $state<string[]>([]);
 	let loading = $state(false);
+	let loadingCoordinatorMembers = $state(false);
+	let remoteAvailableKeyPackages = $state<AvailableKeyPackage[]>([]);
 	let error = $state('');
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const availableKeyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
+	const querySafeCoordinatorKey = $derived.by(() => {
+		const pubkey = coordinatorKey.trim();
+		return pubkey && /^[0-9a-f]{64}$/i.test(pubkey) ? pubkey : undefined;
+	});
+	const hasValidActiveAccount = $derived.by(() =>
+		Boolean($activeAccount?.pubkey?.trim() && /^[0-9a-f]{64}$/i.test($activeAccount.pubkey))
+	);
+	const coordinatorMemberOptions = $derived.by(() => {
+		const entries = remoteAvailableKeyPackages
+			.filter((entry) => entry.pk !== $activeAccount?.pubkey)
+			.map((entry) => ({
+				pubkey: entry.pk,
+				label: nip19.npubEncode(entry.pk).slice(0, 16),
+				description: `${entry.last_resort ? 'Last resort' : 'Standard'} · ${entry.kp_ref}`
+			}));
+
+		return Array.from(new Map(entries.map((entry) => [entry.pubkey, entry])).values());
+	});
+
+	function samePubkeys(left: string[], right: string[]) {
+		return left.length === right.length && left.every((value, index) => value === right[index]);
+	}
+
+	$effect(() => {
+		if (!hasValidActiveAccount || !querySafeCoordinatorKey) {
+			remoteAvailableKeyPackages = [];
+			loadingCoordinatorMembers = false;
+			return;
+		}
+
+		let cancelled = false;
+		loadingCoordinatorMembers = true;
+
+		void fetchCoordinatorAvailableKeyPackages(querySafeCoordinatorKey)
+			.then((entries) => {
+				if (cancelled) return;
+				remoteAvailableKeyPackages = entries;
+			})
+			.catch(() => {
+				if (cancelled) return;
+				remoteAvailableKeyPackages = [];
+			})
+			.finally(() => {
+				if (cancelled) return;
+				loadingCoordinatorMembers = false;
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	function parseRelayList(value: string): string[] {
 		return value
@@ -55,6 +113,24 @@
 		});
 	}
 
+	$effect(() => {
+		const allowedPubkeys = new Set(coordinatorMemberOptions.map((entry) => entry.pubkey));
+		const nextSelectedMembers = selectedMemberPubkeys.filter((pubkey) =>
+			allowedPubkeys.has(pubkey)
+		);
+		const nextSelectedAdmins = selectedAdminPubkeys.filter(
+			(pubkey) => nextSelectedMembers.includes(pubkey) && allowedPubkeys.has(pubkey)
+		);
+
+		if (!samePubkeys(selectedMemberPubkeys, nextSelectedMembers)) {
+			selectedMemberPubkeys = nextSelectedMembers;
+		}
+
+		if (!samePubkeys(selectedAdminPubkeys, nextSelectedAdmins)) {
+			selectedAdminPubkeys = nextSelectedAdmins;
+		}
+	});
+
 	async function handleSubmit(event: Event) {
 		event.preventDefault();
 		if (!$activeAccount) {
@@ -73,11 +149,11 @@
 				keyPackageRef: selectedKeyPackageRef || undefined,
 				keyPackageLabel: selectedKeyPackageRef ? undefined : keyPackageLabel,
 				keyPackageIsLastResort: selectedKeyPackageRef ? undefined : keyPackageIsLastResort,
-				adminPubkeys: adminPubkeys
-					.split(/[,\n]/)
-					.map((value) => value.trim())
-					.filter(Boolean)
+				adminPubkeys: selectedAdminPubkeys
 			});
+			for (const pubkey of selectedMemberPubkeys) {
+				await inviteChatGroupMember({ groupId: group.id, identifier: pubkey });
+			}
 			await goto(resolve('/chat/[id]', { id: group.id }));
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create group';
@@ -244,6 +320,30 @@
 						</label>
 					{/if}
 
+					<ChatPubkeyMultiSelect
+						label="Members"
+						helperText="Invite members from the selected coordinator's available key packages."
+						placeholder="Search available members…"
+						emptyLabel={coordinatorKey.trim()
+							? loadingCoordinatorMembers
+								? 'Loading coordinator key packages…'
+								: 'No available key packages found for this coordinator.'
+							: 'Select a coordinator to load available key packages.'}
+						options={coordinatorMemberOptions}
+						bind:selectedPubkeys={selectedMemberPubkeys}
+					/>
+
+					<ChatPubkeyMultiSelect
+						label="Admins"
+						helperText="Pick admins from the members selected above. Leave empty to keep the group egalitarian."
+						placeholder="Search selected members…"
+						emptyLabel="Select members first to choose admins."
+						options={coordinatorMemberOptions.filter((option) =>
+							selectedMemberPubkeys.includes(option.pubkey)
+						)}
+						bind:selectedPubkeys={selectedAdminPubkeys}
+					/>
+
 					<InputGroup.Root>
 						<InputGroup.Input bind:value={icon} placeholder="🪢" />
 						<InputGroup.Addon>
@@ -266,17 +366,6 @@
 						/>
 						<InputGroup.Addon align="block-start">
 							<InputGroup.Text>Description</InputGroup.Text>
-						</InputGroup.Addon>
-					</InputGroup.Root>
-
-					<InputGroup.Root>
-						<InputGroup.Textarea
-							bind:value={adminPubkeys}
-							placeholder="Optional admin pubkeys, separated by commas or new lines"
-							class="min-h-24 font-mono text-xs"
-						/>
-						<InputGroup.Addon align="block-start">
-							<InputGroup.Text>Admins</InputGroup.Text>
 						</InputGroup.Addon>
 					</InputGroup.Root>
 

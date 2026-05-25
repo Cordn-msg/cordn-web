@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
+	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
@@ -29,7 +30,11 @@
 		coordinatorDetailsActionsStore,
 		loadCoordinatorRemoteKeyPackagesAction
 	} from '$lib/services/chatUiActions.svelte';
-	import { getLatestChatGroupMessagePreview } from '$lib/services/chatGroupPresence.svelte';
+	import {
+		getLatestChatGroupMessagePreview,
+		getUnreadChatGroupMessageCount,
+		getUnreadChatGroupReferenceCount
+	} from '$lib/services/chatGroupPresence.svelte';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { goto } from '$app/navigation';
@@ -234,6 +239,16 @@
 
 	function getGroupPreview(groupId: string) {
 		return getLatestChatGroupMessagePreview(groupId);
+	}
+
+	function getGroupSummary(groupId: string) {
+		return {
+			preview: getGroupPreview(groupId),
+			unreadCount: getUnreadChatGroupMessageCount(groupId),
+			unreadReferenceCount: $activeAccount?.pubkey
+				? getUnreadChatGroupReferenceCount(groupId, $activeAccount.pubkey)
+				: 0
+		};
 	}
 
 	function getRemoteKeyPackageCoordinatorLabel() {
@@ -521,23 +536,27 @@
 				<Card.Root>
 					<Card.Header>
 						<Card.Title>Groups</Card.Title>
-						<Card.Description>
-							Open recent groups first, with the same visual preview used in the sidebar.
-						</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-4">
 						{#if hasGroups}
 							<div class="space-y-3">
 								{#each sortedGroups as group (group.id)}
+									{@const summary = getGroupSummary(group.id)}
 									<a
 										href={getGroupHref(group.id)}
 										class="group flex items-center gap-3 rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
 									>
-										<ChatGroupAvatar
-											{group}
-											class="h-12 w-12"
-											fallbackClass="text-base font-medium"
-										/>
+										<div class="relative shrink-0">
+											<ChatGroupAvatar
+												{group}
+												class="h-12 w-12"
+												fallbackClass="text-base font-medium"
+											/>
+											<ChatGroupUnreadChips
+												unreadCount={summary.unreadCount}
+												unreadReferenceCount={summary.unreadReferenceCount}
+											/>
+										</div>
 										<div class="min-w-0 flex-1 space-y-1">
 											<div class="flex items-center gap-2">
 												<p class="truncate font-medium text-foreground">{getGroupTitle(group)}</p>
@@ -549,7 +568,7 @@
 												{/if}
 											</div>
 											<p class="truncate text-sm text-muted-foreground">
-												{getGroupPreview(group.id)}
+												{summary.preview}
 											</p>
 										</div>
 										<ExternalLink

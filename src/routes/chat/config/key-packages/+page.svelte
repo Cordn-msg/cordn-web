@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import type { AvailableKeyPackage } from '$lib/contracts';
 	import * as Card from '$lib/components/ui/card';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -7,6 +8,7 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		createChatKeyPackage,
@@ -15,8 +17,16 @@
 		removeChatKeyPackage
 	} from '$lib/services/chatKeyPackages.svelte';
 	import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+	import { normalizePubKey } from '$lib/utils';
+	import Boxes from '@lucide/svelte/icons/boxes';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { SvelteMap } from 'svelte/reactivity';
+
+	type OwnedRemoteKeyPackage = AvailableKeyPackage & {
+		coordinatorKey: string;
+		localCopy: ReturnType<typeof listChatKeyPackages>[number] | undefined;
+	};
 
 	function getCoordinatorLabel(coordinatorKey: string) {
 		return (
@@ -36,9 +46,36 @@
 	let isLastResort = $state(false);
 	let publishingKeyPackageRef = $state('');
 	let removingKeyPackageRef = $state('');
+	let loadingRemoteKeyPackages = $state(false);
+	let remoteKeyPackagesLoaded = $state(false);
+	let remoteKeyPackageError = $state('');
+	let removingRemoteKey = $state('');
+	let ownedRemoteKeyPackages = $state<OwnedRemoteKeyPackage[]>([]);
 
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const coordinators = $derived.by(() => listChatCoordinators());
+	const activePubkey = $derived.by(() =>
+		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
+	);
+	const remoteKeyPackagesByCoordinator = $derived.by(() => {
+		const groups = new SvelteMap<string, OwnedRemoteKeyPackage[]>();
+		for (const entry of ownedRemoteKeyPackages) {
+			const existing = groups.get(entry.coordinatorKey) ?? [];
+			existing.push(entry);
+			groups.set(entry.coordinatorKey, existing);
+		}
+
+		return [...groups.entries()]
+			.map(([coordinatorKey, entries]) => ({
+				coordinatorKey,
+				label: getCoordinatorLabel(coordinatorKey),
+				entries: [...entries].sort((a, b) => b.at - a.at)
+			}))
+			.sort((a, b) => a.label.localeCompare(b.label));
+	});
+	const orphanedRemoteKeyPackageCount = $derived.by(
+		() => ownedRemoteKeyPackages.filter((entry) => !entry.localCopy).length
+	);
 
 	async function handleCreate() {
 		try {
@@ -80,6 +117,52 @@
 			error = err instanceof Error ? err.message : 'Failed to remove key package';
 		} finally {
 			removingKeyPackageRef = '';
+		}
+	}
+
+	async function loadRemoteKeyPackages() {
+		if (!$activeAccount) return;
+
+		try {
+			loadingRemoteKeyPackages = true;
+			remoteKeyPackageError = '';
+
+			const remoteResults = await Promise.all(
+				coordinators.map(async (coordinator) => {
+					const entries = await fetchCoordinatorAvailableKeyPackages(coordinator.pubkey, {
+						force: remoteKeyPackagesLoaded
+					});
+					return entries
+						.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
+						.map((entry) => ({
+							...entry,
+							coordinatorKey: normalizePubKey(coordinator.pubkey),
+							localCopy: keyPackages.find((record) => record.keyPackageRef === entry.kp_ref)
+						}));
+				})
+			);
+
+			ownedRemoteKeyPackages = remoteResults.flat().sort((a, b) => b.at - a.at);
+			remoteKeyPackagesLoaded = true;
+		} catch (err) {
+			remoteKeyPackageError =
+				err instanceof Error ? err.message : 'Failed to load remote key packages';
+		} finally {
+			loadingRemoteKeyPackages = false;
+		}
+	}
+
+	async function handleRemoveRemote(keyPackageRef: string, coordinatorKey: string) {
+		try {
+			removingRemoteKey = `${coordinatorKey}:${keyPackageRef}`;
+			remoteKeyPackageError = '';
+			await removeChatKeyPackage(keyPackageRef, { coordinatorKey });
+			await loadRemoteKeyPackages();
+		} catch (err) {
+			remoteKeyPackageError =
+				err instanceof Error ? err.message : 'Failed to remove remote key package';
+		} finally {
+			removingRemoteKey = '';
 		}
 	}
 </script>
@@ -276,6 +359,158 @@
 							{/each}
 						{/if}
 					</div>
+				</Card.Content>
+			</Card.Root>
+
+			<Card.Root class="lg:col-span-2">
+				<Card.Header>
+					<Card.Title>Remote coordinator key packages</Card.Title>
+					<Card.Description
+						>Inspect all key packages published for your active identity across saved coordinators,
+						including orphaned remote entries with no local copy.</Card.Description
+					>
+				</Card.Header>
+				<Card.Content>
+					{#if !$activeAccount}
+						<div class="space-y-3">
+							<p class="text-sm text-muted-foreground">
+								Log in to inspect coordinator-side key packages.
+							</p>
+							<AccountLoginDialog />
+						</div>
+					{:else if coordinators.length === 0}
+						<div
+							class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+						>
+							Add a coordinator first to inspect published key packages.
+						</div>
+					{:else}
+						<div class="space-y-4">
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<div class="text-sm text-muted-foreground">
+									{#if remoteKeyPackagesLoaded}
+										Found {ownedRemoteKeyPackages.length} remote key package{ownedRemoteKeyPackages.length ===
+										1
+											? ''
+											: 's'} across {remoteKeyPackagesByCoordinator.length} coordinator{remoteKeyPackagesByCoordinator.length ===
+										1
+											? ''
+											: 's'}.
+										{#if orphanedRemoteKeyPackageCount > 0}
+											<span class="ml-2 text-amber-600 dark:text-amber-400">
+												{orphanedRemoteKeyPackageCount} orphaned
+											</span>
+										{/if}
+									{:else}
+										Load remote state to compare local storage with coordinator directories.
+									{/if}
+								</div>
+								<Button
+									type="button"
+									onclick={loadRemoteKeyPackages}
+									disabled={loadingRemoteKeyPackages}
+								>
+									<Boxes class="mr-2 size-4" />
+									{loadingRemoteKeyPackages
+										? 'Loading remote key packages…'
+										: remoteKeyPackagesLoaded
+											? 'Refresh remote key packages'
+											: 'Load remote key packages'}
+								</Button>
+							</div>
+
+							{#if remoteKeyPackageError}
+								<p class="text-sm text-destructive">{remoteKeyPackageError}</p>
+							{/if}
+
+							{#if !remoteKeyPackagesLoaded}
+								<div
+									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+								>
+									Load remote key packages to inspect coordinator-side state and remove orphaned
+									entries.
+								</div>
+							{:else if ownedRemoteKeyPackages.length === 0}
+								<div
+									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
+								>
+									No remote key packages owned by the active identity were found on your saved
+									coordinators.
+								</div>
+							{:else}
+								<div class="space-y-4">
+									{#each remoteKeyPackagesByCoordinator as group (group.coordinatorKey)}
+										<div class="space-y-3 rounded-2xl border border-border p-4">
+											<div class="flex items-center justify-between gap-3">
+												<div class="min-w-0">
+													<p class="font-medium">{group.label}</p>
+													<p class="text-xs text-muted-foreground">
+														{group.entries.length} owned key package{group.entries.length === 1
+															? ''
+															: 's'}
+													</p>
+												</div>
+												<Button
+													href={resolve('/chat/coordinators/[coordinatorKey]', {
+														coordinatorKey: group.coordinatorKey
+													})}
+													variant="outline"
+													size="sm"
+												>
+													Open coordinator
+												</Button>
+											</div>
+
+											<div class="space-y-3">
+												{#each group.entries as remoteEntry (remoteEntry.kp_ref)}
+													<div class="space-y-2 rounded-xl border border-border/70 px-4 py-3">
+														<KeyPackageCard
+															entry={remoteEntry}
+															badge={remoteEntry.localCopy
+																? 'remote + local copy'
+																: 'orphaned remote'}
+														/>
+														{#if remoteEntry.localCopy}
+															<p class="text-xs text-muted-foreground">
+																Local label: {remoteEntry.localCopy.label}
+															</p>
+														{:else}
+															<p class="text-xs text-amber-600 dark:text-amber-400">
+																This remote key package has no local record and can be cleaned up
+																here.
+															</p>
+														{/if}
+														<div class="flex justify-end pt-1">
+															<Button
+																type="button"
+																variant="outline"
+																size="sm"
+																disabled={removingRemoteKey ===
+																	`${remoteEntry.coordinatorKey}:${remoteEntry.kp_ref}`}
+																onclick={() =>
+																	handleRemoveRemote(
+																		remoteEntry.kp_ref,
+																		remoteEntry.coordinatorKey
+																	)}
+															>
+																<Trash2 class="mr-2 size-4" />
+																{removingRemoteKey ===
+																`${remoteEntry.coordinatorKey}:${remoteEntry.kp_ref}`
+																	? 'Removing…'
+																	: remoteEntry.localCopy
+																		? 'Remove remote entry'
+																		: 'Remove orphaned remote'}
+															</Button>
+														</div>
+													</div>
+												{/each}
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</Card.Content>
 			</Card.Root>
 		</div>

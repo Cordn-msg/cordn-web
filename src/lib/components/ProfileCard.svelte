@@ -7,11 +7,13 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import { logout } from '$lib/services/accountManager.svelte';
+	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
 	import { pubkeyToHexColor } from '$lib/utils';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
 	import { cn } from '$lib/utils';
 	import { copyToClipboard } from '$lib/utils';
+	import { resolve } from '$app/paths';
 
 	let {
 		pubkey,
@@ -28,6 +30,7 @@
 	} = $props();
 
 	let showLogoutDialog = $state(false);
+	let logoutCleaning = $state(false);
 
 	const isExtended = $derived(mode === 'extended');
 	const isInline = $derived(mode === 'inline');
@@ -42,6 +45,18 @@
 	async function copyPubkey() {
 		await copyToClipboard(npub);
 	}
+
+	const profileHref = $derived.by(() => resolve('/p/[identifier]', { identifier: npub }));
+
+	async function cleanAndLogout() {
+		logoutCleaning = true;
+		try {
+			await cleanupActiveAccountChatData();
+			showLogoutDialog = false;
+		} finally {
+			logoutCleaning = false;
+		}
+	}
 	$effect(() => {
 		if ($profile) return;
 		const sub = addressLoader({
@@ -55,22 +70,26 @@
 
 {#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' | 'inline' = 'compact')}
 	{#if pfp}
-		<img
-			src={pfp}
-			alt="pfp"
-			class={cn(
-				'rounded-full object-cover',
-				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-			)}
-		/>
+		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
+			<img
+				src={pfp}
+				alt="pfp"
+				class={cn(
+					'rounded-full object-cover',
+					size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+				)}
+			/>
+		</a>
 	{:else}
-		<div
-			class={cn(
-				'rounded-full',
-				size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-			)}
-			style="background-color: {pubkeyToHexColor(pubkey)}"
-		></div>
+		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
+			<div
+				class={cn(
+					'rounded-full',
+					size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+				)}
+				style="background-color: {pubkeyToHexColor(pubkey)}"
+			></div>
+		</a>
 	{/if}
 {/snippet}
 {#if isExtended}
@@ -88,7 +107,9 @@
 						class="block w-full truncate text-left text-lg font-semibold"
 						onclick={copyPubkey}
 					>
-						{displayName}
+						<a href={profileHref} class="block truncate text-lg font-semibold hover:underline">
+							{displayName}
+						</a>
 					</button>
 					{#if $profile?.nip05}
 						<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
@@ -119,22 +140,18 @@
 		{#if showInlineAvatar}
 			{@render pfp(pubkey, $profile?.picture, 'inline')}
 		{/if}
-		<button type="button" class="inline min-w-0 text-left" onclick={copyPubkey}
-			>{displayName}</button
-		>
+		<a href={profileHref} class="inline min-w-0 text-left hover:underline">{displayName}</a>
 	</span>
 {:else}
 	<div class="flex items-center gap-2">
 		{@render pfp(pubkey, $profile?.picture)}
 		{#if showName}
 			<div class="min-w-0 flex-1">
-				<button
-					type="button"
-					class="block w-full truncate text-left text-sm font-semibold"
-					onclick={copyPubkey}
-				>
-					{displayName}
-				</button>
+				<div class="flex min-w-0 flex-wrap items-center gap-2">
+					<a href={profileHref} class="block truncate text-lg font-semibold hover:underline">
+						{displayName}
+					</a>
+				</div>
 				{#if $profile?.nip05}
 					<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
 				{/if}
@@ -159,18 +176,22 @@
 		<Dialog.Header>
 			<Dialog.Title>Log out?</Dialog.Title>
 			<Dialog.Description>
-				Your account will be removed from this device. If you haven't backed up your keys, your data
-				will be lost.
+				Log out keeps this account and its local chat data on this device. Use the cleanup option to
+				remove local chat data for this account before logging out.
 			</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (showLogoutDialog = false)}>Cancel</Button>
+			<Button variant="outline" onclick={cleanAndLogout} disabled={logoutCleaning}>
+				Log out and clean data
+			</Button>
 			<Button
 				variant="destructive"
 				onclick={() => {
 					showLogoutDialog = false;
 					logout();
 				}}
+				disabled={logoutCleaning}
 			>
 				Log out
 			</Button>

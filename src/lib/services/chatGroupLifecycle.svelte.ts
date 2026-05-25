@@ -90,6 +90,7 @@ export function getProtocolGroupId(state: { groupContext: { groupId: Uint8Array 
 
 export function buildStoredChatGroup(params: {
 	id: string;
+	ownerPubkey?: string;
 	coordinatorKey: string;
 	createdAt?: number;
 	stateBase64: string;
@@ -97,6 +98,7 @@ export function buildStoredChatGroup(params: {
 }): StoredChatGroup {
 	return {
 		id: params.id,
+		ownerPubkey: params.ownerPubkey,
 		coordinatorKey: params.coordinatorKey,
 		createdAt: params.createdAt ?? Date.now(),
 		stateBase64: params.stateBase64,

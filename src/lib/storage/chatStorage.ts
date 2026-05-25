@@ -9,6 +9,7 @@ export type ChatStorageBackend = 'indexeddb' | 'memory';
 
 export interface StoredChatGroupRecord {
 	id: string;
+	ownerPubkey?: string;
 	coordinatorKey: string;
 	createdAt: number;
 	lastCursor: number;
@@ -61,19 +62,21 @@ export interface ChatStorageCapabilities {
 export interface ChatStorage {
 	readonly capabilities: ChatStorageCapabilities;
 	init(): Promise<void>;
-	listGroups(): Promise<StoredChatGroupRecord[]>;
+	listGroups(ownerPubkey?: string): Promise<StoredChatGroupRecord[]>;
 	getGroup(groupId: string): Promise<StoredChatGroupData | undefined>;
 	putGroup(group: StoredChatGroupData): Promise<void>;
 	deleteGroup(groupId: string): Promise<void>;
+	deleteGroupsByOwner(ownerPubkey: string): Promise<void>;
 	listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]>;
 	getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined>;
 	putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void>;
 	replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void>;
 	deleteKeyPackage(keyPackageRef: string): Promise<void>;
+	deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void>;
 }
 
 const DATABASE_NAME = 'cordn-web';
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const GROUP_STORE = 'groups';
 const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
@@ -184,8 +187,11 @@ class MemoryChatStorage implements ChatStorage {
 		return;
 	}
 
-	async listGroups(): Promise<StoredChatGroupRecord[]> {
-		return [...this.groups.values()].map(cloneGroupRecord).sort(compareGroups);
+	async listGroups(ownerPubkey?: string): Promise<StoredChatGroupRecord[]> {
+		return [...this.groups.values()]
+			.filter((group) => (ownerPubkey ? group.ownerPubkey === ownerPubkey : true))
+			.map(cloneGroupRecord)
+			.sort(compareGroups);
 	}
 
 	async getGroup(groupId: string): Promise<StoredChatGroupData | undefined> {
@@ -209,6 +215,14 @@ class MemoryChatStorage implements ChatStorage {
 		this.groups.delete(groupId);
 		this.messages.delete(groupId);
 		this.syncIssues.delete(groupId);
+	}
+
+	async deleteGroupsByOwner(ownerPubkey: string): Promise<void> {
+		for (const group of [...this.groups.values()]) {
+			if (group.ownerPubkey === ownerPubkey) {
+				await this.deleteGroup(group.id);
+			}
+		}
 	}
 
 	async listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]> {
@@ -236,6 +250,14 @@ class MemoryChatStorage implements ChatStorage {
 	async deleteKeyPackage(keyPackageRef: string): Promise<void> {
 		this.keyPackages.delete(keyPackageRef);
 	}
+
+	async deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void> {
+		for (const record of [...this.keyPackages.values()]) {
+			if (record.ownerPubkey === ownerPubkey) {
+				this.keyPackages.delete(record.keyPackageRef);
+			}
+		}
+	}
 }
 
 class IndexedDbChatStorage implements ChatStorage {
@@ -256,7 +278,13 @@ class IndexedDbChatStorage implements ChatStorage {
 			request.onupgradeneeded = () => {
 				const db = request.result;
 				if (!db.objectStoreNames.contains(GROUP_STORE)) {
-					db.createObjectStore(GROUP_STORE, { keyPath: 'id' });
+					const store = db.createObjectStore(GROUP_STORE, { keyPath: 'id' });
+					store.createIndex('ownerPubkey', 'ownerPubkey', { unique: false });
+				} else {
+					const store = request.transaction?.objectStore(GROUP_STORE);
+					if (store && !store.indexNames.contains('ownerPubkey')) {
+						store.createIndex('ownerPubkey', 'ownerPubkey', { unique: false });
+					}
 				}
 				if (!db.objectStoreNames.contains(GROUP_STATE_STORE)) {
 					db.createObjectStore(GROUP_STATE_STORE, { keyPath: 'groupId' });
@@ -317,13 +345,15 @@ class IndexedDbChatStorage implements ChatStorage {
 		});
 	}
 
-	async listGroups(): Promise<StoredChatGroupRecord[]> {
+	async listGroups(ownerPubkey?: string): Promise<StoredChatGroupRecord[]> {
 		const groups = await this.runTransaction<StoredChatGroupRecord[]>(
 			GROUP_STORE,
 			'readonly',
 			(store) => store.getAll() as IDBRequest<StoredChatGroupRecord[]>
 		);
-		return (groups ?? []).sort(compareGroups);
+		return (groups ?? [])
+			.filter((group) => (ownerPubkey ? group.ownerPubkey === ownerPubkey : true))
+			.sort(compareGroups);
 	}
 
 	async getGroup(groupId: string): Promise<StoredChatGroupData | undefined> {
@@ -444,6 +474,13 @@ class IndexedDbChatStorage implements ChatStorage {
 		});
 	}
 
+	async deleteGroupsByOwner(ownerPubkey: string): Promise<void> {
+		const groups = await this.listGroups(ownerPubkey);
+		for (const group of groups) {
+			await this.deleteGroup(group.id);
+		}
+	}
+
 	async listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]> {
 		const records = await this.runTransaction<StoredChatKeyPackageRecord[]>(
 			KEY_PACKAGE_STORE,
@@ -500,6 +537,13 @@ class IndexedDbChatStorage implements ChatStorage {
 			},
 			() => undefined
 		);
+	}
+
+	async deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void> {
+		const records = await this.listKeyPackages(ownerPubkey);
+		for (const record of records) {
+			await this.deleteKeyPackage(record.keyPackageRef);
+		}
 	}
 }
 

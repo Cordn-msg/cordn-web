@@ -7,6 +7,7 @@ It is built with SvelteKit, Svelte 5, TypeScript, and Tailwind CSS, and currentl
 - a landing page at [`/`](src/routes/+page.svelte)
 - a browser chat UI at [`/chat`](src/routes/chat/+page.svelte)
 - route-based group navigation under [`src/routes/chat/[id]`](src/routes/chat/[id])
+- a profile page under [`src/routes/p/[identifier]/+page.svelte`](src/routes/p/[identifier]/+page.svelte) for hex pubkeys, `npub`, or `nprofile` identifiers
 
 ## Chat storage model
 
@@ -33,6 +34,14 @@ Long group histories are rendered with [`@tanstack/svelte-virtual`](package.json
 When changing chat history rendering, keep [`scrollToMessage()`](src/lib/components/chat/ChatMessageList.svelte:75) and message [`data-message-id`](src/lib/components/chat/ChatMessageList.svelte:212) anchors working so references, mentions, and unread jumps can still navigate to off-screen messages through the virtualizer.
 
 Per-message render work is reduced by caching parsed mention parts in [`chatMessageRenderCache.ts`](src/lib/components/chat/chatMessageRenderCache.ts:1), sharing custom reaction persistence across mounted rows, lazily mounting heavy menu/tooltip controls in [`ChatMessageItem.svelte`](src/lib/components/chat/ChatMessageItem.svelte:88), and throttling unread-reference visibility checks with `requestAnimationFrame` in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:97).
+
+## Identity and profile UX
+
+- [`AccountLoginDialog.svelte`](src/lib/components/AccountLoginDialog.svelte) now supports revealing the private-key input with an eye toggle so users signing in with a raw key can verify and copy it for backup.
+- The profile route at [`/p/[identifier]`](src/routes/p/[identifier]/+page.svelte) renders the extended [`ProfileCard`](src/lib/components/ProfileCard.svelte) view plus the locally stored groups shared with that profile.
+- Shared-group discovery on the profile route is derived from local group membership via [`listChatGroups()`](src/lib/services/chatGroups.svelte.ts:243) and [`listChatGroupMembers()`](src/lib/services/chatGroups.svelte.ts:511), keeping the implementation local-first and avoiding redundant remote fetches.
+- The profile route uses a stacked row layout and, when the viewed profile matches the active account, shows inline logout actions plus a simple metadata editor.
+- Profile metadata publishing prefers the user's NIP-65 outboxes and falls back to `wss://relay.damus.io` and `wss://relay.primal.net` when mailbox data is unavailable.
 
 ## Development
 

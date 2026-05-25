@@ -14,6 +14,8 @@
 	import { generateSecretKey } from 'nostr-tools';
 	import { bytesToHex } from 'nostr-tools/utils';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
+	import Eye from '@lucide/svelte/icons/eye';
+	import EyeOff from '@lucide/svelte/icons/eye-off';
 
 	let open = $state(false);
 
@@ -30,6 +32,7 @@
 	let loading = $state(false);
 	let error = $state('');
 	let remoteSignerStep = $state<'generate' | 'connecting' | 'manual'>('generate');
+	let showPrivateKey = $state(false);
 
 	async function connectExtension() {
 		try {
@@ -69,6 +72,7 @@
 
 			open = false;
 			privateKey = '';
+			showPrivateKey = false;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect with private key';
 		} finally {
@@ -79,6 +83,10 @@
 	function generatePrivateKey() {
 		const secretKey = generateSecretKey();
 		privateKey = bytesToHex(secretKey);
+	}
+
+	function togglePrivateKeyVisibility() {
+		showPrivateKey = !showPrivateKey;
 	}
 
 	async function generateRemoteSignerUri() {
@@ -184,6 +192,12 @@
 	});
 
 	$effect(() => {
+		if (selectedTab !== 'simple') {
+			showPrivateKey = false;
+		}
+	});
+
+	$effect(() => {
 		// Check if extension is available
 		if (typeof window !== 'undefined' && !('nostr' in window)) {
 			selectedTab = 'simple';
@@ -257,8 +271,21 @@
 								placeholder="Enter your private key (hex format)"
 								bind:value={privateKey}
 								class="flex-1 font-mono"
-								type="password"
+								type={showPrivateKey ? 'text' : 'password'}
 							/>
+							<Button
+								variant="outline"
+								size="icon"
+								type="button"
+								onclick={togglePrivateKeyVisibility}
+								aria-label={showPrivateKey ? 'Hide private key' : 'Show private key'}
+							>
+								{#if showPrivateKey}
+									<EyeOff class="size-4" />
+								{:else}
+									<Eye class="size-4" />
+								{/if}
+							</Button>
 							<Button variant="outline" onclick={generatePrivateKey} type="button">Generate</Button>
 						</div>
 						<p class="text-xs text-muted-foreground">
@@ -340,7 +367,16 @@
 		</div>
 
 		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (open = false)} disabled={loading}>Cancel</Button>
+			<Button
+				variant="outline"
+				onclick={() => {
+					open = false;
+					showPrivateKey = false;
+				}}
+				disabled={loading}
+			>
+				Cancel
+			</Button>
 			{#if selectedTab === 'remote' && remoteSignerStep === 'connecting'}
 				<!-- No connect button when waiting for remote signer -->
 			{:else}

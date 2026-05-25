@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -44,21 +45,19 @@
 	const adminPubkeys = $derived.by(() =>
 		(group?.metadata?.adminPubkeys ?? []).map((pubkey) => normalizePubKey(pubkey))
 	);
+	const memberAdminOptions = $derived.by(() =>
+		members.map((member) => ({
+			pubkey: normalizePubKey(member.stablePubkey),
+			description: `Leaf index ${member.leafIndex}`
+		}))
+	);
 	let metadataName = $state('');
 	let metadataDescription = $state('');
 	let metadataIcon = $state('');
 	let metadataImageUrl = $state('');
-	let metadataAdminPubkeys = $state('');
+	let metadataAdminPubkeys = $state<string[]>([]);
 	let metadataFormOpen = $state(false);
 	let lastMetadataSignature = $state('');
-
-	function parseAdminPubkeys(value: string): string[] {
-		return value
-			.split(/[\n,]/)
-			.map((entry) => entry.trim())
-			.filter(Boolean)
-			.map((entry) => normalizePubKey(entry));
-	}
 
 	function syncMetadataForm() {
 		if (!group) return;
@@ -66,7 +65,9 @@
 		metadataDescription = group.metadata?.description ?? '';
 		metadataIcon = group.metadata?.icon ?? '';
 		metadataImageUrl = group.metadata?.imageUrl ?? '';
-		metadataAdminPubkeys = (group.metadata?.adminPubkeys ?? []).join('\n');
+		metadataAdminPubkeys = (group.metadata?.adminPubkeys ?? []).map((pubkey) =>
+			normalizePubKey(pubkey)
+		);
 	}
 
 	$effect(() => {
@@ -89,13 +90,12 @@
 		const currentAdminPubkeys = (group.metadata?.adminPubkeys ?? []).map((pubkey) =>
 			normalizePubKey(pubkey)
 		);
-		const formAdminPubkeys = parseAdminPubkeys(metadataAdminPubkeys);
 		return (
 			metadataName.trim() !== (group.metadata?.name ?? '') ||
 			metadataDescription.trim() !== (group.metadata?.description ?? '') ||
 			metadataIcon.trim() !== (group.metadata?.icon ?? '') ||
 			metadataImageUrl.trim() !== (group.metadata?.imageUrl ?? '') ||
-			JSON.stringify(formAdminPubkeys) !== JSON.stringify(currentAdminPubkeys)
+			JSON.stringify(metadataAdminPubkeys) !== JSON.stringify(currentAdminPubkeys)
 		);
 	});
 
@@ -117,7 +117,7 @@
 			description: metadataDescription.trim() || undefined,
 			icon: metadataIcon.trim() || undefined,
 			imageUrl: metadataImageUrl.trim() || undefined,
-			adminPubkeys: parseAdminPubkeys(metadataAdminPubkeys)
+			adminPubkeys: metadataAdminPubkeys
 		});
 		if (saved) {
 			metadataFormOpen = false;
@@ -276,16 +276,15 @@
 											</InputGroup.Addon>
 										</InputGroup.Root>
 
-										<InputGroup.Root>
-											<InputGroup.Textarea
-												bind:value={metadataAdminPubkeys}
-												placeholder="Optional admin pubkeys, separated by commas or new lines"
-												class="min-h-24 font-mono text-xs"
-											/>
-											<InputGroup.Addon align="block-start">
-												<InputGroup.Text>Admins</InputGroup.Text>
-											</InputGroup.Addon>
-										</InputGroup.Root>
+										<ChatPubkeyMultiSelect
+											label="Admins"
+											helperText="Choose admins from the current group members. Leave empty to keep the group egalitarian."
+											placeholder="Search group members…"
+											emptyLabel="No eligible members available."
+											options={memberAdminOptions}
+											bind:selectedPubkeys={metadataAdminPubkeys}
+											showRawPubkey={true}
+										/>
 
 										<div
 											class="flex flex-col gap-3 rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between"

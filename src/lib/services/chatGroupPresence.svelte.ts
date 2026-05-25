@@ -26,19 +26,33 @@ export const chatGroupPresenceStore = $state<{
 	groups: {}
 });
 
+let activePresenceStorageKey = getPresenceStorageKey();
+
 function savePresence() {
 	if (!browser) return;
 	const payload: PersistedGroupPresence = {
 		groups: chatGroupPresenceStore.groups
 	};
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+	localStorage.setItem(activePresenceStorageKey, JSON.stringify(payload));
 }
 
-function loadPresence() {
+function getPresenceStorageKey(ownerPubkey?: string) {
+	return ownerPubkey ? `${STORAGE_KEY}:${ownerPubkey}` : STORAGE_KEY;
+}
+
+loadChatGroupPresenceForOwner();
+
+export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 	if (!browser) return;
+	activePresenceStorageKey = getPresenceStorageKey(ownerPubkey);
 	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return;
+		const raw =
+			localStorage.getItem(activePresenceStorageKey) ??
+			(ownerPubkey ? localStorage.getItem(STORAGE_KEY) : null);
+		if (!raw) {
+			chatGroupPresenceStore.groups = {};
+			return;
+		}
 		const parsed = JSON.parse(raw) as PersistedGroupPresence;
 		chatGroupPresenceStore.groups = parsed.groups ?? {};
 	} catch {
@@ -46,7 +60,15 @@ function loadPresence() {
 	}
 }
 
-loadPresence();
+export function deleteChatGroupPresenceForOwner(ownerPubkey: string) {
+	if (!browser) return;
+	const storageKey = getPresenceStorageKey(ownerPubkey);
+	localStorage.removeItem(storageKey);
+	if (activePresenceStorageKey === storageKey) {
+		activePresenceStorageKey = getPresenceStorageKey();
+	}
+	chatGroupPresenceStore.groups = {};
+}
 
 export function getChatGroupLastReadCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0;

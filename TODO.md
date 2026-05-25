@@ -14,15 +14,13 @@
 - [x] Failed messages always appear at the bottom of the chat, even if there are newer messages
 - [x] Use tanstack query for centralizing fetching strategy and lists for virtualized lists for chats with many messages
 - [x] Add search functionality to chats
-- [ ] Improve edit group admins, allow use npubs
+- [x] Improve edit group admins, allow use npubs
 - [ ] Create user page to see user info, groups in common, etc
 - [ ] Allow searching for users outside of cordn and send nip-17 message to invite them
-- Log out doest work as expected and if loged with a different account after logout previous chats appear
-- Ensure last resort key packages can be removed
-- Retrieve all your key packages in the coordinator to be able to remove orphaned ones
-- Fix key packages list (virtual) view in phones. Currently there are overlapping each other
-- Tune coordinator, use pino and look for other low risk optimizatoins
-- Add retry mechanism if there is some request timeout or similar, just one retry should handle the most of the common cases
+- [x] Log out doest work as expected and if loged with a different account after logout previous chats appear
+- [x] Retrieve all your key packages in the coordinator to be able to remove orphaned ones
+- [x] Fix key packages list (virtual) view in phones. Currently there are overlapping each other
+- [x] Add retry mechanism if there is some request timeout or similar, just one retry should handle the most of the common cases
 - PWA request notifications so we can push native notifications while the app is open
-- Make logged user profile card clickable and navigate to config page
-- Groups in home page '/chat' doesn show unread/mention chips, maybe we can create a component to avoid duplication between this and sidebar group rendering
+- [x] Make logged user profile card clickable and navigate to config page
+- [x] Groups in home page '/chat' doesn show unread/mention chips, maybe we can create a component to avoid duplication between this and sidebar group rendering

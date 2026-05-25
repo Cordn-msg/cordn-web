@@ -47,6 +47,8 @@ export const chatWelcomeNotificationsStore = $state<{
 	error: ''
 });
 
+let activeNotificationsStorageKey = getNotificationsStorageKey();
+
 function makeNotificationId(coordinatorKey: string, welcome: PendingWelcome): string {
 	return `${coordinatorKey}:${welcome.kp_ref}:${welcome.at}`;
 }
@@ -57,14 +59,27 @@ function saveNotifications() {
 		entries: chatWelcomeNotificationsStore.entries,
 		lastFetchedAtByCoordinator: chatWelcomeNotificationsStore.lastFetchedAtByCoordinator
 	};
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+	localStorage.setItem(activeNotificationsStorageKey, JSON.stringify(payload));
 }
 
-function loadNotifications() {
+function getNotificationsStorageKey(ownerPubkey?: string) {
+	return ownerPubkey ? `${STORAGE_KEY}:${ownerPubkey}` : STORAGE_KEY;
+}
+
+loadWelcomeNotificationsForOwner();
+
+export function loadWelcomeNotificationsForOwner(ownerPubkey?: string) {
 	if (!browser) return;
+	activeNotificationsStorageKey = getNotificationsStorageKey(ownerPubkey);
 	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return;
+		const raw =
+			localStorage.getItem(activeNotificationsStorageKey) ??
+			(ownerPubkey ? localStorage.getItem(STORAGE_KEY) : null);
+		if (!raw) {
+			chatWelcomeNotificationsStore.entries = [];
+			chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {};
+			return;
+		}
 		const parsed = JSON.parse(raw) as PersistedWelcomeNotifications;
 		chatWelcomeNotificationsStore.entries = parsed.entries ?? [];
 		chatWelcomeNotificationsStore.lastFetchedAtByCoordinator =
@@ -75,7 +90,16 @@ function loadNotifications() {
 	}
 }
 
-loadNotifications();
+export function deleteWelcomeNotificationsForOwner(ownerPubkey: string) {
+	if (!browser) return;
+	const storageKey = getNotificationsStorageKey(ownerPubkey);
+	localStorage.removeItem(storageKey);
+	if (activeNotificationsStorageKey === storageKey) {
+		activeNotificationsStorageKey = getNotificationsStorageKey();
+	}
+	chatWelcomeNotificationsStore.entries = [];
+	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {};
+}
 
 export function listKnownCoordinatorKeys(): string[] {
 	const keys = new SvelteSet<string>();

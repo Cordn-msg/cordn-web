@@ -126,6 +126,15 @@ export function listChatKeyPackages(ownerPubkey?: string): StoredKeyPackageRecor
 	return [...filtered].sort((a, b) => b.createdAt - a.createdAt);
 }
 
+export async function deleteChatKeyPackagesForOwner(ownerPubkey: string): Promise<void> {
+	const normalizedOwner = normalizePubKey(ownerPubkey);
+	chatKeyPackagesStore.keyPackages = chatKeyPackagesStore.keyPackages.filter(
+		(entry) => normalizePubKey(entry.ownerPubkey) !== normalizedOwner
+	);
+	const storage = await getChatStorage();
+	await storage.deleteKeyPackagesByOwner(normalizedOwner);
+}
+
 export function getChatKeyPackage(keyPackageRef: string): StoredKeyPackageRecord | undefined {
 	return chatKeyPackagesStore.keyPackages.find((entry) => entry.keyPackageRef === keyPackageRef);
 }

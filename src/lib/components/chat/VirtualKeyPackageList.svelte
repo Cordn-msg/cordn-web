@@ -23,8 +23,8 @@
 		className?: string;
 	};
 
-	const ESTIMATED_ROW_HEIGHT = 180;
-	const VIRTUAL_OVERSCAN = 6;
+	const ESTIMATED_ROW_HEIGHT = 140;
+	const VIRTUAL_OVERSCAN = 4;
 
 	type Props = {
 		items: VirtualKeyPackageListItem[];

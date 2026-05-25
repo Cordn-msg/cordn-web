@@ -118,6 +118,28 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 	accountClientRegistries.delete(registryKey);
 }
 
+function isTransientCoordinatorError(error: unknown): boolean {
+	const detail = error instanceof Error ? error.message : String(error);
+	return /timeout|timed out|connection closed|failed to publish event|network|disconnected/i.test(
+		detail
+	);
+}
+
+export async function withCoordinatorClientRefreshRetry<T>(
+	operation: () => Promise<T>
+): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (!isTransientCoordinatorError(error)) {
+			throw error;
+		}
+
+		await replaceActiveCoordinatorClients();
+		return operation();
+	}
+}
+
 async function replaceActiveCoordinatorClients(): Promise<void> {
 	if (refreshActiveClientsPromise) {
 		return refreshActiveClientsPromise;

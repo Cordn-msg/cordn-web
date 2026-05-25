@@ -21,10 +21,12 @@
 - Main app routes live in [`src/routes`](src/routes).
 - Shared UI primitives live in [`src/lib/components/ui`](src/lib/components/ui).
 - Chat-specific UI lives in [`src/lib/components/chat`](src/lib/components/chat).
+- User profile pages live under [`src/routes/p`](src/routes/p) and should stay focused on profile presentation plus local shared-group discovery.
 - Chat persistence is centralized behind [`getChatStorage()`](src/lib/storage/chatStorage.ts:530) with IndexedDB as the primary backend and local-storage/memory fallbacks.
 - Group records persist MLS state bytes, message history, and sync issues through [`src/lib/storage/chatStorage.ts`](src/lib/storage/chatStorage.ts) rather than direct localStorage blobs.
 - Key package persistence is handled through the same storage layer, with binary package material converted at the service boundary in [`src/lib/services/chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1).
 - Prefer small, focused Svelte components and keep route files thin.
+- Keep private-key UX minimal: when adjusting [`AccountLoginDialog.svelte`](src/lib/components/AccountLoginDialog.svelte), prefer simple local reveal/hide behavior over additional backup flows.
 - Group message ingestion is centralized in [`applyIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:379) so manual fetches via [`fetchChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:419) and live subscriptions via [`ingestIncomingChatGroupMessages()`](src/lib/services/chatGroups.svelte.ts:449) stay consistent.
 - Active group watching is managed in [`startWatchingGroup()`](src/lib/services/chatGroupWatch.svelte.ts:71) and should remain the default path for keeping an open chat route up to date instead of adding parallel fetch-heavy flows.
 - Long group histories are virtualized with [`@tanstack/svelte-virtual`](package.json:65) in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:55). Preserve [`scrollToMessage()`](src/lib/components/chat/ChatMessageList.svelte:75), stable message keys, and [`data-message-id`](src/lib/components/chat/ChatMessageList.svelte:212) anchors when changing reference, mention, or unread navigation behavior.
@@ -40,6 +42,7 @@
   - **Available key packages** — fetched via [`fetchCoordinatorAvailableKeyPackages()`](src/lib/queries/chatKeyPackageQueries.ts:8) and consumed by [`listCoordinatorAvailableKeyPackages()`](src/lib/services/chatGroups.svelte.ts:369), [`reconcilePublishedKeyPackagesForActiveAccount()`](src/lib/services/chatKeyPackages.svelte.ts:312), and the coordinator detail UI.
   - **Welcome notifications** — fetched via [`welcomeNotificationsQueryOptions()`](src/lib/queries/chatWelcomeQueries.ts:9) with `refetchOnWindowFocus: true` because `FetchPendingWelcomes` is a destructive drain operation and explicit manual refresh is the primary trigger.
 - Svelte Query owns **remote read caching, deduplication, and in-flight request sharing**. The existing stores and IndexedDB layer continue to own durable local state.
+- For profile pages, prefer deriving shared-group membership from existing local group state before introducing new Svelte Query reads.
 - These coordinator operations are **not** moved into Svelte Query because they are mutations, streaming state, or durable local writes:
   - [`PublishKeyPackage`](src/lib/services/coordinatorClient.ts:197), [`RemoveKeyPackages`](src/lib/services/coordinatorClient.ts:220), [`ConsumeKeyPackage`](src/lib/services/coordinatorClient.ts:211), [`PostGroupMessage`](src/lib/services/coordinatorClient.ts:278), [`StoreWelcome`](src/lib/services/coordinatorClient.ts:264), [`FetchGroupMessages`](src/lib/services/coordinatorClient.ts:293), and [`SubscribeGroupMessages`](src/lib/services/coordinatorClient.ts:302).
 - Invalidation rules:

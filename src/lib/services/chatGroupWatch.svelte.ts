@@ -6,16 +6,21 @@ import {
 	getChatGroup,
 	isChatGroupRemoved,
 	listChatGroups,
-	ingestIncomingChatGroupMessages
+	ingestIncomingChatGroupMessages,
+	reloadChatGroupsForOwner
 } from '$lib/services/chatGroups.svelte';
 import {
 	disconnectCoordinatorClients,
 	getCoordinatorClient,
 	onCoordinatorClientsRefresh,
-	requireActiveAccount
+	requireActiveAccount,
+	withCoordinatorClientRefreshRetry
 } from '$lib/services/chatRuntime';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
+import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
+import { normalizePubKey } from '$lib/utils';
 
 type GroupWatchTask = {
 	groupId: string;
@@ -78,6 +83,10 @@ if (browser) {
 		const previousAccount = manager.getAccount(lastActiveAccountId);
 		lastActiveAccountId = nextAccountId;
 		autoWatchDisabledGroupIds.clear();
+		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
+		loadChatGroupPresenceForOwner(nextOwnerPubkey);
+		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
+		void reloadChatGroupsForOwner(nextOwnerPubkey);
 
 		void stopWatchingGroup(undefined, 'active account changed');
 		if (previousAccount) {
@@ -194,10 +203,12 @@ export async function startWatchingGroup(groupId: string) {
 	};
 
 	handle.ready = (async () => {
-		const subscription = await client.SubscribeGroupMessages({
-			gid,
-			after
-		});
+		const subscription = await withCoordinatorClientRefreshRetry(() =>
+			client.SubscribeGroupMessages({
+				gid,
+				after
+			})
+		);
 
 		handle.task = (async () => {
 			const pendingMessages: WatchIncomingMessage[] = [];

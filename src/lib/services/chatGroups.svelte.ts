@@ -60,7 +60,11 @@ import {
 	removeWelcomeNotification
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { normalizePubKey } from '$lib/utils';
-import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import {
+	getCoordinatorClient,
+	requireActiveAccount,
+	withCoordinatorClientRefreshRetry
+} from '$lib/services/chatRuntime';
 import { getChatStorage, type StoredChatGroupData } from '$lib/storage/chatStorage';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
@@ -70,6 +74,7 @@ const groupIdDecoder = new TextDecoder();
 
 export interface StoredChatGroup {
 	id: string;
+	ownerPubkey?: string;
 	coordinatorKey: string;
 	createdAt: number;
 	stateBase64: string;
@@ -114,6 +119,7 @@ export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 	return {
 		id: group.id,
+		ownerPubkey: group.ownerPubkey,
 		coordinatorKey: group.coordinatorKey,
 		createdAt: group.createdAt,
 		lastCursor: group.lastCursor,
@@ -136,6 +142,7 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		: undefined;
 	return migrateStoredGroup({
 		id: group.id,
+		ownerPubkey: group.ownerPubkey,
 		coordinatorKey: group.coordinatorKey,
 		createdAt: group.createdAt,
 		stateBase64: bytesToBase64(group.stateBytes),
@@ -152,10 +159,16 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 	});
 }
 
-async function loadGroups() {
+async function loadGroups(ownerPubkey?: string) {
 	const storage = await getChatStorage();
+	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
+	if (!normalizedOwner) {
+		chatGroupsStore.groups = [];
+		groupsLoaded = false;
+		return;
+	}
 	const groups = await Promise.all(
-		(await storage.listGroups()).map(async (group) => {
+		(await storage.listGroups(normalizedOwner)).map(async (group) => {
 			const fullGroup = await storage.getGroup(group.id);
 			if (!fullGroup) {
 				throw new Error(`Stored group ${group.id} not found`);
@@ -176,13 +189,6 @@ function persistGroups(groups: StoredChatGroup[]) {
 	persistGroupsPromise = persistGroupsPromise
 		.then(async () => {
 			const storage = await getChatStorage();
-			const existingGroups = await storage.listGroups();
-			const nextIds = new Set(groups.map((group) => group.id));
-			for (const existing of existingGroups) {
-				if (!nextIds.has(existing.id)) {
-					await storage.deleteGroup(existing.id);
-				}
-			}
 			for (const group of groups) {
 				await storage.putGroup(toStoredGroupData(group));
 			}
@@ -192,6 +198,12 @@ function persistGroups(groups: StoredChatGroup[]) {
 }
 
 void ensureGroupsLoaded();
+
+export function reloadChatGroupsForOwner(ownerPubkey?: string) {
+	groupsLoaded = false;
+	groupsReady = loadGroups(ownerPubkey);
+	return groupsReady;
+}
 
 function encodeState(state: ClientState): string {
 	return bytesToBase64(encode(clientStateEncoder, state));
@@ -305,7 +317,7 @@ export async function createChatGroup(input: {
 	keyPackageLabel?: string;
 	keyPackageIsLastResort?: boolean;
 }) {
-	requireActiveAccount('You must be logged in to create a group');
+	const account = requireActiveAccount('You must be logged in to create a group');
 	const metadata: GroupMetadataInput = {
 		name: input.name?.trim() ?? '',
 		description: input.description,
@@ -332,6 +344,7 @@ export async function createChatGroup(input: {
 
 	const group = buildStoredChatGroup({
 		id: getProtocolGroupId(state),
+		ownerPubkey: normalizePubKey(account.pubkey),
 		coordinatorKey: normalizedCoordinatorKey,
 		stateBase64: encodeState(state),
 		metadata
@@ -342,7 +355,7 @@ export async function createChatGroup(input: {
 }
 
 export async function acceptChatWelcome(input: { welcomeId: string }): Promise<StoredChatGroup> {
-	requireActiveAccount('You must be logged in to accept a welcome');
+	const account = requireActiveAccount('You must be logged in to accept a welcome');
 	const existingWelcome = getWelcomeNotification(input.welcomeId);
 	if (existingWelcome) {
 		await fetchWelcomeNotifications([existingWelcome.coordinatorKey]);
@@ -357,6 +370,7 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 		encodeState
 	});
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
+	group.ownerPubkey = normalizePubKey(account.pubkey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
 
 	persistGroup(group);
@@ -377,7 +391,10 @@ export async function listCoordinatorAvailableKeyPackages(
 
 	const result = await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey),
-		queryFn: () => fetchCoordinatorAvailableKeyPackages(group.coordinatorKey),
+		queryFn: () =>
+			withCoordinatorClientRefreshRetry(() =>
+				fetchCoordinatorAvailableKeyPackages(group.coordinatorKey)
+			),
 		staleTime: 30 * 1000
 	});
 	return result
@@ -491,7 +508,10 @@ export async function inviteChatGroupMember(input: {
 	});
 }
 
-export function listChatGroupMembers(groupId: string): Array<{
+export function listChatGroupMembers(
+	groupId: string,
+	activePubkey?: string
+): Array<{
 	leafIndex: number;
 	stablePubkey: string;
 	isAdmin: boolean;
@@ -499,11 +519,13 @@ export function listChatGroupMembers(groupId: string): Array<{
 }> {
 	const group = requireChatGroup(groupId);
 	const state = decodeStoredGroupState(group);
-	const account = requireActiveAccount('You must be logged in to inspect group members');
+	const normalizedActivePubkey = activePubkey ? normalizePubKey(activePubkey) : '';
 	return listGroupMembers(state).map((member) => ({
 		...member,
 		isAdmin: assertMemberAdmin(group, member.stablePubkey),
-		isSelf: normalizePubKey(member.stablePubkey) === normalizePubKey(account.pubkey)
+		isSelf: normalizedActivePubkey
+			? normalizePubKey(member.stablePubkey) === normalizedActivePubkey
+			: false
 	}));
 }
 
@@ -707,10 +729,12 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
-		const result = await coordinatorClient.FetchGroupMessages({
-			gid,
-			after: group.fetchCursor > 0 ? group.fetchCursor : undefined
-		});
+		const result = await withCoordinatorClientRefreshRetry(() =>
+			coordinatorClient.FetchGroupMessages({
+				gid,
+				after: group.fetchCursor > 0 ? group.fetchCursor : undefined
+			})
+		);
 
 		return applyIncomingChatGroupMessages(
 			group,
@@ -819,5 +843,14 @@ export async function sendChatGroupMessage(input: {
 
 export function deleteChatGroup(groupId: string): void {
 	chatGroupsStore.groups = chatGroupsStore.groups.filter((group) => group.id !== groupId);
-	void persistGroups(chatGroupsStore.groups);
+	void getChatStorage().then((storage) => storage.deleteGroup(groupId));
+}
+
+export async function deleteChatGroupsForOwner(ownerPubkey: string): Promise<void> {
+	const normalizedOwner = normalizePubKey(ownerPubkey);
+	chatGroupsStore.groups = chatGroupsStore.groups.filter(
+		(group) => group.ownerPubkey !== normalizedOwner
+	);
+	const storage = await getChatStorage();
+	await storage.deleteGroupsByOwner(normalizedOwner);
 }

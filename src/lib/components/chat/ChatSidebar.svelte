@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
+	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import {
 		getChatGroupDisplayTitle,
@@ -152,7 +153,8 @@
 	}
 
 	function getMessageHref(groupId: string, messageKey: string) {
-		return `${getGroupHref(groupId)}?message=${encodeURIComponent(messageKey)}`;
+		const targetHref = resolve('/chat/[id]', { id: groupId });
+		return `${targetHref}?message=${encodeURIComponent(messageKey)}`;
 	}
 
 	async function navigateToMessage(groupId: string, messageKey: string) {
@@ -488,21 +490,10 @@
 							>
 								<div class="relative shrink-0">
 									<ChatGroupAvatar group={chat} />
-									{#if summary.unreadCount > 0}
-										<span
-											class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-										>
-											{summary.unreadCount}
-										</span>
-									{/if}
-									{#if summary.unreadReferenceCount > 0}
-										<span
-											class="absolute -right-1 -bottom-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] leading-none font-semibold text-white"
-											aria-label={`${summary.unreadReferenceCount} unread reference${summary.unreadReferenceCount === 1 ? '' : 's'}`}
-										>
-											@
-										</span>
-									{/if}
+									<ChatGroupUnreadChips
+										unreadCount={summary.unreadCount}
+										unreadReferenceCount={summary.unreadReferenceCount}
+									/>
 								</div>
 
 								{#if !collapsed}
@@ -704,16 +695,23 @@
 			{/if}
 		</a>
 
-		<div
-			class={`rounded-xl border border-border bg-background px-3 py-3 ${collapsed ? 'flex justify-center px-2' : ''}`}
-		>
-			{#if $activeAccount}
+		{#if $activeAccount}
+			<a
+				href={getConfigHref()}
+				onclick={closeMobileSidebar}
+				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+				aria-label="Open config"
+			>
 				<ProfileCard pubkey={$activeAccount.pubkey} showName={!collapsed} />
-			{:else}
+			</a>
+		{:else}
+			<div
+				class={`rounded-xl border border-border bg-background px-3 py-3 ${collapsed ? 'flex justify-center px-2' : ''}`}
+			>
 				<div class={collapsed ? 'flex justify-center' : 'w-full'}>
 					<AccountLoginDialog />
 				</div>
-			{/if}
-		</div>
+			</div>
+		{/if}
 	</div>
 </aside>
