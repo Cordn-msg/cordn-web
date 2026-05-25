@@ -4,15 +4,16 @@ import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
-import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 async function fetchSingleCoordinatorAvailableKeyPackages(
 	coordinatorKey: string
 ): Promise<AvailableKeyPackage[]> {
 	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
-	const client = getCoordinatorClient(account, normalizePubKey(coordinatorKey));
-	const result = await client.ListAvailableKeyPackages({});
+	const result = await withCoordinatorClient(account, normalizePubKey(coordinatorKey), (client) =>
+		client.ListAvailableKeyPackages({})
+	);
 	return result.keyPackages.sort((a, b) => b.at - a.at);
 }
 

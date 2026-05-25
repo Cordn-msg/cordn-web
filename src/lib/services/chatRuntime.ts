@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
-import { cordnClient } from '$lib/services/coordinatorClient';
+import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { relayActions } from '$lib/stores/relay-store.svelte';
 import { normalizePubKey } from '$lib/utils';
 import type { NostrSigner } from '@contextvm/sdk';
@@ -118,25 +118,27 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 	accountClientRegistries.delete(registryKey);
 }
 
-function isTransientCoordinatorError(error: unknown): boolean {
+export function isTransientCoordinatorError(error: unknown): boolean {
 	const detail = error instanceof Error ? error.message : String(error);
-	return /timeout|timed out|connection closed|failed to publish event|network|disconnected/i.test(
+	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected/i.test(
 		detail
 	);
 }
 
-export async function withCoordinatorClientRefreshRetry<T>(
-	operation: () => Promise<T>
+export async function withCoordinatorClient<T>(
+	account: IAccount,
+	coordinatorKey: string,
+	operation: (client: coordinatorClient) => Promise<T>
 ): Promise<T> {
 	try {
-		return await operation();
+		return await operation(getCoordinatorClient(account, coordinatorKey));
 	} catch (error) {
 		if (!isTransientCoordinatorError(error)) {
 			throw error;
 		}
 
 		await replaceActiveCoordinatorClients();
-		return operation();
+		return operation(getCoordinatorClient(account, coordinatorKey));
 	}
 }
 

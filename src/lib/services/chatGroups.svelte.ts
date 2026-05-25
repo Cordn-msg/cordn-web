@@ -63,7 +63,7 @@ import { normalizePubKey } from '$lib/utils';
 import {
 	getCoordinatorClient,
 	requireActiveAccount,
-	withCoordinatorClientRefreshRetry
+	withCoordinatorClient
 } from '$lib/services/chatRuntime';
 import { getChatStorage, type StoredChatGroupData } from '$lib/storage/chatStorage';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
@@ -417,10 +417,7 @@ export async function listCoordinatorAvailableKeyPackages(
 
 	const result = await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey),
-		queryFn: () =>
-			withCoordinatorClientRefreshRetry(() =>
-				fetchCoordinatorAvailableKeyPackages(group.coordinatorKey)
-			),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(group.coordinatorKey),
 		staleTime: 30 * 1000
 	});
 	return result
@@ -449,11 +446,12 @@ export async function inviteChatGroupMember(input: {
 		});
 
 		const state = decodeStoredGroupState(group);
-		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
-		const consumeResult = await coordinatorClient.ConsumeKeyPackage({
-			id: input.identifier.trim()
-		});
+		const consumeResult = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.ConsumeKeyPackage({
+				id: input.identifier.trim()
+			})
+		);
 		void queryClient.invalidateQueries({
 			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey)
 		});
@@ -492,9 +490,11 @@ export async function inviteChatGroupMember(input: {
 			welcomeBase64: encodeWelcomeBase64(commitResult.welcome)
 		});
 
-		await coordinatorClient.PostGroupMessage({
-			msg_64: commitResult.commitMessageBase64
-		});
+		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.PostGroupMessage({
+				msg_64: commitResult.commitMessageBase64
+			})
+		);
 
 		const syncBaseGroup: StoredChatGroup = {
 			...group,
@@ -503,10 +503,12 @@ export async function inviteChatGroupMember(input: {
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 				group.metadata
 		};
-		const result = await coordinatorClient.FetchGroupMessages({
-			gid: groupIdDecoder.decode(state.groupContext.groupId),
-			after: group.fetchCursor > 0 ? group.fetchCursor : undefined
-		});
+		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchGroupMessages({
+				gid: groupIdDecoder.decode(state.groupContext.groupId),
+				after: group.fetchCursor > 0 ? group.fetchCursor : undefined
+			})
+		);
 
 		const workingGroup = createWorkingChatGroupSession(syncBaseGroup, commitResult.newState);
 		const sync = await syncChatGroupMessages({
@@ -518,7 +520,7 @@ export async function inviteChatGroupMember(input: {
 				opaqueMessageBase64: message.msg_64
 			})),
 			pendingEpochOperations,
-			coordinatorClient,
+			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
 			localStablePubkey: normalizePubKey(account.pubkey)
 		});
 
@@ -590,7 +592,6 @@ export async function removeChatGroupMember(input: {
 			throw new Error('Member not found in group');
 		}
 
-		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 		const commitResult = await removeMemberFromGroup({ state, removedLeafIndex });
 
 		enqueuePendingEpochOperation(pendingEpochOperations, {
@@ -600,9 +601,11 @@ export async function removeChatGroupMember(input: {
 			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
 		});
 
-		await coordinatorClient.PostGroupMessage({
-			msg_64: commitResult.commitMessageBase64
-		});
+		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.PostGroupMessage({
+				msg_64: commitResult.commitMessageBase64
+			})
+		);
 
 		const nextGroup = buildPersistedChatGroup({
 			group,
@@ -652,7 +655,6 @@ export async function updateChatGroupMetadata(input: {
 			adminPubkeys: input.adminPubkeys
 		};
 		const state = decodeStoredGroupState(group);
-		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 		const commitResult = await updateGroupMetadataExtension({
 			state,
 			metadata
@@ -664,9 +666,11 @@ export async function updateChatGroupMetadata(input: {
 			commitMessageBase64: commitResult.commitMessageBase64
 		});
 
-		await coordinatorClient.PostGroupMessage({
-			msg_64: commitResult.commitMessageBase64
-		});
+		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.PostGroupMessage({
+				msg_64: commitResult.commitMessageBase64
+			})
+		);
 
 		const nextGroup = buildPersistedChatGroup({
 			group,
@@ -752,11 +756,10 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 		assertChatGroupIsActive(group);
 
 		const state = decodeStoredGroupState(group);
-		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
-		const result = await withCoordinatorClientRefreshRetry(() =>
-			coordinatorClient.FetchGroupMessages({
+		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchGroupMessages({
 				gid,
 				after: group.fetchCursor > 0 ? group.fetchCursor : undefined
 			})
@@ -814,7 +817,6 @@ export async function sendChatGroupMessage(input: {
 		}
 
 		const state = decodeStoredGroupState(group);
-		const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 		const tags = input.reactionTo
 			? createReactionMessageTags(input.reactionTo)
 			: input.deleteTo
@@ -837,9 +839,11 @@ export async function sendChatGroupMessage(input: {
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
 		});
 
-		const posted = await coordinatorClient.PostGroupMessage({
-			msg_64: outbound.opaqueMessageBase64
-		});
+		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.PostGroupMessage({
+				msg_64: outbound.opaqueMessageBase64
+			})
+		);
 
 		const stored: StoredChatMessage = {
 			cursor: posted.cursor,

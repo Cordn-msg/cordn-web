@@ -11,7 +11,7 @@ import {
 } from '$lib/services/chatKeyPackages.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
-import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-welcome-notifications';
@@ -187,8 +187,9 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	try {
 		const account = requireActiveAccount('You must be logged in to fetch welcomes');
 		for (const coordinatorKey of keys) {
-			const client = getCoordinatorClient(account, coordinatorKey);
-			const result = await client.FetchPendingWelcomes({});
+			const result = await withCoordinatorClient(account, coordinatorKey, (client) =>
+				client.FetchPendingWelcomes({})
+			);
 			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
 		}
 		await resolveFetchedWelcomePreviews();

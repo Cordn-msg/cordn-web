@@ -11,10 +11,10 @@ import {
 } from '$lib/services/chatGroups.svelte';
 import {
 	disconnectCoordinatorClients,
-	getCoordinatorClient,
+	isTransientCoordinatorError,
 	onCoordinatorClientsRefresh,
 	requireActiveAccount,
-	withCoordinatorClientRefreshRetry
+	withCoordinatorClient
 } from '$lib/services/chatRuntime';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -187,7 +187,6 @@ export async function startWatchingGroup(groupId: string) {
 
 	const state = decodeStoredGroupState(group);
 	const gid = groupIdDecoder.decode(state.groupContext.groupId);
-	const client = getCoordinatorClient(account, group.coordinatorKey);
 	const after = group.fetchCursor > 0 ? group.fetchCursor : undefined;
 
 	chatGroupWatchStore.error = '';
@@ -203,7 +202,7 @@ export async function startWatchingGroup(groupId: string) {
 	};
 
 	handle.ready = (async () => {
-		const subscription = await withCoordinatorClientRefreshRetry(() =>
+		const subscription = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.SubscribeGroupMessages({
 				gid,
 				after
@@ -261,6 +260,9 @@ export async function startWatchingGroup(groupId: string) {
 				if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
 					return;
 				}
+				if (isTransientCoordinatorError(error)) {
+					return;
+				}
 
 				chatGroupWatchStore.error =
 					error instanceof Error ? error.message : 'Failed to watch group messages';
@@ -313,6 +315,10 @@ export async function startWatchingGroup(groupId: string) {
 		void handle.task.catch((error) => {
 			const detail = error instanceof Error ? error.message : String(error);
 			if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
+				return;
+			}
+
+			if (isTransientCoordinatorError(error)) {
 				return;
 			}
 

@@ -21,7 +21,7 @@ import {
 } from '$lib/services/chatMlsUtils';
 import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { getCoordinatorClient, requireActiveAccount } from '$lib/services/chatRuntime';
+import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import {
 	getChatStorage,
 	type StoredChatKeyPackageRecord as StoredBinaryChatKeyPackageRecord
@@ -253,11 +253,12 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	}
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
 	const account = requireActiveAccount('You must be logged in to manage key packages');
-	const client = getCoordinatorClient(account, normalizedCoordinator);
-	const result = await client.PublishKeyPackage({
-		kp_ref: record.keyPackageRef,
-		kp_64: record.keyPackageBase64
-	});
+	const result = await withCoordinatorClient(account, normalizedCoordinator, (client) =>
+		client.PublishKeyPackage({
+			kp_ref: record.keyPackageRef,
+			kp_64: record.keyPackageBase64
+		})
+	);
 	markCoordinatorUsed(normalizedCoordinator);
 	await markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
 	void queryClient.invalidateQueries({
@@ -286,8 +287,9 @@ export async function removeChatKeyPackage(
 			: dedupeStrings(record?.publishedCoordinatorKeys ?? []);
 
 		for (const coordinatorKey of coordinatorKeys) {
-			const client = getCoordinatorClient(account, coordinatorKey);
-			await client.RemoveKeyPackages({ kp_refs: [keyPackageRef] });
+			await withCoordinatorClient(account, coordinatorKey, (client) =>
+				client.RemoveKeyPackages({ kp_refs: [keyPackageRef] })
+			);
 			void queryClient.invalidateQueries({
 				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
 			});
