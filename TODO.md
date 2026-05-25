@@ -3,7 +3,7 @@
 - [x] Make app pwa
 - Fix other reported bugs
 - [x] Make onboarding more straightforward and publish a last resort key package, hide advanced with toggles to show other options like just publish regular key packages during onboarding
-- Allow backing up generated keys and edit profile
+- [x] Allow backing up generated keys and edit profile
 - [x] User tagging in chat '@user' 
 - [x] More default reactions
 - [x] Reply/reaction is a bit awkward on mobile, maybe slide to reply, long press to react?
@@ -15,7 +15,7 @@
 - [x] Use tanstack query for centralizing fetching strategy and lists for virtualized lists for chats with many messages
 - [x] Add search functionality to chats
 - [x] Improve edit group admins, allow use npubs
-- [ ] Create user page to see user info, groups in common, etc
+- [x] Create user page to see user info, groups in common, etc
 - [ ] Allow searching for users outside of cordn and send nip-17 message to invite them
 - [x] Log out doest work as expected and if loged with a different account after logout previous chats appear
 - [x] Retrieve all your key packages in the coordinator to be able to remove orphaned ones

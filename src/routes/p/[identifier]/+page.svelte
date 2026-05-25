@@ -109,7 +109,11 @@
 
 		const subscriptions = pubkeys.flatMap((pubkey) => [
 			createUserRelayListByPubkeyLoader(pubkey).subscribe(),
-			addressLoader({ kind: Metadata, pubkey, relays: getMetadataLookupRelays(pubkey) }).subscribe(),
+			addressLoader({
+				kind: Metadata,
+				pubkey,
+				relays: getMetadataLookupRelays(pubkey)
+			}).subscribe(),
 			eventStore.model(ProfileModel, pubkey).subscribe((nextProfile) => {
 				const current = untrack(() => sharedGroupProfileHints[pubkey]);
 				const next = {
@@ -190,7 +194,14 @@
 	}
 
 	function parseRelayList(value: string): string[] {
-		return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
+		return [
+			...new Set(
+				value
+					.split(/\r?\n/)
+					.map((entry) => entry.trim())
+					.filter(Boolean)
+			)
+		];
 	}
 
 	const enteredProfileRelayCount = $derived.by(() => parseRelayList(profileRelayList).length);
@@ -243,13 +254,15 @@
 				pubkey: $activeAccount.pubkey
 			};
 
-			const signer = ($activeAccount as {
-				signer?: {
-					signEvent?: (
-						event: typeof unsignedEvent
-					) => Promise<typeof unsignedEvent & { id: string; sig: string }>;
-				};
-			}).signer;
+			const signer = (
+				$activeAccount as {
+					signer?: {
+						signEvent?: (
+							event: typeof unsignedEvent
+						) => Promise<typeof unsignedEvent & { id: string; sig: string }>;
+					};
+				}
+			).signer;
 
 			if (!signer?.signEvent) {
 				throw new Error('Active account signer does not support metadata signing');
@@ -369,14 +382,20 @@
 							</InputGroup.Root>
 
 							<InputGroup.Root>
-								<InputGroup.Input bind:value={profilePicture} placeholder="https://example.com/avatar.png" />
+								<InputGroup.Input
+									bind:value={profilePicture}
+									placeholder="https://example.com/avatar.png"
+								/>
 								<InputGroup.Addon>
 									<InputGroup.Text>Picture</InputGroup.Text>
 								</InputGroup.Addon>
 							</InputGroup.Root>
 
 							<InputGroup.Root>
-								<InputGroup.Input bind:value={profileBanner} placeholder="https://example.com/banner.png" />
+								<InputGroup.Input
+									bind:value={profileBanner}
+									placeholder="https://example.com/banner.png"
+								/>
 								<InputGroup.Addon>
 									<InputGroup.Text>Banner</InputGroup.Text>
 								</InputGroup.Addon>
@@ -420,7 +439,9 @@
 
 							<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
 								<p>
-									Publishing to {enteredProfileRelayCount} relay{enteredProfileRelayCount === 1 ? '' : 's'}.
+									Publishing to {enteredProfileRelayCount} relay{enteredProfileRelayCount === 1
+										? ''
+										: 's'}.
 								</p>
 								<p class="mt-1 text-xs">
 									{#if loadedProfileRelays.length > 0}
@@ -432,7 +453,9 @@
 							</div>
 
 							{#if profileError}
-								<div class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+								<div
+									class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+								>
 									{profileError}
 								</div>
 							{/if}
