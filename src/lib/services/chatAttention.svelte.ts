@@ -99,7 +99,11 @@ function getNotificationBody(sender: string, content: string) {
 }
 
 function shouldSuppressNotification(groupId: string) {
-	if (document.visibilityState === 'visible' && page.url.pathname === `/chat/${groupId}`) {
+	const groupPath = `/chat/${groupId}`;
+	if (
+		document.visibilityState === 'visible' &&
+		(page.url.pathname === groupPath || page.url.pathname.startsWith(`${groupPath}/`))
+	) {
 		return true;
 	}
 	return false;
