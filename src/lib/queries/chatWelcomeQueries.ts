@@ -2,6 +2,8 @@ import { createQuery } from '@tanstack/svelte-query';
 import { browser } from '$app/environment';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { manager } from '$lib/services/accountManager.svelte';
+import { isCoordinatorClientRefreshInProgress } from '$lib/services/chatRuntime';
 import {
 	fetchWelcomeNotifications,
 	listKnownCoordinatorKeys,
@@ -44,16 +46,17 @@ export async function fetchCoordinatorWelcomeNotifications(
 
 export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
 	const hasStablePubkey = Boolean(stablePubkey?.trim());
+	const hasActiveAccount = Boolean(manager.getActive());
+	const canFetchWelcomes = !isCoordinatorClientRefreshInProgress();
 	return {
 		queryKey: hasStablePubkey
 			? chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey)
 			: [...chatQueryKeys.all, 'inactive-account', 'welcome-notifications'],
 		queryFn: () => fetchCoordinatorWelcomeNotifications(stablePubkey, coordinatorKey),
-		enabled: browser && hasStablePubkey,
+		enabled: browser && hasStablePubkey && hasActiveAccount && canFetchWelcomes,
 		staleTime: 60 * 1000,
-		refetchOnWindowFocus: true,
 		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: true
+		refetchIntervalInBackground: false
 	};
 }
 

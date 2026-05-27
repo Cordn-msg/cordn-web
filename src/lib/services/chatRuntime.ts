@@ -104,6 +104,10 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 	return getAccountCoordinatorClientRegistry(account).getClient(coordinatorKey);
 }
 
+export function isCoordinatorClientRefreshInProgress(): boolean {
+	return refreshActiveClientsPromise !== null || runtimeRecoveryPromise !== null;
+}
+
 export function onCoordinatorClientsRefresh(handler: CoordinatorClientRefreshHandler): () => void {
 	coordinatorClientRefreshHandlers.add(handler);
 	return () => coordinatorClientRefreshHandlers.delete(handler);
