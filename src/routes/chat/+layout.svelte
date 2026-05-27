@@ -12,16 +12,21 @@
 	} from '$lib/services/chatAttention.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
-	import { startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
+	import { chatGroupWatchStore, startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
 	import {
-		reconcilePublishedKeyPackagesForActiveAccount,
+		reconcilePublishedKeyPackagesForActiveAccount as reconcileKeyPackages,
 		shouldReconcilePublishedKeyPackages
 	} from '$lib/services/chatKeyPackages.svelte';
+	import {
+		loadCoordinatorRemoteKeyPackagesAction,
+		loadWelcomeNotificationsAction
+	} from '$lib/services/chatUiActions.svelte';
 
 	let { children } = $props();
 	const chatLayout = setChatLayoutContext(createChatLayoutContext());
 
 	const groups = $derived.by(() => listChatGroups());
+	let startupSyncedFor = $state('');
 
 	$effect(() => {
 		if (!$activeAccount || groups.length === 0) return;
@@ -30,8 +35,15 @@
 
 	$effect(() => {
 		const pubkey = $activeAccount?.pubkey;
-		if (!pubkey || !shouldReconcilePublishedKeyPackages(pubkey)) return;
-		void reconcilePublishedKeyPackagesForActiveAccount();
+		if (!pubkey || chatGroupWatchStore.startup !== 'ready' || startupSyncedFor === pubkey) return;
+		startupSyncedFor = pubkey;
+		void untrack(async () => {
+			await loadWelcomeNotificationsAction();
+			await loadCoordinatorRemoteKeyPackagesAction(undefined);
+			if (shouldReconcilePublishedKeyPackages(pubkey)) {
+				await reconcileKeyPackages();
+			}
+		});
 	});
 
 	$effect(() => {

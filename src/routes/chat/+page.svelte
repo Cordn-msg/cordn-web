@@ -113,7 +113,6 @@
 	let bootstrapAdvancedOpen = $state(false);
 	let quickChatError = $state('');
 	let quickChatStartingRef = $state('');
-	let keyPackageDirectoryLoaded = $state(false);
 	let keyPackageDirectorySearch = $state('');
 	let keyPackageProfileHints = $state<
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
@@ -255,13 +254,7 @@
 	}
 
 	async function refreshKeyPackageDirectory() {
-		keyPackageDirectoryLoaded = true;
 		await loadCoordinatorRemoteKeyPackagesAction(undefined, { force: true });
-	}
-
-	async function loadKeyPackageDirectory() {
-		keyPackageDirectoryLoaded = true;
-		await loadCoordinatorRemoteKeyPackagesAction(undefined);
 	}
 
 	$effect(() => {
@@ -284,15 +277,6 @@
 		]);
 
 		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
-	});
-
-	$effect(() => {
-		if (!$activeAccount || coordinators.length === 0 || keyPackageDirectoryLoaded) return;
-		const timeout = setTimeout(() => {
-			void loadKeyPackageDirectory();
-		}, 100);
-
-		return () => clearTimeout(timeout);
 	});
 
 	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {

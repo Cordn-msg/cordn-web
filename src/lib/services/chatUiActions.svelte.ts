@@ -328,6 +328,15 @@ export async function refreshWelcomeNotificationsAction() {
 	});
 }
 
+export async function loadWelcomeNotificationsAction() {
+	const account = requireActiveAccount('You must be logged in to fetch welcomes');
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
+		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey),
+		staleTime: 60 * 1000
+	});
+}
+
 export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKey: string) {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
 	await queryClient.invalidateQueries({

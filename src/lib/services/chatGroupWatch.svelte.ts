@@ -34,9 +34,11 @@ type GroupWatchTask = {
 
 export const chatGroupWatchStore = $state<{
 	watchingGroupIds: string[];
+	startup: 'idle' | 'starting' | 'ready' | 'error';
 	error: string;
 }>({
 	watchingGroupIds: [],
+	startup: 'idle',
 	error: ''
 });
 
@@ -92,6 +94,7 @@ if (browser) {
 		const previousAccount = manager.getAccount(lastActiveAccountId);
 		lastActiveAccountId = nextAccountId;
 		autoWatchDisabledGroupIds.clear();
+		chatGroupWatchStore.startup = 'idle';
 		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
@@ -299,11 +302,14 @@ export async function startWatchingGroup(groupId: string) {
 	};
 
 	handle.ready = (async () => {
-		const subscription = await withCoordinatorClient(account, watchableGroup.coordinatorKey, (client) =>
-			client.SubscribeGroupMessages({
-				gid: watchableGroup.gid,
-				after: watchableGroup.after
-			})
+		const subscription = await withCoordinatorClient(
+			account,
+			watchableGroup.coordinatorKey,
+			(client) =>
+				client.SubscribeGroupMessages({
+					gid: watchableGroup.gid,
+					after: watchableGroup.after
+				})
 		);
 
 		handle.task = (async () => {
@@ -516,12 +522,18 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 }
 
 export async function startWatchingAllGroups() {
+	chatGroupWatchStore.startup = 'starting';
 	const groupsToWatch = listChatGroups().filter(
 		(group) =>
 			getCurrentWatch(group.id) === undefined &&
 			!autoWatchDisabledGroupIds.has(group.id) &&
 			!isChatGroupRemoved(group)
 	);
+	if (groupsToWatch.length === 0) {
+		chatGroupWatchStore.startup = 'ready';
+		return;
+	}
+
 	const groupsByCoordinator = new SvelteMap<string, WatchableGroup[]>();
 
 	for (const group of groupsToWatch) {
@@ -532,10 +544,15 @@ export async function startWatchingAllGroups() {
 		groupsByCoordinator.set(watchableGroup.coordinatorKey, coordinatorGroups);
 	}
 
-	for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
-		await startWatchingCoordinatorGroups(coordinatorGroups).catch((error) => {
-			console.warn('Failed to start coordinator group watch', coordinatorKey, error);
-		});
-		await new Promise((resolve) => setTimeout(resolve, 0));
+	try {
+		for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
+			await startWatchingCoordinatorGroups(coordinatorGroups).catch((error) => {
+				console.warn('Failed to start coordinator group watch', coordinatorKey, error);
+			});
+		}
+		chatGroupWatchStore.startup = 'ready';
+	} catch (error) {
+		chatGroupWatchStore.startup = 'error';
+		throw error;
 	}
 }
