@@ -636,7 +636,7 @@
 											<a
 												href={part.href}
 												target="_blank"
-												rel="noreferrer noopener"
+												rel="external noreferrer noopener"
 												class={cn(
 													MESSAGE_LINK_WRAP_CLASS,
 													isOwn

@@ -1,3 +1,5 @@
+import { SvelteSet } from 'svelte/reactivity';
+
 type ChatReconnectPhase = 'idle' | 'checking' | 'reconnecting' | 'syncing' | 'error';
 
 export const chatReconnectStatusStore = $state<{
@@ -33,7 +35,7 @@ export function setChatReconnectStatus(input: {
 	chatReconnectStatusStore.phase = input.phase;
 	chatReconnectStatusStore.message = input.message;
 	chatReconnectStatusStore.activeCoordinatorKeys = input.activeCoordinatorKeys
-		? [...new Set(input.activeCoordinatorKeys)]
+		? [...new SvelteSet(input.activeCoordinatorKeys)]
 		: chatReconnectStatusStore.activeCoordinatorKeys;
 }
 
