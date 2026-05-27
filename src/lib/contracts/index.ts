@@ -19,7 +19,8 @@ export const COORDINATOR_METHODS = {
 	storeWelcome: 'welcome_store',
 	postGroupMessage: 'msg_post',
 	fetchGroupMessages: 'msg_fetch',
-	subscribeGroupMessages: 'msg_sub'
+	subscribeGroupMessages: 'msg_sub',
+	subscribeManyGroupMessages: 'msg_sub_many'
 } as const;
 
 export const emptyInputSchema = z.object({});
@@ -126,6 +127,15 @@ export const subscribeGroupMessagesOutputSchema = z.object({
 	subscribed: z.literal(true)
 });
 
+export const subscribeManyGroupMessagesInputSchema = z.object({
+	groups: z.array(fetchGroupMessagesInputSchema).min(1)
+});
+
+export const subscribeManyGroupMessagesOutputSchema = z.object({
+	subscribed: z.literal(true),
+	groups: z.array(z.string())
+});
+
 export type PublishKeyPackageInput = z.infer<typeof publishKeyPackageInputSchema>;
 export type PublishKeyPackageOutput = z.infer<typeof publishKeyPackageOutputSchema>;
 export type ConsumeKeyPackageInput = z.infer<typeof consumeKeyPackageInputSchema>;
@@ -144,6 +154,10 @@ export type FetchGroupMessagesInput = z.infer<typeof fetchGroupMessagesInputSche
 export type FetchGroupMessagesOutput = z.infer<typeof fetchGroupMessagesOutputSchema>;
 export type SubscribeGroupMessagesInput = z.infer<typeof subscribeGroupMessagesInputSchema>;
 export type SubscribeGroupMessagesOutput = z.infer<typeof subscribeGroupMessagesOutputSchema>;
+export type SubscribeManyGroupMessagesInput = z.infer<typeof subscribeManyGroupMessagesInputSchema>;
+export type SubscribeManyGroupMessagesOutput = z.infer<
+	typeof subscribeManyGroupMessagesOutputSchema
+>;
 export type AvailableKeyPackage = z.infer<typeof availableKeyPackageSchema>;
 export type PendingWelcome = z.infer<typeof pendingWelcomeSchema>;
 export type GroupMessage = z.infer<typeof groupMessageSchema>;
