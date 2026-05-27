@@ -49,9 +49,7 @@ export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinat
 	const hasActiveAccount = Boolean(manager.getActive());
 	const canFetchWelcomes = !isCoordinatorClientRefreshInProgress();
 	return {
-		queryKey: hasStablePubkey
-			? chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey)
-			: [...chatQueryKeys.all, 'inactive-account', 'welcome-notifications'],
+		queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey),
 		queryFn: () => fetchCoordinatorWelcomeNotifications(stablePubkey, coordinatorKey),
 		enabled: browser && hasStablePubkey && hasActiveAccount && canFetchWelcomes,
 		staleTime: 60 * 1000,
@@ -60,14 +58,7 @@ export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinat
 	};
 }
 
-export function useWelcomeNotifications(
-	stablePubkey: string | (() => string),
-	coordinatorKey?: string | (() => string | undefined)
-) {
-	return createQuery(() =>
-		welcomeNotificationsQueryOptions(
-			typeof stablePubkey === 'function' ? stablePubkey() : stablePubkey,
-			typeof coordinatorKey === 'function' ? coordinatorKey() : coordinatorKey
-		)
-	);
+export function useWelcomeNotifications(stablePubkey?: string, coordinatorKey?: string) {
+	if (!stablePubkey) return undefined;
+	return createQuery(() => welcomeNotificationsQueryOptions(stablePubkey, coordinatorKey));
 }

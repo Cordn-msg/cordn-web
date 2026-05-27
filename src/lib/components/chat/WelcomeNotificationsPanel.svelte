@@ -39,10 +39,9 @@
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
 
-	const activeAccountPubkey = $derived.by(() => $activeAccount?.pubkey ?? '');
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const useScrollableList = $derived.by(() => welcomeNotifications.length > 2);
-	const welcomeNotificationsQuery = useWelcomeNotifications(() => activeAccountPubkey);
+	const welcomeNotificationsQuery = useWelcomeNotifications($activeAccount?.pubkey);
 
 	function getNotificationCoordinatorLabel(pubkey: string) {
 		return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
@@ -193,7 +192,7 @@
 
 	{#if chatWelcomeNotificationsStore.error}
 		<p class="text-sm text-destructive">{chatWelcomeNotificationsStore.error}</p>
-	{:else if welcomeNotificationsQuery.error}
+	{:else if welcomeNotificationsQuery?.error}
 		<p class="text-sm text-destructive">
 			{welcomeNotificationsQuery.error instanceof Error
 				? welcomeNotificationsQuery.error.message
