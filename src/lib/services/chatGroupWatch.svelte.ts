@@ -3,6 +3,7 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	decodeStoredGroupState,
+	fetchChatGroupMessages,
 	getChatGroup,
 	isChatGroupRemoved,
 	listChatGroups,
@@ -10,12 +11,14 @@ import {
 	reloadChatGroupsForOwner
 } from '$lib/services/chatGroups.svelte';
 import {
+	requestCoordinatorClientsRefresh,
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
 	onCoordinatorClientsRefresh,
 	requireActiveAccount,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
+import { setChatReconnectStatus } from '$lib/services/chatReconnectStatus.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
@@ -97,9 +100,18 @@ if (browser) {
 
 	onCoordinatorClientsRefresh(async (refreshClients) => {
 		const watchedGroupIds = [...currentWatches.keys()];
+		const watchedGroups = watchedGroupIds
+			.map((groupId) => getChatGroup(groupId))
+			.filter((group): group is NonNullable<typeof group> => Boolean(group));
+		const activeCoordinatorKeys = watchedGroups.map((group) => group.coordinatorKey);
 
 		if (watchedGroupIds.length > 0) {
 			chatGroupWatchStore.error = '';
+			setChatReconnectStatus({
+				phase: 'syncing',
+				message: 'Updating chats…',
+				activeCoordinatorKeys
+			});
 			await stopWatchingGroup(undefined, COORDINATOR_CLIENTS_REFRESHED_REASON);
 		}
 
@@ -117,6 +129,8 @@ if (browser) {
 				})
 				.map((groupId) => startWatchingGroup(groupId))
 		);
+
+		await Promise.allSettled(watchedGroupIds.map((groupId) => fetchChatGroupMessages(groupId)));
 
 		chatGroupWatchStore.error = '';
 	});
@@ -261,6 +275,7 @@ export async function startWatchingGroup(groupId: string) {
 					return;
 				}
 				if (isTransientCoordinatorError(error)) {
+					void requestCoordinatorClientsRefresh();
 					return;
 				}
 
@@ -319,6 +334,7 @@ export async function startWatchingGroup(groupId: string) {
 			}
 
 			if (isTransientCoordinatorError(error)) {
+				void requestCoordinatorClientsRefresh();
 				return;
 			}
 

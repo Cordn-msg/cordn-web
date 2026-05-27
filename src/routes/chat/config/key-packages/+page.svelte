@@ -73,32 +73,20 @@
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
 	);
 	const keyPackageUsageGroupsByRef = $derived.by(() => {
-		const groupsById = new SvelteMap(chatGroups.map((group) => [group.id, group]));
 		const usageGroupsByRef = new SvelteMap<string, KeyPackageUsageGroup[]>();
 
-		for (const keyPackage of keyPackages) {
-			if (!keyPackage.consumedByGroupId) continue;
+		for (const group of chatGroups) {
+			if (!group.joinedWithKeyPackageRef) continue;
 
-			const existing = usageGroupsByRef.get(keyPackage.keyPackageRef) ?? [];
-			const group = groupsById.get(keyPackage.consumedByGroupId);
-			existing.push(
-				group
-					? {
-							id: group.id,
-							name: getGroupLabel(group),
-							coordinatorLabel: getCoordinatorLabel(group.coordinatorKey),
-							createdAt: group.createdAt,
-							missing: false
-						}
-					: {
-							id: keyPackage.consumedByGroupId,
-							name: `Group ${keyPackage.consumedByGroupId.slice(0, 8)}`,
-							coordinatorLabel: 'Group not available locally',
-							createdAt: keyPackage.consumedAt,
-							missing: true
-						}
-			);
-			usageGroupsByRef.set(keyPackage.keyPackageRef, existing);
+			const existing = usageGroupsByRef.get(group.joinedWithKeyPackageRef) ?? [];
+			existing.push({
+				id: group.id,
+				name: getGroupLabel(group),
+				coordinatorLabel: getCoordinatorLabel(group.coordinatorKey),
+				createdAt: group.createdAt,
+				missing: false
+			});
+			usageGroupsByRef.set(group.joinedWithKeyPackageRef, existing);
 		}
 
 		for (const entry of usageGroupsByRef.values()) {
@@ -129,6 +117,15 @@
 
 	function getUsageGroups(keyPackageRef: string): KeyPackageUsageGroup[] {
 		return keyPackageUsageGroupsByRef.get(keyPackageRef) ?? [];
+	}
+
+	function getRemoteUsageSummary(entry: OwnedRemoteKeyPackage): string {
+		if (!entry.localCopy) return 'Remote-only package; no local record';
+		const usageGroups = getUsageGroups(entry.localCopy.keyPackageRef);
+		if (usageGroups.length === 0) return 'No group association found locally';
+		const firstGroup = usageGroups[0];
+		if (firstGroup.missing) return `Used by missing local group ${firstGroup.name}`;
+		return `Used by group ${firstGroup.name}`;
 	}
 
 	async function handleCreate() {
@@ -580,6 +577,9 @@
 																{/if}
 															{/snippet}
 														</KeyPackageCard>
+														<p class="text-xs text-muted-foreground">
+															{getRemoteUsageSummary(remoteEntry)}
+														</p>
 														{#if remoteEntry.localCopy}
 															<p class="text-xs text-muted-foreground">
 																Local label: {remoteEntry.localCopy.label}

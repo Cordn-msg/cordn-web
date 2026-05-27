@@ -13,9 +13,5 @@
 </svelte:head>
 
 {#if group}
-	<ChatShell
-		groupId={group.id}
-		title={group.metadata?.name || 'Chat'}
-		subtitle={group.metadata?.description || 'Coordinator-assisted messaging'}
-	/>
+	<ChatShell groupId={group.id} title={group.metadata?.name || 'Chat'} />
 {/if}

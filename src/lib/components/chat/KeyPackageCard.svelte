@@ -103,7 +103,9 @@
 		{/if}
 	</div>
 
-	<div class="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+	<div
+		class="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+	>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if normalized.isLastResort}
 				<span class="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
@@ -121,6 +123,7 @@
 				type="button"
 				size="sm"
 				variant="outline"
+				class="w-full sm:w-auto"
 				onclick={onAction}
 				disabled={actionDisabled}
 			>

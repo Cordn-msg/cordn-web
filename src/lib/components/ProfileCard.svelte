@@ -164,6 +164,7 @@
 			<Button
 				variant={logoutButtonVariant}
 				size="icon"
+				class={showName ? '' : 'shrink-0'}
 				onclick={() => (showLogoutDialog = true)}
 				aria-label="Logout"
 			>

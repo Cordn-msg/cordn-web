@@ -3,11 +3,9 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { SvelteMap } from 'svelte/reactivity';
-	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
-	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
+	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
-	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -17,7 +15,7 @@
 		getUnreadChatGroupMessageCount,
 		pruneChatGroupPresence
 	} from '$lib/services/chatGroupPresence.svelte';
-	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getCoordinatorColor,
 		getChatCoordinator,
@@ -27,6 +25,7 @@
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { getCoordinatorReconnectTone } from '$lib/services/chatReconnectStatus.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -46,9 +45,6 @@
 	let notificationsOpen = $state(false);
 	let searchQuery = $state('');
 	let debouncedSearchQuery = $state('');
-	let groupProfileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
 	const chats = $derived.by(() =>
 		[...listChatGroups()].sort((a, b) => {
 			const aLatest = Math.max(a.createdAt, a.messages.at(-1)?.createdAt ?? 0);
@@ -61,8 +57,7 @@
 	const searchResults = $derived.by(() =>
 		searchChatMessages(debouncedSearchQuery, {
 			limit: 50,
-			activePubkey: $activeAccount?.pubkey,
-			profileHints: groupProfileHints
+			activePubkey: $activeAccount?.pubkey
 		})
 	);
 	const isSearching = $derived(debouncedSearchQuery.trim().length >= 2);
@@ -162,15 +157,6 @@
 		);
 	}
 
-	function getChatTitle(chat: (typeof chats)[number]) {
-		return getChatGroupDisplayTitle({
-			group: chat,
-			activePubkey: $activeAccount?.pubkey,
-			profileHints: groupProfileHints,
-			memberPubkeys: listChatGroupMembers(chat.id).map((member) => member.stablePubkey)
-		});
-	}
-
 	function closeMobileSidebar() {
 		$mobileSidebarOpen = false;
 	}
@@ -182,6 +168,20 @@
 			hour: '2-digit',
 			minute: '2-digit'
 		});
+	}
+
+	function getCoordinatorStatusClass(coordinatorKey: string) {
+		const tone = getCoordinatorReconnectTone(coordinatorKey);
+		if (tone === 'error') {
+			return 'bg-destructive';
+		}
+
+		if (tone === 'active') {
+			return 'bg-amber-500';
+		}
+
+		const hasChats = groupedChats.some((entry) => entry.pubkey === coordinatorKey);
+		return hasChats ? 'bg-emerald-500' : 'bg-muted-foreground/40';
 	}
 
 	$effect(() => {
@@ -384,39 +384,31 @@
 							<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"
 							></span>
 						{:else}
-							<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
-								{coordinatorGroup.label}
-							</p>
+							<div class="flex min-w-0 items-center gap-2">
+								<span
+									class={`h-2 w-2 shrink-0 rounded-full ${getCoordinatorStatusClass(coordinatorGroup.pubkey)}`}
+								></span>
+								<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
+									{coordinatorGroup.label}
+								</p>
+							</div>
 						{/if}
 					</a>
 
 					<div class="space-y-1">
 						{#each coordinatorGroup.chats as chat (chat.id)}
 							{@const summary = getChatSummary(chat.id)}
-							<a
+							<ChatGroupListItem
+								group={chat}
 								href={getGroupHref(chat.id)}
+								preview={summary.preview}
+								unreadCount={summary.unreadCount}
+								unreadReferenceCount={summary.unreadReferenceCount}
+								{collapsed}
+								variant="sidebar"
+								active={isActive(getGroupHref(chat.id))}
 								onclick={closeMobileSidebar}
-								class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : 'ml-1'} ${isActive(getGroupHref(chat.id)) ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
-							>
-								<div class="relative shrink-0">
-									<ChatGroupAvatar group={chat} />
-									<ChatGroupUnreadChips
-										unreadCount={summary.unreadCount}
-										unreadReferenceCount={summary.unreadReferenceCount}
-									/>
-								</div>
-
-								{#if !collapsed}
-									<div class="min-w-0 flex-1 overflow-hidden">
-										<div class="flex items-start justify-between gap-2">
-											<p class="truncate font-medium">{getChatTitle(chat)}</p>
-										</div>
-										<p class="truncate text-xs leading-5 text-muted-foreground">
-											{summary.preview}
-										</p>
-									</div>
-								{/if}
-							</a>
+							/>
 						{/each}
 					</div>
 				</div>
@@ -425,10 +417,10 @@
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		<div class="grid grid-cols-2 gap-2">
+		<div class={`grid gap-2 ${collapsed ? 'grid-cols-1 justify-items-center' : 'grid-cols-2'}`}>
 			<Dialog.Root bind:open={notificationsOpen}>
 				<Dialog.Trigger
-					class={`relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${notificationsOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+					class={`relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'w-full max-w-14 px-2' : ''} ${notificationsOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 					aria-label="Open notifications"
 					title={getNotificationsButtonLabel()}
 				>
@@ -448,7 +440,6 @@
 
 				<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),42rem)] sm:max-w-2xl">
 					<Dialog.Header>
-						<Dialog.Title>Welcome notifications</Dialog.Title>
 						<Dialog.Description>
 							Unified inbox for welcomes fetched across known coordinators.
 						</Dialog.Description>
@@ -461,7 +452,7 @@
 			<a
 				href={getConfigHref()}
 				onclick={closeMobileSidebar}
-				class={`flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+				class={`flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'w-full max-w-14 px-2' : ''} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 				aria-label="Open config"
 				title="Open config"
 			>
@@ -475,12 +466,12 @@
 
 		{#if $activeAccount}
 			<div
-				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center overflow-hidden px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
 			>
 				<ProfileCard
 					pubkey={$activeAccount.pubkey}
 					showName={!collapsed}
-					showLogout={true}
+					showLogout={!collapsed}
 					logoutButtonVariant="destructive"
 				/>
 			</div>

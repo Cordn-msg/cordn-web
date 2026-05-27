@@ -44,12 +44,10 @@
 
 	let {
 		groupId = 'general',
-		title = 'Cordn',
-		subtitle = 'Private group chat'
+		title = 'Cordn'
 	}: {
 		groupId?: string;
 		title?: string;
-		subtitle?: string;
 	} = $props();
 
 	const MAX_OPTIMISTIC_MESSAGES = 20;
@@ -95,7 +93,6 @@
 				})
 			: title
 	);
-	const displaySubtitle = $derived.by(() => group?.metadata?.description || subtitle);
 	const unreadReferenceTargets = $derived.by(() =>
 		activePubkey ? listUnreadChatGroupReferenceTargets(groupId, activePubkey) : []
 	);
@@ -515,7 +512,6 @@
 	<ChatHeader
 		{groupId}
 		title={displayTitle}
-		subtitle={displaySubtitle}
 		icon={group?.metadata?.icon}
 		imageUrl={group?.metadata?.imageUrl}
 	/>

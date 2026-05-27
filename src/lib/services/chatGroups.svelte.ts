@@ -15,7 +15,6 @@ import {
 	findMemberLeafIndexByStablePubkey,
 	getCordnGroupMetadataExtension,
 	parseConsumedPublishedKeyPackage,
-	replaceMemberInGroup,
 	removeMemberFromGroup,
 	updateGroupMetadataExtension,
 	SelfRemovalNotSupportedError,
@@ -85,6 +84,7 @@ export interface StoredChatGroup {
 	status?: 'active' | 'removed';
 	removedAtCursor?: number;
 	metadata?: GroupMetadataInput;
+	joinedWithKeyPackageRef?: string;
 }
 
 export interface CoordinatorAvailableKeyPackage {
@@ -108,7 +108,8 @@ function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 		messages: group.messages ?? [],
 		syncIssues: group.syncIssues ?? [],
 		status: group.status ?? 'active',
-		removedAtCursor: group.removedAtCursor
+		removedAtCursor: group.removedAtCursor,
+		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef
 	};
 }
 
@@ -126,6 +127,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		fetchCursor: group.fetchCursor,
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
+		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		stateBytes: base64ToBytes(group.stateBase64),
 		messages: group.messages.map((message) => ({
 			...message,
@@ -155,7 +157,8 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
-		metadata
+		metadata,
+		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef
 	});
 }
 
@@ -373,7 +376,8 @@ export async function createChatGroup(input: {
 		ownerPubkey: normalizePubKey(account.pubkey),
 		coordinatorKey: normalizedCoordinatorKey,
 		stateBase64: encodeState(state),
-		metadata
+		metadata,
+		joinedWithKeyPackageRef: memberArtifacts.keyPackageRef
 	});
 
 	persistGroup(group);
@@ -398,6 +402,23 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
 	group.ownerPubkey = normalizePubKey(account.pubkey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
+
+	const existingGroup = getChatGroup(group.id);
+	if (existingGroup) {
+		replaceGroup(existingGroup.id, {
+			...group,
+			createdAt: existingGroup.createdAt,
+			messages: existingGroup.messages,
+			syncIssues: existingGroup.syncIssues,
+			lastCursor: existingGroup.lastCursor,
+			fetchCursor: existingGroup.fetchCursor,
+			status: 'active',
+			removedAtCursor: undefined
+		});
+		removeWelcomeNotification(welcome.id);
+		markCoordinatorUsed(existingGroup.coordinatorKey);
+		return getChatGroup(group.id) ?? group;
+	}
 
 	persistGroup(group);
 	markCoordinatorUsed(group.coordinatorKey);
@@ -460,32 +481,36 @@ export async function inviteChatGroupMember(input: {
 			throw new Error(`No published key package found for ${input.identifier}`);
 		}
 
+		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);
+		const normalizedIdentifier = normalizePubKey(input.identifier.trim());
+		const matchedAvailableKeyPackage = availableKeyPackages.find(
+			(entry) =>
+				entry.keyPackageRef === input.identifier.trim() ||
+				normalizePubKey(entry.stablePubkey) === normalizedIdentifier
+		);
+		const targetStablePubkey = normalizePubKey(
+			matchedAvailableKeyPackage?.stablePubkey ?? consumeResult.keyPackage.pk
+		);
+		const existingLeafIndex = findMemberLeafIndexByStablePubkey(state, targetStablePubkey);
+		if (existingLeafIndex >= 0) {
+			throw new Error('This identity is already a group member. Reinvites are not supported.');
+		}
+
 		const memberKeyPackage = await parseConsumedPublishedKeyPackage({
 			stablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
 			publicationEvent: consumeResult.keyPackage.event
 		});
-		const replacedLeafIndex = findMemberLeafIndexByStablePubkey(
-			state,
-			normalizePubKey(consumeResult.keyPackage.pk)
-		);
 
-		const commitResult =
-			replacedLeafIndex < 0
-				? await addMemberToGroup({
-						state,
-						memberKeyPackage
-					})
-				: await replaceMemberInGroup({
-						state,
-						memberKeyPackage,
-						removedLeafIndex: replacedLeafIndex
-					});
+		const commitResult = await addMemberToGroup({
+			state,
+			memberKeyPackage
+		});
 
 		enqueuePendingEpochOperation(pendingEpochOperations, {
 			kind: 'add-member',
 			groupId: group.id,
 			commitMessageBase64: commitResult.commitMessageBase64,
-			targetStablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
+			targetStablePubkey,
 			keyPackageReference: consumeResult.keyPackage.kp_ref,
 			welcomeBase64: encodeWelcomeBase64(commitResult.welcome)
 		});

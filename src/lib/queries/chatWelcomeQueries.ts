@@ -18,19 +18,23 @@ async function fetchSingleCoordinatorWelcomeNotifications(coordinatorKey: string
 
 export async function fetchCoordinatorWelcomeNotifications(
 	stablePubkey: string,
-	coordinatorKey?: string
+	coordinatorKey?: string,
+	options?: {
+		force?: boolean;
+	}
 ) {
 	if (coordinatorKey?.trim()) {
 		return fetchSingleCoordinatorWelcomeNotifications(coordinatorKey);
 	}
 
 	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys().map(normalizePubKey))];
+	const staleTime = options?.force ? 0 : 60 * 1000;
 	await Promise.all(
 		coordinatorKeys.map((key) =>
 			queryClient.fetchQuery({
 				queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, key),
 				queryFn: () => fetchSingleCoordinatorWelcomeNotifications(key),
-				staleTime: 60 * 1000
+				staleTime
 			})
 		)
 	);
@@ -39,15 +43,28 @@ export async function fetchCoordinatorWelcomeNotifications(
 }
 
 export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
+	const hasStablePubkey = Boolean(stablePubkey?.trim());
 	return {
-		queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey),
+		queryKey: hasStablePubkey
+			? chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey)
+			: [...chatQueryKeys.all, 'inactive-account', 'welcome-notifications'],
 		queryFn: () => fetchCoordinatorWelcomeNotifications(stablePubkey, coordinatorKey),
-		enabled: browser && Boolean(stablePubkey),
+		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
-		refetchOnWindowFocus: true
+		refetchOnWindowFocus: true,
+		refetchInterval: 5 * 60 * 1000,
+		refetchIntervalInBackground: true
 	};
 }
 
-export function useWelcomeNotifications(stablePubkey: string, coordinatorKey?: string) {
-	return createQuery(() => welcomeNotificationsQueryOptions(stablePubkey, coordinatorKey));
+export function useWelcomeNotifications(
+	stablePubkey: string | (() => string),
+	coordinatorKey?: string | (() => string | undefined)
+) {
+	return createQuery(() =>
+		welcomeNotificationsQueryOptions(
+			typeof stablePubkey === 'function' ? stablePubkey() : stablePubkey,
+			typeof coordinatorKey === 'function' ? coordinatorKey() : coordinatorKey
+		)
+	);
 }

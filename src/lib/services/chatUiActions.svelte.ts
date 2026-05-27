@@ -323,7 +323,7 @@ export async function refreshWelcomeNotificationsAction() {
 	});
 	await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
-		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey),
+		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey, undefined, { force: true }),
 		staleTime: 0
 	});
 }
@@ -335,7 +335,8 @@ export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKe
 	});
 	await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey, coordinatorKey),
-		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey),
+		queryFn: () =>
+			fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey, { force: true }),
 		staleTime: 0
 	});
 }

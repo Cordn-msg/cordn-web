@@ -1,12 +1,10 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
-	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
-	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
+	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
-	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -22,7 +20,6 @@
 	import {
 		createChatGroup,
 		inviteChatGroupMember,
-		listChatGroupMembers,
 		listChatGroups
 	} from '$lib/services/chatGroups.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
@@ -46,7 +43,6 @@
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
 	import CircleDashed from '@lucide/svelte/icons/circle-dashed';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
-	import Inbox from '@lucide/svelte/icons/inbox';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Server from '@lucide/svelte/icons/server';
 	import Sparkles from '@lucide/svelte/icons/sparkles';
@@ -244,15 +240,6 @@
 		return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
 	}
 
-	function getGroupTitle(group: (typeof groups)[number]) {
-		return getChatGroupDisplayTitle({
-			group,
-			activePubkey: $activeAccount?.pubkey,
-			profileHints: keyPackageProfileHints,
-			memberPubkeys: listChatGroupMembers(group.id).map((member) => member.stablePubkey)
-		});
-	}
-
 	function getGroupPreview(groupId: string) {
 		return getLatestChatGroupMessagePreview(groupId);
 	}
@@ -265,16 +252,6 @@
 				? getUnreadChatGroupReferenceCount(groupId, $activeAccount.pubkey)
 				: 0
 		};
-	}
-
-	function getRemoteKeyPackageCoordinatorLabel() {
-		return coordinatorDetailsActionsStore.coordinatorKey
-			? getCoordinatorLabel(
-					coordinators.find(
-						(entry) => entry.pubkey === coordinatorDetailsActionsStore.coordinatorKey
-					)
-				)
-			: 'All known coordinators';
 	}
 
 	async function refreshKeyPackageDirectory() {
@@ -330,8 +307,7 @@
 			quickChatError = '';
 			const group = await createChatGroup({
 				name: '',
-				coordinatorKey,
-				keyPackageIsLastResort: true
+				coordinatorKey
 			});
 			await inviteChatGroupMember({
 				groupId: group.id,
@@ -541,19 +517,6 @@
 
 			<div class="flex flex-col gap-6">
 				<Card.Root>
-					<Card.Header class="flex flex-row items-start justify-between gap-4 space-y-0">
-						<div class="space-y-1.5">
-							<Card.Title>Welcome notifications</Card.Title>
-							<Card.Description>
-								Unified inbox for welcomes fetched across known coordinators.
-							</Card.Description>
-						</div>
-						<div
-							class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground"
-						>
-							<Inbox class="size-4" />
-						</div>
-					</Card.Header>
 					<Card.Content>
 						<WelcomeNotificationsPanel
 							maxHeightClass="h-[min(24rem,55vh)]"
@@ -571,39 +534,13 @@
 							<div class="space-y-3">
 								{#each sortedGroups as group (group.id)}
 									{@const summary = getGroupSummary(group.id)}
-									<a
+									<ChatGroupListItem
+										{group}
 										href={getGroupHref(group.id)}
-										class="group flex items-center gap-3 rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30"
-									>
-										<div class="relative shrink-0">
-											<ChatGroupAvatar
-												{group}
-												class="h-12 w-12"
-												fallbackClass="text-base font-medium"
-											/>
-											<ChatGroupUnreadChips
-												unreadCount={summary.unreadCount}
-												unreadReferenceCount={summary.unreadReferenceCount}
-											/>
-										</div>
-										<div class="min-w-0 flex-1 space-y-1">
-											<div class="flex items-center gap-2">
-												<p class="truncate font-medium text-foreground">{getGroupTitle(group)}</p>
-												{#if group.metadata?.description}
-													<span class="hidden text-xs text-muted-foreground sm:inline">•</span>
-													<p class="hidden truncate text-xs text-muted-foreground sm:block">
-														{group.metadata.description}
-													</p>
-												{/if}
-											</div>
-											<p class="truncate text-sm text-muted-foreground">
-												{summary.preview}
-											</p>
-										</div>
-										<ExternalLink
-											class="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
-										/>
-									</a>
+										preview={summary.preview}
+										unreadCount={summary.unreadCount}
+										unreadReferenceCount={summary.unreadReferenceCount}
+									/>
 								{/each}
 							</div>
 						{:else}
@@ -626,11 +563,11 @@
 				</Card.Root>
 
 				<Card.Root>
-					<Card.Header class="flex flex-row items-start justify-between gap-4 space-y-0">
+					<Card.Header class="flex flex-col items-start justify-between gap-4 space-y-0">
 						<div class="space-y-1.5">
 							<Card.Title>Available key packages</Card.Title>
 							<Card.Description>
-								Directory of public key packages in {getRemoteKeyPackageCoordinatorLabel()}.
+								Directory of public key packages in all known coordinators.
 							</Card.Description>
 						</div>
 						<div class="flex flex-wrap justify-end gap-2">

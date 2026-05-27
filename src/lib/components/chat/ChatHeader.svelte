@@ -23,7 +23,11 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
-	import { getChatGroup, isChatGroupRemoved } from '$lib/services/chatGroups.svelte';
+	import {
+		getChatGroup,
+		isChatGroupRemoved,
+		listChatGroupMembers
+	} from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
 	import Download from '@lucide/svelte/icons/download';
 	import Eye from '@lucide/svelte/icons/eye';
@@ -41,13 +45,11 @@
 	let {
 		groupId,
 		title = 'Cordn',
-		subtitle = 'Coordinator-assisted messaging',
 		icon,
 		imageUrl
 	}: {
 		groupId?: string;
 		title?: string;
-		subtitle?: string;
 		icon?: string;
 		imageUrl?: string;
 	} = $props();
@@ -120,16 +122,22 @@
 		}
 		return [...pubkeys];
 	});
-	const visibleInviteKeyPackageItems = $derived.by(() =>
-		filteredInviteKeyPackages.map((entry) => ({
-			id: entry.keyPackageRef,
-			entry: { ...entry, label: formatKeyPackageLabel(entry) },
-			pubkey: entry.stablePubkey,
-			actionLabel: 'Invite',
-			actionDisabled: chatHeaderActionsStore.inviteSubmitting,
-			onAction: () => inviteMember(entry.keyPackageRef)
-		}))
-	);
+	const visibleInviteKeyPackageItems = $derived.by(() => {
+		const existingMemberPubkeys = new SvelteSet(
+			groupId ? listChatGroupMembers(groupId).map((member) => member.stablePubkey) : []
+		);
+
+		return filteredInviteKeyPackages
+			.filter((entry) => !existingMemberPubkeys.has(entry.stablePubkey))
+			.map((entry) => ({
+				id: entry.keyPackageRef,
+				entry: { ...entry, label: formatKeyPackageLabel(entry) },
+				pubkey: entry.stablePubkey,
+				actionLabel: 'Invite',
+				actionDisabled: chatHeaderActionsStore.inviteSubmitting,
+				onAction: () => inviteMember(entry.keyPackageRef)
+			}));
+	});
 
 	async function navigateToInfo() {
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
@@ -238,10 +246,14 @@
 				{/if}
 			</Avatar>
 
-			<div class="min-w-0">
+			<button
+				type="button"
+				onclick={navigateToInfo}
+				class="min-w-0 rounded-xl text-left transition-opacity outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+				aria-label={`Open ${title} group info`}
+			>
 				<h1 class="truncate text-lg font-semibold tracking-tight">{title}</h1>
-				<p class="truncate text-sm text-muted-foreground">{subtitle}</p>
-			</div>
+			</button>
 		</div>
 
 		{#if groupId}
@@ -460,9 +472,6 @@
 		{/if}
 	</div>
 
-	{#if chatGroupWatchStore.error}
-		<p class="px-4 pb-3 text-sm text-destructive md:px-6">{chatGroupWatchStore.error}</p>
-	{/if}
 	{#if isRemoved}
 		<p class="px-4 pb-3 text-sm text-muted-foreground md:px-6">
 			This group is inactive for your account. Live watching and sending are disabled.

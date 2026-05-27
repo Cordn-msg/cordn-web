@@ -17,6 +17,11 @@
 	import ProfileCard from '../ProfileCard.svelte';
 	import type { ChatMentionCandidate, ChatMentionReference } from './chat.types';
 
+	const COMPOSER_PREVIEW_WRAP_CLASS =
+		'line-clamp-2 min-w-0 max-w-full text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]';
+	const COMPOSER_INPUT_WRAP_CLASS =
+		'field-sizing-fixed min-h-11 w-full min-w-0 max-w-full overflow-x-hidden whitespace-pre-wrap break-words rounded-xl border border-input bg-card text-sm shadow-xs [overflow-wrap:anywhere] [word-break:break-word]';
+
 	let {
 		value = $bindable(''),
 		onSubmit,
@@ -257,7 +262,7 @@
 						<Pencil class="size-3.5" />
 						<span>Editing message</span>
 					</div>
-					<p class="line-clamp-2 text-sm [overflow-wrap:anywhere] break-words text-foreground/80">
+					<p class={`${COMPOSER_PREVIEW_WRAP_CLASS} text-foreground/80`}>
 						{editTo.text}
 					</p>
 				</div>
@@ -284,7 +289,7 @@
 						<span>Replying to</span>
 						<ProfileCard pubkey={replyTo.author} mode="inline" showInlineAvatar={true} />
 					</div>
-					<p class="line-clamp-2 text-sm [overflow-wrap:anywhere] break-words text-foreground/80">
+					<p class={`${COMPOSER_PREVIEW_WRAP_CLASS} text-foreground/80`}>
 						{replyTo.text}
 					</p>
 				</div>
@@ -301,8 +306,8 @@
 			</div>
 		{/if}
 
-		<div class="flex items-end gap-3">
-			<div class="flex flex-1 flex-col gap-2">
+		<div class="flex min-w-0 items-end gap-3">
+			<div class="flex min-w-0 flex-1 flex-col gap-2">
 				{#if unreadReferenceCount > 0}
 					<div class="flex justify-center">
 						<Button
@@ -353,10 +358,11 @@
 					bind:value
 					placeholder="Type a message..."
 					rows={expanded ? 6 : 1}
+					wrap="soft"
 					{disabled}
 					onkeydown={handleKeyDown}
 					oninput={handleInput}
-					class="min-h-11 w-full min-w-0 overflow-x-hidden rounded-xl border border-input bg-card text-sm break-all whitespace-pre-wrap shadow-xs"
+					class={COMPOSER_INPUT_WRAP_CLASS}
 					style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
 				/>
 			</div>

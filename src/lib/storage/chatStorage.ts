@@ -16,6 +16,7 @@ export interface StoredChatGroupRecord {
 	fetchCursor: number;
 	status?: 'active' | 'removed';
 	removedAtCursor?: number;
+	joinedWithKeyPackageRef?: string;
 }
 
 export interface StoredChatGroupStateRecord {
@@ -48,8 +49,6 @@ export interface StoredChatKeyPackageRecord {
 	cipherSuite: string;
 	createdAt: number;
 	publishedCoordinatorKeys: string[];
-	consumedAt?: number;
-	consumedByGroupId?: string;
 }
 
 export interface ChatStorageCapabilities {
@@ -417,13 +416,15 @@ class IndexedDbChatStorage implements ChatStorage {
 				reject(getExistingGroup.error ?? new Error('IndexedDB request failed'));
 			getExistingGroup.onsuccess = () => {
 				const existing = getExistingGroup.result;
+				const isReactivatedGroup = group.status === 'active' && group.removedAtCursor === undefined;
 				groupStore.put({
 					...cloneGroupRecord(group),
 					lastCursor: Math.max(existing?.lastCursor ?? 0, group.lastCursor),
 					fetchCursor: Math.max(existing?.fetchCursor ?? 0, group.fetchCursor),
-					status: existing?.status === 'removed' ? 'removed' : group.status,
-					removedAtCursor:
-						existing?.removedAtCursor !== undefined && group.removedAtCursor !== undefined
+					status: existing?.status === 'removed' && !isReactivatedGroup ? 'removed' : group.status,
+					removedAtCursor: isReactivatedGroup
+						? undefined
+						: existing?.removedAtCursor !== undefined && group.removedAtCursor !== undefined
 							? Math.max(existing.removedAtCursor, group.removedAtCursor)
 							: (existing?.removedAtCursor ?? group.removedAtCursor)
 				});

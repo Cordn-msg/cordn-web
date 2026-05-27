@@ -50,7 +50,7 @@ export const chatWelcomeNotificationsStore = $state<{
 let activeNotificationsStorageKey = getNotificationsStorageKey();
 
 function makeNotificationId(coordinatorKey: string, welcome: PendingWelcome): string {
-	return `${coordinatorKey}:${welcome.kp_ref}:${welcome.at}`;
+	return `${coordinatorKey}:${welcome.kp_ref}`;
 }
 
 function saveNotifications() {
@@ -135,7 +135,12 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 		});
 	}
 
-	chatWelcomeNotificationsStore.entries = [...existingById.values()].sort((a, b) => b.at - a.at);
+	chatWelcomeNotificationsStore.entries = [...existingById.values()]
+		.filter(
+			(entry, index, entries) =>
+				entries.findIndex((candidate) => candidate.id === entry.id) === index
+		)
+		.sort((a, b) => b.at - a.at);
 	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {
 		...chatWelcomeNotificationsStore.lastFetchedAtByCoordinator,
 		[normalizedCoordinatorKey]: fetchedAt

@@ -6,11 +6,7 @@ import {
 } from 'ts-mls';
 
 import type { StoredKeyPackageRecord } from '$lib/services/chatKeyPackages.svelte';
-import {
-	decodeStoredKeyPackage,
-	getChatKeyPackage,
-	markKeyPackageConsumed
-} from '$lib/services/chatKeyPackages.svelte';
+import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 import {
 	getCordnCipherSuite,
 	getCordnGroupMetadataExtension,
@@ -95,6 +91,7 @@ export function buildStoredChatGroup(params: {
 	createdAt?: number;
 	stateBase64: string;
 	metadata?: GroupMetadataInput;
+	joinedWithKeyPackageRef?: string;
 }): StoredChatGroup {
 	return {
 		id: params.id,
@@ -106,7 +103,8 @@ export function buildStoredChatGroup(params: {
 		fetchCursor: 0,
 		messages: [],
 		syncIssues: [],
-		metadata: params.metadata
+		metadata: params.metadata,
+		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef
 	};
 }
 
@@ -131,9 +129,8 @@ export async function acceptWelcomeToGroup(params: {
 		id: getProtocolGroupId(state),
 		coordinatorKey: params.welcome.coordinatorKey,
 		stateBase64: params.encodeState(state),
-		metadata
+		metadata,
+		joinedWithKeyPackageRef: params.welcome.kpRef
 	});
-
-	markKeyPackageConsumed(params.welcome.kpRef, group.id);
 	return group;
 }

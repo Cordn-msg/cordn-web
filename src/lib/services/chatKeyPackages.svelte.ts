@@ -52,8 +52,6 @@ export interface StoredKeyPackageRecord {
 	cipherSuite: string;
 	createdAt: number;
 	publishedCoordinatorKeys: string[];
-	consumedAt?: number;
-	consumedByGroupId?: string;
 }
 
 export const chatKeyPackagesStore = $state<{ keyPackages: StoredKeyPackageRecord[] }>({
@@ -74,9 +72,7 @@ function fromStoredRecord(record: StoredBinaryChatKeyPackageRecord): StoredKeyPa
 		privateKeyPackageBase64: bytesToBase64(record.privateKeyPackageBytes),
 		cipherSuite: record.cipherSuite,
 		createdAt: record.createdAt,
-		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys],
-		consumedAt: record.consumedAt,
-		consumedByGroupId: record.consumedByGroupId
+		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys]
 	};
 }
 
@@ -91,9 +87,7 @@ function toStoredRecord(record: StoredKeyPackageRecord): StoredBinaryChatKeyPack
 		privateKeyPackageBytes: base64ToBytes(record.privateKeyPackageBase64),
 		cipherSuite: record.cipherSuite,
 		createdAt: record.createdAt,
-		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys],
-		consumedAt: record.consumedAt,
-		consumedByGroupId: record.consumedByGroupId
+		publishedCoordinatorKeys: [...record.publishedCoordinatorKeys]
 	};
 }
 
@@ -283,7 +277,7 @@ export async function removeChatKeyPackage(
 	const normalizedCoordinator = input.coordinatorKey?.trim()
 		? normalizePubKey(input.coordinatorKey)
 		: undefined;
-	const shouldRemoveRemotely = !input.localOnly && !record?.consumedAt;
+	const shouldRemoveRemotely = !input.localOnly;
 
 	if (!record && !normalizedCoordinator) {
 		throw new Error('Key package not found');
@@ -408,24 +402,5 @@ export async function markKeyPackagePublished(
 				publishedCoordinatorKeys
 			};
 		})
-	);
-}
-
-export function markKeyPackageConsumed(keyPackageRef: string, groupId: string) {
-	void markKeyPackageConsumedAsync(keyPackageRef, groupId);
-}
-
-async function markKeyPackageConsumedAsync(keyPackageRef: string, groupId: string) {
-	const consumedAt = Date.now();
-	await setKeyPackages(
-		chatKeyPackagesStore.keyPackages.map((entry) =>
-			entry.keyPackageRef === keyPackageRef
-				? {
-						...entry,
-						consumedAt,
-						consumedByGroupId: groupId
-					}
-				: entry
-		)
 	);
 }

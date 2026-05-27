@@ -472,14 +472,6 @@ export async function ingestChatGroupMessages(params: {
 				isUndecryptableStaleMessageIssue(detail) ||
 				isRemovedMemberCommitIssue(detail)
 			) {
-				if (isRemovedMemberCommitIssue(detail) && !isPendingOperationMessage) {
-					group.fetchCursor = message.cursor;
-					group.lastCursor = Math.max(group.lastCursor, message.cursor);
-					group.status = 'removed';
-					group.removedAtCursor = message.cursor;
-					removedLocalMember = true;
-					continue;
-				}
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 

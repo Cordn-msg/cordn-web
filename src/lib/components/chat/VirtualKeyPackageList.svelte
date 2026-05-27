@@ -23,7 +23,7 @@
 		className?: string;
 	};
 
-	const ESTIMATED_ROW_HEIGHT = 140;
+	const ESTIMATED_ROW_HEIGHT = 180;
 	const VIRTUAL_OVERSCAN = 4;
 
 	type Props = {
@@ -61,15 +61,22 @@
 	const totalSize = $derived($virtualizer.getTotalSize());
 	let lastVisibleItemIds: string[] = [];
 
+	function applyVirtualizerOptions(count: number) {
+		untrack(() => {
+			$virtualizer.setOptions({
+				count,
+				getScrollElement: () => container,
+				getItemKey: (index) => items[index]?.id ?? index
+			});
+		});
+	}
+
 	function areStringArraysEqual(left: string[], right: string[]) {
 		return left.length === right.length && left.every((value, index) => value === right[index]);
 	}
 
-	const shouldMeasureDynamically = $derived(itemHeight <= 0);
-
 	function measureVisibleItems() {
 		if (!browser || !container) return;
-		if (!shouldMeasureDynamically) return;
 		for (const element of container.querySelectorAll<HTMLDivElement>('[data-virtual-item]')) {
 			$virtualizer.measureElement(element);
 		}
@@ -77,11 +84,6 @@
 
 	function measureVirtualItem(node: HTMLDivElement) {
 		if (!browser) return;
-		if (!shouldMeasureDynamically) {
-			return {
-				destroy() {}
-			};
-		}
 		$virtualizer.measureElement(node);
 		const observer = new ResizeObserver(() => {
 			$virtualizer.measureElement(node);
@@ -97,20 +99,27 @@
 
 	onMount(() => {
 		mounted = true;
+		const resizeObserver =
+			browser && container
+				? new ResizeObserver(() => {
+						void tick().then(measureVisibleItems);
+					})
+				: null;
+
+		if (container && resizeObserver) {
+			resizeObserver.observe(container);
+		}
+
 		void tick().then(() => {
+			applyVirtualizerOptions(items.length);
 			untrack(() => {
-				$virtualizer.setOptions({
-					count: items.length,
-					getScrollElement: () => container,
-					estimateSize: () => itemHeight + itemGap,
-					getItemKey: (index) => items[index]?.id ?? index
-				});
 				$virtualizer.measure();
 			});
 			measureVisibleItems();
 		});
 		return () => {
 			mounted = false;
+			resizeObserver?.disconnect();
 		};
 	});
 
@@ -118,17 +127,14 @@
 		if (!mounted) return;
 		const itemCount = items.length;
 		void tick().then(() => {
-			untrack(() => {
-				$virtualizer.setOptions({
-					count: itemCount,
-					getScrollElement: () => container,
-					estimateSize: () => itemHeight + itemGap,
-					getItemKey: (index) => items[index]?.id ?? index
-				});
-				$virtualizer.measure();
-			});
+			applyVirtualizerOptions(itemCount);
 			measureVisibleItems();
 		});
+	});
+
+	$effect(() => {
+		void virtualItems;
+		void tick().then(measureVisibleItems);
 	});
 
 	$effect(() => {

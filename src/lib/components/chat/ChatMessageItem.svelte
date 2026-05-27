@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	let sharedSavedReactions = $state<string[] | null>(null);
+	let activeTouchActionsMessageId = $state<string | null>(null);
 </script>
 
 <script lang="ts">
@@ -26,9 +27,10 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import Pencil from '@lucide/svelte/icons/pencil';
+	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
+	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
-	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import { cn, pubkeyToHexColor } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 	import {
@@ -39,9 +41,11 @@
 
 	const REACTIONS = ['👍', '❤️', '😂', '😮', '🎉', '🔥'] as const;
 	const MESSAGE_TEXT_WRAP_CLASS =
-		'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere] break-words';
+		'min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]';
 	const MESSAGE_LINK_WRAP_CLASS =
-		'underline underline-offset-2 [overflow-wrap:anywhere] break-words';
+		'inline max-w-full whitespace-normal break-words text-left align-baseline underline underline-offset-2 [overflow-wrap:anywhere] [word-break:break-word]';
+	const MESSAGE_PART_CONTAINER_CLASS =
+		'min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word]';
 
 	function openExternalLink(href: string) {
 		window.open(href, '_blank', 'noopener,noreferrer');
@@ -80,12 +84,9 @@
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
 	let isDragging = $state(false);
-	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-	let longPressTriggered = false;
 
 	const SWIPE_REPLY_THRESHOLD = 56;
 	const SWIPE_MAX_OFFSET = 72;
-	const LONG_PRESS_DELAY = 500;
 	const GESTURE_MOVE_TOLERANCE = 10;
 
 	const isOwn = $derived(message.isOwn ?? false);
@@ -96,8 +97,13 @@
 	);
 	const savedReactions = $derived(sharedSavedReactions ?? []);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
+	const mobileActionsVisible = $derived(activeTouchActionsMessageId === message.id);
 	const shouldMountInteractionControls = $derived(
-		interactionControlsActive || reactionMenuOpen || actionsMenuOpen || customReactionOpen
+		interactionControlsActive ||
+			reactionMenuOpen ||
+			actionsMenuOpen ||
+			customReactionOpen ||
+			mobileActionsVisible
 	);
 	const replySwipeDirection = $derived(isOwn ? -1 : 1);
 	const replySwipeProgress = $derived(Math.min(Math.abs(swipeOffset) / SWIPE_REPLY_THRESHOLD, 1));
@@ -112,7 +118,7 @@
 	}
 	const bubbleClass = $derived.by(
 		() =>
-			`max-w-full rounded-3xl border px-3 py-2.5 text-sm leading-6 shadow-sm transition-all sm:px-4 sm:py-3 sm:leading-7 ${
+			`min-w-0 max-w-full overflow-hidden rounded-3xl border px-3 py-2.5 text-sm leading-6 shadow-sm transition-all sm:px-4 sm:py-3 sm:leading-7 ${
 				isOwn
 					? message.deliveryState === 'error'
 						? 'border-destructive/40 bg-primary text-primary-foreground'
@@ -164,8 +170,27 @@
 		interactionControlsActive = true;
 	}
 
-	function handleShowCustomReactionInput() {
+	function showTouchActions() {
 		activateInteractionControls();
+		activeTouchActionsMessageId = message.id;
+	}
+
+	function clearTouchActions() {
+		if (activeTouchActionsMessageId === message.id) {
+			activeTouchActionsMessageId = null;
+		}
+	}
+
+	function handleReplyAction() {
+		if (message.deleted) return;
+		actionsMenuOpen = false;
+		clearTouchActions();
+		onReply(message);
+	}
+
+	function handleShowCustomReactionInput() {
+		showTouchActions();
+		reactionMenuOpen = true;
 		customReactionOpen = true;
 	}
 
@@ -179,45 +204,53 @@
 		customReaction = '';
 		customReactionOpen = false;
 		reactionMenuOpen = false;
+		clearTouchActions();
+	}
+
+	function startEditing() {
+		if (!isOwn || message.deleted) return;
+		actionsMenuOpen = false;
+		clearTouchActions();
+		onEdit(message);
 	}
 
 	function handleReactionMenuOpenChange(open: boolean) {
 		reactionMenuOpen = open;
-		if (open) activateInteractionControls();
+		if (open) {
+			showTouchActions();
+		}
 		if (!open) {
 			customReactionOpen = false;
 			customReaction = '';
 		}
 	}
 
-	function startEditing() {
-		if (!isOwn || message.deleted) return;
-		actionsMenuOpen = false;
-		onEdit(message);
-	}
-
 	function handleActionsMenuOpenChange(open: boolean) {
 		actionsMenuOpen = open;
-		if (open) activateInteractionControls();
+		if (open) showTouchActions();
+		if (!open) {
+			reactionMenuOpen = false;
+			customReactionOpen = false;
+			customReaction = '';
+			clearTouchActions();
+		}
 	}
 
 	async function deleteMessage() {
 		if (!isOwn || message.deleted) return;
 		actionsMenuOpen = false;
+		clearTouchActions();
 		await onDelete(message);
 	}
 
-	function clearLongPressTimer() {
-		if (!longPressTimer) return;
-		clearTimeout(longPressTimer);
-		longPressTimer = null;
+	function getReactionTooltip(reaction: NonNullable<ChatMessage['reactions']>[number]) {
+		if (!reaction.reactors.length) return 'Toggle reaction';
+		return reaction.reactors.join('\n');
 	}
 
 	function resetGesture() {
-		clearLongPressTimer();
 		isDragging = false;
 		swipeOffset = 0;
-		longPressTriggered = false;
 	}
 
 	function isCoarsePointer(event: PointerEvent) {
@@ -232,19 +265,6 @@
 		touchStartY = event.clientY;
 		swipeOffset = 0;
 		isDragging = false;
-		longPressTriggered = false;
-		clearLongPressTimer();
-
-		longPressTimer = setTimeout(() => {
-			activateInteractionControls();
-			longPressTriggered = true;
-			if (isOwn) {
-				actionsMenuOpen = true;
-			} else if (!message.deleted) {
-				reactionMenuOpen = true;
-			}
-			swipeOffset = 0;
-		}, LONG_PRESS_DELAY);
 	}
 
 	function handleBubblePointerMove(event: PointerEvent) {
@@ -261,7 +281,6 @@
 
 		if (horizontalDistance <= GESTURE_MOVE_TOLERANCE) return;
 
-		clearLongPressTimer();
 		const directedOffset = deltaX * replySwipeDirection > 0 ? deltaX : 0;
 		isDragging = directedOffset !== 0;
 		swipeOffset = Math.max(-SWIPE_MAX_OFFSET, Math.min(SWIPE_MAX_OFFSET, directedOffset));
@@ -269,10 +288,15 @@
 
 	function handleBubblePointerUp(event: PointerEvent) {
 		if (!isCoarsePointer(event)) return;
-		clearLongPressTimer();
 
-		if (!message.deleted && !longPressTriggered && Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD) {
+		if (!message.deleted && Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD) {
 			onReply(message);
+			resetGesture();
+			return;
+		}
+
+		if (Math.abs(swipeOffset) < GESTURE_MOVE_TOLERANCE) {
+			showTouchActions();
 		}
 
 		resetGesture();
@@ -310,14 +334,20 @@
 			class:flex-row-reverse={isOwn}
 			onpointerenter={activateInteractionControls}
 			onfocusin={activateInteractionControls}
+			onclick={() => {
+				if (mobileActionsVisible || actionsMenuOpen || reactionMenuOpen) return;
+				clearTouchActions();
+			}}
 		>
-			<div class="relative flex min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
+			<div class="relative flex max-w-full min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
 				{#if shouldMountInteractionControls}
 					<TooltipProvider>
 						<div
 							class={cn(
-								'absolute z-10 flex items-center gap-1 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
-								reactionMenuOpen ? 'opacity-100' : 'opacity-0',
+								'absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:opacity-100 sm:group-hover:opacity-100',
+								mobileActionsVisible || reactionMenuOpen || actionsMenuOpen
+									? 'opacity-100'
+									: 'opacity-0 sm:opacity-0',
 								actionSideClass
 							)}
 						>
@@ -330,7 +360,7 @@
 												type="button"
 												variant="ghost"
 												size="icon-sm"
-												class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
 												onclick={() => onReply(message)}
 												aria-label="Reply to message"
 											>
@@ -340,6 +370,22 @@
 									</TooltipTrigger>
 									<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
 								</Tooltip>
+							{/if}
+
+							{#if !message.deleted}
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-sm"
+									class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:hidden"
+									onclick={(event) => {
+										event.stopPropagation();
+										handleReplyAction();
+									}}
+									aria-label="Reply to message"
+								>
+									<MessageCirclePlus class="size-4" />
+								</Button>
 							{/if}
 
 							{#if !message.deleted}
@@ -359,6 +405,7 @@
 															size="icon-sm"
 															class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
 															aria-label="Add reaction"
+															onclick={(event) => event.stopPropagation()}
 														>
 															<SmilePlus class="size-4" />
 														</Button>
@@ -378,7 +425,10 @@
 										<div class="grid max-h-[172px] grid-cols-6 gap-1 overflow-y-auto">
 											{#each availableReactions as reaction (reaction)}
 												<DropdownMenuItem
-													onSelect={() => onReact(message, reaction)}
+													onSelect={async () => {
+														await onReact(message, reaction);
+														clearTouchActions();
+													}}
 													class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
 												>
 													{reaction}
@@ -432,52 +482,58 @@
 								</DropdownMenuRoot>
 							{/if}
 
-							{#if isOwn}
-								<DropdownMenuRoot
-									bind:open={actionsMenuOpen}
-									onOpenChange={handleActionsMenuOpenChange}
-								>
-									<Tooltip>
-										<TooltipTrigger>
-											{#snippet child({ props })}
-												<DropdownMenuTrigger {...props}>
-													{#snippet child({ props: triggerProps })}
-														<Button
-															{...triggerProps}
-															type="button"
-															variant="ghost"
-															size="icon-sm"
-															class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-															aria-label="Open message actions"
-														>
-															<Ellipsis class="size-4" />
-														</Button>
-													{/snippet}
-												</DropdownMenuTrigger>
-											{/snippet}
-										</TooltipTrigger>
-										<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
-									</Tooltip>
+							<DropdownMenuRoot
+								bind:open={actionsMenuOpen}
+								onOpenChange={handleActionsMenuOpenChange}
+							>
+								<Tooltip>
+									<TooltipTrigger>
+										{#snippet child({ props })}
+											<DropdownMenuTrigger {...props}>
+												{#snippet child({ props: triggerProps })}
+													<Button
+														{...triggerProps}
+														type="button"
+														variant="ghost"
+														size="icon-sm"
+														class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+														aria-label="Open message actions"
+														onclick={(event) => event.stopPropagation()}
+													>
+														<Ellipsis class="size-4" />
+													</Button>
+												{/snippet}
+											</DropdownMenuTrigger>
+										{/snippet}
+									</TooltipTrigger>
+									<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
+								</Tooltip>
 
-									<DropdownMenuContent
-										side="top"
-										align={isOwn ? 'start' : 'end'}
-										sideOffset={8}
-										class="w-40 rounded-xl"
-									>
-										{#if !message.deleted}
-											<DropdownMenuItem onSelect={startEditing} class="gap-2">
-												<Pencil class="size-4" />
-												<span>Edit</span>
-											</DropdownMenuItem>
-											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
-												<Trash2 class="size-4" />
-												<span>Delete</span>
-											</DropdownMenuItem>
-										{/if}
-									</DropdownMenuContent>
-								</DropdownMenuRoot>
-							{/if}
+								<DropdownMenuContent
+									side="top"
+									align={isOwn ? 'start' : 'end'}
+									sideOffset={8}
+									class="w-40 rounded-xl"
+								>
+									{#if !message.deleted}
+										<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
+											<CornerUpLeft class="size-4" />
+											<span>Reply</span>
+										</DropdownMenuItem>
+									{/if}
+
+									{#if isOwn && !message.deleted}
+										<DropdownMenuItem onSelect={startEditing} class="gap-2">
+											<Pencil class="size-4" />
+											<span>Edit</span>
+										</DropdownMenuItem>
+										<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
+											<Trash2 class="size-4" />
+											<span>Delete</span>
+										</DropdownMenuItem>
+									{/if}
+								</DropdownMenuContent>
+							</DropdownMenuRoot>
 						</div>
 					</TooltipProvider>
 				{/if}
@@ -490,11 +546,14 @@
 					</p>
 				{/if}
 
-				<div class="relative">
+				<div class="relative max-w-full min-w-0">
 					<div
 						role="group"
 						data-message-id={message.id}
-						class={cn(bubbleClass, 'relative z-10 touch-pan-y select-text')}
+						class={cn(
+							bubbleClass,
+							'relative z-10 w-full max-w-full min-w-0 touch-pan-y select-text'
+						)}
 						style={`transform: ${swipeTransform}; ${
 							isDragging ? '' : 'transition: transform 150ms ease-out;'
 						}`}
@@ -531,14 +590,14 @@
 							<button
 								type="button"
 								class={cn(
-									'mb-3 block w-full rounded-2xl border px-3 py-2 text-left transition-colors',
+									'mb-3 block max-w-full min-w-0 rounded-2xl border px-3 py-2 text-left transition-colors',
 									isOwn
 										? 'border-primary-foreground/20 bg-primary-foreground/12 text-primary-foreground hover:bg-primary-foreground/18'
 										: 'border-border/70 bg-background/70 hover:bg-muted/80'
 								)}
 								onclick={() => onNavigateToMessage(message.replyTo!.id)}
 							>
-								<div class="flex items-center gap-1.5 text-xs font-medium">
+								<div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
 									<span class={cn(isOwn ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
 										Replying to
 									</span>
@@ -559,13 +618,18 @@
 								</div>
 								<p
 									class={cn(
-										`line-clamp-2 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
+										`line-clamp-2 max-w-full min-w-0 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
 										isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
 									)}
 								>
 									{#each replyParts as part, index (`${message.id}:reply-part:${index}`)}
 										{#if part.type === 'profile'}
-											<span class="inline-flex rounded-full font-semibold">
+											<span
+												class={cn(
+													'inline-flex max-w-full min-w-0 rounded-full font-semibold',
+													MESSAGE_PART_CONTAINER_CLASS
+												)}
+											>
 												@<ProfileCard pubkey={part.pubkey} mode="inline" />
 											</span>
 										{:else if part.type === 'link'}
@@ -583,7 +647,7 @@
 												{part.text}
 											</a>
 										{:else}
-											{part.text}
+											<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
 										{/if}
 									{/each}
 								</p>
@@ -591,12 +655,13 @@
 						{/if}
 
 						{#if !message.deleted}
-							<p class={MESSAGE_TEXT_WRAP_CLASS}>
+							<p class={cn('max-w-full min-w-0', MESSAGE_TEXT_WRAP_CLASS)}>
 								{#each messageParts as part, index (`${message.id}:part:${index}`)}
 									{#if part.type === 'profile'}
 										<span
 											class={cn(
-												'inline-flex rounded-full px-1 font-semibold',
+												'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
+												MESSAGE_PART_CONTAINER_CLASS,
 												isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
 											)}
 										>
@@ -607,6 +672,7 @@
 											type="button"
 											onclick={() => openExternalLink(part.href)}
 											class={cn(
+												'max-w-full min-w-0 whitespace-normal',
 												MESSAGE_LINK_WRAP_CLASS,
 												isOwn
 													? 'text-primary-foreground hover:text-primary-foreground/80'
@@ -616,7 +682,7 @@
 											{part.text}
 										</button>
 									{:else}
-										{part.text}
+										<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
 									{/if}
 								{/each}
 							</p>
@@ -627,56 +693,32 @@
 				{#if !message.deleted && message.reactions?.length}
 					<div class="flex flex-wrap gap-2 px-1 pt-0.5" class:justify-end={isOwn}>
 						{#each message.reactions as reaction (`${message.id}:${reaction.emoji}`)}
-							{#if interactionControlsActive}
-								<DropdownMenuRoot>
-									<Tooltip>
-										<TooltipTrigger>
-											{#snippet child({ props })}
-												<DropdownMenuTrigger {...props}>
-													{#snippet child({ props: triggerProps })}
-														<button
-															{...triggerProps}
-															type="button"
-															class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-															aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
-															onclick={() => onReact(message, reaction.emoji)}
-														>
-															<span>{reaction.emoji}</span>
-															<span>{reaction.count}</span>
-														</button>
-													{/snippet}
-												</DropdownMenuTrigger>
-											{/snippet}
-										</TooltipTrigger>
-										<TooltipContent side="top" sideOffset={8}>View reactions</TooltipContent>
-									</Tooltip>
-
-									<DropdownMenuContent
-										side="top"
-										align={isOwn ? 'start' : 'end'}
-										sideOffset={8}
-										class="min-w-44 rounded-xl p-3"
-									>
-										<div class="flex flex-col gap-2">
-											{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
-												<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
-											{/each}
-										</div>
-									</DropdownMenuContent>
-								</DropdownMenuRoot>
-							{:else}
-								<button
-									type="button"
-									class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-									aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
-									onclick={() => onReact(message, reaction.emoji)}
-									onpointerenter={activateInteractionControls}
-									onfocus={activateInteractionControls}
-								>
-									<span>{reaction.emoji}</span>
-									<span>{reaction.count}</span>
-								</button>
-							{/if}
+							<Tooltip>
+								<TooltipTrigger>
+									{#snippet child({ props })}
+										<button
+											{...props}
+											type="button"
+											class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+											aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
+											title={getReactionTooltip(reaction)}
+											onclick={() => onReact(message, reaction.emoji)}
+											onpointerenter={activateInteractionControls}
+											onfocus={activateInteractionControls}
+										>
+											<span>{reaction.emoji}</span>
+											<span>{reaction.count}</span>
+										</button>
+									{/snippet}
+								</TooltipTrigger>
+								<TooltipContent side="top" sideOffset={8}>
+									<div class="flex flex-col gap-2">
+										{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
+											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
+										{/each}
+									</div>
+								</TooltipContent>
+							</Tooltip>
 						{/each}
 					</div>
 				{/if}

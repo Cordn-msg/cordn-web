@@ -35,6 +35,12 @@ When changing chat history rendering, keep [`scrollToMessage()`](src/lib/compone
 
 Per-message render work is reduced by caching parsed mention parts in [`chatMessageRenderCache.ts`](src/lib/components/chat/chatMessageRenderCache.ts:1), sharing custom reaction persistence across mounted rows, lazily mounting heavy menu/tooltip controls in [`ChatMessageItem.svelte`](src/lib/components/chat/ChatMessageItem.svelte:88), and throttling unread-reference visibility checks with `requestAnimationFrame` in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:97).
 
+## Notifications and unread visibility
+
+- Chat routes keep browser-level unread visibility synchronized through [`syncChatAttention()`](src/lib/services/chatAttention.svelte.ts:73), which updates the document title with the unread message count while preserving the default favicon.
+- Browser notifications for newly ingested inbound chat messages are dispatched by [`notifyForUnreadChatMessages()`](src/lib/services/chatAttention.svelte.ts:104), while suppressing alerts for the currently visible open group.
+- The mobile sidebar toggle in [`ChatMobileSidebarButton.svelte`](src/lib/components/chat/ChatMobileSidebarButton.svelte) shows a small red dot when unread chat or welcome-notification attention is pending.
+
 ## Identity and profile UX
 
 - [`AccountLoginDialog.svelte`](src/lib/components/AccountLoginDialog.svelte) now supports revealing the private-key input with an eye toggle so users signing in with a raw key can verify and copy it for backup.

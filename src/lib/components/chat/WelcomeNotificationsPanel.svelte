@@ -16,14 +16,13 @@
 		rejectWelcomeAction,
 		refreshWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { useWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 	import {
 		chatWelcomeNotificationsStore,
-		getUnreadWelcomeNotificationCount,
 		listWelcomeNotifications,
 		markAllWelcomeNotificationsRead
 	} from '$lib/services/chatWelcomeNotifications.svelte';
 	import { normalizePubKey } from '$lib/utils';
-	import Inbox from '@lucide/svelte/icons/inbox';
 	import { ProfileModel } from 'applesauce-core/models';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { untrack } from 'svelte';
@@ -40,9 +39,10 @@
 		Record<string, { name?: string; displayName?: string; nip05?: string }>
 	>({});
 
+	const activeAccountPubkey = $derived.by(() => $activeAccount?.pubkey ?? '');
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
-	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
 	const useScrollableList = $derived.by(() => welcomeNotifications.length > 2);
+	const welcomeNotificationsQuery = useWelcomeNotifications(() => activeAccountPubkey);
 
 	function getNotificationCoordinatorLabel(pubkey: string) {
 		return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
@@ -107,17 +107,7 @@
 
 <div class="space-y-3">
 	<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-		<div class="flex flex-wrap items-center gap-2.5">
-			<p class="text-sm text-muted-foreground">
-				{welcomeNotifications.length} welcome{welcomeNotifications.length === 1 ? '' : 's'} cached
-			</p>
-			<div
-				class="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground"
-			>
-				<Inbox class="size-3.5" />
-				<span>{unreadWelcomeNotifications} unread</span>
-			</div>
-		</div>
+		<h3>Welcome notifications</h3>
 		<div class="flex flex-wrap gap-2">
 			<Button type="button" variant="outline" size="sm" onclick={markAllWelcomeNotificationsRead}>
 				Mark all as read
@@ -135,6 +125,12 @@
 
 	{#if chatWelcomeNotificationsStore.error}
 		<p class="text-sm text-destructive">{chatWelcomeNotificationsStore.error}</p>
+	{:else if welcomeNotificationsQuery.error}
+		<p class="text-sm text-destructive">
+			{welcomeNotificationsQuery.error instanceof Error
+				? welcomeNotificationsQuery.error.message
+				: 'Failed to fetch welcome notifications'}
+		</p>
 	{/if}
 
 	{#if !$activeAccount}

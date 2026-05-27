@@ -1,5 +1,10 @@
 import { browser } from '$app/environment';
 import { manager } from '$lib/services/accountManager.svelte';
+import {
+	clearChatReconnectStatus,
+	failChatReconnectStatus,
+	setChatReconnectStatus
+} from '$lib/services/chatReconnectStatus.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { relayActions } from '$lib/stores/relay-store.svelte';
@@ -67,6 +72,8 @@ class AccountCoordinatorClientRegistry {
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
 let refreshActiveClientsPromise: Promise<void> | null = null;
+let runtimeRecoveryPromise: Promise<void> | null = null;
+let documentHiddenAt = 0;
 
 type CoordinatorClientRefreshHandler = (refreshClients: () => Promise<void>) => Promise<void>;
 const coordinatorClientRefreshHandlers = new Set<CoordinatorClientRefreshHandler>();
@@ -100,6 +107,15 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 export function onCoordinatorClientsRefresh(handler: CoordinatorClientRefreshHandler): () => void {
 	coordinatorClientRefreshHandlers.add(handler);
 	return () => coordinatorClientRefreshHandlers.delete(handler);
+}
+
+function getActiveRegistryCoordinatorKeys(): string[] {
+	const account = manager.getActive();
+	if (!account) {
+		return [];
+	}
+
+	return accountClientRegistries.get(getAccountRegistryKey(account))?.listCoordinatorKeys() ?? [];
 }
 
 export async function disconnectCoordinatorClients(account?: IAccount): Promise<void> {
@@ -181,8 +197,81 @@ async function refreshActiveCoordinatorClients(): Promise<void> {
 	await Promise.allSettled(handlers.map((handler) => handler(refreshClients)));
 }
 
+export async function requestCoordinatorClientsRefresh(message = 'Reconnecting…'): Promise<void> {
+	if (runtimeRecoveryPromise) {
+		return runtimeRecoveryPromise;
+	}
+
+	const activeCoordinatorKeys = getActiveRegistryCoordinatorKeys();
+	if (activeCoordinatorKeys.length === 0) {
+		return;
+	}
+
+	setChatReconnectStatus({
+		phase: 'checking',
+		message: 'Checking connection…',
+		activeCoordinatorKeys
+	});
+
+	runtimeRecoveryPromise = (async () => {
+		try {
+			setChatReconnectStatus({
+				phase: 'reconnecting',
+				message,
+				activeCoordinatorKeys
+			});
+			await refreshActiveCoordinatorClients();
+			clearChatReconnectStatus();
+		} catch (error) {
+			failChatReconnectStatus(
+				error instanceof Error ? error.message : 'Failed to reconnect to coordinators'
+			);
+			throw error;
+		} finally {
+			runtimeRecoveryPromise = null;
+		}
+	})();
+
+	return runtimeRecoveryPromise;
+}
+
+function shouldAttemptResumeRefresh(): boolean {
+	if (typeof navigator === 'undefined') {
+		return false;
+	}
+
+	const hiddenForMs = documentHiddenAt > 0 ? Date.now() - documentHiddenAt : 0;
+	const isMobileHeuristic =
+		navigator.maxTouchPoints > 0 && window.matchMedia('(pointer: coarse)').matches;
+	return isMobileHeuristic && hiddenForMs >= 30000 && getActiveRegistryCoordinatorKeys().length > 0;
+}
+
 if (browser) {
 	window.addEventListener('online', () => {
-		void refreshActiveCoordinatorClients();
+		void requestCoordinatorClientsRefresh();
+	});
+
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') {
+			documentHiddenAt = Date.now();
+			return;
+		}
+
+		if (!shouldAttemptResumeRefresh()) {
+			documentHiddenAt = 0;
+			return;
+		}
+
+		documentHiddenAt = 0;
+		void requestCoordinatorClientsRefresh();
+	});
+
+	window.addEventListener('pageshow', () => {
+		if (!shouldAttemptResumeRefresh()) {
+			return;
+		}
+
+		documentHiddenAt = 0;
+		void requestCoordinatorClientsRefresh();
 	});
 }

@@ -55,13 +55,22 @@
 	const virtualItems = $derived($virtualizer.getVirtualItems());
 	const totalSize = $derived($virtualizer.getTotalSize());
 
-	export async function scrollToBottom() {
+	async function scrollToLatestMessage() {
 		await tick();
-		if (!browser || !container) return;
+		if (!browser || !container || messages.length === 0) return;
+
+		$virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+		await tick();
+		measureVisibleItems();
+		await tick();
 		container.scrollTo({
 			top: container.scrollHeight,
 			behavior: 'instant'
 		});
+	}
+
+	export async function scrollToBottom() {
+		await scrollToLatestMessage();
 	}
 
 	export async function scrollToMessage(messageId: string) {
@@ -137,7 +146,7 @@
 				});
 				$virtualizer.measure();
 			});
-			void scrollToBottom();
+			void scrollToLatestMessage();
 		});
 	});
 
@@ -161,7 +170,7 @@
 			if (suppressNextAutoScroll) {
 				suppressNextAutoScroll = false;
 			} else if (shouldScroll) {
-				container?.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+				void scrollToLatestMessage();
 			}
 			wasAtBottom = isAtBottom();
 			markVisibleUnreadReferences();

@@ -178,9 +178,6 @@
 						<h1 class="truncate text-xl font-semibold tracking-tight">
 							{group.metadata?.name || 'Unnamed chat'}
 						</h1>
-						<p class="text-sm text-muted-foreground">
-							{group.metadata?.description || 'Coordinator-assisted messaging'}
-						</p>
 					</div>
 				</div>
 
@@ -214,6 +211,15 @@
 								alt={group.metadata?.name || group.id}
 								class="max-h-64 w-full rounded-2xl border border-border object-cover"
 							/>
+						{/if}
+
+						{#if group.metadata?.description}
+							<div class="rounded-2xl border border-border p-4">
+								<p class="text-xs tracking-wide text-muted-foreground uppercase">Description</p>
+								<p class="mt-2 text-sm whitespace-pre-wrap text-muted-foreground">
+									{group.metadata.description}
+								</p>
+							</div>
 						{/if}
 
 						<div class="grid gap-4 md:grid-cols-2">
@@ -322,9 +328,7 @@
 												</Button>
 												<Button
 													type="submit"
-													disabled={chatGroupInfoActionsStore.metadataSubmitting ||
-														!metadataName.trim() ||
-														!metadataDirty}
+													disabled={chatGroupInfoActionsStore.metadataSubmitting || !metadataDirty}
 												>
 													<Save class="mr-2 size-4" />
 													{chatGroupInfoActionsStore.metadataSubmitting

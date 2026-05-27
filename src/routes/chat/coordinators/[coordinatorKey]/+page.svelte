@@ -20,6 +20,11 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import {
+		chatReconnectStatusStore,
+		getCoordinatorReconnectLabel,
+		getCoordinatorReconnectTone
+	} from '$lib/services/chatReconnectStatus.svelte';
+	import {
 		getChatGroup,
 		listChatGroupMembers,
 		listChatGroups
@@ -146,6 +151,39 @@
 			pubkey: entry.pk
 		}))
 	);
+	const coordinatorConnectionTone = $derived.by(() => getCoordinatorReconnectTone(coordinatorKey));
+	const coordinatorConnectionLabel = $derived.by(() =>
+		getCoordinatorReconnectLabel(coordinatorKey)
+	);
+	const coordinatorConnectionDotClass = $derived.by(() => {
+		if (coordinatorConnectionTone === 'error') return 'bg-destructive';
+		if (coordinatorConnectionTone === 'active') return 'bg-amber-500';
+		return relatedGroups.length > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/40';
+	});
+	const coordinatorConnectionCardClass = $derived.by(() => {
+		if (coordinatorConnectionTone === 'error') {
+			return 'border-destructive/40 bg-destructive/5';
+		}
+
+		if (coordinatorConnectionTone === 'active') {
+			return 'border-amber-500/40 bg-amber-500/5';
+		}
+
+		return 'border-border bg-background';
+	});
+	const coordinatorConnectionDetail = $derived.by(() => {
+		if (coordinatorConnectionTone === 'error') {
+			return 'The latest reconnect attempt for this coordinator did not complete cleanly.';
+		}
+
+		if (coordinatorConnectionTone === 'active') {
+			return 'A reconnect rebuild is currently running for this coordinator.';
+		}
+
+		return relatedGroups.length > 0
+			? 'No reconnect work is currently running for this coordinator.'
+			: 'No reconnect activity is currently tracked for this coordinator.';
+	});
 
 	async function loadRemoteKeyPackages() {
 		await loadCoordinatorRemoteKeyPackagesAction(coordinatorKey, {
@@ -266,6 +304,26 @@
 									<p class="mt-1 text-sm text-muted-foreground">
 										{coordinator?.relays?.join(' · ') || 'Use client defaults'}
 									</p>
+								</div>
+								<div>
+									<p class="text-xs tracking-wide text-muted-foreground uppercase">Connection</p>
+									<div class={`mt-2 rounded-2xl border p-4 ${coordinatorConnectionCardClass}`}>
+										<div class="flex items-start gap-3">
+											<span
+												class={`mt-0.5 h-3 w-3 shrink-0 rounded-full ${coordinatorConnectionDotClass}`}
+												aria-hidden="true"
+											></span>
+											<div class="min-w-0 space-y-1">
+												<p class="font-medium">{coordinatorConnectionLabel}</p>
+												<p class="text-sm text-muted-foreground">{coordinatorConnectionDetail}</p>
+												{#if chatReconnectStatusStore.active && coordinatorConnectionTone !== 'healthy'}
+													<p class="text-xs text-muted-foreground">
+														Visible while reconnect activity is in progress.
+													</p>
+												{/if}
+											</div>
+										</div>
+									</div>
 								</div>
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Local groups</p>
