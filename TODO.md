@@ -16,7 +16,6 @@
 - [x] Add search functionality to chats
 - [x] Improve edit group admins, allow use npubs
 - [x] Create user page to see user info, groups in common, etc
-- [ ] Allow searching for users outside of cordn and send nip-17 message to invite them
 - [x] Log out doest work as expected and if loged with a different account after logout previous chats appear
 - [x] Retrieve all your key packages in the coordinator to be able to remove orphaned ones
 - [x] Fix key packages list (virtual) view in phones. Currently there are overlapping each other
@@ -24,3 +23,8 @@
 - PWA request notifications so we can push native notifications while the app is open
 - [x] Make logged user profile card clickable and navigate to config page
 - [x] Groups in home page '/chat' doesn show unread/mention chips, maybe we can create a component to avoid duplication between this and sidebar group rendering
+- [ ] Allow searching for users outside of cordn and send nip-17 message to invite them
+- [ ] Add other message types like long form content, calendar, etc.
+- [ ] Support zaps
+- [ ] Multi-device support
+- [ ] Coordinator switching and handoff

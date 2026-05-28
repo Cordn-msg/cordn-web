@@ -7,6 +7,7 @@ import {
 } from '$lib/services/chatReconnectStatus.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
+import { defaultRelays } from '$lib/services/relay-pool';
 import { relayActions } from '$lib/stores/relay-store.svelte';
 import { normalizePubKey } from '$lib/utils';
 import type { NostrSigner } from '@contextvm/sdk';
@@ -17,13 +18,24 @@ type CoordinatorTarget = {
 	relays: string[];
 };
 
+function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordinator>): string[] {
+	if (!coordinator) {
+		return relayActions.getSelectedRelays();
+	}
+
+	if (coordinator.relays.length > 0) {
+		return coordinator.relays;
+	}
+
+	return coordinator.isDefault ? defaultRelays : relayActions.getSelectedRelays();
+}
+
 function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
 	const coordinator = getChatCoordinator(normalizedCoordinatorKey);
-	const relays = coordinator?.relays ?? relayActions.getSelectedRelays();
 	return {
 		serverPubkey: normalizedCoordinatorKey,
-		relays
+		relays: resolveCoordinatorRelays(coordinator)
 	};
 }
 

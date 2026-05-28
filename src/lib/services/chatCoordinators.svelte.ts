@@ -133,10 +133,10 @@ export function upsertChatCoordinator(input: {
 	const pubkey = normalizePubKey(input.pubkey);
 	const existing = getChatCoordinator(pubkey);
 	const nextLabel = input.label?.trim() || `Coordinator ${pubkey.slice(0, 8)}`;
-	const nextRelays = normalizeRelays(input.relays ?? existing?.relays);
-	const nextColor = normalizeColor(input.color ?? existing?.color, pubkey);
 	const nextIsDefault =
 		input.isDefault ?? existing?.isDefault ?? chatCoordinatorsStore.coordinators.length === 0;
+	const nextRelays = normalizeRelays(input.relays ?? existing?.relays);
+	const nextColor = normalizeColor(input.color ?? existing?.color, pubkey);
 
 	if (existing) {
 		const updated: StoredCoordinator = {
@@ -186,7 +186,8 @@ export function removeChatCoordinator(pubkey: string) {
 }
 
 export function setDefaultChatCoordinator(pubkey: string) {
-	ensureSingleDefault(pubkey);
+	const normalized = normalizePubKey(pubkey);
+	ensureSingleDefault(normalized);
 	saveCoordinators();
 }
 

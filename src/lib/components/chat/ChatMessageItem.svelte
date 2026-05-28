@@ -12,6 +12,8 @@
 		DropdownMenuTrigger
 	} from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import {
 		Tooltip,
 		TooltipContent,
@@ -26,11 +28,13 @@
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
+	import Info from '@lucide/svelte/icons/info';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import { cn, pubkeyToHexColor } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 	import {
@@ -80,6 +84,8 @@
 	let customReaction = $state('');
 	let customReactionInput: HTMLInputElement | null = $state(null);
 	let interactionControlsActive = $state(false);
+	let messageInfoOpen = $state(false);
+	let rawEnvelopeOpen = $state(false);
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -110,6 +116,11 @@
 	const replySwipeActive = $derived(Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD);
 	const swipeTransform = $derived(swipeOffset ? `translateX(${swipeOffset}px)` : 'translateX(0px)');
 	const replyIndicatorSideClass = $derived(isOwn ? 'right-full mr-2' : 'left-full ml-2');
+	const messageTimestamp = $derived(new Date(message.createdAt).toLocaleString());
+	const rawMessageEnvelope = $derived(JSON.stringify(message, null, 2));
+	const reactionTotal = $derived(
+		message.reactions?.reduce((total, reaction) => total + reaction.count, 0) ?? 0
+	);
 	function getDeliveryStateLabel() {
 		if (message.deliveryState === 'sending') return 'Sending';
 		if (message.deliveryState === 'sent') return 'Sent';
@@ -236,6 +247,12 @@
 		}
 	}
 
+	function openMessageInfo() {
+		actionsMenuOpen = false;
+		messageInfoOpen = true;
+		clearTouchActions();
+	}
+
 	async function deleteMessage() {
 		if (!isOwn || message.deleted) return;
 		actionsMenuOpen = false;
@@ -243,7 +260,7 @@
 		await onDelete(message);
 	}
 
-	function getReactionTooltip(reaction: NonNullable<ChatMessage['reactions']>[number]) {
+	function getReactionLabel(reaction: NonNullable<ChatMessage['reactions']>[number]) {
 		if (!reaction.reactors.length) return 'Toggle reaction';
 		return reaction.reactors.join('\n');
 	}
@@ -513,8 +530,13 @@
 									side="top"
 									align={isOwn ? 'start' : 'end'}
 									sideOffset={8}
-									class="w-40 rounded-xl"
+									class="w-44 rounded-xl"
 								>
+									<DropdownMenuItem onSelect={openMessageInfo} class="gap-2">
+										<Info class="size-4" />
+										<span>Info</span>
+									</DropdownMenuItem>
+
 									{#if !message.deleted}
 										<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
 											<CornerUpLeft class="size-4" />
@@ -700,8 +722,8 @@
 											{...props}
 											type="button"
 											class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-											aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}`}
-											title={getReactionTooltip(reaction)}
+											aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Open message info for reaction details on touch devices.`}
+											title={getReactionLabel(reaction)}
 											onclick={() => onReact(message, reaction.emoji)}
 											onpointerenter={activateInteractionControls}
 											onfocus={activateInteractionControls}
@@ -755,4 +777,89 @@
 			</div>
 		</div>
 	</article>
+
+	<Dialog.Root bind:open={messageInfoOpen}>
+		<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+			<Dialog.Header>
+				<Dialog.Title>Message info</Dialog.Title>
+				<Dialog.Description>Details for this message and its reactions.</Dialog.Description>
+			</Dialog.Header>
+
+			<div class="space-y-5 text-sm">
+				<div class="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2">
+					<div class="space-y-1">
+						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Author</p>
+						<ProfileCard pubkey={message.author} mode="inline" showInlineAvatar={true} />
+					</div>
+					<div class="space-y-1">
+						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Time</p>
+						<p>{messageTimestamp}</p>
+					</div>
+					<div class="space-y-1">
+						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Status</p>
+						<p>{message.deleted ? 'Deleted' : message.edited ? 'Edited' : 'Original'}</p>
+					</div>
+					<div class="space-y-1">
+						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+							Delivery
+						</p>
+						<p>{getDeliveryStateLabel() || 'Received'}</p>
+					</div>
+				</div>
+
+				<div class="space-y-3">
+					<div class="flex items-center justify-between gap-3">
+						<h3 class="font-semibold">Reactions</h3>
+						<span class="text-xs text-muted-foreground">
+							{reactionTotal} total
+						</span>
+					</div>
+
+					{#if message.reactions?.length}
+						<div class="space-y-3">
+							{#each message.reactions as reaction (`${message.id}:info:${reaction.emoji}`)}
+								<div class="rounded-2xl border p-3">
+									<div class="mb-3 flex items-center gap-2">
+										<span class="text-lg">{reaction.emoji}</span>
+										<span class="font-medium">
+											{reaction.count} reaction{reaction.count === 1 ? '' : 's'}
+										</span>
+									</div>
+									<div class="flex flex-col gap-2">
+										{#each reaction.reactors as reactor (`${message.id}:info:${reaction.emoji}:${reactor}`)}
+											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
+										{/each}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="rounded-2xl border border-dashed p-4 text-muted-foreground">
+							No reactions yet.
+						</p>
+					{/if}
+				</div>
+
+				<Collapsible.Root bind:open={rawEnvelopeOpen}>
+					<Collapsible.Trigger
+						class="flex w-full min-w-0 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left font-medium"
+					>
+						<span class="min-w-0 flex-1">Raw message envelope</span>
+						<ChevronDown
+							class={cn(
+								'size-4 shrink-0 transition-transform',
+								rawEnvelopeOpen ? 'rotate-180' : ''
+							)}
+						/>
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<pre
+							class="mt-3 max-w-full overflow-x-auto overflow-y-auto rounded-2xl bg-muted p-4 text-xs leading-relaxed"><code
+								class="block min-w-0 break-all whitespace-pre-wrap">{rawMessageEnvelope}</code
+							></pre>
+					</Collapsible.Content>
+				</Collapsible.Root>
+			</div>
+		</Dialog.Content>
+	</Dialog.Root>
 </div>
