@@ -3,7 +3,6 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	decodeStoredGroupState,
-	fetchChatGroupMessages,
 	getChatGroup,
 	isChatGroupRemoved,
 	listChatGroups,
@@ -131,8 +130,6 @@ if (browser) {
 		}
 
 		await startWatchingAllGroups();
-
-		await Promise.allSettled(watchedGroupIds.map((groupId) => fetchChatGroupMessages(groupId)));
 
 		chatGroupWatchStore.error = '';
 	});

@@ -164,7 +164,7 @@ export async function withCoordinatorClient<T>(
 
 async function replaceActiveCoordinatorClients(): Promise<void> {
 	if (refreshActiveClientsPromise) {
-		return refreshActiveClientsPromise;
+		return;
 	}
 
 	const account = manager.getActive();
@@ -186,7 +186,7 @@ async function replaceActiveCoordinatorClients(): Promise<void> {
 		refreshActiveClientsPromise = null;
 	});
 
-	return refreshActiveClientsPromise;
+	void refreshActiveClientsPromise;
 }
 
 async function refreshActiveCoordinatorClients(): Promise<void> {

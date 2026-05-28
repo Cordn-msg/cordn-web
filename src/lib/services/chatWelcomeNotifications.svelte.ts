@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
+import type { IAccount } from 'applesauce-accounts';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 import { listChatGroups } from '$lib/services/chatGroups.svelte';
 import {
@@ -15,6 +16,8 @@ import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatR
 import { normalizePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-welcome-notifications';
+const SIGNER_READY_RETRY_ATTEMPTS = 3;
+const SIGNER_READY_RETRY_DELAY_MS = 500;
 
 export interface WelcomeNotificationEntry {
 	id: string;
@@ -148,6 +151,33 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 	saveNotifications();
 }
 
+function isSignerUnavailableError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /signer extension missing/i.test(message);
+}
+
+function wait(ms: number) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchPendingWelcomesWithSignerRetry(account: IAccount, coordinatorKey: string) {
+	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
+		try {
+			return await withCoordinatorClient(account, coordinatorKey, (client) =>
+				client.FetchPendingWelcomes({})
+			);
+		} catch (error) {
+			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
+				throw error;
+			}
+
+			await wait(SIGNER_READY_RETRY_DELAY_MS);
+		}
+	}
+
+	throw new Error('Failed to fetch welcome notifications');
+}
+
 async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
 	if (entry.preview) return entry.preview;
 
@@ -192,13 +222,15 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	try {
 		const account = requireActiveAccount('You must be logged in to fetch welcomes');
 		for (const coordinatorKey of keys) {
-			const result = await withCoordinatorClient(account, coordinatorKey, (client) =>
-				client.FetchPendingWelcomes({})
-			);
+			const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
 			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
 		}
 		await resolveFetchedWelcomePreviews();
 	} catch (error) {
+		if (isSignerUnavailableError(error)) {
+			return;
+		}
+
 		chatWelcomeNotificationsStore.error =
 			error instanceof Error ? error.message : 'Failed to fetch welcome notifications';
 	} finally {
