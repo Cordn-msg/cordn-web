@@ -1,13 +1,23 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+	import { fetchPublicCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import type { AvailableKeyPackage } from '$lib/contracts';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { activeAccount, logout } from '$lib/services/accountManager.svelte';
+	import {
+		getDefaultChatCoordinator,
+		upsertChatCoordinator
+	} from '$lib/services/chatCoordinators.svelte';
+	import { createChatGroup, inviteChatGroupMember } from '$lib/services/chatGroups.svelte';
 	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import {
@@ -22,8 +32,10 @@
 		getUserRelayListFromStore
 	} from '$lib/services/loaders.svelte';
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
+	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Save from '@lucide/svelte/icons/save';
@@ -72,13 +84,31 @@
 		if (!$activeAccount) return false;
 		return normalizePubKey($activeAccount.pubkey) === profilePubkey;
 	});
+	const requestedCoordinatorKey = $derived.by(() => {
+		const value = page.url.searchParams.get('c')?.trim();
+		if (!value) return undefined;
+		return /^[0-9a-f]{64}$/i.test(value) ? normalizePubKey(value) : undefined;
+	});
+	const selectedCoordinatorKey = $derived.by(
+		() => requestedCoordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+	);
+	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const npub = $derived.by(() => nip19.npubEncode(profilePubkey));
 	const displayName = $derived.by(
 		() => $profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16)
 	);
+	const profileKeyPackage = $derived.by(() =>
+		availableKeyPackages.find((entry) => normalizePubKey(entry.pk) === profilePubkey)
+	);
+	const startChatDisabled = $derived.by(
+		() => isSelf || (Boolean($activeAccount) && (loadingAvailableKeyPackages || !profileKeyPackage))
+	);
 	const loadedProfileRelays = $derived.by(() => getUserRelayListFromStore(profilePubkey));
 	const profileLookupRelays = $derived.by(() => getMetadataLookupRelays(profilePubkey));
 	const profilePublishRelays = $derived.by(() => loadedProfileRelays);
+	let availableKeyPackages = $state<AvailableKeyPackage[]>([]);
+	let loadingAvailableKeyPackages = $state(false);
+	let availableKeyPackagesError = $state('');
 	let sharedGroupProfileHints = $state<Record<string, ProfileHint>>({});
 	let editingProfile = $state(false);
 	let profileName = $state('');
@@ -92,7 +122,42 @@
 	let submittingProfile = $state(false);
 	let profileError = $state('');
 	let logoutCleaning = $state(false);
+	let startingChat = $state(false);
+	let startChatError = $state('');
 	let initializedEditorForPubkey = $state('');
+
+	$effect(() => {
+		if (isSelf) {
+			availableKeyPackages = [];
+			loadingAvailableKeyPackages = false;
+			availableKeyPackagesError = '';
+			return;
+		}
+
+		let cancelled = false;
+		loadingAvailableKeyPackages = true;
+		availableKeyPackagesError = '';
+
+		void fetchPublicCoordinatorAvailableKeyPackages(selectedCoordinatorKey)
+			.then((entries) => {
+				if (cancelled) return;
+				availableKeyPackages = entries;
+			})
+			.catch((error) => {
+				if (cancelled) return;
+				availableKeyPackages = [];
+				availableKeyPackagesError =
+					error instanceof Error ? error.message : 'Failed to load coordinator key packages.';
+			})
+			.finally(() => {
+				if (cancelled) return;
+				loadingAvailableKeyPackages = false;
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	$effect(() => {
 		const pubkeys = [
@@ -298,6 +363,49 @@
 			logoutCleaning = false;
 		}
 	}
+
+	async function handleStartChat() {
+		if (isSelf) return;
+
+		if (!$activeAccount) {
+			dialogState.dialogId = DIALOG_IDS.LOGIN;
+			return;
+		}
+
+		if (!profileKeyPackage || loadingAvailableKeyPackages) {
+			return;
+		}
+
+		try {
+			startingChat = true;
+			startChatError = '';
+
+			if (!defaultCoordinator || defaultCoordinator.pubkey !== selectedCoordinatorKey) {
+				upsertChatCoordinator({
+					pubkey: selectedCoordinatorKey,
+					label:
+						selectedCoordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY
+							? 'Default coordinator'
+							: `Coordinator ${selectedCoordinatorKey.slice(0, 8)}`,
+					isDefault: true
+				});
+			}
+
+			const group = await createChatGroup({
+				name: '',
+				coordinatorKey: selectedCoordinatorKey
+			});
+			await inviteChatGroupMember({
+				groupId: group.id,
+				identifier: profileKeyPackage.kp_ref
+			});
+			await goto(resolve('/chat/[id]', { id: group.id }));
+		} catch (error) {
+			startChatError = error instanceof Error ? error.message : 'Failed to start chat';
+		} finally {
+			startingChat = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -332,6 +440,10 @@
 
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
 		<div class="mx-auto flex max-w-5xl flex-col gap-6">
+			<div class="hidden">
+				<AccountLoginDialog />
+			</div>
+
 			<Card.Root>
 				<Card.Header>
 					<div class="flex flex-wrap items-start justify-between gap-3">
@@ -360,6 +472,22 @@
 								>
 									{logoutCleaning ? 'Cleaning…' : 'Log out and clean data'}
 								</Button>
+							</div>
+						{:else}
+							<div class="flex max-w-sm flex-col items-stretch gap-2">
+								<Button
+									type="button"
+									onclick={handleStartChat}
+									disabled={startChatDisabled || startingChat}
+								>
+									<MessageCirclePlus class="mr-2 size-4" />
+									{startingChat ? 'Starting chat…' : 'Start chat'}
+								</Button>
+								{#if startChatError}
+									<p class="text-sm text-destructive">{startChatError}</p>
+								{:else if availableKeyPackagesError}
+									<p class="text-sm text-destructive">{availableKeyPackagesError}</p>
+								{/if}
 							</div>
 						{/if}
 					</div>
@@ -473,37 +601,30 @@
 					{/if}
 				</Card.Content>
 			</Card.Root>
-
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Groups in common</Card.Title>
-					<Card.Description>
-						{#if isSelf}
-							Your local groups on this device.
-						{:else}
-							Local groups where this profile appears in the current membership list.
-						{/if}
-					</Card.Description>
-				</Card.Header>
-				<Card.Content>
-					<div class="space-y-3">
-						<div class="rounded-2xl border border-border bg-card/40 px-4 py-4">
-							<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">
-								{displayName}
-							</p>
-							<p class="text-2xl font-semibold tracking-tight">{sharedGroupCount}</p>
-							<p class="text-sm text-muted-foreground">
-								{sharedGroupCount === 1 ? 'Shared local group' : 'Shared local groups'}
-							</p>
-						</div>
-
-						{#if sharedGroups.length === 0}
-							<div
-								class="rounded-2xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-							>
-								No local groups in common were found for this profile.
+			{#if sharedGroups.length}
+				<Card.Root>
+					<Card.Header>
+						<Card.Title>Groups in common</Card.Title>
+						<Card.Description>
+							{#if isSelf}
+								Your local groups on this device.
+							{:else}
+								Local groups where this profile appears in the current membership list.
+							{/if}
+						</Card.Description>
+					</Card.Header>
+					<Card.Content>
+						<div class="space-y-3">
+							<div class="rounded-2xl border border-border bg-card/40 px-4 py-4">
+								<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">
+									{displayName}
+								</p>
+								<p class="text-2xl font-semibold tracking-tight">{sharedGroupCount}</p>
+								<p class="text-sm text-muted-foreground">
+									{sharedGroupCount === 1 ? 'Shared local group' : 'Shared local groups'}
+								</p>
 							</div>
-						{:else}
+
 							{#each sharedGroups as group (group.id)}
 								<a
 									href={getGroupHref(group.id)}
@@ -515,10 +636,10 @@
 									</p>
 								</a>
 							{/each}
-						{/if}
-					</div>
-				</Card.Content>
-			</Card.Root>
+						</div>
+					</Card.Content>
+				</Card.Root>
+			{/if}
 		</div>
 	</div>
 </div>

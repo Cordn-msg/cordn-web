@@ -3,7 +3,9 @@ import { browser } from '$app/environment';
 import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+import { getChatCoordinator, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+import { cordnClient } from '$lib/services/coordinatorClient';
+import { defaultRelays } from '$lib/services/relay-pool';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
@@ -15,6 +17,32 @@ async function fetchSingleCoordinatorAvailableKeyPackages(
 		client.ListAvailableKeyPackages({})
 	);
 	return result.keyPackages.sort((a, b) => b.at - a.at);
+}
+
+function resolveGuestCoordinatorRelays(coordinatorKey: string): string[] {
+	const coordinator = getChatCoordinator(normalizePubKey(coordinatorKey));
+	if (coordinator?.relays.length) {
+		return coordinator.relays;
+	}
+
+	return defaultRelays;
+}
+
+export async function fetchPublicCoordinatorAvailableKeyPackages(
+	coordinatorKey: string
+): Promise<AvailableKeyPackage[]> {
+	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
+	const client = new cordnClient({
+		serverPubkey: normalizedCoordinatorKey,
+		relays: resolveGuestCoordinatorRelays(normalizedCoordinatorKey)
+	});
+
+	try {
+		const result = await client.ListAvailableKeyPackages({});
+		return result.keyPackages.sort((a, b) => b.at - a.at);
+	} finally {
+		await client.disconnect().catch(() => undefined);
+	}
 }
 
 export async function fetchCoordinatorAvailableKeyPackages(

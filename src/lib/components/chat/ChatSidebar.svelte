@@ -2,7 +2,9 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { browser } from '$app/environment';
 	import { SvelteMap } from 'svelte/reactivity';
+	import QrCode from '$lib/components/QrCode.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -27,12 +29,15 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getCoordinatorReconnectTone } from '$lib/services/chatReconnectStatus.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
+	import Copy from '@lucide/svelte/icons/copy';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Plus from '@lucide/svelte/icons/plus';
+	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
+	import { nip19 } from 'nostr-tools';
 	import type { Writable } from 'svelte/store';
 
 	let {
@@ -43,6 +48,8 @@
 
 	let collapsed = $state(false);
 	let notificationsOpen = $state(false);
+	let profileShareOpen = $state(false);
+	let copiedProfileLink = $state(false);
 	let searchQuery = $state('');
 	let debouncedSearchQuery = $state('');
 	const chats = $derived.by(() =>
@@ -111,6 +118,14 @@
 			);
 		});
 	});
+	const profileSharePath = $derived.by(() => {
+		if (!$activeAccount) return '';
+		return resolve('/p/[identifier]', { identifier: nip19.npubEncode($activeAccount.pubkey) });
+	});
+	const profileShareUrl = $derived.by(() => {
+		if (!profileSharePath) return '';
+		return browser ? new URL(profileSharePath, page.url).toString() : profileSharePath;
+	});
 
 	function isActive(href: string) {
 		return page.url.pathname === href;
@@ -122,9 +137,10 @@
 
 	async function navigateToMessage(groupId: string, messageKey: string) {
 		closeMobileSidebar();
-		const targetUrl = new URL(resolve('/chat/[id]', { id: groupId }), page.url);
+		const groupHref = resolve('/chat/[id]', { id: groupId });
+		const targetUrl = new URL(groupHref, page.url);
 		targetUrl.searchParams.set('message', messageKey);
-		await goto(targetUrl);
+		await goto(`${groupHref}?${targetUrl.searchParams.toString()}`);
 	}
 
 	function getChatHomeHref() {
@@ -145,6 +161,15 @@
 		}
 
 		return 'No unread welcomes';
+	}
+
+	async function copyProfileShareUrl() {
+		if (!profileShareUrl || !browser) return;
+		await navigator.clipboard.writeText(profileShareUrl);
+		copiedProfileLink = true;
+		setTimeout(() => {
+			copiedProfileLink = false;
+		}, 1500);
 	}
 
 	function getCoordinatorHref(pubkey: string) {
@@ -417,7 +442,9 @@
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		<div class={`grid gap-2 ${collapsed ? 'grid-cols-1 justify-items-center' : 'grid-cols-2'}`}>
+		<div
+			class={`grid gap-2 ${collapsed ? 'grid-cols-1 justify-items-center' : $activeAccount ? 'grid-cols-3' : 'grid-cols-2'}`}
+		>
 			<Dialog.Root bind:open={notificationsOpen}>
 				<Dialog.Trigger
 					class={`relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'w-full max-w-14 px-2' : ''} ${notificationsOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
@@ -448,6 +475,44 @@
 					<WelcomeNotificationsPanel maxHeightClass="h-[min(26rem,60vh)]" />
 				</Dialog.Content>
 			</Dialog.Root>
+
+			{#if $activeAccount}
+				<Dialog.Root bind:open={profileShareOpen}>
+					<Dialog.Trigger
+						class={`flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'w-full max-w-14 px-2' : ''} ${profileShareOpen ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}
+						aria-label="Share profile"
+						title="Share profile"
+					>
+						<div
+							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+						>
+							<QrCodeIcon class="size-4" />
+						</div>
+					</Dialog.Trigger>
+
+					<Dialog.Content class="sm:max-w-md">
+						<Dialog.Header>
+							<Dialog.Title>Share your profile</Dialog.Title>
+							<Dialog.Description>
+								Share your public Cordn profile link as a QR code.
+							</Dialog.Description>
+						</Dialog.Header>
+
+						<div class="flex flex-col items-center gap-4 py-2">
+							<QrCode data={profileShareUrl} size={220} />
+							<p
+								class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
+							>
+								{profileShareUrl}
+							</p>
+							<Button type="button" variant="outline" class="w-full" onclick={copyProfileShareUrl}>
+								<Copy class="mr-2 size-4" />
+								{copiedProfileLink ? 'Copied profile link' : 'Copy profile link'}
+							</Button>
+						</div>
+					</Dialog.Content>
+				</Dialog.Root>
+			{/if}
 
 			<a
 				href={getConfigHref()}
