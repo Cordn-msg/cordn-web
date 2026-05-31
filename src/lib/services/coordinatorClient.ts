@@ -13,7 +13,9 @@ import {
 	type ConsumeKeyPackageInput,
 	consumeKeyPackageOutputSchema,
 	COORDINATOR_METHODS,
+	type FetchManyGroupMessagesInput,
 	type FetchGroupMessagesInput,
+	fetchManyGroupMessagesOutputSchema,
 	fetchGroupMessagesOutputSchema,
 	fetchPendingWelcomesOutputSchema,
 	listAvailableKeyPackagesOutputSchema,
@@ -26,6 +28,7 @@ import {
 	subscribeGroupMessagesOutputSchema,
 	type ConsumeKeyPackageOutput,
 	type FetchGroupMessagesOutput,
+	type FetchManyGroupMessagesOutput,
 	type FetchPendingWelcomesInput,
 	type FetchPendingWelcomesOutput,
 	type GroupMessage,
@@ -56,6 +59,9 @@ export type coordinatorClient = {
 	StoreWelcome: (input: StoreWelcomeInput) => Promise<StoreWelcomeOutput>;
 	PostGroupMessage: (input: PostGroupMessageInput) => Promise<PostGroupMessageOutput>;
 	FetchGroupMessages: (input: FetchGroupMessagesInput) => Promise<FetchGroupMessagesOutput>;
+	FetchManyGroupMessages: (
+		input: FetchManyGroupMessagesInput
+	) => Promise<FetchManyGroupMessagesOutput>;
 	SubscribeGroupMessages: (input: SubscribeGroupMessagesInput) => Promise<{
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeGroupMessagesOutput>;
@@ -301,6 +307,17 @@ export class cordnClient implements coordinatorClient {
 			COORDINATOR_METHODS.fetchGroupMessages,
 			input,
 			fetchGroupMessagesOutputSchema
+		);
+	}
+
+	async FetchManyGroupMessages(
+		input: FetchManyGroupMessagesInput
+	): Promise<FetchManyGroupMessagesOutput> {
+		return this.call(
+			'ephemeral',
+			COORDINATOR_METHODS.fetchManyGroupMessages,
+			input,
+			fetchManyGroupMessagesOutputSchema
 		);
 	}
 

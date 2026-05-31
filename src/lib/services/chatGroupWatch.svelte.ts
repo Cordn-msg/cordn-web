@@ -55,6 +55,10 @@ type WatchIncomingMessage = {
 	opaqueMessageBase64: string;
 };
 
+type WatchFetchedMessage = WatchIncomingMessage & {
+	gid: string;
+};
+
 function syncWatchingGroupIds() {
 	chatGroupWatchStore.watchingGroupIds = [...currentWatches.keys()];
 }
@@ -272,6 +276,71 @@ function createWatchBuffer(input: {
 	};
 }
 
+async function ingestGroupMessagesFromCoordinatorFetch(
+	groupsByGid: Map<string, WatchableGroup>,
+	messages: WatchFetchedMessage[]
+) {
+	const messagesByGroupId = new SvelteMap<string, WatchIncomingMessage[]>();
+
+	for (const message of messages) {
+		const group = groupsByGid.get(message.gid);
+		if (!group) continue;
+		const groupMessages = messagesByGroupId.get(group.id) ?? [];
+		groupMessages.push({
+			cursor: message.cursor,
+			createdAt: message.createdAt,
+			opaqueMessageBase64: message.opaqueMessageBase64
+		});
+		messagesByGroupId.set(group.id, groupMessages);
+	}
+
+	for (const [groupId, groupMessages] of messagesByGroupId) {
+		await ingestIncomingChatGroupMessages(groupId, groupMessages);
+	}
+}
+
+async function fetchGroupBacklog(group: WatchableGroup) {
+	const account = requireActiveAccount('You must be logged in to watch group messages');
+	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		client.FetchGroupMessages({
+			gid: group.gid,
+			after: group.after
+		})
+	);
+
+	await ingestIncomingChatGroupMessages(
+		group.id,
+		result.messages.map((message) => ({
+			cursor: message.cursor,
+			createdAt: message.at,
+			opaqueMessageBase64: message.msg_64
+		}))
+	);
+}
+
+async function fetchCoordinatorGroupBacklog(input: {
+	account: ReturnType<typeof requireActiveAccount>;
+	coordinatorKey: string;
+	groups: WatchableGroup[];
+}) {
+	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
+	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
+		client.FetchManyGroupMessages({
+			groups: input.groups.map((group) => ({ gid: group.gid, after: group.after }))
+		})
+	);
+
+	await ingestGroupMessagesFromCoordinatorFetch(
+		groupsByGid,
+		result.messages.map((message) => ({
+			gid: message.gid,
+			cursor: message.cursor,
+			createdAt: message.at,
+			opaqueMessageBase64: message.msg_64
+		}))
+	);
+}
+
 export async function startWatchingGroup(groupId: string) {
 	const existingWatch = getCurrentWatch(groupId);
 	if (existingWatch) {
@@ -299,13 +368,16 @@ export async function startWatchingGroup(groupId: string) {
 	};
 
 	handle.ready = (async () => {
+		await fetchGroupBacklog(watchableGroup);
+		const subscriptionGroup = toWatchableGroup(groupId);
+		if (!subscriptionGroup) return;
 		const subscription = await withCoordinatorClient(
 			account,
-			watchableGroup.coordinatorKey,
+			subscriptionGroup.coordinatorKey,
 			(client) =>
 				client.SubscribeGroupMessages({
-					gid: watchableGroup.gid,
-					after: watchableGroup.after
+					gid: subscriptionGroup.gid,
+					after: subscriptionGroup.after
 				})
 		);
 
@@ -399,7 +471,6 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 
 	const account = requireActiveAccount('You must be logged in to watch group messages');
 	const coordinatorKey = groups[0].coordinatorKey;
-	const groupsByGid = new Map(groups.map((group) => [group.gid, group]));
 	const groupIds = groups.map((group) => group.id);
 
 	chatGroupWatchStore.error = '';
@@ -415,13 +486,19 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 	};
 
 	handle.ready = (async () => {
+		await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+		const subscriptionGroups = groupIds
+			.map((groupId) => toWatchableGroup(groupId))
+			.filter((group): group is WatchableGroup => Boolean(group));
+		if (subscriptionGroups.length === 0) return;
+		const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
 		const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
 			client.SubscribeManyGroupMessages({
-				groups: groups.map((group) => ({ gid: group.gid, after: group.after }))
+				groups: subscriptionGroups.map((group) => ({ gid: group.gid, after: group.after }))
 			})
 		);
 		const buffers = new Map(
-			groups.map((group) => [
+			subscriptionGroups.map((group) => [
 				group.id,
 				createWatchBuffer({
 					groupId: group.id,
