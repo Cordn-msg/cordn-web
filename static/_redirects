@@ -1,1 +1,7 @@
+/_app/* /_app/:splat 200
+/pwa/* /pwa/:splat 200
+/favicon.svg /favicon.svg 200
+/manifest.webmanifest /manifest.webmanifest 200
+/robots.txt /robots.txt 200
+/service-worker.js /service-worker.js 200
 /* /index.html 200

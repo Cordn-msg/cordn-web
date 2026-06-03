@@ -10,14 +10,16 @@ import {
 	reloadChatGroupsForOwner
 } from '$lib/services/chatGroups.svelte';
 import {
-	requestCoordinatorClientsRefresh,
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
-	onCoordinatorClientsRefresh,
 	requireActiveAccount,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
-import { setChatReconnectStatus } from '$lib/services/chatReconnectStatus.svelte';
+import {
+	clearChatReconnectStatus,
+	failChatReconnectStatus,
+	setChatReconnectStatus
+} from '$lib/services/chatReconnectStatus.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
@@ -45,9 +47,15 @@ const currentWatches = new SvelteMap<string, GroupWatchTask>();
 const autoWatchDisabledGroupIds = new SvelteSet<string>();
 let lastActiveAccountId = '';
 const groupIdDecoder = new TextDecoder();
-const COORDINATOR_CLIENTS_REFRESHED_REASON = 'coordinator clients refreshed';
+const RUNTIME_RESUME_REASON = 'runtime resume';
 const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 50;
+const RESUME_DEBOUNCE_MS = 500;
+const MIN_RESUME_INTERVAL_MS = 5000;
+let resumePromise: Promise<void> | null = null;
+let resumeEpoch = 0;
+let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSuccessfulResumeAt = 0;
 
 type WatchIncomingMessage = {
 	cursor: number;
@@ -101,41 +109,26 @@ if (browser) {
 		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
-		void reloadChatGroupsForOwner(nextOwnerPubkey);
 
-		void stopWatchingGroup(undefined, 'active account changed');
+		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
+			await reloadChatGroupsForOwner(nextOwnerPubkey);
+			if (account) {
+				void resumeChatGroupWatching('active account changed');
+			}
+		});
 		if (previousAccount) {
 			queryClient.removeQueries({ queryKey: chatQueryKeys.account(previousAccount.pubkey) });
 			void disconnectCoordinatorClients(previousAccount);
 		}
 	});
 
-	onCoordinatorClientsRefresh(async (refreshClients) => {
-		const watchedGroupIds = [...currentWatches.keys()];
-		const watchedGroups = watchedGroupIds
-			.map((groupId) => getChatGroup(groupId))
-			.filter((group): group is NonNullable<typeof group> => Boolean(group));
-		const activeCoordinatorKeys = watchedGroups.map((group) => group.coordinatorKey);
-
-		if (watchedGroupIds.length > 0) {
-			chatGroupWatchStore.error = '';
-			setChatReconnectStatus({
-				phase: 'syncing',
-				message: 'Updating chats…',
-				activeCoordinatorKeys
-			});
-			await stopWatchingGroup(undefined, COORDINATOR_CLIENTS_REFRESHED_REASON);
+	window.addEventListener('online', () => scheduleChatGroupResume('browser online'));
+	window.addEventListener('focus', () => scheduleChatGroupResume('window focus'));
+	window.addEventListener('pageshow', () => scheduleChatGroupResume('page show'));
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'visible') {
+			scheduleChatGroupResume('page visible');
 		}
-
-		await refreshClients();
-
-		if (watchedGroupIds.length === 0) {
-			return;
-		}
-
-		await startWatchingAllGroups();
-
-		chatGroupWatchStore.error = '';
 	});
 }
 
@@ -158,9 +151,24 @@ function isExpectedWatchTeardown(detail: string, reason?: string) {
 	}
 
 	return (
-		reason === COORDINATOR_CLIENTS_REFRESHED_REASON &&
+		reason === RUNTIME_RESUME_REASON &&
 		(detail.includes('Connection closed') || detail.includes('Failed to publish event'))
 	);
+}
+
+function scheduleChatGroupResume(reason: string) {
+	if (resumeTimer) {
+		clearTimeout(resumeTimer);
+	}
+
+	resumeTimer = setTimeout(() => {
+		resumeTimer = null;
+		void resumeChatGroupWatching(reason);
+	}, RESUME_DEBOUNCE_MS);
+}
+
+function scheduleChatGroupResumeAfterTransientError(reason: string) {
+	scheduleChatGroupResume(reason);
 }
 
 export function stopWatchingGroup(groupId?: string, reason = 'user stopped watching') {
@@ -186,9 +194,123 @@ export function stopWatchingGroup(groupId?: string, reason = 'user stopped watch
 
 	return closeWatch(watch, reason).then(() => {
 		if (reason === 'user stopped watching') {
-			void startWatchingAllGroups();
+			void resumeChatGroupWatching('watch manually stopped');
 		}
 	});
+}
+
+function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
+	return listChatGroups()
+		.filter(
+			(group) =>
+				(input.includeCurrentWatches || getCurrentWatch(group.id) === undefined) &&
+				!autoWatchDisabledGroupIds.has(group.id) &&
+				!isChatGroupRemoved(group)
+		)
+		.map((group) => toWatchableGroup(group.id))
+		.filter((group): group is WatchableGroup => Boolean(group));
+}
+
+function groupWatchableGroupsByCoordinator(groups: WatchableGroup[]) {
+	const groupsByCoordinator = new SvelteMap<string, WatchableGroup[]>();
+
+	for (const group of groups) {
+		const coordinatorGroups = groupsByCoordinator.get(group.coordinatorKey) ?? [];
+		coordinatorGroups.push(group);
+		groupsByCoordinator.set(group.coordinatorKey, coordinatorGroups);
+	}
+
+	return groupsByCoordinator;
+}
+
+async function syncGroupBacklogs(groups: WatchableGroup[]) {
+	if (groups.length === 0) return;
+
+	const account = requireActiveAccount('You must be logged in to sync group messages');
+	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groups);
+
+	for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
+		await fetchCoordinatorGroupBacklog({
+			account,
+			coordinatorKey,
+			groups: coordinatorGroups
+		}).catch((error) => {
+			console.warn('Failed to sync coordinator group backlog', coordinatorKey, error);
+			throw error;
+		});
+	}
+}
+
+async function runResumeChatGroupWatching(reason: string) {
+	const account = manager.getActive();
+	if (!account) {
+		return;
+	}
+
+	const ownerPubkey = normalizePubKey(account.pubkey);
+	chatGroupWatchStore.startup = 'starting';
+	chatGroupWatchStore.error = '';
+
+	await reloadChatGroupsForOwner(ownerPubkey);
+	const groupsToResume = getWatchableGroups({ includeCurrentWatches: true });
+	const activeCoordinatorKeys = groupsToResume.map((group) => group.coordinatorKey);
+
+	if (groupsToResume.length === 0) {
+		chatGroupWatchStore.startup = 'ready';
+		clearChatReconnectStatus();
+		return;
+	}
+
+	const showReconnectStatus =
+		reason !== 'chat layout active' && reason !== 'active account changed';
+	if (showReconnectStatus) {
+		setChatReconnectStatus({
+			phase: 'syncing',
+			message: 'Updating chats…',
+			activeCoordinatorKeys
+		});
+	}
+
+	try {
+		await stopWatchingGroup(undefined, RUNTIME_RESUME_REASON);
+		void syncGroupBacklogs(groupsToResume).catch((error) => {
+			console.warn('Failed to sync group backlogs during chat resume', error);
+			chatGroupWatchStore.error = error instanceof Error ? error.message : 'Failed to update chats';
+		});
+		void startWatchingAllGroups({ skipBacklogSync: false });
+		chatGroupWatchStore.startup = 'ready';
+		lastSuccessfulResumeAt = Date.now();
+		clearChatReconnectStatus();
+	} catch (error) {
+		chatGroupWatchStore.startup = 'error';
+		chatGroupWatchStore.error = error instanceof Error ? error.message : 'Failed to update chats';
+		if (showReconnectStatus) {
+			failChatReconnectStatus(chatGroupWatchStore.error);
+		}
+		throw error;
+	}
+}
+
+export function resumeChatGroupWatching(reason = 'runtime resume') {
+	if (resumePromise) {
+		return resumePromise;
+	}
+
+	if (
+		Date.now() - lastSuccessfulResumeAt < MIN_RESUME_INTERVAL_MS &&
+		reason !== 'active account changed'
+	) {
+		return Promise.resolve();
+	}
+
+	const epoch = ++resumeEpoch;
+	resumePromise = runResumeChatGroupWatching(reason).finally(() => {
+		if (resumeEpoch === epoch) {
+			resumePromise = null;
+		}
+	});
+
+	return resumePromise;
 }
 
 type WatchableGroup = {
@@ -394,7 +516,7 @@ export async function startWatchingGroup(groupId: string) {
 					return;
 				}
 				if (isTransientCoordinatorError(error)) {
-					void requestCoordinatorClientsRefresh();
+					scheduleChatGroupResumeAfterTransientError('single group subscription result failed');
 					return;
 				}
 
@@ -450,7 +572,7 @@ export async function startWatchingGroup(groupId: string) {
 			}
 
 			if (isTransientCoordinatorError(error)) {
-				void requestCoordinatorClientsRefresh();
+				scheduleChatGroupResumeAfterTransientError('single group subscription stream failed');
 				return;
 			}
 
@@ -466,7 +588,10 @@ export async function startWatchingGroup(groupId: string) {
 	return handle.ready;
 }
 
-async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
+async function startWatchingCoordinatorGroups(
+	groups: WatchableGroup[],
+	options: { skipBacklogSync?: boolean } = {}
+) {
 	if (groups.length === 0) return;
 
 	const account = requireActiveAccount('You must be logged in to watch group messages');
@@ -486,7 +611,9 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 	};
 
 	handle.ready = (async () => {
-		await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+		if (!options.skipBacklogSync) {
+			await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+		}
 		const subscriptionGroups = groupIds
 			.map((groupId) => toWatchableGroup(groupId))
 			.filter((group): group is WatchableGroup => Boolean(group));
@@ -515,7 +642,7 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 					return;
 				}
 				if (isTransientCoordinatorError(error)) {
-					void requestCoordinatorClientsRefresh();
+					scheduleChatGroupResumeAfterTransientError('coordinator subscription result failed');
 					return;
 				}
 
@@ -577,7 +704,7 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 			}
 
 			if (isTransientCoordinatorError(error)) {
-				void requestCoordinatorClientsRefresh();
+				scheduleChatGroupResumeAfterTransientError('coordinator subscription stream failed');
 				return;
 			}
 
@@ -595,32 +722,19 @@ async function startWatchingCoordinatorGroups(groups: WatchableGroup[]) {
 	return handle.ready;
 }
 
-export async function startWatchingAllGroups() {
+export async function startWatchingAllGroups(options: { skipBacklogSync?: boolean } = {}) {
 	chatGroupWatchStore.startup = 'starting';
-	const groupsToWatch = listChatGroups().filter(
-		(group) =>
-			getCurrentWatch(group.id) === undefined &&
-			!autoWatchDisabledGroupIds.has(group.id) &&
-			!isChatGroupRemoved(group)
-	);
+	const groupsToWatch = getWatchableGroups({ includeCurrentWatches: false });
 	if (groupsToWatch.length === 0) {
 		chatGroupWatchStore.startup = 'ready';
 		return;
 	}
 
-	const groupsByCoordinator = new SvelteMap<string, WatchableGroup[]>();
-
-	for (const group of groupsToWatch) {
-		const watchableGroup = toWatchableGroup(group.id);
-		if (!watchableGroup) continue;
-		const coordinatorGroups = groupsByCoordinator.get(watchableGroup.coordinatorKey) ?? [];
-		coordinatorGroups.push(watchableGroup);
-		groupsByCoordinator.set(watchableGroup.coordinatorKey, coordinatorGroups);
-	}
+	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groupsToWatch);
 
 	try {
 		for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
-			await startWatchingCoordinatorGroups(coordinatorGroups).catch((error) => {
+			await startWatchingCoordinatorGroups(coordinatorGroups, options).catch((error) => {
 				console.warn('Failed to start coordinator group watch', coordinatorKey, error);
 			});
 		}

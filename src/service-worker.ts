@@ -5,6 +5,7 @@ import { build, files, version } from '$service-worker';
 const CACHE_PREFIX = 'cordn-app';
 const CACHE_NAME = `${CACHE_PREFIX}-${version}`;
 const APP_SHELL = '/index.html';
+const LEGACY_APP_SHELL = '/200.html';
 const ASSETS = [...build, ...files];
 
 const worker = self as unknown as ServiceWorkerGlobalScope;
@@ -72,7 +73,12 @@ async function networkFirst(request: Request): Promise<Response> {
 		cache.put(request, response.clone()).catch(() => undefined);
 		return response;
 	} catch {
-		return (await caches.match(request)) ?? (await caches.match(APP_SHELL)) ?? Response.error();
+		return (
+			(await caches.match(request)) ??
+			(await caches.match(APP_SHELL)) ??
+			(await caches.match(LEGACY_APP_SHELL)) ??
+			Response.error()
+		);
 	}
 }
 
