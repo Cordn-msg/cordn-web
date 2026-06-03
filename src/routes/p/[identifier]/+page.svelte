@@ -48,6 +48,7 @@
 	let { params } = $props();
 
 	type ProfileHint = { name?: string; displayName?: string; nip05?: string };
+	type DecodedProfileIdentifier = { pubkey: string; error: string };
 
 	function decodeProfileIdentifier(identifier: string): string {
 		const trimmed = identifier.trim();
@@ -69,9 +70,21 @@
 		throw new Error('Profile identifier must be a hex pubkey, npub, or nprofile');
 	}
 
-	const profilePubkey = $derived.by(() => decodeProfileIdentifier(params.identifier));
+	const decodedProfileIdentifier = $derived.by<DecodedProfileIdentifier>(() => {
+		try {
+			return { pubkey: decodeProfileIdentifier(params.identifier), error: '' };
+		} catch (error) {
+			return {
+				pubkey: '',
+				error: error instanceof Error ? error.message : 'Failed to decode the profile identifier.'
+			};
+		}
+	});
+	const profilePubkey = $derived.by(() => decodedProfileIdentifier.pubkey);
+	const profileIdentifierError = $derived.by(() => decodedProfileIdentifier.error);
 	const profile = $derived(eventStore.model(ProfileModel, profilePubkey));
 	const sharedGroups = $derived.by(() => {
+		if (!profilePubkey) return [];
 		const targetPubkey = profilePubkey;
 		return listChatGroups().filter((group) =>
 			listChatGroupMembers(group.id).some(
@@ -93,15 +106,19 @@
 		() => requestedCoordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
 	);
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
-	const npub = $derived.by(() => nip19.npubEncode(profilePubkey));
+	const npub = $derived.by(() => (profilePubkey ? nip19.npubEncode(profilePubkey) : ''));
 	const displayName = $derived.by(
-		() => $profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16)
+		() =>
+			$profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16) || 'Profile'
 	);
 	const profileKeyPackage = $derived.by(() =>
 		availableKeyPackages.find((entry) => normalizePubKey(entry.pk) === profilePubkey)
 	);
 	const startChatDisabled = $derived.by(
-		() => isSelf || (Boolean($activeAccount) && (loadingAvailableKeyPackages || !profileKeyPackage))
+		() =>
+			Boolean(profileIdentifierError) ||
+			isSelf ||
+			(Boolean($activeAccount) && (loadingAvailableKeyPackages || !profileKeyPackage))
 	);
 	const loadedProfileRelays = $derived.by(() => getUserRelayListFromStore(profilePubkey));
 	const profileLookupRelays = $derived.by(() => getMetadataLookupRelays(profilePubkey));
@@ -124,9 +141,17 @@
 	let logoutCleaning = $state(false);
 	let startingChat = $state(false);
 	let startChatError = $state('');
+	let startChatAfterLogin = $state(false);
 	let initializedEditorForPubkey = $state('');
 
 	$effect(() => {
+		if (!profilePubkey) {
+			availableKeyPackages = [];
+			loadingAvailableKeyPackages = false;
+			availableKeyPackagesError = '';
+			return;
+		}
+
 		if (isSelf) {
 			availableKeyPackages = [];
 			loadingAvailableKeyPackages = false;
@@ -160,6 +185,8 @@
 	});
 
 	$effect(() => {
+		if (!profilePubkey) return;
+
 		const pubkeys = [
 			...new Set(
 				sharedGroups.flatMap((group) =>
@@ -201,12 +228,16 @@
 	});
 
 	$effect(() => {
+		if (!profilePubkey) return;
+
 		const subscription = createUserRelayListByPubkeyLoader(profilePubkey).subscribe();
 
 		return () => subscription.unsubscribe();
 	});
 
 	$effect(() => {
+		if (!profilePubkey) return;
+
 		const subscription = addressLoader({
 			kind: Metadata,
 			pubkey: profilePubkey,
@@ -231,6 +262,15 @@
 			resetProfileEditor();
 			initializedEditorForPubkey = profilePubkey;
 		}
+	});
+
+	$effect(() => {
+		if (!startChatAfterLogin || !$activeAccount || isSelf || startingChat) {
+			return;
+		}
+
+		startChatAfterLogin = false;
+		void handleStartChat();
 	});
 
 	function getGroupHref(groupId: string) {
@@ -365,9 +405,10 @@
 	}
 
 	async function handleStartChat() {
-		if (isSelf) return;
+		if (isSelf || !profilePubkey) return;
 
 		if (!$activeAccount) {
+			startChatAfterLogin = true;
 			dialogState.dialogId = DIALOG_IDS.LOGIN;
 			return;
 		}
@@ -444,201 +485,223 @@
 				<AccountLoginDialog />
 			</div>
 
-			<Card.Root>
-				<Card.Header>
-					<div class="flex flex-wrap items-start justify-between gap-3">
-						<div>
-							<Card.Title>{isSelf ? 'Identity' : 'Profile overview'}</Card.Title>
-							<Card.Description>
-								Extended profile metadata resolved from the local event store and relays.
-							</Card.Description>
-						</div>
-
-						{#if isSelf}
-							<div class="flex flex-wrap gap-2">
-								<Button type="button" variant="outline" onclick={startEditingProfile}>
-									<Pencil class="mr-2 size-4" />
-									Edit profile
-								</Button>
-								<Button type="button" variant="outline" onclick={logout}>
-									<LogOut class="mr-2 size-4" />
-									Log out
-								</Button>
-								<Button
-									type="button"
-									variant="ghost"
-									onclick={cleanAndLogout}
-									disabled={logoutCleaning}
-								>
-									{logoutCleaning ? 'Cleaning…' : 'Log out and clean data'}
-								</Button>
-							</div>
-						{:else}
-							<div class="flex max-w-sm flex-col items-stretch gap-2">
-								<Button
-									type="button"
-									onclick={handleStartChat}
-									disabled={startChatDisabled || startingChat}
-								>
-									<MessageCirclePlus class="mr-2 size-4" />
-									{startingChat ? 'Starting chat…' : 'Start chat'}
-								</Button>
-								{#if startChatError}
-									<p class="text-sm text-destructive">{startChatError}</p>
-								{:else if availableKeyPackagesError}
-									<p class="text-sm text-destructive">{availableKeyPackagesError}</p>
-								{/if}
-							</div>
-						{/if}
-					</div>
-				</Card.Header>
-				<Card.Content>
-					{#if isSelf && editingProfile}
-						<form class="space-y-4" onsubmit={saveProfile}>
-							<InputGroup.Root>
-								<InputGroup.Input bind:value={profileName} placeholder="Name" />
-								<InputGroup.Addon>
-									<InputGroup.Text>Name</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Input bind:value={profileDisplayName} placeholder="Display name" />
-								<InputGroup.Addon>
-									<InputGroup.Text>Display</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Input
-									bind:value={profilePicture}
-									placeholder="https://example.com/avatar.png"
-								/>
-								<InputGroup.Addon>
-									<InputGroup.Text>Picture</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Input
-									bind:value={profileBanner}
-									placeholder="https://example.com/banner.png"
-								/>
-								<InputGroup.Addon>
-									<InputGroup.Text>Banner</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Input bind:value={profileNip05} placeholder="name@example.com" />
-								<InputGroup.Addon>
-									<InputGroup.Text>NIP-05</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Input bind:value={profileWebsite} placeholder="https://example.com" />
-								<InputGroup.Addon>
-									<InputGroup.Text>Website</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Textarea
-									bind:value={profileAbout}
-									placeholder="Tell people about yourself"
-									class="min-h-28"
-								/>
-								<InputGroup.Addon align="block-start">
-									<InputGroup.Text>About</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<InputGroup.Root>
-								<InputGroup.Textarea
-									bind:value={profileRelayList}
-									placeholder=""
-									class="min-h-24"
-								/>
-								<InputGroup.Addon align="block-start">
-									<InputGroup.Text>Relays</InputGroup.Text>
-								</InputGroup.Addon>
-							</InputGroup.Root>
-
-							<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
-								<p>
-									Publishing to {enteredProfileRelayCount} relay{enteredProfileRelayCount === 1
-										? ''
-										: 's'}.
-								</p>
-								<p class="mt-1 text-xs">
-									{#if loadedProfileRelays.length > 0}
-										Loaded from the profile 10002 relay list event and used for metadata publishing.
-									{:else}
-										No profile 10002 relay list was found yet. Add user relays before saving.
-									{/if}
-								</p>
-							</div>
-
-							{#if profileError}
-								<div
-									class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-								>
-									{profileError}
-								</div>
-							{/if}
-
-							<div class="flex flex-wrap justify-end gap-2">
-								<Button type="button" variant="ghost" onclick={cancelEditingProfile}>Cancel</Button>
-								<Button type="submit" disabled={submittingProfile || !profileDirty}>
-									<Save class="mr-2 size-4" />
-									{submittingProfile ? 'Saving…' : 'Save profile'}
-								</Button>
-							</div>
-						</form>
-					{:else}
-						<ProfileCard pubkey={profilePubkey} mode="extended" />
-					{/if}
-				</Card.Content>
-			</Card.Root>
-			{#if sharedGroups.length}
+			{#if profileIdentifierError}
 				<Card.Root>
 					<Card.Header>
-						<Card.Title>Groups in common</Card.Title>
-						<Card.Description>
-							{#if isSelf}
-								Your local groups on this device.
-							{:else}
-								Local groups where this profile appears in the current membership list.
-							{/if}
-						</Card.Description>
+						<Card.Title>Invalid profile identifier</Card.Title>
+						<Card.Description>This profile link could not be decoded.</Card.Description>
 					</Card.Header>
 					<Card.Content>
-						<div class="space-y-3">
-							<div class="rounded-2xl border border-border bg-card/40 px-4 py-4">
-								<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">
-									{displayName}
-								</p>
-								<p class="text-2xl font-semibold tracking-tight">{sharedGroupCount}</p>
-								<p class="text-sm text-muted-foreground">
-									{sharedGroupCount === 1 ? 'Shared local group' : 'Shared local groups'}
-								</p>
-							</div>
-
-							{#each sharedGroups as group (group.id)}
-								<a
-									href={getGroupHref(group.id)}
-									class="block rounded-2xl border border-border px-4 py-4 transition-colors hover:bg-muted/40"
-								>
-									<p class="font-medium">{getSharedGroupTitle(group)}</p>
-									<p class="mt-1 text-sm text-muted-foreground">
-										{group.metadata?.description || 'Coordinator-assisted messaging'}
-									</p>
-								</a>
-							{/each}
+						<div class="space-y-4">
+							<p
+								class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+							>
+								{profileIdentifierError}
+							</p>
+							<p class="text-sm text-muted-foreground">
+								Use a full hex pubkey, npub, or nprofile identifier.
+							</p>
 						</div>
 					</Card.Content>
 				</Card.Root>
+			{:else}
+				<Card.Root>
+					<Card.Header>
+						<div class="flex flex-wrap items-start justify-between gap-3">
+							<div>
+								<Card.Title>{isSelf ? 'Identity' : 'Profile overview'}</Card.Title>
+							</div>
+
+							{#if isSelf}
+								<div class="flex flex-wrap gap-2">
+									<Button type="button" variant="outline" onclick={startEditingProfile}>
+										<Pencil class="mr-2 size-4" />
+										Edit profile
+									</Button>
+									<Button type="button" variant="outline" onclick={logout}>
+										<LogOut class="mr-2 size-4" />
+										Log out
+									</Button>
+									<Button
+										type="button"
+										variant="ghost"
+										onclick={cleanAndLogout}
+										disabled={logoutCleaning}
+									>
+										{logoutCleaning ? 'Cleaning…' : 'Log out and clean data'}
+									</Button>
+								</div>
+							{/if}
+						</div>
+					</Card.Header>
+					<Card.Content>
+						{#if isSelf && editingProfile}
+							<form class="space-y-4" onsubmit={saveProfile}>
+								<InputGroup.Root>
+									<InputGroup.Input bind:value={profileName} placeholder="Name" />
+									<InputGroup.Addon>
+										<InputGroup.Text>Name</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input bind:value={profileDisplayName} placeholder="Display name" />
+									<InputGroup.Addon>
+										<InputGroup.Text>Display</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input
+										bind:value={profilePicture}
+										placeholder="https://example.com/avatar.png"
+									/>
+									<InputGroup.Addon>
+										<InputGroup.Text>Picture</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input
+										bind:value={profileBanner}
+										placeholder="https://example.com/banner.png"
+									/>
+									<InputGroup.Addon>
+										<InputGroup.Text>Banner</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input bind:value={profileNip05} placeholder="name@example.com" />
+									<InputGroup.Addon>
+										<InputGroup.Text>NIP-05</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input bind:value={profileWebsite} placeholder="https://example.com" />
+									<InputGroup.Addon>
+										<InputGroup.Text>Website</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Textarea
+										bind:value={profileAbout}
+										placeholder="Tell people about yourself"
+										class="min-h-28"
+									/>
+									<InputGroup.Addon align="block-start">
+										<InputGroup.Text>About</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Textarea
+										bind:value={profileRelayList}
+										placeholder=""
+										class="min-h-24"
+									/>
+									<InputGroup.Addon align="block-start">
+										<InputGroup.Text>Relays</InputGroup.Text>
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
+									<p>
+										Publishing to {enteredProfileRelayCount} relay{enteredProfileRelayCount === 1
+											? ''
+											: 's'}.
+									</p>
+									<p class="mt-1 text-xs">
+										{#if loadedProfileRelays.length > 0}
+											Loaded from the profile 10002 relay list event and used for metadata
+											publishing.
+										{:else}
+											No profile 10002 relay list was found yet. Add user relays before saving.
+										{/if}
+									</p>
+								</div>
+
+								{#if profileError}
+									<div
+										class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+									>
+										{profileError}
+									</div>
+								{/if}
+
+								<div class="flex flex-wrap justify-end gap-2">
+									<Button type="button" variant="ghost" onclick={cancelEditingProfile}
+										>Cancel</Button
+									>
+									<Button type="submit" disabled={submittingProfile || !profileDirty}>
+										<Save class="mr-2 size-4" />
+										{submittingProfile ? 'Saving…' : 'Save profile'}
+									</Button>
+								</div>
+							</form>
+						{:else}
+							<div class="flex w-full flex-col items-center gap-3">
+								<ProfileCard pubkey={profilePubkey} mode="extended" />
+								<div class="flex w-full max-w-sm flex-col items-stretch gap-2">
+									<Button
+										type="button"
+										onclick={handleStartChat}
+										disabled={startChatDisabled || startingChat}
+									>
+										<MessageCirclePlus class="mr-2 size-4" />
+										{startingChat ? 'Starting chat…' : 'Start chat'}
+									</Button>
+									{#if startChatError}
+										<p class="text-sm text-destructive">{startChatError}</p>
+									{:else if availableKeyPackagesError}
+										<p class="text-sm text-destructive">{availableKeyPackagesError}</p>
+									{/if}
+								</div>
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+				{#if sharedGroups.length}
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Groups in common</Card.Title>
+							<Card.Description>
+								{#if isSelf}
+									Your local groups on this device.
+								{:else}
+									Local groups where this profile appears in the current membership list.
+								{/if}
+							</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<div class="space-y-3">
+								<div class="rounded-2xl border border-border bg-card/40 px-4 py-4">
+									<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">
+										{displayName}
+									</p>
+									<p class="text-2xl font-semibold tracking-tight">{sharedGroupCount}</p>
+									<p class="text-sm text-muted-foreground">
+										{sharedGroupCount === 1 ? 'Shared local group' : 'Shared local groups'}
+									</p>
+								</div>
+
+								{#each sharedGroups as group (group.id)}
+									<a
+										href={getGroupHref(group.id)}
+										class="block rounded-2xl border border-border px-4 py-4 transition-colors hover:bg-muted/40"
+									>
+										<p class="font-medium">{getSharedGroupTitle(group)}</p>
+										<p class="mt-1 text-sm text-muted-foreground">
+											{group.metadata?.description || 'Coordinator-assisted messaging'}
+										</p>
+									</a>
+								{/each}
+							</div>
+						</Card.Content>
+					</Card.Root>
+				{/if}
 			{/if}
 		</div>
 	</div>

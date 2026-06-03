@@ -95,7 +95,7 @@
 	{/if}
 {/snippet}
 {#if isExtended}
-	<div class="overflow-hidden rounded-lg border border-border bg-card">
+	<div class="w-full overflow-hidden rounded-lg border border-border bg-card">
 		{#if $profile?.banner}
 			<img src={$profile.banner} alt="" class="h-32 w-full object-cover" />
 		{/if}
