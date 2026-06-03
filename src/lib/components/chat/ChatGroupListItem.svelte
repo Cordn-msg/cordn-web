@@ -88,6 +88,8 @@
 	});
 </script>
 
+<!-- The caller passes route hrefs resolved with $app/paths when route params are needed. -->
+<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 <a {href} {onclick} class={linkClass}>
 	<div class="relative shrink-0">
 		<ChatGroupAvatar

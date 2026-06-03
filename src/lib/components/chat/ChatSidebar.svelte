@@ -140,6 +140,8 @@
 		const groupHref = resolve('/chat/[id]', { id: groupId });
 		const targetUrl = new URL(groupHref, page.url);
 		targetUrl.searchParams.set('message', messageKey);
+		// The path is resolved above before adding a local query parameter.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		await goto(`${groupHref}?${targetUrl.searchParams.toString()}`);
 	}
 

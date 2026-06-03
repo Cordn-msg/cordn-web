@@ -140,7 +140,6 @@
 	});
 
 	async function navigateToInfo() {
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		await goto(infoHref);
 	}
 

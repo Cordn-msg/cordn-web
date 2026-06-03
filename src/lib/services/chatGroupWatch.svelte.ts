@@ -51,6 +51,7 @@ const RUNTIME_RESUME_REASON = 'runtime resume';
 const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 50;
 const RESUME_DEBOUNCE_MS = 500;
+const RECONNECT_STATUS_SHOW_DELAY_MS = 200;
 const MIN_RESUME_INTERVAL_MS = 5000;
 let resumePromise: Promise<void> | null = null;
 let resumeEpoch = 0;
@@ -267,7 +268,8 @@ async function runResumeChatGroupWatching(reason: string) {
 		setChatReconnectStatus({
 			phase: 'syncing',
 			message: 'Updating chats…',
-			activeCoordinatorKeys
+			activeCoordinatorKeys,
+			showDelayMs: RECONNECT_STATUS_SHOW_DELAY_MS
 		});
 	}
 

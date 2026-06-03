@@ -2,6 +2,8 @@ import { SvelteSet } from 'svelte/reactivity';
 
 type ChatReconnectPhase = 'idle' | 'checking' | 'reconnecting' | 'syncing' | 'error';
 
+const DEFAULT_SHOW_DELAY_MS = 0;
+
 export const chatReconnectStatusStore = $state<{
 	active: boolean;
 	phase: ChatReconnectPhase;
@@ -15,28 +17,45 @@ export const chatReconnectStatusStore = $state<{
 });
 
 let clearTimer: ReturnType<typeof setTimeout> | null = null;
+let showTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearPendingTimer() {
-	if (!clearTimer) {
-		return;
+	if (clearTimer) {
+		clearTimeout(clearTimer);
+		clearTimer = null;
 	}
 
-	clearTimeout(clearTimer);
-	clearTimer = null;
+	if (showTimer) {
+		clearTimeout(showTimer);
+		showTimer = null;
+	}
 }
 
 export function setChatReconnectStatus(input: {
 	phase: Exclude<ChatReconnectPhase, 'idle'>;
 	message: string;
 	activeCoordinatorKeys?: Iterable<string>;
+	showDelayMs?: number;
 }) {
 	clearPendingTimer();
-	chatReconnectStatusStore.active = true;
-	chatReconnectStatusStore.phase = input.phase;
-	chatReconnectStatusStore.message = input.message;
-	chatReconnectStatusStore.activeCoordinatorKeys = input.activeCoordinatorKeys
-		? [...new SvelteSet(input.activeCoordinatorKeys)]
-		: chatReconnectStatusStore.activeCoordinatorKeys;
+
+	const show = () => {
+		showTimer = null;
+		chatReconnectStatusStore.active = true;
+		chatReconnectStatusStore.phase = input.phase;
+		chatReconnectStatusStore.message = input.message;
+		chatReconnectStatusStore.activeCoordinatorKeys = input.activeCoordinatorKeys
+			? [...new SvelteSet(input.activeCoordinatorKeys)]
+			: chatReconnectStatusStore.activeCoordinatorKeys;
+	};
+
+	const showDelayMs = input.showDelayMs ?? DEFAULT_SHOW_DELAY_MS;
+	if (showDelayMs > 0) {
+		showTimer = setTimeout(show, showDelayMs);
+		return;
+	}
+
+	show();
 }
 
 export function clearChatReconnectStatus() {
@@ -44,6 +63,7 @@ export function clearChatReconnectStatus() {
 	chatReconnectStatusStore.active = false;
 	chatReconnectStatusStore.phase = 'idle';
 	chatReconnectStatusStore.message = '';
+	chatReconnectStatusStore.activeCoordinatorKeys = [];
 }
 
 export function failChatReconnectStatus(message: string) {
