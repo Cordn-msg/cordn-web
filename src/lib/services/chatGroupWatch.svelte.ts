@@ -123,14 +123,19 @@ if (browser) {
 		}
 	});
 
+	const likelyMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
 	window.addEventListener('online', () => scheduleChatGroupResume('browser online'));
-	window.addEventListener('focus', () => scheduleChatGroupResume('window focus'));
 	window.addEventListener('pageshow', () => scheduleChatGroupResume('page show'));
-	document.addEventListener('visibilitychange', () => {
-		if (document.visibilityState === 'visible') {
-			scheduleChatGroupResume('page visible');
-		}
-	});
+
+	if (likelyMobile) {
+		window.addEventListener('focus', () => scheduleChatGroupResume('window focus'));
+		document.addEventListener('visibilitychange', () => {
+			if (document.visibilityState === 'visible') {
+				scheduleChatGroupResume('page visible');
+			}
+		});
+	}
 }
 
 export function isWatchingGroup(groupId?: string): boolean {

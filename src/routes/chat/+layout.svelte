@@ -57,10 +57,10 @@
 <div class="flex h-dvh min-h-dvh bg-background text-foreground">
 	<ChatSidebar mobileSidebarOpen={chatLayout.mobileSidebarOpen} />
 
-	<div class="min-w-0 flex-1 overflow-hidden">
+	<div class="relative min-w-0 flex-1 overflow-hidden">
 		{#if chatReconnectStatusStore.active}
 			<div
-				class="border-b border-border/60 bg-muted/60 px-4 py-2 text-sm text-muted-foreground md:px-6"
+				class="absolute inset-x-0 top-0 z-50 border-b border-border/60 bg-muted/60 px-2 py-1 text-sm text-muted-foreground backdrop-blur-sm"
 			>
 				{chatReconnectStatusStore.message}
 			</div>

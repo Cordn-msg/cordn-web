@@ -102,7 +102,7 @@ export class cordnClient implements coordinatorClient {
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
 		const relays = options.relays || [];
-		const relayHandler = options.relayHandler || new ApplesauceRelayPool(relays);
+		const relayHandler = new ApplesauceRelayPool(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {
 			throw new Error(

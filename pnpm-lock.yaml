@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@contextvm/sdk':
-        specifier: ^0.11.9
-        version: 0.11.9(typescript@6.0.3)
+        specifier: ^0.11.12
+        version: 0.11.12(typescript@6.0.3)
       '@lucide/svelte':
         specifier: ^0.562.0
         version: 0.562.0(svelte@5.55.5(@typescript-eslint/types@8.59.3))
@@ -177,8 +177,8 @@ packages:
   '@capacitor/core@7.6.5':
     resolution: {integrity: sha512-JWyxD9LaK1oY588B/khJIG3Ec4NHI/Ki4v1b4XzqPNt2a27au0F2AhLTwYexV4Bp3Ruxf+8oYqxFAC8/7sGBWA==}
 
-  '@contextvm/sdk@0.11.9':
-    resolution: {integrity: sha512-WH7K80L/5V0BIKdLZGEr3wtqJAehGTTES5PaokT5di5cE4rTYmBL0JMPP90V+XOP0ycBUG1Z0ET85baYhR8yig==}
+  '@contextvm/sdk@0.11.12':
+    resolution: {integrity: sha512-1BFuJRe3J9ZK4ShxgKcltuAtKNTRet3lUpy0MG2sfTG4gFZxp7CsJ8dc0biPFl71TkigSxoHJIb2eBPulhrfSA==}
     engines: {bun: '>=1.2.0'}
     peerDependencies:
       typescript: ^5.9.3
@@ -2345,7 +2345,7 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@contextvm/sdk@0.11.9(typescript@6.0.3)':
+  '@contextvm/sdk@0.11.12(typescript@6.0.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@noble/hashes': 2.2.0
