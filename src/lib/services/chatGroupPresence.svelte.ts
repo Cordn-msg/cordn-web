@@ -6,6 +6,7 @@ import {
 	listChatGroupMessages,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
+import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
@@ -149,7 +150,14 @@ export function getLatestChatGroupMessagePreview(groupId: string): string {
 	}
 
 	const group = getChatGroup(groupId);
-	const latestMessage = listChatGroupMessages(groupId).at(-1);
+	const messages = listChatGroupMessages(groupId);
+	let latestMessage: (typeof messages)[number] | undefined;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].kind !== SYSTEM_MESSAGE_KIND) {
+			latestMessage = messages[i];
+			break;
+		}
+	}
 	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();
 	if (preview) {
 		return preview.length > MAX_PREVIEW_LENGTH

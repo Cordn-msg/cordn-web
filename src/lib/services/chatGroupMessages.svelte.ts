@@ -15,9 +15,15 @@ import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import {
 	createAdminAuthorizationCallback,
-	createUnauthorizedAdminRejectionDetail
+	createUnauthorizedAdminRejectionDetail,
+	listGroupMembers
 } from '$lib/services/chatAdminPolicy';
-import { getCordnCipherSuite, getCordnGroupMetadataExtension } from '$lib/services/chatMlsUtils';
+import {
+	getCordnCipherSuite,
+	getCordnGroupMetadataExtension,
+	type CordnGroupMetadata
+} from '$lib/services/chatMlsUtils';
+import { normalizePubKey } from '$lib/utils';
 
 export interface StoredChatMessage {
 	cursor: number;
@@ -85,6 +91,15 @@ export interface StoredChatSyncIssue {
 	cursor: number;
 	createdAt: number;
 	detail: string;
+}
+
+export const SYSTEM_MESSAGE_KIND = -1;
+
+export interface StoredChatSystemMessageData {
+	systemKind: 'member-added' | 'member-removed' | 'metadata-changed';
+	target?: string;
+	committer?: string;
+	detail?: string;
 }
 
 export interface ChatCordnMessageEnvelope extends UnsignedEvent {
@@ -413,6 +428,125 @@ function wasMessageRejectedByCallback(result: { kind: 'newState'; actionTaken?: 
 	return result.actionTaken === 'reject';
 }
 
+function buildSystemMessageId(
+	cursor: number,
+	systemKind: StoredChatSystemMessageData['systemKind'],
+	target?: string
+): string {
+	const targetSegment = target ? `:${normalizePubKey(target)}` : '';
+	return `system:${cursor}:${systemKind}${targetSegment}`;
+}
+
+function buildSystemMessageContent(data: StoredChatSystemMessageData): string {
+	return JSON.stringify(data);
+}
+
+function describeMetadataChanges(
+	oldMeta?: CordnGroupMetadata,
+	newMeta?: CordnGroupMetadata
+): string[] {
+	const changes: string[] = [];
+	if (!oldMeta || !newMeta) return changes;
+
+	if (oldMeta.name !== newMeta.name) {
+		changes.push(`group name to "${newMeta.name}"`);
+	}
+	if (oldMeta.description !== newMeta.description) {
+		changes.push('group description');
+	}
+	if (oldMeta.icon !== newMeta.icon) {
+		changes.push('group icon');
+	}
+	if (oldMeta.imageUrl !== newMeta.imageUrl) {
+		changes.push('group image');
+	}
+	const oldAdmins = new Set((oldMeta.adminPubkeys ?? []).map(normalizePubKey));
+	const newAdmins = new Set((newMeta.adminPubkeys ?? []).map(normalizePubKey));
+	if (oldAdmins.size !== newAdmins.size || ![...oldAdmins].every((admin) => newAdmins.has(admin))) {
+		changes.push('group admins');
+	}
+
+	return changes;
+}
+
+export function createSystemMessagesFromStateChange(input: {
+	cursor: number;
+	createdAt: number;
+	oldState: ClientState;
+	newState: ClientState;
+	oldMetadata?: CordnGroupMetadata;
+	newMetadata?: CordnGroupMetadata;
+	committerPubkey?: string;
+}): StoredChatMessage[] {
+	const messages: StoredChatMessage[] = [];
+	const committer = input.committerPubkey ? normalizePubKey(input.committerPubkey) : undefined;
+
+	const oldMembers = listGroupMembers(input.oldState);
+	const newMembers = listGroupMembers(input.newState);
+
+	const oldPubkeys = new Set(oldMembers.map((m) => normalizePubKey(m.stablePubkey)));
+	const newPubkeys = new Set(newMembers.map((m) => normalizePubKey(m.stablePubkey)));
+
+	const addedMembers = newMembers.filter((m) => !oldPubkeys.has(normalizePubKey(m.stablePubkey)));
+	const removedMembers = oldMembers.filter((m) => !newPubkeys.has(normalizePubKey(m.stablePubkey)));
+
+	for (const member of addedMembers) {
+		const target = normalizePubKey(member.stablePubkey);
+		messages.push({
+			cursor: input.cursor,
+			createdAt: input.createdAt,
+			direction: 'inbound',
+			sender: committer ?? '',
+			id: buildSystemMessageId(input.cursor, 'member-added', target),
+			kind: SYSTEM_MESSAGE_KIND,
+			tags: [],
+			content: buildSystemMessageContent({
+				systemKind: 'member-added',
+				target,
+				committer
+			})
+		});
+	}
+
+	for (const member of removedMembers) {
+		const target = normalizePubKey(member.stablePubkey);
+		messages.push({
+			cursor: input.cursor,
+			createdAt: input.createdAt,
+			direction: 'inbound',
+			sender: committer ?? '',
+			id: buildSystemMessageId(input.cursor, 'member-removed', target),
+			kind: SYSTEM_MESSAGE_KIND,
+			tags: [],
+			content: buildSystemMessageContent({
+				systemKind: 'member-removed',
+				target,
+				committer
+			})
+		});
+	}
+
+	const metadataChanges = describeMetadataChanges(input.oldMetadata, input.newMetadata);
+	if (metadataChanges.length > 0) {
+		messages.push({
+			cursor: input.cursor,
+			createdAt: input.createdAt,
+			direction: 'inbound',
+			sender: committer ?? '',
+			id: buildSystemMessageId(input.cursor, 'metadata-changed'),
+			kind: SYSTEM_MESSAGE_KIND,
+			tags: [],
+			content: buildSystemMessageContent({
+				systemKind: 'metadata-changed',
+				committer,
+				detail: metadataChanges.join(', ')
+			})
+		});
+	}
+
+	return messages;
+}
+
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
@@ -453,15 +587,25 @@ export async function ingestChatGroupMessages(params: {
 		}
 
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
+		let commitSenderPubkey: string | undefined;
 
 		try {
+			const adminCallback = createAdminAuthorizationCallback({
+				state: group.state,
+				metadata: group.metadata
+			});
 			processed = await processMessageBase64({
 				state: group.state,
 				opaqueMessageBase64: message.opaqueMessageBase64,
-				callback: createAdminAuthorizationCallback({
-					state: group.state,
-					metadata: group.metadata
-				})
+				callback: (incoming) => {
+					if (incoming.kind === 'commit' && incoming.senderLeafIndex !== undefined) {
+						const sender = listGroupMembers(group.state).find(
+							(member) => member.leafIndex === incoming.senderLeafIndex
+						);
+						commitSenderPubkey = sender?.stablePubkey;
+					}
+					return adminCallback(incoming);
+				}
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
@@ -551,6 +695,8 @@ export async function ingestChatGroupMessages(params: {
 		}
 
 		if (processed.kind === 'newState') {
+			const oldState = group.state;
+			const oldMetadata = getCordnGroupMetadataExtension(oldState);
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);
 			if (isRemovedFromGroupState(processed.newState)) {
@@ -560,6 +706,26 @@ export async function ingestChatGroupMessages(params: {
 			}
 			if (isPendingOperationMessage) {
 				appliedPendingCommitMessages.add(message.opaqueMessageBase64);
+			}
+
+			const systemMessages = createSystemMessagesFromStateChange({
+				cursor: message.cursor,
+				createdAt: message.createdAt,
+				oldState,
+				newState: processed.newState,
+				oldMetadata,
+				newMetadata: group.metadata,
+				committerPubkey: commitSenderPubkey
+			});
+
+			if (systemMessages.length > 0) {
+				seenCursors.add(message.cursor);
+				for (const systemMessage of systemMessages) {
+					if (seenMessageIds.has(systemMessage.id)) continue;
+					seenMessageIds.add(systemMessage.id);
+					group.messages.push(systemMessage);
+					received.push(systemMessage);
+				}
 			}
 		}
 	}

@@ -26,6 +26,10 @@ export interface ChatMessage {
 	cursor?: number;
 	unreadReference?: boolean;
 	unreadReferenceCursor?: number;
+	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed';
+	systemTarget?: string;
+	systemCommitter?: string;
+	systemDetail?: string;
 }
 
 export interface ChatGroup {

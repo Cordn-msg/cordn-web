@@ -20,10 +20,12 @@
 		getMessageEditReference,
 		getMessageReactionReference,
 		getMessageThreadReference,
+		SYSTEM_MESSAGE_KIND,
 		type ChatMessageDeleteTarget,
 		type ChatMessageEditTarget,
 		type ChatMessageReactionTarget,
-		type ChatMessageReplyTarget
+		type ChatMessageReplyTarget,
+		type StoredChatSystemMessageData
 	} from '$lib/services/chatGroupMessages.svelte';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 	import {
@@ -245,9 +247,31 @@
 			}
 		}
 
+		function parseSystemMessageData(content: string): StoredChatSystemMessageData | null {
+			try {
+				const parsed = JSON.parse(content) as StoredChatSystemMessageData;
+				if (!parsed.systemKind) return null;
+				return parsed;
+			} catch {
+				return null;
+			}
+		}
+
 		const confirmedMessages = storedMessages
 			.filter((message) => message.kind !== 5 && message.kind !== 7 && message.kind !== 1010)
 			.map((message) => {
+				if (message.kind === SYSTEM_MESSAGE_KIND) {
+					const data = parseSystemMessageData(message.content);
+					return {
+						...toChatMessage(message),
+						text: '',
+						systemKind: data?.systemKind,
+						systemTarget: data?.target,
+						systemCommitter: data?.committer,
+						systemDetail: data?.detail
+					};
+				}
+
 				const threadReference = getMessageThreadReference(message.tags);
 				const replySource = threadReference ? byEventId.get(threadReference.parentId) : undefined;
 				const reactions = reactionMap.get(message.id);

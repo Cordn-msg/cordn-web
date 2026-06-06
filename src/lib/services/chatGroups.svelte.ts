@@ -27,6 +27,7 @@ import {
 	createEditMessageTags,
 	createReactionMessageTags,
 	createReplyMessageTags,
+	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
 	type ChatMessageDeleteTarget,
@@ -515,7 +516,7 @@ export async function inviteChatGroupMember(input: {
 			welcomeBase64: encodeWelcomeBase64(commitResult.welcome)
 		});
 
-		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage({
 				msg_64: commitResult.commitMessageBase64
 			})
@@ -548,6 +549,19 @@ export async function inviteChatGroupMember(input: {
 			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
 			localStablePubkey: normalizePubKey(account.pubkey)
 		});
+
+		const inviteSystemMessages = createSystemMessagesFromStateChange({
+			cursor: posted.cursor,
+			createdAt: posted.at,
+			oldState: state,
+			newState: commitResult.newState,
+			oldMetadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(state)),
+			newMetadata: getCordnGroupMetadataExtension(commitResult.newState),
+			committerPubkey: normalizePubKey(account.pubkey)
+		});
+		for (const systemMessage of inviteSystemMessages) {
+			sync.workingGroup.messages.push(systemMessage);
+		}
 
 		const nextGroup = buildPersistedChatGroup({
 			group: syncBaseGroup,
@@ -626,23 +640,38 @@ export async function removeChatGroupMember(input: {
 			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
 		});
 
-		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage({
 				msg_64: commitResult.commitMessageBase64
 			})
 		);
 
+		const removeWorkingGroup = createWorkingChatGroupSession(
+			{
+				...group,
+				metadata:
+					toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+					group.metadata
+			},
+			commitResult.newState
+		);
+
+		const removeSystemMessages = createSystemMessagesFromStateChange({
+			cursor: posted.cursor,
+			createdAt: posted.at,
+			oldState: state,
+			newState: commitResult.newState,
+			oldMetadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(state)),
+			newMetadata: getCordnGroupMetadataExtension(commitResult.newState),
+			committerPubkey: normalizePubKey(account.pubkey)
+		});
+		for (const systemMessage of removeSystemMessages) {
+			removeWorkingGroup.messages.push(systemMessage);
+		}
+
 		const nextGroup = buildPersistedChatGroup({
 			group,
-			workingGroup: createWorkingChatGroupSession(
-				{
-					...group,
-					metadata:
-						toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
-						group.metadata
-				},
-				commitResult.newState
-			),
+			workingGroup: removeWorkingGroup,
 			encodeState,
 			metadata:
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
@@ -691,23 +720,38 @@ export async function updateChatGroupMetadata(input: {
 			commitMessageBase64: commitResult.commitMessageBase64
 		});
 
-		await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage({
 				msg_64: commitResult.commitMessageBase64
 			})
 		);
 
+		const metadataWorkingGroup = createWorkingChatGroupSession(
+			{
+				...group,
+				metadata:
+					toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
+					metadata
+			},
+			commitResult.newState
+		);
+
+		const metadataSystemMessages = createSystemMessagesFromStateChange({
+			cursor: posted.cursor,
+			createdAt: posted.at,
+			oldState: state,
+			newState: commitResult.newState,
+			oldMetadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(state)),
+			newMetadata: getCordnGroupMetadataExtension(commitResult.newState),
+			committerPubkey: normalizePubKey(account.pubkey)
+		});
+		for (const systemMessage of metadataSystemMessages) {
+			metadataWorkingGroup.messages.push(systemMessage);
+		}
+
 		const nextGroup = buildPersistedChatGroup({
 			group,
-			workingGroup: createWorkingChatGroupSession(
-				{
-					...group,
-					metadata:
-						toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
-						metadata
-				},
-				commitResult.newState
-			),
+			workingGroup: metadataWorkingGroup,
 			encodeState,
 			metadata:
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ?? metadata

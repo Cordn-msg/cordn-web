@@ -121,6 +121,19 @@
 	const reactionTotal = $derived(
 		message.reactions?.reduce((total, reaction) => total + reaction.count, 0) ?? 0
 	);
+	const isSystemMessage = $derived(Boolean(message.systemKind));
+	const systemMessageIcon = $derived.by(() => {
+		switch (message.systemKind) {
+			case 'member-added':
+				return Plus;
+			case 'member-removed':
+				return X;
+			case 'metadata-changed':
+				return Pencil;
+			default:
+				return Info;
+		}
+	});
 	function getDeliveryStateLabel() {
 		if (message.deliveryState === 'sending') return 'Sending';
 		if (message.deliveryState === 'sent') return 'Sent';
@@ -329,86 +342,253 @@
 		<p class="px-2 text-center text-[11px] font-medium text-muted-foreground">{message.dayLabel}</p>
 	{/if}
 
-	<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
-		<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
-			{#if showAvatar}
-				{#if $profile?.picture}
-					<img src={$profile.picture} alt={displayName} class="h-8 w-8 rounded-full object-cover" />
-				{:else}
-					<div
-						class="h-8 w-8 rounded-full"
-						style={`background-color: ${pubkeyToHexColor(message.author)}`}
-					></div>
-				{/if}
-			{:else}
-				<div class="h-8 w-8" aria-hidden="true"></div>
-			{/if}
-		</div>
-
+	{#if isSystemMessage}
 		<div
-			role="presentation"
-			class="group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2"
-			class:flex-row-reverse={isOwn}
-			onpointerenter={activateInteractionControls}
-			onfocusin={activateInteractionControls}
-			onclick={() => {
-				if (mobileActionsVisible || actionsMenuOpen || reactionMenuOpen) return;
-				clearTouchActions();
-			}}
+			class="flex items-center justify-center gap-2 px-2 py-1 text-xs text-muted-foreground"
+			data-message-id={message.id}
 		>
-			<div class="relative flex max-w-full min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
-				{#if shouldMountInteractionControls}
-					<TooltipProvider>
+			{#snippet icon()}
+				{@const IconComponent = systemMessageIcon}
+				<IconComponent class="size-3.5 shrink-0 text-muted-foreground/60" />
+			{/snippet}
+			{@render icon()}
+			<span class="inline-flex items-center gap-1">
+				{#if message.systemKind === 'member-added'}
+					{#if message.systemCommitter}
+						<ProfileCard
+							pubkey={message.systemCommitter}
+							mode="inline"
+							showInlineAvatar={false}
+							profileLink={false}
+						/>
+					{:else}
+						<span>Someone</span>
+					{/if}
+					added
+					{#if message.systemTarget}
+						<ProfileCard
+							pubkey={message.systemTarget}
+							mode="inline"
+							showInlineAvatar={false}
+							profileLink={false}
+						/>
+					{/if}
+					to the group
+				{:else if message.systemKind === 'member-removed'}
+					{#if message.systemCommitter}
+						<ProfileCard
+							pubkey={message.systemCommitter}
+							mode="inline"
+							showInlineAvatar={false}
+							profileLink={false}
+						/>
+					{:else}
+						<span>Someone</span>
+					{/if}
+					removed
+					{#if message.systemTarget}
+						<ProfileCard
+							pubkey={message.systemTarget}
+							mode="inline"
+							showInlineAvatar={false}
+							profileLink={false}
+						/>
+					{/if}
+					from the group
+				{:else if message.systemKind === 'metadata-changed'}
+					{#if message.systemCommitter}
+						<ProfileCard
+							pubkey={message.systemCommitter}
+							mode="inline"
+							showInlineAvatar={false}
+							profileLink={false}
+						/>
+					{:else}
+						<span>Someone</span>
+					{/if}
+					changed {message.systemDetail ?? 'group settings'}
+				{/if}
+			</span>
+			<span class="text-[10px] text-muted-foreground/50">{message.timeLabel}</span>
+		</div>
+	{:else}
+		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
+			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
+				{#if showAvatar}
+					{#if $profile?.picture}
+						<img
+							src={$profile.picture}
+							alt={displayName}
+							class="h-8 w-8 rounded-full object-cover"
+						/>
+					{:else}
 						<div
-							class={cn(
-								'absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:opacity-100 sm:group-hover:opacity-100',
-								mobileActionsVisible || reactionMenuOpen || actionsMenuOpen
-									? 'opacity-100'
-									: 'opacity-0 sm:opacity-0',
-								actionSideClass
-							)}
-						>
-							{#if !message.deleted}
-								<Tooltip>
-									<TooltipTrigger>
-										{#snippet child({ props })}
-											<Button
-												{...props}
-												type="button"
-												variant="ghost"
-												size="icon-sm"
-												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
-												onclick={() => onReply(message)}
-												aria-label="Reply to message"
-											>
-												<CornerUpLeft class="size-4" />
-											</Button>
-										{/snippet}
-									</TooltipTrigger>
-									<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
-								</Tooltip>
-							{/if}
+							class="h-8 w-8 rounded-full"
+							style={`background-color: ${pubkeyToHexColor(message.author)}`}
+						></div>
+					{/if}
+				{:else}
+					<div class="h-8 w-8" aria-hidden="true"></div>
+				{/if}
+			</div>
 
-							{#if !message.deleted}
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon-sm"
-									class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:hidden"
-									onclick={(event) => {
-										event.stopPropagation();
-										handleReplyAction();
-									}}
-									aria-label="Reply to message"
-								>
-									<MessageCirclePlus class="size-4" />
-								</Button>
-							{/if}
+			<div
+				role="presentation"
+				class="group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2"
+				class:flex-row-reverse={isOwn}
+				onpointerenter={activateInteractionControls}
+				onfocusin={activateInteractionControls}
+				onclick={() => {
+					if (mobileActionsVisible || actionsMenuOpen || reactionMenuOpen) return;
+					clearTouchActions();
+				}}
+			>
+				<div class="relative flex max-w-full min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
+					{#if shouldMountInteractionControls}
+						<TooltipProvider>
+							<div
+								class={cn(
+									'absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:opacity-100 sm:group-hover:opacity-100',
+									mobileActionsVisible || reactionMenuOpen || actionsMenuOpen
+										? 'opacity-100'
+										: 'opacity-0 sm:opacity-0',
+									actionSideClass
+								)}
+							>
+								{#if !message.deleted}
+									<Tooltip>
+										<TooltipTrigger>
+											{#snippet child({ props })}
+												<Button
+													{...props}
+													type="button"
+													variant="ghost"
+													size="icon-sm"
+													class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+													onclick={() => onReply(message)}
+													aria-label="Reply to message"
+												>
+													<CornerUpLeft class="size-4" />
+												</Button>
+											{/snippet}
+										</TooltipTrigger>
+										<TooltipContent side="top" sideOffset={8}>Reply</TooltipContent>
+									</Tooltip>
+								{/if}
 
-							{#if !message.deleted}
+								{#if !message.deleted}
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:hidden"
+										onclick={(event) => {
+											event.stopPropagation();
+											handleReplyAction();
+										}}
+										aria-label="Reply to message"
+									>
+										<MessageCirclePlus class="size-4" />
+									</Button>
+								{/if}
+
+								{#if !message.deleted}
+									<DropdownMenuRoot
+										bind:open={reactionMenuOpen}
+										onOpenChange={handleReactionMenuOpenChange}
+									>
+										<Tooltip>
+											<TooltipTrigger>
+												{#snippet child({ props })}
+													<DropdownMenuTrigger {...props}>
+														{#snippet child({ props: triggerProps })}
+															<Button
+																{...triggerProps}
+																type="button"
+																variant="ghost"
+																size="icon-sm"
+																class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+																aria-label="Add reaction"
+																onclick={(event) => event.stopPropagation()}
+															>
+																<SmilePlus class="size-4" />
+															</Button>
+														{/snippet}
+													</DropdownMenuTrigger>
+												{/snippet}
+											</TooltipTrigger>
+											<TooltipContent side="top" sideOffset={8}>Add reaction</TooltipContent>
+										</Tooltip>
+
+										<DropdownMenuContent
+											side="top"
+											align={isOwn ? 'start' : 'end'}
+											sideOffset={8}
+											class="flex min-w-0 flex-row items-start gap-1 rounded-2xl p-1"
+										>
+											<div class="grid max-h-[172px] grid-cols-6 gap-1 overflow-y-auto">
+												{#each availableReactions as reaction (reaction)}
+													<DropdownMenuItem
+														onSelect={async () => {
+															await onReact(message, reaction);
+															clearTouchActions();
+														}}
+														class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
+													>
+														{reaction}
+													</DropdownMenuItem>
+												{/each}
+											</div>
+											<div class="flex items-center gap-1 border-l border-border/70 pl-2">
+												{#if customReactionOpen}
+													<form
+														class="flex items-center gap-1"
+														onsubmit={async (event) => {
+															event.preventDefault();
+															await handleCustomReaction();
+														}}
+													>
+														<Input
+															bind:ref={customReactionInput}
+															bind:value={customReaction}
+															class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
+															placeholder=""
+															maxlength={8}
+															aria-label="Custom reaction"
+															oninput={() => {
+																customReaction = normalizeCustomReaction(customReaction);
+															}}
+														/>
+														<Button
+															type="submit"
+															variant="ghost"
+															size="icon-sm"
+															class="rounded-xl bg-background"
+															aria-label="Confirm custom reaction"
+														>
+															<Plus class="size-4" />
+														</Button>
+													</form>
+												{:else}
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon-sm"
+														class="rounded-xl bg-background"
+														aria-label="Show custom reaction input"
+														onclick={handleShowCustomReactionInput}
+													>
+														<Plus class="size-4" />
+													</Button>
+												{/if}
+											</div>
+										</DropdownMenuContent>
+									</DropdownMenuRoot>
+								{/if}
+
 								<DropdownMenuRoot
-									bind:open={reactionMenuOpen}
-									onOpenChange={handleReactionMenuOpenChange}
+									bind:open={actionsMenuOpen}
+									onOpenChange={handleActionsMenuOpenChange}
 								>
 									<Tooltip>
 										<TooltipTrigger>
@@ -421,246 +601,190 @@
 															variant="ghost"
 															size="icon-sm"
 															class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-															aria-label="Add reaction"
+															aria-label="Open message actions"
 															onclick={(event) => event.stopPropagation()}
 														>
-															<SmilePlus class="size-4" />
+															<Ellipsis class="size-4" />
 														</Button>
 													{/snippet}
 												</DropdownMenuTrigger>
 											{/snippet}
 										</TooltipTrigger>
-										<TooltipContent side="top" sideOffset={8}>Add reaction</TooltipContent>
+										<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
 									</Tooltip>
 
 									<DropdownMenuContent
 										side="top"
 										align={isOwn ? 'start' : 'end'}
 										sideOffset={8}
-										class="flex min-w-0 flex-row items-start gap-1 rounded-2xl p-1"
+										class="w-44 rounded-xl"
 									>
-										<div class="grid max-h-[172px] grid-cols-6 gap-1 overflow-y-auto">
-											{#each availableReactions as reaction (reaction)}
-												<DropdownMenuItem
-													onSelect={async () => {
-														await onReact(message, reaction);
-														clearTouchActions();
-													}}
-													class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
-												>
-													{reaction}
-												</DropdownMenuItem>
-											{/each}
-										</div>
-										<div class="flex items-center gap-1 border-l border-border/70 pl-2">
-											{#if customReactionOpen}
-												<form
-													class="flex items-center gap-1"
-													onsubmit={async (event) => {
-														event.preventDefault();
-														await handleCustomReaction();
-													}}
-												>
-													<Input
-														bind:ref={customReactionInput}
-														bind:value={customReaction}
-														class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-														placeholder=""
-														maxlength={8}
-														aria-label="Custom reaction"
-														oninput={() => {
-															customReaction = normalizeCustomReaction(customReaction);
-														}}
-													/>
-													<Button
-														type="submit"
-														variant="ghost"
-														size="icon-sm"
-														class="rounded-xl bg-background"
-														aria-label="Confirm custom reaction"
-													>
-														<Plus class="size-4" />
-													</Button>
-												</form>
-											{:else}
-												<Button
-													type="button"
-													variant="ghost"
-													size="icon-sm"
-													class="rounded-xl bg-background"
-													aria-label="Show custom reaction input"
-													onclick={handleShowCustomReactionInput}
-												>
-													<Plus class="size-4" />
-												</Button>
-											{/if}
-										</div>
+										<DropdownMenuItem onSelect={openMessageInfo} class="gap-2">
+											<Info class="size-4" />
+											<span>Info</span>
+										</DropdownMenuItem>
+
+										{#if !message.deleted}
+											<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
+												<CornerUpLeft class="size-4" />
+												<span>Reply</span>
+											</DropdownMenuItem>
+										{/if}
+
+										{#if isOwn && !message.deleted}
+											<DropdownMenuItem onSelect={startEditing} class="gap-2">
+												<Pencil class="size-4" />
+												<span>Edit</span>
+											</DropdownMenuItem>
+											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
+												<Trash2 class="size-4" />
+												<span>Delete</span>
+											</DropdownMenuItem>
+										{/if}
 									</DropdownMenuContent>
 								</DropdownMenuRoot>
-							{/if}
+							</div>
+						</TooltipProvider>
+					{/if}
 
-							<DropdownMenuRoot
-								bind:open={actionsMenuOpen}
-								onOpenChange={handleActionsMenuOpenChange}
-							>
-								<Tooltip>
-									<TooltipTrigger>
-										{#snippet child({ props })}
-											<DropdownMenuTrigger {...props}>
-												{#snippet child({ props: triggerProps })}
-													<Button
-														{...triggerProps}
-														type="button"
-														variant="ghost"
-														size="icon-sm"
-														class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
-														aria-label="Open message actions"
-														onclick={(event) => event.stopPropagation()}
-													>
-														<Ellipsis class="size-4" />
-													</Button>
-												{/snippet}
-											</DropdownMenuTrigger>
-										{/snippet}
-									</TooltipTrigger>
-									<TooltipContent side="top" sideOffset={8}>More</TooltipContent>
-								</Tooltip>
-
-								<DropdownMenuContent
-									side="top"
-									align={isOwn ? 'start' : 'end'}
-									sideOffset={8}
-									class="w-44 rounded-xl"
-								>
-									<DropdownMenuItem onSelect={openMessageInfo} class="gap-2">
-										<Info class="size-4" />
-										<span>Info</span>
-									</DropdownMenuItem>
-
-									{#if !message.deleted}
-										<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
-											<CornerUpLeft class="size-4" />
-											<span>Reply</span>
-										</DropdownMenuItem>
-									{/if}
-
-									{#if isOwn && !message.deleted}
-										<DropdownMenuItem onSelect={startEditing} class="gap-2">
-											<Pencil class="size-4" />
-											<span>Edit</span>
-										</DropdownMenuItem>
-										<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
-											<Trash2 class="size-4" />
-											<span>Delete</span>
-										</DropdownMenuItem>
-									{/if}
-								</DropdownMenuContent>
-							</DropdownMenuRoot>
-						</div>
-					</TooltipProvider>
-				{/if}
-
-				{#if showAuthor}
-					<p
-						class="max-w-[12rem] truncate px-1 text-xs font-medium text-foreground/90 sm:max-w-[16rem]"
-					>
-						{displayName}
-					</p>
-				{/if}
-
-				<div class="relative max-w-full min-w-0">
-					<div
-						role="group"
-						data-message-id={message.id}
-						class={cn(
-							bubbleClass,
-							'relative z-10 w-full max-w-full min-w-0 touch-pan-y select-text'
-						)}
-						style={`transform: ${swipeTransform}; ${
-							isDragging ? '' : 'transition: transform 150ms ease-out;'
-						}`}
-						onpointerdown={handleBubblePointerDown}
-						onpointermove={handleBubblePointerMove}
-						onpointerup={handleBubblePointerUp}
-						onpointercancel={handleBubblePointerCancel}
-						onpointerleave={handleBubblePointerCancel}
-					>
-						<div
-							class={cn(
-								'pointer-events-none absolute top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border bg-background/95 text-muted-foreground shadow-sm sm:hidden',
-								replyIndicatorSideClass,
-								replySwipeActive ? 'border-primary text-primary' : 'border-border'
-							)}
-							style={`opacity: ${replySwipeProgress}; transform: translateY(-50%) scale(${0.85 + replySwipeProgress * 0.15});`}
-							aria-hidden="true"
+					{#if showAuthor}
+						<p
+							class="max-w-[12rem] truncate px-1 text-xs font-medium text-foreground/90 sm:max-w-[16rem]"
 						>
-							<CornerUpLeft class={cn('size-4', isOwn ? 'rotate-180' : '')} />
-						</div>
+							{displayName}
+						</p>
+					{/if}
 
-						{#if message.deleted}
+					<div class="relative max-w-full min-w-0">
+						<div
+							role="group"
+							data-message-id={message.id}
+							class={cn(
+								bubbleClass,
+								'relative z-10 w-full max-w-full min-w-0 touch-pan-y select-text'
+							)}
+							style={`transform: ${swipeTransform}; ${
+								isDragging ? '' : 'transition: transform 150ms ease-out;'
+							}`}
+							onpointerdown={handleBubblePointerDown}
+							onpointermove={handleBubblePointerMove}
+							onpointerup={handleBubblePointerUp}
+							onpointercancel={handleBubblePointerCancel}
+							onpointerleave={handleBubblePointerCancel}
+						>
 							<div
 								class={cn(
-									'rounded-2xl border border-dashed px-3 py-2 text-sm italic',
-									isOwn
-										? 'border-primary-foreground/25 text-primary-foreground/80'
-										: 'border-border/80 text-muted-foreground'
+									'pointer-events-none absolute top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border bg-background/95 text-muted-foreground shadow-sm sm:hidden',
+									replyIndicatorSideClass,
+									replySwipeActive ? 'border-primary text-primary' : 'border-border'
 								)}
+								style={`opacity: ${replySwipeProgress}; transform: translateY(-50%) scale(${0.85 + replySwipeProgress * 0.15});`}
+								aria-hidden="true"
 							>
-								This message was deleted
+								<CornerUpLeft class={cn('size-4', isOwn ? 'rotate-180' : '')} />
 							</div>
-						{:else if message.replyTo}
-							<button
-								type="button"
-								class={cn(
-									'mb-3 block max-w-full min-w-0 rounded-2xl border px-3 py-2 text-left transition-colors',
-									isOwn
-										? 'border-primary-foreground/20 bg-primary-foreground/12 text-primary-foreground hover:bg-primary-foreground/18'
-										: 'border-border/70 bg-background/70 hover:bg-muted/80'
-								)}
-								onclick={() => onNavigateToMessage(message.replyTo!.id)}
-							>
-								<div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
-									<span class={cn(isOwn ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
-										Replying to
-									</span>
-									<span
-										class={cn(
-											'inline-flex min-w-0 items-center gap-2 rounded-full border px-2 py-1',
-											isOwn
-												? 'border-primary-foreground/25 bg-primary text-primary-foreground'
-												: 'border-border/80 bg-background text-foreground'
-										)}
-									>
-										<ProfileCard
-											pubkey={message.replyTo.author}
-											mode="inline"
-											showInlineAvatar={true}
-											profileLink={false}
-										/>
-									</span>
-								</div>
-								<p
+
+							{#if message.deleted}
+								<div
 									class={cn(
-										`line-clamp-2 max-w-full min-w-0 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
-										isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
+										'rounded-2xl border border-dashed px-3 py-2 text-sm italic',
+										isOwn
+											? 'border-primary-foreground/25 text-primary-foreground/80'
+											: 'border-border/80 text-muted-foreground'
 									)}
 								>
-									{#each replyParts as part, index (`${message.id}:reply-part:${index}`)}
+									This message was deleted
+								</div>
+							{:else if message.replyTo}
+								<button
+									type="button"
+									class={cn(
+										'mb-3 block max-w-full min-w-0 rounded-2xl border px-3 py-2 text-left transition-colors',
+										isOwn
+											? 'border-primary-foreground/20 bg-primary-foreground/12 text-primary-foreground hover:bg-primary-foreground/18'
+											: 'border-border/70 bg-background/70 hover:bg-muted/80'
+									)}
+									onclick={() => onNavigateToMessage(message.replyTo!.id)}
+								>
+									<div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
+										<span
+											class={cn(isOwn ? 'text-primary-foreground/80' : 'text-muted-foreground')}
+										>
+											Replying to
+										</span>
+										<span
+											class={cn(
+												'inline-flex min-w-0 items-center gap-2 rounded-full border px-2 py-1',
+												isOwn
+													? 'border-primary-foreground/25 bg-primary text-primary-foreground'
+													: 'border-border/80 bg-background text-foreground'
+											)}
+										>
+											<ProfileCard
+												pubkey={message.replyTo.author}
+												mode="inline"
+												showInlineAvatar={true}
+												profileLink={false}
+											/>
+										</span>
+									</div>
+									<p
+										class={cn(
+											`line-clamp-2 max-w-full min-w-0 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
+											isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
+										)}
+									>
+										{#each replyParts as part, index (`${message.id}:reply-part:${index}`)}
+											{#if part.type === 'profile'}
+												<span
+													class={cn(
+														'inline-flex max-w-full min-w-0 rounded-full font-semibold',
+														MESSAGE_PART_CONTAINER_CLASS
+													)}
+												>
+													@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
+												</span>
+											{:else if part.type === 'link'}
+												<a
+													href={part.href}
+													target="_blank"
+													rel="external noreferrer noopener"
+													class={cn(
+														MESSAGE_LINK_WRAP_CLASS,
+														isOwn
+															? 'text-primary-foreground hover:text-primary-foreground/80'
+															: 'text-foreground hover:text-foreground/80'
+													)}
+												>
+													{part.text}
+												</a>
+											{:else}
+												<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
+											{/if}
+										{/each}
+									</p>
+								</button>
+							{/if}
+
+							{#if !message.deleted}
+								<p class={cn('max-w-full min-w-0', MESSAGE_TEXT_WRAP_CLASS)}>
+									{#each messageParts as part, index (`${message.id}:part:${index}`)}
 										{#if part.type === 'profile'}
 											<span
 												class={cn(
-													'inline-flex max-w-full min-w-0 rounded-full font-semibold',
-													MESSAGE_PART_CONTAINER_CLASS
+													'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
+													MESSAGE_PART_CONTAINER_CLASS,
+													isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
 												)}
 											>
 												@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
 											</span>
 										{:else if part.type === 'link'}
-											<a
-												href={part.href}
-												target="_blank"
-												rel="external noreferrer noopener"
+											<button
+												type="button"
+												onclick={() => openExternalLink(part.href)}
 												class={cn(
+													'max-w-full min-w-0 whitespace-normal',
 													MESSAGE_LINK_WRAP_CLASS,
 													isOwn
 														? 'text-primary-foreground hover:text-primary-foreground/80'
@@ -668,214 +792,186 @@
 												)}
 											>
 												{part.text}
-											</a>
+											</button>
 										{:else}
 											<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
 										{/if}
 									{/each}
 								</p>
-							</button>
-						{/if}
-
-						{#if !message.deleted}
-							<p class={cn('max-w-full min-w-0', MESSAGE_TEXT_WRAP_CLASS)}>
-								{#each messageParts as part, index (`${message.id}:part:${index}`)}
-									{#if part.type === 'profile'}
-										<span
-											class={cn(
-												'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
-												MESSAGE_PART_CONTAINER_CLASS,
-												isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
-											)}
-										>
-											@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
-										</span>
-									{:else if part.type === 'link'}
-										<button
-											type="button"
-											onclick={() => openExternalLink(part.href)}
-											class={cn(
-												'max-w-full min-w-0 whitespace-normal',
-												MESSAGE_LINK_WRAP_CLASS,
-												isOwn
-													? 'text-primary-foreground hover:text-primary-foreground/80'
-													: 'text-foreground hover:text-foreground/80'
-											)}
-										>
-											{part.text}
-										</button>
-									{:else}
-										<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
-									{/if}
-								{/each}
-							</p>
-						{/if}
-					</div>
-				</div>
-
-				{#if !message.deleted && message.reactions?.length}
-					<div class="flex flex-wrap gap-2 px-1 pt-0.5" class:justify-end={isOwn}>
-						{#each message.reactions as reaction (`${message.id}:${reaction.emoji}`)}
-							<Tooltip>
-								<TooltipTrigger>
-									{#snippet child({ props })}
-										<button
-											{...props}
-											type="button"
-											class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-											aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Open message info for reaction details on touch devices.`}
-											title={getReactionLabel(reaction)}
-											onclick={() => onReact(message, reaction.emoji)}
-											onpointerenter={activateInteractionControls}
-											onfocus={activateInteractionControls}
-										>
-											<span>{reaction.emoji}</span>
-											<span>{reaction.count}</span>
-										</button>
-									{/snippet}
-								</TooltipTrigger>
-								<TooltipContent side="top" sideOffset={8}>
-									<div class="flex flex-col gap-2">
-										{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
-											<ProfileCard
-												pubkey={reactor}
-												mode="inline"
-												showInlineAvatar={true}
-												profileLink={false}
-											/>
-										{/each}
-									</div>
-								</TooltipContent>
-							</Tooltip>
-						{/each}
-					</div>
-				{/if}
-			</div>
-
-			<div
-				class="flex shrink-0 items-center gap-1 self-end px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
-			>
-				<p>{message.timeLabel}</p>
-				{#if message.edited}
-					<span class="inline-flex items-center" aria-label="Edited" title="Edited">
-						<Pencil class="size-3" />
-					</span>
-				{/if}
-				{#if message.isOwn && message.deliveryState === 'sent'}
-					<span
-						class="inline-flex items-center"
-						aria-label={getDeliveryStateLabel()}
-						title={getDeliveryStateLabel()}
-					>
-						<Check class="size-3" />
-					</span>
-				{:else if message.isOwn && message.deliveryState === 'error'}
-					<span
-						class="inline-flex items-center text-destructive"
-						aria-label={getDeliveryStateLabel()}
-						title={getDeliveryStateLabel()}
-					>
-						<X class="size-3" />
-					</span>
-				{:else if message.isOwn && message.deliveryState === 'sending'}
-					<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
-				{/if}
-			</div>
-		</div>
-	</article>
-
-	<Dialog.Root bind:open={messageInfoOpen}>
-		<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-xl">
-			<Dialog.Header>
-				<Dialog.Title>Message info</Dialog.Title>
-				<Dialog.Description>Details for this message and its reactions.</Dialog.Description>
-			</Dialog.Header>
-
-			<div class="space-y-5 text-sm">
-				<div class="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2">
-					<div class="space-y-1">
-						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Author</p>
-						<ProfileCard
-							pubkey={message.author}
-							mode="inline"
-							showInlineAvatar={true}
-							profileLink={false}
-						/>
-					</div>
-					<div class="space-y-1">
-						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Time</p>
-						<p>{messageTimestamp}</p>
-					</div>
-					<div class="space-y-1">
-						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Status</p>
-						<p>{message.deleted ? 'Deleted' : message.edited ? 'Edited' : 'Original'}</p>
-					</div>
-					<div class="space-y-1">
-						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-							Delivery
-						</p>
-						<p>{getDeliveryStateLabel() || 'Received'}</p>
-					</div>
-				</div>
-
-				<div class="space-y-3">
-					<div class="flex items-center justify-between gap-3">
-						<h3 class="font-semibold">Reactions</h3>
-						<span class="text-xs text-muted-foreground">
-							{reactionTotal} total
-						</span>
+							{/if}
+						</div>
 					</div>
 
-					{#if message.reactions?.length}
-						<div class="space-y-3">
-							{#each message.reactions as reaction (`${message.id}:info:${reaction.emoji}`)}
-								<div class="rounded-2xl border p-3">
-									<div class="mb-3 flex items-center gap-2">
-										<span class="text-lg">{reaction.emoji}</span>
-										<span class="font-medium">
-											{reaction.count} reaction{reaction.count === 1 ? '' : 's'}
-										</span>
-									</div>
-									<div class="flex flex-col gap-2">
-										{#each reaction.reactors as reactor (`${message.id}:info:${reaction.emoji}:${reactor}`)}
-											<ProfileCard
-												pubkey={reactor}
-												mode="inline"
-												showInlineAvatar={true}
-												profileLink={false}
-											/>
-										{/each}
-									</div>
-								</div>
+					{#if !message.deleted && message.reactions?.length}
+						<div class="flex flex-wrap gap-2 px-1 pt-0.5" class:justify-end={isOwn}>
+							{#each message.reactions as reaction (`${message.id}:${reaction.emoji}`)}
+								<Tooltip>
+									<TooltipTrigger>
+										{#snippet child({ props })}
+											<button
+												{...props}
+												type="button"
+												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+												aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Open message info for reaction details on touch devices.`}
+												title={getReactionLabel(reaction)}
+												onclick={() => onReact(message, reaction.emoji)}
+												onpointerenter={activateInteractionControls}
+												onfocus={activateInteractionControls}
+											>
+												<span>{reaction.emoji}</span>
+												<span>{reaction.count}</span>
+											</button>
+										{/snippet}
+									</TooltipTrigger>
+									<TooltipContent side="top" sideOffset={8}>
+										<div class="flex flex-col gap-2">
+											{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
+												<ProfileCard
+													pubkey={reactor}
+													mode="inline"
+													showInlineAvatar={true}
+													profileLink={false}
+												/>
+											{/each}
+										</div>
+									</TooltipContent>
+								</Tooltip>
 							{/each}
 						</div>
-					{:else}
-						<p class="rounded-2xl border border-dashed p-4 text-muted-foreground">
-							No reactions yet.
-						</p>
 					{/if}
 				</div>
 
-				<Collapsible.Root bind:open={rawEnvelopeOpen}>
-					<Collapsible.Trigger
-						class="flex w-full min-w-0 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left font-medium"
-					>
-						<span class="min-w-0 flex-1">Raw message envelope</span>
-						<ChevronDown
-							class={cn(
-								'size-4 shrink-0 transition-transform',
-								rawEnvelopeOpen ? 'rotate-180' : ''
-							)}
-						/>
-					</Collapsible.Trigger>
-					<Collapsible.Content>
-						<pre
-							class="mt-3 max-w-full overflow-x-auto overflow-y-auto rounded-2xl bg-muted p-4 text-xs leading-relaxed"><code
-								class="block min-w-0 break-all whitespace-pre-wrap">{rawMessageEnvelope}</code
-							></pre>
-					</Collapsible.Content>
-				</Collapsible.Root>
+				<div
+					class="flex shrink-0 items-center gap-1 self-end px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
+				>
+					<p>{message.timeLabel}</p>
+					{#if message.edited}
+						<span class="inline-flex items-center" aria-label="Edited" title="Edited">
+							<Pencil class="size-3" />
+						</span>
+					{/if}
+					{#if message.isOwn && message.deliveryState === 'sent'}
+						<span
+							class="inline-flex items-center"
+							aria-label={getDeliveryStateLabel()}
+							title={getDeliveryStateLabel()}
+						>
+							<Check class="size-3" />
+						</span>
+					{:else if message.isOwn && message.deliveryState === 'error'}
+						<span
+							class="inline-flex items-center text-destructive"
+							aria-label={getDeliveryStateLabel()}
+							title={getDeliveryStateLabel()}
+						>
+							<X class="size-3" />
+						</span>
+					{:else if message.isOwn && message.deliveryState === 'sending'}
+						<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
+					{/if}
+				</div>
 			</div>
-		</Dialog.Content>
-	</Dialog.Root>
+		</article>
+	{/if}
+
+	{#if !isSystemMessage}
+		<Dialog.Root bind:open={messageInfoOpen}>
+			<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+				<Dialog.Header>
+					<Dialog.Title>Message info</Dialog.Title>
+					<Dialog.Description>Details for this message and its reactions.</Dialog.Description>
+				</Dialog.Header>
+
+				<div class="space-y-5 text-sm">
+					<div class="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2">
+						<div class="space-y-1">
+							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+								Author
+							</p>
+							<ProfileCard
+								pubkey={message.author}
+								mode="inline"
+								showInlineAvatar={true}
+								profileLink={false}
+							/>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Time</p>
+							<p>{messageTimestamp}</p>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+								Status
+							</p>
+							<p>{message.deleted ? 'Deleted' : message.edited ? 'Edited' : 'Original'}</p>
+						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+								Delivery
+							</p>
+							<p>{getDeliveryStateLabel() || 'Received'}</p>
+						</div>
+					</div>
+
+					<div class="space-y-3">
+						<div class="flex items-center justify-between gap-3">
+							<h3 class="font-semibold">Reactions</h3>
+							<span class="text-xs text-muted-foreground">
+								{reactionTotal} total
+							</span>
+						</div>
+
+						{#if message.reactions?.length}
+							<div class="space-y-3">
+								{#each message.reactions as reaction (`${message.id}:info:${reaction.emoji}`)}
+									<div class="rounded-2xl border p-3">
+										<div class="mb-3 flex items-center gap-2">
+											<span class="text-lg">{reaction.emoji}</span>
+											<span class="font-medium">
+												{reaction.count} reaction{reaction.count === 1 ? '' : 's'}
+											</span>
+										</div>
+										<div class="flex flex-col gap-2">
+											{#each reaction.reactors as reactor (`${message.id}:info:${reaction.emoji}:${reactor}`)}
+												<ProfileCard
+													pubkey={reactor}
+													mode="inline"
+													showInlineAvatar={true}
+													profileLink={false}
+												/>
+											{/each}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<p class="rounded-2xl border border-dashed p-4 text-muted-foreground">
+								No reactions yet.
+							</p>
+						{/if}
+					</div>
+
+					<Collapsible.Root bind:open={rawEnvelopeOpen}>
+						<Collapsible.Trigger
+							class="flex w-full min-w-0 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left font-medium"
+						>
+							<span class="min-w-0 flex-1">Raw message envelope</span>
+							<ChevronDown
+								class={cn(
+									'size-4 shrink-0 transition-transform',
+									rawEnvelopeOpen ? 'rotate-180' : ''
+								)}
+							/>
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<pre
+								class="mt-3 max-w-full overflow-x-auto overflow-y-auto rounded-2xl bg-muted p-4 text-xs leading-relaxed"><code
+									class="block min-w-0 break-all whitespace-pre-wrap">{rawMessageEnvelope}</code
+								></pre>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				</div>
+			</Dialog.Content>
+		</Dialog.Root>
+	{/if}
 </div>

@@ -35,6 +35,15 @@
 			const previousMessage = index > 0 ? messages[index - 1] : null;
 			const nextMessage = index < messages.length - 1 ? messages[index + 1] : null;
 
+			if (message.systemKind) {
+				return {
+					message,
+					showAuthor: false,
+					showAvatar: false,
+					showDayLabel: previousMessage?.dayLabel !== message.dayLabel
+				};
+			}
+
 			return {
 				message,
 				showAuthor: previousMessage?.author !== message.author,
@@ -90,6 +99,7 @@
 		for (const virtualItem of virtualItems) {
 			const message = messages[virtualItem.index];
 			if (!message) continue;
+			if (message.systemKind) continue;
 			if (!message.unreadReference) continue;
 			const element = container.querySelector<HTMLElement>(
 				`[data-index="${virtualItem.index}"] [data-message-id]`
