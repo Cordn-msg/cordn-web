@@ -16,7 +16,10 @@ import {
 function createStateWithMembers(pubkeys: string[]) {
 	return {
 		ratchetTree: pubkeys.flatMap((pubkey) => [
-			{ leaf: { credential: { identity: new TextEncoder().encode(pubkey) } } },
+			{
+				nodeType: 1,
+				leaf: { credential: { identity: new TextEncoder().encode(pubkey) } }
+			},
 			undefined
 		])
 	} as never;

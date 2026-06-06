@@ -18,9 +18,15 @@ vi.mock('ts-mls', async () => {
 
 vi.mock('$app/environment', () => ({ browser: false }));
 
+const withCoordinatorClientMock = vi.fn(
+	<T>(account: unknown, coordinatorKey: string, operation: (client: T) => Promise<unknown>) =>
+		operation(getCoordinatorClientMock(account, coordinatorKey) as T)
+);
+
 vi.mock('$lib/services/chatRuntime', () => ({
 	getCoordinatorClient: getCoordinatorClientMock,
-	requireActiveAccount: requireActiveAccountMock
+	requireActiveAccount: requireActiveAccountMock,
+	withCoordinatorClient: withCoordinatorClientMock
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({

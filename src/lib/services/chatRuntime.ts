@@ -132,21 +132,65 @@ export function isTransientCoordinatorError(error: unknown): boolean {
 	);
 }
 
+/**
+ * In-memory per-coordinator operation queue used to flush operations that
+ * were requested while `replaceActiveCoordinatorClients()` is rebuilding the
+ * coordinator client.
+ */
+function getCoordinatorOperationKey(account: IAccount, coordinatorKey: string): string {
+	return `${getAccountRegistryKey(account)}::${normalizePubKey(coordinatorKey)}`;
+}
+
+const coordinatorOperationChains = new Map<string, Promise<void>>();
+
+async function runCoordinatorOperation<T>(
+	account: IAccount,
+	coordinatorKey: string,
+	operation: () => Promise<T>
+): Promise<T> {
+	const chainKey = getCoordinatorOperationKey(account, coordinatorKey);
+	const previous = coordinatorOperationChains.get(chainKey) ?? Promise.resolve();
+	let release!: () => void;
+	const current = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const tail = previous.catch(() => undefined).then(() => current);
+	coordinatorOperationChains.set(chainKey, tail);
+	const queued = previous
+		.catch(() => undefined)
+		.then(async () => {
+			const refresh = refreshActiveClientsPromise;
+			if (refresh) {
+				await refresh.catch(() => undefined);
+			}
+			return operation();
+		});
+	try {
+		return await queued;
+	} finally {
+		release();
+		if (coordinatorOperationChains.get(chainKey) === tail) {
+			coordinatorOperationChains.delete(chainKey);
+		}
+	}
+}
+
 export async function withCoordinatorClient<T>(
 	account: IAccount,
 	coordinatorKey: string,
 	operation: (client: coordinatorClient) => Promise<T>
 ): Promise<T> {
-	try {
-		return await operation(getCoordinatorClient(account, coordinatorKey));
-	} catch (error) {
-		if (!isTransientCoordinatorError(error)) {
-			throw error;
+	return runCoordinatorOperation(account, coordinatorKey, async () => {
+		try {
+			return await operation(getCoordinatorClient(account, coordinatorKey));
+		} catch (error) {
+			if (!isTransientCoordinatorError(error)) {
+				throw error;
+			}
+			await replaceActiveCoordinatorClients();
+			return operation(getCoordinatorClient(account, coordinatorKey));
 		}
-
-		await replaceActiveCoordinatorClients();
-		return operation(getCoordinatorClient(account, coordinatorKey));
-	}
+	});
 }
 
 export async function replaceActiveCoordinatorClients(
