@@ -635,6 +635,7 @@
 											pubkey={message.replyTo.author}
 											mode="inline"
 											showInlineAvatar={true}
+											profileLink={false}
 										/>
 									</span>
 								</div>
@@ -652,7 +653,7 @@
 													MESSAGE_PART_CONTAINER_CLASS
 												)}
 											>
-												@<ProfileCard pubkey={part.pubkey} mode="inline" />
+												@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
 											</span>
 										{:else if part.type === 'link'}
 											<a
@@ -687,7 +688,7 @@
 												isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
 											)}
 										>
-											@<ProfileCard pubkey={part.pubkey} mode="inline" />
+											@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
 										</span>
 									{:else if part.type === 'link'}
 										<button
@@ -736,7 +737,12 @@
 								<TooltipContent side="top" sideOffset={8}>
 									<div class="flex flex-col gap-2">
 										{#each reaction.reactors as reactor (`${message.id}:${reaction.emoji}:${reactor}`)}
-											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
+											<ProfileCard
+												pubkey={reactor}
+												mode="inline"
+												showInlineAvatar={true}
+												profileLink={false}
+											/>
 										{/each}
 									</div>
 								</TooltipContent>
@@ -789,7 +795,12 @@
 				<div class="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2">
 					<div class="space-y-1">
 						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Author</p>
-						<ProfileCard pubkey={message.author} mode="inline" showInlineAvatar={true} />
+						<ProfileCard
+							pubkey={message.author}
+							mode="inline"
+							showInlineAvatar={true}
+							profileLink={false}
+						/>
 					</div>
 					<div class="space-y-1">
 						<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Time</p>
@@ -827,7 +838,12 @@
 									</div>
 									<div class="flex flex-col gap-2">
 										{#each reaction.reactors as reactor (`${message.id}:info:${reaction.emoji}:${reactor}`)}
-											<ProfileCard pubkey={reactor} mode="inline" showInlineAvatar={true} />
+											<ProfileCard
+												pubkey={reactor}
+												mode="inline"
+												showInlineAvatar={true}
+												profileLink={false}
+											/>
 										{/each}
 									</div>
 								</div>

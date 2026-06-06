@@ -21,7 +21,8 @@
 		showLogout = false,
 		showName = true,
 		showInlineAvatar = false,
-		logoutButtonVariant = 'ghost'
+		logoutButtonVariant = 'ghost',
+		profileLink = true
 	}: {
 		pubkey: string;
 		mode?: 'compact' | 'extended' | 'inline';
@@ -29,6 +30,7 @@
 		showName?: boolean;
 		showInlineAvatar?: boolean;
 		logoutButtonVariant?: ButtonVariant;
+		profileLink?: boolean;
 	} = $props();
 
 	let showLogoutDialog = $state(false);
@@ -71,27 +73,48 @@
 </script>
 
 {#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' | 'inline' = 'compact')}
-	{#if pfp}
+	{#if profileLink}
 		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
-			<img
-				src={pfp}
-				alt="pfp"
-				class={cn(
-					'rounded-full object-cover',
-					size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-				)}
-			/>
+			{#if pfp}
+				<img
+					src={pfp}
+					alt="pfp"
+					class={cn(
+						'rounded-full object-cover',
+						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+					)}
+				/>
+			{:else}
+				<div
+					class={cn(
+						'rounded-full',
+						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+					)}
+					style="background-color: {pubkeyToHexColor(pubkey)}"
+				></div>
+			{/if}
 		</a>
 	{:else}
-		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
-			<div
-				class={cn(
-					'rounded-full',
-					size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-				)}
-				style="background-color: {pubkeyToHexColor(pubkey)}"
-			></div>
-		</a>
+		<span class="shrink-0" aria-hidden="true">
+			{#if pfp}
+				<img
+					src={pfp}
+					alt="pfp"
+					class={cn(
+						'rounded-full object-cover',
+						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+					)}
+				/>
+			{:else}
+				<div
+					class={cn(
+						'rounded-full',
+						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
+					)}
+					style="background-color: {pubkeyToHexColor(pubkey)}"
+				></div>
+			{/if}
+		</span>
 	{/if}
 {/snippet}
 {#if isExtended}
@@ -106,12 +129,20 @@
 				<div class="min-w-0 flex-1 pt-1">
 					<button
 						type="button"
-						class="block w-full truncate text-left text-lg font-semibold"
+						class="block w-full cursor-pointer truncate text-left text-lg font-semibold"
 						onclick={copyPubkey}
 					>
-						<a href={profileHref} class="block truncate text-lg font-semibold hover:underline">
-							{displayName}
-						</a>
+						{#if profileLink}
+							<a
+								href={profileHref}
+								class="block truncate text-lg font-semibold hover:underline"
+								onclick={(event) => event.stopPropagation()}
+							>
+								{displayName}
+							</a>
+						{:else}
+							<span class="block truncate text-lg font-semibold">{displayName}</span>
+						{/if}
 					</button>
 					{#if $profile?.nip05}
 						<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
@@ -142,7 +173,11 @@
 		{#if showInlineAvatar}
 			{@render pfp(pubkey, $profile?.picture, 'inline')}
 		{/if}
-		<a href={profileHref} class="inline min-w-0 text-left hover:underline">{displayName}</a>
+		{#if profileLink}
+			<a href={profileHref} class="inline min-w-0 text-left hover:underline">{displayName}</a>
+		{:else}
+			<span class="inline min-w-0 text-left">{displayName}</span>
+		{/if}
 	</span>
 {:else}
 	<div class="flex items-center gap-2">
@@ -150,9 +185,13 @@
 		{#if showName}
 			<div class="min-w-0 flex-1">
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
-					<a href={profileHref} class="block truncate text-lg font-semibold hover:underline">
-						{displayName}
-					</a>
+					{#if profileLink}
+						<a href={profileHref} class="block truncate text-lg font-semibold hover:underline">
+							{displayName}
+						</a>
+					{:else}
+						<span class="block truncate text-lg font-semibold">{displayName}</span>
+					{/if}
 				</div>
 				{#if $profile?.nip05}
 					<p class="text-xs text-muted-foreground">{$profile.nip05}</p>

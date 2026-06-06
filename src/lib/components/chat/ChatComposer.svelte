@@ -287,7 +287,12 @@
 					<div class="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
 						<Reply class="size-3.5" />
 						<span>Replying to</span>
-						<ProfileCard pubkey={replyTo.author} mode="inline" showInlineAvatar={true} />
+						<ProfileCard
+							pubkey={replyTo.author}
+							mode="inline"
+							showInlineAvatar={true}
+							profileLink={false}
+						/>
 					</div>
 					<p class={`${COMPOSER_PREVIEW_WRAP_CLASS} text-foreground/80`}>
 						{replyTo.text}
@@ -332,7 +337,7 @@
 								onclick={() => selectMention(candidate)}
 							>
 								<div class="min-w-0 flex-1">
-									<ProfileCard pubkey={candidate.pubkey} mode="compact" />
+									<ProfileCard pubkey={candidate.pubkey} mode="compact" profileLink={false} />
 									<p class="mt-1 truncate text-xs text-muted-foreground">
 										{getMentionHint(candidate)}
 									</p>

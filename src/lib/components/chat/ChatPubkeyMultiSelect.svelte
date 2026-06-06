@@ -80,7 +80,12 @@
 				<div
 					class="flex items-center gap-2 rounded-full border border-border bg-muted/40 px-2 py-1.5"
 				>
-					<ProfileCard pubkey={option.pubkey} mode="inline" showInlineAvatar={true} />
+					<ProfileCard
+						pubkey={option.pubkey}
+						mode="inline"
+						showInlineAvatar={true}
+						profileLink={false}
+					/>
 					<Button
 						type="button"
 						variant="ghost"
@@ -114,7 +119,7 @@
 					onclick={() => add(option.pubkey)}
 				>
 					<div class="min-w-0 flex-1">
-						<ProfileCard pubkey={option.pubkey} mode="compact" />
+						<ProfileCard pubkey={option.pubkey} mode="compact" profileLink={false} />
 						{#if option.description}
 							<p class="mt-1 truncate text-xs text-muted-foreground">{option.description}</p>
 						{/if}
