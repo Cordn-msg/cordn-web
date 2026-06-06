@@ -7,6 +7,7 @@ import {
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
+import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 const MAX_PREVIEW_LENGTH = 80;
@@ -142,6 +143,11 @@ export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string
 }
 
 export function getLatestChatGroupMessagePreview(groupId: string): string {
+	const draftPreview = getChatDraftPreview(groupId);
+	if (draftPreview) {
+		return draftPreview;
+	}
+
 	const group = getChatGroup(groupId);
 	const latestMessage = listChatGroupMessages(groupId).at(-1);
 	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();

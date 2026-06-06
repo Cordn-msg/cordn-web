@@ -41,6 +41,7 @@
 	import { Metadata } from 'nostr-tools/kinds';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { untrack } from 'svelte';
+	import { getChatDraft, setChatDraft } from '$lib/services/chatDrafts.svelte';
 
 	let {
 		groupId = 'general',
@@ -52,7 +53,19 @@
 
 	const MAX_OPTIMISTIC_MESSAGES = 20;
 
+	// eslint-disable-next-line svelte/prefer-writable-derived -- writable $derived.by setter form not available in this Svelte version; draft must be both derived-from-storage and user-mutable via bind:value
 	let draft = $state('');
+
+	$effect(() => {
+		draft = getChatDraft(groupId);
+	});
+
+	$effect(() => {
+		setChatDraft(groupId, draft);
+		return () => {
+			setChatDraft(groupId, draft);
+		};
+	});
 	let sendError = $state('');
 	let replyTarget = $state<ChatMessageReplyTarget | null>(null);
 	let replyTargetAuthor = $state('');
