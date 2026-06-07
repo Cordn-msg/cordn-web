@@ -15,7 +15,7 @@ import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte'
 import {
 	chatWelcomeNotificationsStore,
 	getWelcomeNotification,
-	removeWelcomeNotification
+	markWelcomeDismissed
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
 	chatGroupWatchStore,
@@ -369,7 +369,7 @@ export async function acceptWelcomeAction(welcomeId: string) {
 export async function rejectWelcomeAction(welcomeId: string) {
 	chatWelcomeNotificationsStore.error = '';
 	try {
-		removeWelcomeNotification(welcomeId);
+		markWelcomeDismissed(welcomeId);
 		return true;
 	} catch (error) {
 		const notification = getWelcomeNotification(welcomeId);

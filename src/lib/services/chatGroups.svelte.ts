@@ -57,7 +57,7 @@ import {
 import {
 	getWelcomeNotification,
 	fetchWelcomeNotifications,
-	removeWelcomeNotification
+	markWelcomeAccepted
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { normalizePubKey } from '$lib/utils';
 import {
@@ -416,14 +416,14 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 			status: 'active',
 			removedAtCursor: undefined
 		});
-		removeWelcomeNotification(welcome.id);
+		markWelcomeAccepted(welcome.id, existingGroup.id);
 		markCoordinatorUsed(existingGroup.coordinatorKey);
 		return getChatGroup(group.id) ?? group;
 	}
 
 	persistGroup(group);
 	markCoordinatorUsed(group.coordinatorKey);
-	removeWelcomeNotification(welcome.id);
+	markWelcomeAccepted(welcome.id, group.id);
 
 	return group;
 }

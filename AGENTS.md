@@ -42,7 +42,7 @@
 - The query key structure supports `undefined` coordinator keys via a dedicated `'all-coordinators'` segment so the same key tree can represent both per-coordinator and cross-coordinator lookups.
 - Remote reads currently managed through Svelte Query:
   - **Available key packages** — fetched via [`fetchCoordinatorAvailableKeyPackages()`](src/lib/queries/chatKeyPackageQueries.ts:8) and consumed by [`listCoordinatorAvailableKeyPackages()`](src/lib/services/chatGroups.svelte.ts:369), [`reconcilePublishedKeyPackagesForActiveAccount()`](src/lib/services/chatKeyPackages.svelte.ts:312), and the coordinator detail UI.
-  - **Welcome notifications** — fetched via [`welcomeNotificationsQueryOptions()`](src/lib/queries/chatWelcomeQueries.ts:9) with `refetchOnWindowFocus: true` because `FetchPendingWelcomes` is a destructive drain operation and explicit manual refresh is the primary trigger.
+  - **Welcome notifications** — fetched via [`welcomeNotificationsQueryOptions()`](src/lib/queries/chatWelcomeQueries.ts:9) with `refetchInterval`-based polling. The coordinator now uses TTL-based non-destructive welcome storage, so accepted and dismissed welcomes are retained locally to prevent reappearance across fetches.
 - Svelte Query owns **remote read caching, deduplication, and in-flight request sharing**. The existing stores and IndexedDB layer continue to own durable local state.
 - For profile pages, prefer deriving shared-group membership from existing local group state before introducing new Svelte Query reads.
 - These coordinator operations are **not** moved into Svelte Query because they are mutations, streaming state, or durable local writes:

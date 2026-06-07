@@ -46,7 +46,7 @@ vi.mock('$lib/services/chatGroupLifecycle.svelte', () => ({
 
 vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
 	getWelcomeNotification: vi.fn(),
-	removeWelcomeNotification: vi.fn()
+	markWelcomeAccepted: vi.fn()
 }));
 
 vi.mock('$lib/services/chatGroupMessages.svelte', () => ({

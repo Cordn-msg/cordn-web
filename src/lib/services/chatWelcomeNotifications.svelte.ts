@@ -30,7 +30,8 @@ export interface WelcomeNotificationEntry {
 	fetchedAt: number;
 	acceptedAt?: number;
 	acceptedGroupId?: string;
-	status?: 'pending' | 'accepted';
+	dismissedAt?: number;
+	status?: 'pending' | 'accepted' | 'dismissed';
 }
 
 type PersistedWelcomeNotifications = {
@@ -120,9 +121,11 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 		chatWelcomeNotificationsStore.entries.map((entry) => [entry.id, entry])
 	);
 	const fetchedAt = Date.now();
+	const responseIds = new Set<string>();
 
 	for (const welcome of welcomes) {
 		const id = makeNotificationId(normalizedCoordinatorKey, welcome);
+		responseIds.add(id);
 		const previous = existingById.get(id);
 		existingById.set(id, {
 			id,
@@ -134,11 +137,22 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 			readAt: previous?.readAt,
 			acceptedAt: previous?.acceptedAt,
 			acceptedGroupId: previous?.acceptedGroupId,
+			dismissedAt: previous?.dismissedAt,
 			status: previous?.status ?? 'pending'
 		});
 	}
 
 	chatWelcomeNotificationsStore.entries = [...existingById.values()]
+		.filter((entry) => {
+			if (
+				entry.coordinatorKey === normalizedCoordinatorKey &&
+				!responseIds.has(entry.id) &&
+				(entry.status === 'accepted' || entry.status === 'dismissed')
+			) {
+				return false;
+			}
+			return true;
+		})
 		.filter(
 			(entry, index, entries) =>
 				entries.findIndex((candidate) => candidate.id === entry.id) === index
@@ -222,8 +236,16 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	try {
 		const account = requireActiveAccount('You must be logged in to fetch welcomes');
 		for (const coordinatorKey of keys) {
-			const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
-			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
+			try {
+				const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
+				mergeFetchedWelcomes(coordinatorKey, result.welcomes);
+			} catch (error) {
+				if (isSignerUnavailableError(error)) return;
+				console.warn(
+					`Failed to fetch welcomes from coordinator ${coordinatorKey}:`,
+					error instanceof Error ? error.message : error
+				);
+			}
 		}
 		await resolveFetchedWelcomePreviews();
 	} catch (error) {
@@ -264,8 +286,26 @@ export function removeWelcomeNotification(id: string) {
 	saveNotifications();
 }
 
+export function markWelcomeAccepted(id: string, groupId: string) {
+	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((entry) =>
+		entry.id === id
+			? { ...entry, status: 'accepted', acceptedAt: Date.now(), acceptedGroupId: groupId }
+			: entry
+	);
+	saveNotifications();
+}
+
+export function markWelcomeDismissed(id: string) {
+	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((entry) =>
+		entry.id === id ? { ...entry, status: 'dismissed', dismissedAt: Date.now() } : entry
+	);
+	saveNotifications();
+}
+
 export function listWelcomeNotifications(): WelcomeNotificationEntry[] {
-	return [...chatWelcomeNotificationsStore.entries].sort((a, b) => b.at - a.at);
+	return [...chatWelcomeNotificationsStore.entries]
+		.filter((entry) => entry.status !== 'accepted' && entry.status !== 'dismissed')
+		.sort((a, b) => b.at - a.at);
 }
 
 export function listWelcomeNotificationsForCoordinator(
@@ -278,5 +318,7 @@ export function listWelcomeNotificationsForCoordinator(
 }
 
 export function getUnreadWelcomeNotificationCount(): number {
-	return chatWelcomeNotificationsStore.entries.filter((entry) => !entry.readAt).length;
+	return chatWelcomeNotificationsStore.entries.filter(
+		(entry) => !entry.readAt && entry.status !== 'accepted' && entry.status !== 'dismissed'
+	).length;
 }
