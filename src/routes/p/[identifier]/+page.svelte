@@ -2,7 +2,6 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -458,7 +457,6 @@
 	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
 		<div class="flex items-center justify-between gap-4">
 			<div class="flex min-w-0 items-center gap-3">
-				<ChatMobileSidebarButton />
 				<div
 					class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
 				>

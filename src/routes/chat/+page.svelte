@@ -1,8 +1,9 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
@@ -106,7 +107,9 @@
 	]);
 
 	let completedStepsExpanded = $state(false);
-	let setupGuideDismissed = $state(false);
+	let setupGuideDismissed = $state(
+		browser ? localStorage.getItem('cordn.setupGuideDismissed') === '1' : false
+	);
 	let settingDefaultCoordinator = $state(false);
 	let keyPackageActionError = $state('');
 	let creatingKeyPackage = $state(false);
@@ -239,13 +242,9 @@
 		return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
 	}
 
-	function getGroupPreview(groupId: string) {
-		return getLatestChatGroupMessagePreview(groupId);
-	}
-
 	function getGroupSummary(groupId: string) {
 		return {
-			preview: getGroupPreview(groupId),
+			preview: getLatestChatGroupMessagePreview(groupId),
 			unreadCount: getUnreadChatGroupMessageCount(groupId),
 			unreadReferenceCount: $activeAccount?.pubkey
 				? getUnreadChatGroupReferenceCount(groupId, $activeAccount.pubkey)
@@ -307,6 +306,9 @@
 
 	function dismissSetupGuide() {
 		setupGuideDismissed = true;
+		if (browser) {
+			localStorage.setItem('cordn.setupGuideDismissed', '1');
+		}
 	}
 
 	function toggleCompletedSteps() {
@@ -500,14 +502,7 @@
 			{/if}
 
 			<div class="flex flex-col gap-6">
-				<Card.Root>
-					<Card.Content>
-						<WelcomeNotificationsPanel
-							maxHeightClass="h-[min(24rem,55vh)]"
-							emptyClass="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-						/>
-					</Card.Content>
-				</Card.Root>
+				<ChatActionIcons />
 
 				<Card.Root>
 					<Card.Header>

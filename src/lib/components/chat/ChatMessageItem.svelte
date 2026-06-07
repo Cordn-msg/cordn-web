@@ -812,9 +812,9 @@
 												{...props}
 												type="button"
 												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-												aria-label={`React with ${reaction.emoji}. ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Open message info for reaction details on touch devices.`}
+												aria-label={`${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
 												title={getReactionLabel(reaction)}
-												onclick={() => onReact(message, reaction.emoji)}
+												onclick={() => openMessageInfo()}
 												onpointerenter={activateInteractionControls}
 												onfocus={activateInteractionControls}
 											>

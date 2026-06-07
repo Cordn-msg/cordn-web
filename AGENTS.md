@@ -58,6 +58,7 @@
 - Use TypeScript in Svelte and helper modules.
 - Keep styling in Tailwind utility classes; reuse existing UI components before adding raw HTML controls.
 - Before finishing changes, run [`pnpm lint`](package.json:15) and [`pnpm check`](package.json:11).
+- Avoid running `pnpm lint:fix` or Prettier auto-formatting unless explicitly requested. Formatting is done manually.
 
 ## Testing and validation
 

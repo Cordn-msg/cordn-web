@@ -3,6 +3,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { ExtensionSigner, NostrConnectSigner } from 'applesauce-signers/signers';
 	import {
@@ -12,10 +13,18 @@
 	} from 'applesauce-accounts/accounts';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import { generateSecretKey } from 'nostr-tools';
-	import { bytesToHex } from 'nostr-tools/utils';
+	import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
+	import { nsecEncode } from 'nostr-tools/nip19';
+	import { Metadata } from 'nostr-tools/kinds';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
+	import { relayPool, metadataRelays } from '$lib/services/relay-pool';
+	import { eventStore } from '$lib/services/eventStore';
+	import { copyToClipboard } from '$lib/utils';
+	import { toast } from 'svelte-sonner';
 	import Eye from '@lucide/svelte/icons/eye';
 	import EyeOff from '@lucide/svelte/icons/eye-off';
+	import Copy from '@lucide/svelte/icons/copy';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
 	let open = $state(false);
 
@@ -33,6 +42,11 @@
 	let error = $state('');
 	let remoteSignerStep = $state<'generate' | 'connecting' | 'manual'>('generate');
 	let showPrivateKey = $state(false);
+	let displayName = $state('');
+	let username = $state('');
+	let about = $state('');
+	let profileExpanded = $state(false);
+	let pasteExpanded = $state(false);
 
 	async function connectExtension() {
 		try {
@@ -54,6 +68,16 @@
 		}
 	}
 
+	function resetSimpleState() {
+		privateKey = '';
+		showPrivateKey = false;
+		displayName = '';
+		username = '';
+		about = '';
+		profileExpanded = false;
+		pasteExpanded = false;
+	}
+
 	async function connectSimple() {
 		if (!privateKey.trim()) {
 			error = 'Please enter a private key';
@@ -70,9 +94,53 @@
 			manager.addAccount(account);
 			manager.setActive(account);
 
+			const name = username.trim();
+			const displayNameTrimmed = displayName.trim();
+			const aboutTrimmed = about.trim();
+
+			if (name || displayNameTrimmed || aboutTrimmed) {
+				try {
+					const content = JSON.stringify({
+						name: name || undefined,
+						display_name: displayNameTrimmed || undefined,
+						about: aboutTrimmed || undefined
+					});
+
+					const unsignedEvent = {
+						kind: Metadata,
+						created_at: Math.floor(Date.now() / 1000),
+						tags: [],
+						content,
+						pubkey: account.pubkey
+					};
+
+					const accountSigner = (
+						account as unknown as {
+							signer?: {
+								signEvent?: (
+									event: typeof unsignedEvent
+								) => Promise<typeof unsignedEvent & { id: string; sig: string }>;
+							};
+						}
+					).signer;
+
+					if (accountSigner?.signEvent) {
+						const nextEvent = await accountSigner.signEvent(unsignedEvent);
+
+						for (const relay of metadataRelays) {
+							await relayPool.relay(relay).publish(nextEvent);
+						}
+
+						eventStore.add(nextEvent);
+					}
+				} catch {
+					// Profile publishing is best-effort; don't block login on metadata failure.
+				}
+			}
+
+			toast.success('Account created');
 			open = false;
-			privateKey = '';
-			showPrivateKey = false;
+			resetSimpleState();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect with private key';
 		} finally {
@@ -83,10 +151,21 @@
 	function generatePrivateKey() {
 		const secretKey = generateSecretKey();
 		privateKey = bytesToHex(secretKey);
+		showPrivateKey = false;
 	}
 
-	function togglePrivateKeyVisibility() {
-		showPrivateKey = !showPrivateKey;
+	function toNsec(key: string): string {
+		if (!key || key.startsWith('nsec')) return key;
+		try {
+			return nsecEncode(hexToBytes(key));
+		} catch {
+			return key;
+		}
+	}
+
+	async function copyPrivateKey() {
+		if (!privateKey) return;
+		await copyToClipboard(toNsec(privateKey));
 	}
 
 	async function generateRemoteSignerUri() {
@@ -233,7 +312,7 @@
 						: 'hover:bg-muted-foreground/10'}"
 					onclick={() => (selectedTab = 'simple')}
 				>
-					Private Key
+					Sign up
 				</button>
 				<button
 					class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
@@ -260,38 +339,128 @@
 				</div>
 			{/if}
 
-			<!-- Simple Tab -->
+			<!-- Sign up Tab -->
 			{#if selectedTab === 'simple'}
 				<div class="space-y-4">
-					<div class="space-y-2">
-						<Label for="account-private-key">Private Key</Label>
-						<div class="flex gap-2">
-							<Input
-								id="account-private-key"
-								placeholder="Enter your private key (hex format)"
-								bind:value={privateKey}
-								class="flex-1 font-mono"
-								type={showPrivateKey ? 'text' : 'password'}
-							/>
-							<Button
-								variant="outline"
-								size="icon"
-								type="button"
-								onclick={togglePrivateKeyVisibility}
-								aria-label={showPrivateKey ? 'Hide private key' : 'Show private key'}
-							>
-								{#if showPrivateKey}
-									<EyeOff class="size-4" />
-								{:else}
-									<Eye class="size-4" />
-								{/if}
+					{#if !privateKey}
+						<div class="space-y-3">
+							<p class="text-sm text-muted-foreground">
+								Create a new Nostr account — all you need to get started.
+							</p>
+							<Button class="w-full" onclick={generatePrivateKey} type="button">
+								Generate a new account
 							</Button>
-							<Button variant="outline" onclick={generatePrivateKey} type="button">Generate</Button>
 						</div>
-						<p class="text-xs text-muted-foreground">
-							Your private key will be stored securely in your browser's local storage.
-						</p>
-					</div>
+
+						<!-- Already have a private key? collapsible -->
+						<div class="space-y-3">
+							<button
+								type="button"
+								onclick={() => (pasteExpanded = !pasteExpanded)}
+								class="flex items-center gap-1 text-sm font-medium"
+							>
+								Already have a private key?
+								<ChevronDown
+									class="ml-1 size-4 text-muted-foreground transition-transform duration-200 {pasteExpanded
+										? 'rotate-180'
+										: ''}"
+								/>
+							</button>
+							{#if pasteExpanded}
+								<div class="space-y-2">
+									<Label for="account-private-key-paste">Private key</Label>
+									<Input
+										id="account-private-key-paste"
+										placeholder="Paste your private key (hex or nsec)"
+										bind:value={privateKey}
+										class="font-mono"
+									/>
+									<p class="text-xs text-muted-foreground">
+										Your private key will be stored securely in your browser's local storage.
+									</p>
+								</div>
+							{/if}
+						</div>
+					{:else}
+						<div class="space-y-2">
+							<Label for="account-private-key">Your private key</Label>
+							<div class="flex gap-2">
+								<div class="relative flex-1">
+									<Input
+										id="account-private-key"
+										value={showPrivateKey ? toNsec(privateKey) : '••••••••••••••••••••••••••••'}
+										readonly
+										class="pr-10 font-mono"
+										type="text"
+									/>
+									<button
+										type="button"
+										onclick={() => (showPrivateKey = !showPrivateKey)}
+										class="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition-colors hover:text-foreground"
+										aria-label={showPrivateKey ? 'Hide private key' : 'Show private key'}
+									>
+										{#if showPrivateKey}
+											<EyeOff class="size-4" />
+										{:else}
+											<Eye class="size-4" />
+										{/if}
+									</button>
+								</div>
+								<Button
+									variant="outline"
+									size="icon"
+									onclick={copyPrivateKey}
+									type="button"
+									aria-label="Copy private key"
+								>
+									<Copy class="size-4" />
+								</Button>
+							</div>
+							<p class="text-xs text-muted-foreground">
+								Save this key somewhere safe — it's the only way to access your account.
+							</p>
+						</div>
+
+						<!-- Profile Details collapsible -->
+						<div class="space-y-3">
+							<button
+								type="button"
+								onclick={() => (profileExpanded = !profileExpanded)}
+								class="flex items-center gap-1 text-sm font-medium"
+							>
+								Customize your profile (optional)
+								<ChevronDown
+									class="ml-1 size-4 text-muted-foreground transition-transform duration-200 {profileExpanded
+										? 'rotate-180'
+										: ''}"
+								/>
+							</button>
+							{#if profileExpanded}
+								<div class="space-y-3">
+									<div class="space-y-2">
+										<Label for="signup-display-name">Display name</Label>
+										<Input
+											id="signup-display-name"
+											placeholder="How others will see you"
+											bind:value={displayName}
+										/>
+									</div>
+									<div class="space-y-2">
+										<Label for="signup-username">Username</Label>
+										<Input id="signup-username" placeholder="Your username" bind:value={username} />
+									</div>
+									<div class="space-y-2">
+										<Label for="signup-about">About</Label>
+										<Textarea
+											id="signup-about"
+											placeholder="Tell others about yourself"
+											bind:value={about}
+										/>
+									</div>
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 
@@ -371,7 +540,7 @@
 				variant="outline"
 				onclick={() => {
 					open = false;
-					showPrivateKey = false;
+					resetSimpleState();
 				}}
 				disabled={loading}
 			>
@@ -380,14 +549,16 @@
 			{#if selectedTab === 'remote' && remoteSignerStep === 'connecting'}
 				<!-- No connect button when waiting for remote signer -->
 			{:else}
-				<Button onclick={handleSubmit}>
+				<Button onclick={handleSubmit} disabled={selectedTab === 'simple' && !privateKey}>
 					{loading
 						? 'Connecting...'
 						: selectedTab === 'remote' && remoteSignerStep === 'manual'
 							? 'Connect with Bunker URI'
 							: selectedTab === 'remote'
 								? 'Generate QR Code'
-								: 'Connect'}
+								: selectedTab === 'simple' && privateKey
+									? 'Sign up'
+									: 'Connect'}
 				</Button>
 			{/if}
 		</Dialog.Footer>

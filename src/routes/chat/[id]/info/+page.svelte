@@ -24,6 +24,7 @@
 		removeGroupMemberAction,
 		updateGroupMetadataAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -54,6 +55,14 @@
 			description: `Leaf index ${member.leafIndex}`
 		}))
 	);
+	const displayTitle = $derived.by(() => {
+		if (!group) return '';
+		return getChatGroupDisplayTitle({
+			group,
+			activePubkey: $activeAccount?.pubkey,
+			memberPubkeys: members.map((m) => m.stablePubkey)
+		});
+	});
 	let metadataName = $state('');
 	let metadataDescription = $state('');
 	let metadataIcon = $state('');
@@ -138,7 +147,7 @@
 </script>
 
 <svelte:head>
-	<title>{group?.metadata?.name || 'Group info'} | Cordn</title>
+	<title>{displayTitle || 'Group info'} | Cordn</title>
 	<meta name="description" content="Inspect Cordn group metadata and membership." />
 </svelte:head>
 
@@ -152,7 +161,7 @@
 						{#if group.metadata?.imageUrl}
 							<AvatarImage
 								src={group.metadata.imageUrl}
-								alt={group.metadata?.name || group.id}
+								alt={displayTitle || group.id}
 								class="object-cover"
 							/>
 						{/if}
@@ -176,7 +185,7 @@
 					<div class="min-w-0">
 						<p class="text-xs tracking-[0.2em] text-muted-foreground uppercase">Group details</p>
 						<h1 class="truncate text-xl font-semibold tracking-tight">
-							{group.metadata?.name || 'Unnamed chat'}
+							{displayTitle || group.id}
 						</h1>
 					</div>
 				</div>
@@ -208,7 +217,7 @@
 						{#if group.metadata?.imageUrl}
 							<img
 								src={group.metadata.imageUrl}
-								alt={group.metadata?.name || group.id}
+								alt={displayTitle || group.id}
 								class="max-h-64 w-full rounded-2xl border border-border object-cover"
 							/>
 						{/if}
@@ -346,29 +355,6 @@
 
 				<Card.Root>
 					<Card.Header>
-						<Card.Title>Local actions</Card.Title>
-						<Card.Description>Device-only cleanup actions for this saved group.</Card.Description>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<p class="text-sm text-muted-foreground">
-							{isRemoved
-								? 'This group is no longer active for your account. Delete the local copy to clean up the app state.'
-								: 'Deleting here only removes the local saved copy from this browser.'}
-						</p>
-						<Button
-							type="button"
-							variant="destructive"
-							onclick={() => (showDeleteGroupDialog = true)}
-							disabled={chatGroupInfoActionsStore.deleteSubmitting}
-						>
-							<Trash2 class="mr-2 size-4" />
-							{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete local group'}
-						</Button>
-					</Card.Content>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header>
 						<Card.Title>Admins</Card.Title>
 						<Card.Description>
 							Configured admin identities. Empty means the group is egalitarian.
@@ -467,6 +453,53 @@
 						{/if}
 					</Card.Content>
 				</Card.Root>
+
+				<Collapsible.Root>
+					<Collapsible.Trigger>
+						{#snippet child({ props })}
+							<button
+								{...props}
+								type="button"
+								class="flex w-full min-w-0 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left font-medium transition-colors hover:bg-muted/30"
+							>
+								<span class="min-w-0 flex-1">Advanced</span>
+								<ChevronDown
+									class="size-4 shrink-0 transition-transform [[data-state=open]_&]:rotate-180"
+								/>
+							</button>
+						{/snippet}
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="mt-6 space-y-6">
+							<Card.Root>
+								<Card.Header>
+									<Card.Title>Local actions</Card.Title>
+									<Card.Description
+										>Device-only cleanup actions for this saved group.</Card.Description
+									>
+								</Card.Header>
+								<Card.Content class="space-y-4">
+									<p class="text-sm text-muted-foreground">
+										{isRemoved
+											? 'This group is no longer active for your account. Delete the local copy to clean up the app state.'
+											: 'Deleting here only removes the local saved copy from this browser.'}
+									</p>
+									<Button
+										type="button"
+										variant="destructive"
+										onclick={() => (showDeleteGroupDialog = true)}
+										disabled={chatGroupInfoActionsStore.deleteSubmitting}
+									>
+										<Trash2 class="mr-2 size-4" />
+										{chatGroupInfoActionsStore.deleteSubmitting
+											? 'Deleting…'
+											: 'Delete local group'}
+									</Button>
+								</Card.Content>
+							</Card.Root>
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
 			</div>
 		</ScrollArea.Root>
 
