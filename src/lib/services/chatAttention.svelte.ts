@@ -1,4 +1,6 @@
 import { browser } from '$app/environment';
+import { goto } from '$app/navigation';
+import { resolve } from '$app/paths';
 import { page } from '$app/state';
 import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 import { manager } from '$lib/services/accountManager.svelte';
@@ -6,6 +8,7 @@ import {
 	getUnreadChatGroupMessageCount,
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
+import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
 	getChatGroup,
@@ -132,6 +135,7 @@ export async function notifyForUnreadChatMessages() {
 		if (shouldSuppressNotification(group.id)) continue;
 
 		for (const message of nextMessages) {
+			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
 			if (message.direction !== 'inbound') continue;
 			if (activePubkey && message.sender === activePubkey) continue;
 			if (notificationState.notifiedMessageIds.has(message.id)) continue;
@@ -150,7 +154,7 @@ export async function notifyForUnreadChatMessages() {
 			});
 			notification.onclick = () => {
 				window.focus();
-				window.location.href = `/chat/${group.id}`;
+				goto(resolve('/chat/[id]', { id: group.id }));
 			};
 		}
 	}

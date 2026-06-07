@@ -113,7 +113,9 @@ export function markChatGroupMentionsRead(groupId: string, cursor: number) {
 
 export function getUnreadChatGroupMessageCount(groupId: string): number {
 	const lastReadCursor = getChatGroupLastReadCursor(groupId);
-	return listChatGroupMessages(groupId).filter((message) => message.cursor > lastReadCursor).length;
+	return listChatGroupMessages(groupId).filter(
+		(message) => message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND
+	).length;
 }
 
 export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
