@@ -145,6 +145,7 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 		});
 	}
 
+	const seenIds = new SvelteSet<string>();
 	chatWelcomeNotificationsStore.entries = [...existingById.values()]
 		.filter((entry) => {
 			if (
@@ -154,12 +155,10 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 			) {
 				return false;
 			}
+			if (seenIds.has(entry.id)) return false;
+			seenIds.add(entry.id);
 			return true;
 		})
-		.filter(
-			(entry, index, entries) =>
-				entries.findIndex((candidate) => candidate.id === entry.id) === index
-		)
 		.sort((a, b) => b.at - a.at);
 	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {
 		...chatWelcomeNotificationsStore.lastFetchedAtByCoordinator,
@@ -212,18 +211,20 @@ async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
 	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((candidate) =>
 		candidate.id === entry.id ? { ...candidate, preview } : candidate
 	);
-	saveNotifications();
 	return preview;
 }
 
 async function resolveFetchedWelcomePreviews() {
+	let updated = false;
 	for (const entry of chatWelcomeNotificationsStore.entries) {
 		try {
-			await resolveWelcomePreview(entry);
+			const preview = await resolveWelcomePreview(entry);
+			if (preview !== undefined) updated = true;
 		} catch {
 			// Ignore preview failures so the welcome remains accept/reject capable.
 		}
 	}
+	if (updated) saveNotifications();
 	return chatWelcomeNotificationsStore.entries;
 }
 

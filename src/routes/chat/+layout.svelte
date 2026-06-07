@@ -45,15 +45,15 @@
 		void untrack(async () => {
 			try {
 				await loadWelcomeNotificationsAction();
-				if ($activeAccount?.pubkey === pubkey) {
-					startupWelcomesSyncedFor = pubkey;
-				}
 			} catch (error) {
 				console.warn(
 					'Failed to load welcome notifications during chat startup',
 					error instanceof Error ? error.message : error
 				);
 			} finally {
+				if ($activeAccount?.pubkey === pubkey) {
+					startupWelcomesSyncedFor = pubkey;
+				}
 				if (startupWelcomesLoadingFor === pubkey) {
 					startupWelcomesLoadingFor = '';
 				}
