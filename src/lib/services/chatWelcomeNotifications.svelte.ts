@@ -116,7 +116,7 @@ export function listKnownCoordinatorKeys(): string[] {
 		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
 	}
 	const sorted = [...keys].sort();
-	console.debug('listKnownCoordinatorKeys', {
+	console.log('listKnownCoordinatorKeys', {
 		total: sorted.length,
 		fromCoordinators: fromCoordinators.length,
 		fromGroups: fromGroups.length,
@@ -240,9 +240,9 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 		await ensureGroupsLoaded();
 	}
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);
-	console.debug('fetchWelcomeNotifications coordinator keys', keys);
+	console.log('fetchWelcomeNotifications coordinator keys', keys);
 	if (keys.length === 0) {
-		console.debug('fetchWelcomeNotifications: no coordinator keys discovered, skipping fetch');
+		console.log('fetchWelcomeNotifications: no coordinator keys discovered, skipping fetch');
 		chatWelcomeNotificationsStore.error = '';
 		return;
 	}
