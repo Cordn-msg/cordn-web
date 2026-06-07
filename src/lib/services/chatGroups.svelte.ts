@@ -210,7 +210,7 @@ async function loadGroups(ownerPubkey?: string) {
 	groupsLoaded = true;
 }
 
-async function ensureGroupsLoaded() {
+export async function ensureGroupsLoaded() {
 	groupsReady ??= loadGroups();
 	await groupsReady;
 }

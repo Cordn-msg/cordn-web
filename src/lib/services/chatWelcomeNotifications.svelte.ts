@@ -4,7 +4,7 @@ import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
 import type { IAccount } from 'applesauce-accounts';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
-import { listChatGroups } from '$lib/services/chatGroups.svelte';
+import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
 import {
 	decodeStoredKeyPackage,
 	getChatKeyPackage,
@@ -107,12 +107,23 @@ export function deleteWelcomeNotificationsForOwner(ownerPubkey: string) {
 
 export function listKnownCoordinatorKeys(): string[] {
 	const keys = new SvelteSet<string>();
-	for (const coordinator of listChatCoordinators()) keys.add(coordinator.pubkey);
-	for (const group of listChatGroups()) keys.add(group.coordinatorKey);
-	for (const keyPackage of listChatKeyPackages(manager.getActive()?.pubkey)) {
+	const fromCoordinators = listChatCoordinators();
+	const fromGroups = listChatGroups();
+	const fromKeyPackages = listChatKeyPackages(manager.getActive()?.pubkey);
+	for (const coordinator of fromCoordinators) keys.add(coordinator.pubkey);
+	for (const group of fromGroups) keys.add(group.coordinatorKey);
+	for (const keyPackage of fromKeyPackages) {
 		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
 	}
-	return [...keys].sort();
+	const sorted = [...keys].sort();
+	console.debug('listKnownCoordinatorKeys', {
+		total: sorted.length,
+		fromCoordinators: fromCoordinators.length,
+		fromGroups: fromGroups.length,
+		fromKeyPackages: fromKeyPackages.length,
+		keys: sorted
+	});
+	return sorted;
 }
 
 function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]) {
@@ -121,7 +132,7 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 		chatWelcomeNotificationsStore.entries.map((entry) => [entry.id, entry])
 	);
 	const fetchedAt = Date.now();
-	const responseIds = new Set<string>();
+	const responseIds = new SvelteSet<string>();
 
 	for (const welcome of welcomes) {
 		const id = makeNotificationId(normalizedCoordinatorKey, welcome);
@@ -225,8 +236,13 @@ async function resolveFetchedWelcomePreviews() {
 }
 
 export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
+	if (!coordinatorKeys) {
+		await ensureGroupsLoaded();
+	}
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);
+	console.debug('fetchWelcomeNotifications coordinator keys', keys);
 	if (keys.length === 0) {
+		console.debug('fetchWelcomeNotifications: no coordinator keys discovered, skipping fetch');
 		chatWelcomeNotificationsStore.error = '';
 		return;
 	}

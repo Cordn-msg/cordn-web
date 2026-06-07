@@ -41,11 +41,15 @@
 		if (!pubkey || startupWelcomesSyncedFor === pubkey || startupWelcomesLoadingFor === pubkey)
 			return;
 
+		console.debug('chat startup: loading welcome notifications', { pubkey: pubkey.slice(0, 8) });
 		startupWelcomesLoadingFor = pubkey;
 		void untrack(async () => {
 			try {
 				await loadWelcomeNotificationsAction();
 				if ($activeAccount?.pubkey === pubkey) {
+					console.debug('chat startup: welcome notifications loaded', {
+						pubkey: pubkey.slice(0, 8)
+					});
 					startupWelcomesSyncedFor = pubkey;
 				}
 			} catch (error) {

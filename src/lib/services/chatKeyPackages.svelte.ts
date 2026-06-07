@@ -97,7 +97,7 @@ async function loadKeyPackages() {
 	chatKeyPackagesStore.keyPackages = records.map(fromStoredRecord);
 }
 
-async function ensureKeyPackagesLoaded() {
+export async function ensureKeyPackagesLoaded() {
 	storageReady ??= loadKeyPackages();
 	await storageReady;
 }

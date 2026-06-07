@@ -484,8 +484,8 @@ export function createSystemMessagesFromStateChange(input: {
 	const oldMembers = listGroupMembers(input.oldState);
 	const newMembers = listGroupMembers(input.newState);
 
-	const oldPubkeys = new Set(oldMembers.map((m) => normalizePubKey(m.stablePubkey)));
-	const newPubkeys = new Set(newMembers.map((m) => normalizePubKey(m.stablePubkey)));
+	const oldPubkeys = new SvelteSet(oldMembers.map((m) => normalizePubKey(m.stablePubkey)));
+	const newPubkeys = new SvelteSet(newMembers.map((m) => normalizePubKey(m.stablePubkey)));
 
 	const addedMembers = newMembers.filter((m) => !oldPubkeys.has(normalizePubKey(m.stablePubkey)));
 	const removedMembers = oldMembers.filter((m) => !newPubkeys.has(normalizePubKey(m.stablePubkey)));
