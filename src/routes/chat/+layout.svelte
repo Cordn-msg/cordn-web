@@ -33,12 +33,39 @@
 		void untrack(() => startWatchingAllGroups());
 	});
 
+	let startupWelcomesSyncedFor = $state('');
+	let startupWelcomesLoadingFor = $state('');
+
+	$effect(() => {
+		const pubkey = $activeAccount?.pubkey;
+		if (!pubkey || startupWelcomesSyncedFor === pubkey || startupWelcomesLoadingFor === pubkey)
+			return;
+
+		startupWelcomesLoadingFor = pubkey;
+		void untrack(async () => {
+			try {
+				await loadWelcomeNotificationsAction();
+				if ($activeAccount?.pubkey === pubkey) {
+					startupWelcomesSyncedFor = pubkey;
+				}
+			} catch (error) {
+				console.warn(
+					'Failed to load welcome notifications during chat startup',
+					error instanceof Error ? error.message : error
+				);
+			} finally {
+				if (startupWelcomesLoadingFor === pubkey) {
+					startupWelcomesLoadingFor = '';
+				}
+			}
+		});
+	});
+
 	$effect(() => {
 		const pubkey = $activeAccount?.pubkey;
 		if (!pubkey || chatGroupWatchStore.startup !== 'ready' || startupSyncedFor === pubkey) return;
 		startupSyncedFor = pubkey;
 		void untrack(async () => {
-			await loadWelcomeNotificationsAction();
 			await loadCoordinatorRemoteKeyPackagesAction(undefined);
 			if (shouldReconcilePublishedKeyPackages(pubkey)) {
 				await reconcileKeyPackages();
