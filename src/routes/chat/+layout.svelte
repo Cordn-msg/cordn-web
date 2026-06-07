@@ -37,21 +37,15 @@
 	let startupWelcomesLoadingFor = $state('');
 
 	$effect(() => {
-		console.log('chat startup: loading welcome notifications');
-
 		const pubkey = $activeAccount?.pubkey;
 		if (!pubkey || startupWelcomesSyncedFor === pubkey || startupWelcomesLoadingFor === pubkey)
 			return;
 
-		console.log('chat startup: loading welcome notifications', { pubkey: pubkey.slice(0, 8) });
 		startupWelcomesLoadingFor = pubkey;
 		void untrack(async () => {
 			try {
 				await loadWelcomeNotificationsAction();
 				if ($activeAccount?.pubkey === pubkey) {
-					console.log('chat startup: welcome notifications loaded', {
-						pubkey: pubkey.slice(0, 8)
-					});
 					startupWelcomesSyncedFor = pubkey;
 				}
 			} catch (error) {

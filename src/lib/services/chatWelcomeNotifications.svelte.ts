@@ -54,7 +54,7 @@ export const chatWelcomeNotificationsStore = $state<{
 let activeNotificationsStorageKey = getNotificationsStorageKey();
 
 function makeNotificationId(coordinatorKey: string, welcome: PendingWelcome): string {
-	return `${coordinatorKey}:${welcome.kp_ref}`;
+	return `${coordinatorKey}:${welcome.kp_ref}:${welcome.at}`;
 }
 
 function saveNotifications() {
@@ -115,15 +115,7 @@ export function listKnownCoordinatorKeys(): string[] {
 	for (const keyPackage of fromKeyPackages) {
 		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
 	}
-	const sorted = [...keys].sort();
-	console.log('listKnownCoordinatorKeys', {
-		total: sorted.length,
-		fromCoordinators: fromCoordinators.length,
-		fromGroups: fromGroups.length,
-		fromKeyPackages: fromKeyPackages.length,
-		keys: sorted
-	});
-	return sorted;
+	return [...keys];
 }
 
 function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]) {
@@ -240,9 +232,7 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 		await ensureGroupsLoaded();
 	}
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);
-	console.log('fetchWelcomeNotifications coordinator keys', keys);
 	if (keys.length === 0) {
-		console.log('fetchWelcomeNotifications: no coordinator keys discovered, skipping fetch');
 		chatWelcomeNotificationsStore.error = '';
 		return;
 	}
