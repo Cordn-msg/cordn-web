@@ -22,7 +22,8 @@
 		collapsed = false,
 		variant = 'card',
 		active = false,
-		onclick
+		onclick,
+		profileHints
 	}: {
 		group: StoredChatGroup;
 		href: string;
@@ -33,6 +34,7 @@
 		variant?: 'card' | 'sidebar';
 		active?: boolean;
 		onclick?: ((event: MouseEvent) => void) | undefined;
+		profileHints?: ChatGroupProfileHints;
 	} = $props();
 
 	let groupProfileHints = $state<ChatGroupProfileHints>({});
@@ -43,11 +45,12 @@
 			.map((member) => normalizePubKey(member.stablePubkey))
 			.filter((pubkey): pubkey is string => Boolean(pubkey))
 	);
+	const hints = $derived(profileHints ?? groupProfileHints);
 	const title = $derived.by(() =>
 		getChatGroupDisplayTitle({
 			group,
 			activePubkey: $activeAccount?.pubkey,
-			profileHints: groupProfileHints,
+			profileHints: hints,
 			memberPubkeys
 		})
 	);
@@ -60,6 +63,8 @@
 	});
 
 	$effect(() => {
+		if (profileHints) return;
+
 		const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
 		const pubkeys = [...new Set(memberPubkeys.filter((pubkey) => pubkey !== activePubkey))];
 		const subscriptions = pubkeys.flatMap((pubkey) => [

@@ -83,3 +83,7 @@ export function getDirectChatTargetPubkeyFromWelcome(welcomeName: string): strin
 	}
 	return '';
 }
+
+export function getChatGroupNotificationIcon(group: StoredChatGroup): string | undefined {
+	return group.metadata?.imageUrl || group.metadata?.icon || undefined;
+}

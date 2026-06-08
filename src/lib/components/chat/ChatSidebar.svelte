@@ -3,6 +3,13 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { untrack } from 'svelte';
+	import { eventStore } from '$lib/services/eventStore';
+	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
+	import { ProfileModel } from 'applesauce-core/models';
+	import { Metadata } from 'nostr-tools/kinds';
+	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -14,12 +21,14 @@
 		getUnreadChatGroupMessageCount,
 		pruneChatGroupPresence
 	} from '$lib/services/chatGroupPresence.svelte';
-	import { listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getCoordinatorColor,
 		getChatCoordinator,
 		listChatCoordinators
 	} from '$lib/services/chatCoordinators.svelte';
+	import type { ChatGroupProfileHints } from '$lib/components/chat/chatGroupDisplay';
+	import { normalizePubKey } from '$lib/utils';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -29,6 +38,11 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
+	import {
+		getSearchKeywords,
+		resolveSearchQuery,
+		type SearchKeyword
+	} from '$lib/services/chatSearchKeywords';
 	import type { Writable } from 'svelte/store';
 
 	let {
@@ -40,6 +54,24 @@
 	let collapsed = $state(false);
 	let searchQuery = $state('');
 	let debouncedSearchQuery = $state('');
+	let searchInputRef: HTMLInputElement | null = $state(null);
+	let keywordStart = $state(-1);
+	let keywordQuery = $state('');
+	let highlightedKeywordIndex = $state(0);
+	let profileNames: string[] = $state([]);
+	let groupProfileHints = $state<ChatGroupProfileHints>({});
+	const chatMemberFingerprint = $derived.by(() =>
+		chats
+			.map((chat) => {
+				const members = listChatGroupMembers(chat.id)
+					.map((m) => normalizePubKey(m.stablePubkey))
+					.filter(Boolean)
+					.sort()
+					.join(',');
+				return `${chat.id}:${members}`;
+			})
+			.join('|')
+	);
 	const chats = $derived.by(() =>
 		[...listChatGroups()].sort((a, b) => {
 			const aLatest = Math.max(a.createdAt, a.messages.at(-1)?.createdAt ?? 0);
@@ -48,13 +80,25 @@
 		})
 	);
 	const coordinators = $derived.by(() => listChatCoordinators());
+	const resolvedSearchQuery = $derived.by(() =>
+		resolveSearchQuery(debouncedSearchQuery, $activeAccount?.pubkey, profileNames)
+	);
 	const searchResults = $derived.by(() =>
-		searchChatMessages(debouncedSearchQuery, {
+		searchChatMessages(resolvedSearchQuery, {
 			limit: 50,
-			activePubkey: $activeAccount?.pubkey
+			activePubkey: $activeAccount?.pubkey,
+			profileHints: groupProfileHints
 		})
 	);
 	const isSearching = $derived(debouncedSearchQuery.trim().length >= 2);
+	const activeKeyword = $derived(keywordStart >= 0);
+	const keywordMatches = $derived.by(() => {
+		if (!activeKeyword) return [];
+		const query = keywordQuery.toLowerCase();
+		const keywords = getSearchKeywords();
+		if (!query) return keywords;
+		return keywords.filter((k) => k.label.toLowerCase().includes(query));
+	});
 	const chatSummaries = $derived.by(() =>
 		Object.fromEntries(
 			chats.map((chat) => [
@@ -145,6 +189,10 @@
 		$mobileSidebarOpen = false;
 	}
 
+	function getGroupById(groupId: string) {
+		return chats.find((chat) => chat.id === groupId);
+	}
+
 	function formatSearchResultTime(createdAt: number) {
 		return new Date(createdAt).toLocaleString(undefined, {
 			month: 'short',
@@ -152,6 +200,64 @@
 			hour: '2-digit',
 			minute: '2-digit'
 		});
+	}
+
+	function handleSearchInput(event: Event) {
+		updateKeywordState(event.currentTarget as HTMLInputElement);
+	}
+
+	function handleSearchKeydown(event: KeyboardEvent) {
+		if (activeKeyword && keywordMatches.length > 0) {
+			if (event.key === 'ArrowDown') {
+				event.preventDefault();
+				highlightedKeywordIndex = (highlightedKeywordIndex + 1) % keywordMatches.length;
+				return;
+			}
+			if (event.key === 'ArrowUp') {
+				event.preventDefault();
+				highlightedKeywordIndex =
+					(highlightedKeywordIndex - 1 + keywordMatches.length) % keywordMatches.length;
+				return;
+			}
+			if (event.key === 'Enter' || event.key === 'Tab') {
+				event.preventDefault();
+				selectKeyword(keywordMatches[highlightedKeywordIndex]);
+				return;
+			}
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				closeKeywordDropdown();
+				return;
+			}
+		}
+	}
+
+	function updateKeywordState(target: HTMLInputElement) {
+		const caret = target.selectionStart ?? 0;
+		const beforeCaret = searchQuery.slice(0, caret);
+		const match = /(^|\s)@([^\s@]*)$/.exec(beforeCaret);
+		if (!match) {
+			closeKeywordDropdown();
+			return;
+		}
+		keywordStart = beforeCaret.length - match[2].length - 1;
+		keywordQuery = match[2];
+		highlightedKeywordIndex = 0;
+	}
+
+	function closeKeywordDropdown() {
+		keywordStart = -1;
+		keywordQuery = '';
+		highlightedKeywordIndex = 0;
+	}
+
+	function selectKeyword(keyword: SearchKeyword) {
+		if (keywordStart < 0) return;
+		const before = searchQuery.slice(0, keywordStart);
+		const after = searchQuery.slice(keywordStart + 1 + keywordQuery.length);
+		searchQuery = `${before}@${keyword.trigger} ${after}`;
+		closeKeywordDropdown();
+		requestAnimationFrame(() => searchInputRef?.focus());
 	}
 
 	function getCoordinatorStatusClass(coordinatorKey: string) {
@@ -171,6 +277,81 @@
 	$effect(() => {
 		void chats.length;
 		pruneChatGroupPresence();
+	});
+
+	$effect(() => {
+		const pubkey = $activeAccount?.pubkey;
+		if (!pubkey) {
+			profileNames = [];
+			return;
+		}
+
+		const loader = addressLoader({
+			kind: Metadata,
+			pubkey,
+			relays: metadataRelays
+		}).subscribe();
+
+		const sub = eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+			const next: string[] = [];
+			if (profile?.name) next.push(profile.name);
+			if (profile?.display_name && profile.display_name !== profile?.name) {
+				next.push(profile.display_name);
+			}
+			if (profile?.nip05) next.push(profile.nip05);
+
+			const current = untrack(() => profileNames);
+			if (current.length === next.length && current.every((name, index) => name === next[index])) {
+				return;
+			}
+
+			profileNames = next;
+		});
+
+		return () => {
+			loader.unsubscribe();
+			sub.unsubscribe();
+		};
+	});
+
+	$effect(() => {
+		const fingerprint = chatMemberFingerprint;
+		void fingerprint;
+
+		const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
+		const pubkeys = [
+			...new Set(
+				untrack(() => chats).flatMap((chat) =>
+					listChatGroupMembers(chat.id)
+						.map((member) => normalizePubKey(member.stablePubkey))
+						.filter((pubkey): pubkey is string => Boolean(pubkey) && pubkey !== activePubkey)
+				)
+			)
+		];
+
+		const subscriptions = pubkeys.flatMap((pubkey) => [
+			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
+			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
+				const current = untrack(() => groupProfileHints[pubkey]);
+				const next = {
+					name: profile?.name,
+					displayName: profile?.display_name,
+					nip05: profile?.nip05
+				};
+
+				if (
+					current?.name === next.name &&
+					current?.displayName === next.displayName &&
+					current?.nip05 === next.nip05
+				) {
+					return;
+				}
+
+				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
+			})
+		]);
+
+		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	$effect(() => {
@@ -269,10 +450,13 @@
 		<div class="pb-3">
 			<InputGroup.Root>
 				<InputGroup.Input
+					bind:ref={searchInputRef}
 					bind:value={searchQuery}
 					type="search"
 					placeholder="Search messages..."
 					aria-label="Search messages"
+					oninput={handleSearchInput}
+					onkeydown={handleSearchKeydown}
 				/>
 				<InputGroup.Addon>
 					<Search class="size-4" />
@@ -283,6 +467,29 @@
 					</InputGroup.Addon>
 				{/if}
 			</InputGroup.Root>
+			{#if activeKeyword && keywordMatches.length > 0}
+				<div class="relative">
+					<div
+						class="absolute inset-x-0 top-0 z-10 rounded-xl border border-border bg-popover p-1 shadow-lg"
+					>
+						{#each keywordMatches as keyword, index (keyword.trigger)}
+							<button
+								type="button"
+								class={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${index === highlightedKeywordIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`}
+								onclick={() => selectKeyword(keyword)}
+								tabindex="-1"
+							>
+								<div class="min-w-0 flex-1">
+									<p class="truncate font-medium">@{keyword.label}</p>
+									<p class="truncate text-xs text-muted-foreground">
+										{keyword.description}
+									</p>
+								</div>
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
 		</div>
 	{/if}
 
@@ -324,21 +531,36 @@
 				{:else}
 					<div class="space-y-1">
 						{#each searchResults as result (result.messageKey)}
+							{@const group = getGroupById(result.groupId)}
 							<button
 								type="button"
 								onclick={() => navigateToMessage(result.groupId, result.messageKey)}
-								class="block rounded-xl border border-transparent px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
+								class="block w-full rounded-xl border border-transparent px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
 							>
 								<div class="flex items-start justify-between gap-2">
-									<p class="truncate font-medium text-foreground">{result.groupTitle}</p>
+									<div class="flex min-w-0 items-center gap-2">
+										{#if group}
+											<ChatGroupAvatar
+												{group}
+												class="h-5 w-5 shrink-0"
+												fallbackClass="text-[9px] font-medium"
+											/>
+										{/if}
+										<p class="truncate font-medium text-foreground">{result.groupTitle}</p>
+									</div>
 									<p class="shrink-0 text-[10px] text-muted-foreground">
 										{formatSearchResultTime(result.createdAt)}
 									</p>
 								</div>
 								<p class="mt-1 line-clamp-2 text-xs leading-5">{result.snippet}</p>
-								<p class="mt-1 truncate text-[10px] text-muted-foreground">
-									{result.sender.slice(0, 12)}…
-								</p>
+								<div class="mt-1 min-w-0 truncate">
+									<ProfileCard
+										pubkey={result.sender}
+										mode="inline"
+										showInlineAvatar={true}
+										profileLink={false}
+									/>
+								</div>
 							</button>
 						{/each}
 					</div>
@@ -392,6 +614,7 @@
 								variant="sidebar"
 								active={isActive(getGroupHref(chat.id))}
 								onclick={closeMobileSidebar}
+								profileHints={groupProfileHints}
 							/>
 						{/each}
 					</div>

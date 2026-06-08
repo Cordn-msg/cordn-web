@@ -2,7 +2,10 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { page } from '$app/state';
-import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+import {
+	getChatGroupDisplayTitle,
+	getChatGroupNotificationIcon
+} from '$lib/components/chat/chatGroupDisplay';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getUnreadChatGroupMessageCount,
@@ -149,7 +152,7 @@ export async function notifyForUnreadChatMessages() {
 			});
 			const notification = new Notification(title || 'Cordn', {
 				body: getNotificationBody(message.sender, message.content),
-				icon: DEFAULT_FAVICON,
+				icon: getChatGroupNotificationIcon(group) ?? DEFAULT_FAVICON,
 				tag: `cordn-group-${group.id}`
 			});
 			notification.onclick = () => {

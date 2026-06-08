@@ -1,4 +1,7 @@
-import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+import {
+	getChatGroupDisplayTitle,
+	type ChatGroupProfileHints
+} from '$lib/components/chat/chatGroupDisplay';
 import {
 	getMessageDeleteReference,
 	getMessageEditReference,
@@ -19,18 +22,34 @@ export interface ChatMessageSearchResult {
 export interface SearchChatMessagesOptions {
 	limit?: number;
 	activePubkey?: string;
-	profileHints?: Record<string, { name?: string; displayName?: string; nip05?: string }>;
+	profileHints?: ChatGroupProfileHints;
 }
 
 const DEFAULT_RESULT_LIMIT = 50;
 const SNIPPET_RADIUS = 56;
 
 export function searchChatMessages(
-	query: string,
+	query: string | string[],
 	{ limit = DEFAULT_RESULT_LIMIT, activePubkey, profileHints }: SearchChatMessagesOptions = {}
 ): ChatMessageSearchResult[] {
-	const normalizedQuery = normalizeSearchText(query);
-	if (normalizedQuery.length < 2) return [];
+	const queries = Array.isArray(query) ? query : [query];
+	const normalizedQueries = [
+		...new Set(
+			queries
+				.map((q) => q.trim())
+				.map((q) => normalizeSearchText(q))
+				.filter((q) => q.length >= 2)
+		)
+	];
+	if (normalizedQueries.length === 0) return [];
+
+	function findMatchIndex(content: string): { index: number; queryLen: number } | null {
+		for (const nq of normalizedQueries) {
+			const idx = content.indexOf(nq);
+			if (idx !== -1) return { index: idx, queryLen: nq.length };
+		}
+		return null;
+	}
 
 	const results: ChatMessageSearchResult[] = [];
 
@@ -52,9 +71,11 @@ export function searchChatMessages(
 			);
 			if (reactionReference) {
 				const targetMessage = messageById.get(reactionReference.targetId);
+				if (!targetMessage) continue;
+
 				const normalizedReaction = normalizeSearchText(reactionReference.reaction);
-				const reactionMatchIndex = normalizedReaction.indexOf(normalizedQuery);
-				if (targetMessage && reactionMatchIndex !== -1) {
+				const reactionMatch = findMatchIndex(normalizedReaction);
+				if (reactionMatch) {
 					results.push({
 						groupId: group.id,
 						groupTitle,
@@ -69,8 +90,8 @@ export function searchChatMessages(
 			}
 
 			const normalizedContent = normalizeSearchText(message.content);
-			const matchIndex = normalizedContent.indexOf(normalizedQuery);
-			if (matchIndex === -1) continue;
+			const match = findMatchIndex(normalizedContent);
+			if (!match) continue;
 
 			results.push({
 				groupId: group.id,
@@ -78,7 +99,7 @@ export function searchChatMessages(
 				messageKey: `${message.id}:${message.cursor}`,
 				createdAt: message.createdAt,
 				sender: message.sender,
-				snippet: createSnippet(message.content, matchIndex, normalizedQuery.length)
+				snippet: createSnippet(message.content, match.index, match.queryLen)
 			});
 		}
 	}
@@ -125,7 +146,7 @@ function getSearchableMessages(messages: StoredChatMessage[]): StoredChatMessage
 }
 
 function normalizeSearchText(value: string): string {
-	return value.trim().toLocaleLowerCase();
+	return value.toLocaleLowerCase();
 }
 
 function createSnippet(content: string, matchIndex: number, queryLength: number): string {
