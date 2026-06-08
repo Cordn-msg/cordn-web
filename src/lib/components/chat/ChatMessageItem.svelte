@@ -25,6 +25,7 @@
 	import { ProfileModel } from 'applesauce-core/models';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
+	import Copy from '@lucide/svelte/icons/copy';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
@@ -35,7 +36,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import { cn, pubkeyToHexColor } from '$lib/utils';
+	import { cn, pubkeyToHexColor, copyToClipboard } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 	import {
 		getCachedChatMessageParts,
@@ -264,6 +265,13 @@
 		actionsMenuOpen = false;
 		messageInfoOpen = true;
 		clearTouchActions();
+	}
+
+	async function handleCopyMessage() {
+		if (message.deleted) return;
+		actionsMenuOpen = false;
+		clearTouchActions();
+		await copyToClipboard(message.text);
 	}
 
 	async function deleteMessage() {
@@ -622,6 +630,11 @@
 										<DropdownMenuItem onSelect={openMessageInfo} class="gap-2">
 											<Info class="size-4" />
 											<span>Info</span>
+										</DropdownMenuItem>
+
+										<DropdownMenuItem onSelect={handleCopyMessage} class="gap-2">
+											<Copy class="size-4" />
+											<span>Copy</span>
 										</DropdownMenuItem>
 
 										{#if !message.deleted}

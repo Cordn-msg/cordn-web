@@ -142,10 +142,8 @@
 	}
 
 	function handleInput(event: Event) {
-		const target = event.currentTarget as HTMLTextAreaElement;
-		target.style.height = 'auto';
-		target.style.height = `${Math.min(target.scrollHeight, expanded ? 320 : 128)}px`;
-		updateMentionState(target);
+		updateMentionState(event.currentTarget as HTMLTextAreaElement);
+		requestAnimationFrame(() => resizeTextarea());
 	}
 
 	function updateMentionState(target: HTMLTextAreaElement) {
@@ -204,6 +202,12 @@
 		const length = textareaRef.value.length;
 		textareaRef.setSelectionRange(length, length);
 		resizeTextarea();
+	});
+
+	$effect(() => {
+		void value;
+		if (!textareaRef) return;
+		requestAnimationFrame(() => resizeTextarea());
 	});
 
 	$effect(() => {
