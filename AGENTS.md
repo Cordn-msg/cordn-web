@@ -23,7 +23,7 @@
 - Chat-specific UI lives in [`src/lib/components/chat`](src/lib/components/chat).
 - User profile pages live under [`src/routes/p`](src/routes/p) and should stay focused on profile presentation plus local shared-group discovery.
 - Chat persistence is centralized behind [`getChatStorage()`](src/lib/storage/chatStorage.ts:530) with IndexedDB as the primary backend and local-storage/memory fallbacks.
-- Group records persist MLS state bytes, message history, and sync issues through [`src/lib/storage/chatStorage.ts`](src/lib/storage/chatStorage.ts) rather than direct localStorage blobs.
+- Group records persist MLS state bytes, message history, sync issues, and the [`joinEpoch`](src/lib/storage/chatStorage.ts:20) through [`src/lib/storage/chatStorage.ts`](src/lib/storage/chatStorage.ts) rather than direct localStorage blobs.
 - Key package persistence is handled through the same storage layer, with binary package material converted at the service boundary in [`src/lib/services/chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1).
 - The key package config route in [`src/routes/chat/config/key-packages/+page.svelte`](src/routes/chat/config/key-packages/+page.svelte) should stay forgiving of stale coordinator removals and prefer locally derived group-usage details on key package cards instead of extra remote reads.
 - Prefer small, focused Svelte components and keep route files thin.
@@ -47,6 +47,7 @@
 - For profile pages, prefer deriving shared-group membership from existing local group state before introducing new Svelte Query reads.
 - These coordinator operations are **not** moved into Svelte Query because they are mutations, streaming state, or durable local writes:
   - [`PublishKeyPackage`](src/lib/services/coordinatorClient.ts:197), [`RemoveKeyPackages`](src/lib/services/coordinatorClient.ts:220), [`ConsumeKeyPackage`](src/lib/services/coordinatorClient.ts:211), [`PostGroupMessage`](src/lib/services/coordinatorClient.ts:278), [`StoreWelcome`](src/lib/services/coordinatorClient.ts:264), [`FetchGroupMessages`](src/lib/services/coordinatorClient.ts:293), and [`SubscribeGroupMessages`](src/lib/services/coordinatorClient.ts:302).
+- All fetch/subscribe call sites pass [`since_epoch`](src/lib/contracts/index.ts:112) — derived from [`joinEpoch`](src/lib/services/chatGroups.svelte.ts:89) via [`toWatchableGroup`](src/lib/services/chatGroupWatch.svelte.ts:330) — so the coordinator filters out pre-join messages that are undecryptable. The group creator defaults to `0n` (no filter). When touching fetch/subscribe logic in [`chatGroupWatch.svelte.ts`](src/lib/services/chatGroupWatch.svelte.ts), preserve `sinceEpoch` in every request path.
 - Invalidation rules:
   - After publishing, removing, or consuming a key package, invalidate the matching `available-key-packages` query key.
   - After account change, remove all queries scoped to the previous account via [`queryClient.removeQueries()`](src/lib/services/chatGroupWatch.svelte.ts:82).

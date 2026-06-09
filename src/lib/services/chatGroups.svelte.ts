@@ -86,6 +86,7 @@ export interface StoredChatGroup {
 	removedAtCursor?: number;
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
+	joinEpoch: bigint;
 }
 
 export interface CoordinatorAvailableKeyPackage {
@@ -110,7 +111,8 @@ function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 		syncIssues: group.syncIssues ?? [],
 		status: group.status ?? 'active',
 		removedAtCursor: group.removedAtCursor,
-		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef
+		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
+		joinEpoch: group.joinEpoch ?? 0n
 	};
 }
 
@@ -129,6 +131,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
+		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
 		stateBytes: base64ToBytes(group.stateBase64),
 		messages: group.messages.map((message) => ({
 			...message,
@@ -159,8 +162,9 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
 		metadata,
-		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef
-	});
+		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
+		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : undefined
+	} as StoredChatGroup);
 }
 
 async function loadGroups(ownerPubkey?: string) {

@@ -92,6 +92,7 @@ export function buildStoredChatGroup(params: {
 	stateBase64: string;
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
+	joinEpoch?: bigint;
 }): StoredChatGroup {
 	return {
 		id: params.id,
@@ -104,7 +105,8 @@ export function buildStoredChatGroup(params: {
 		messages: [],
 		syncIssues: [],
 		metadata: params.metadata,
-		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef
+		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef,
+		joinEpoch: params.joinEpoch ?? 0n
 	};
 }
 
@@ -130,7 +132,8 @@ export async function acceptWelcomeToGroup(params: {
 		coordinatorKey: params.welcome.coordinatorKey,
 		stateBase64: params.encodeState(state),
 		metadata,
-		joinedWithKeyPackageRef: params.welcome.kpRef
+		joinedWithKeyPackageRef: params.welcome.kpRef,
+		joinEpoch: state.groupContext.epoch
 	});
 	return group;
 }

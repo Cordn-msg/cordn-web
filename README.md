@@ -27,6 +27,14 @@ The canonical persisted chat payload includes:
 
 The browser services in [`chatGroups.svelte.ts`](src/lib/services/chatGroups.svelte.ts:1) and [`chatKeyPackages.svelte.ts`](src/lib/services/chatKeyPackages.svelte.ts:1) still expose the same app-facing APIs, but persistence routes through the storage layer instead of directly writing large JSON blobs to browser storage.
 
+## Catch-up filter (`sinceEpoch`)
+
+When a new member joins a long-running group via [`acceptWelcomeToGroup`](src/lib/services/chatGroupLifecycle.svelte.ts:111), the MLS epoch at join time is captured from the [`ClientState.groupContext.epoch`](node_modules/ts-mls/dist/src/groupContext.d.ts:11) and stored as [`joinEpoch`](src/lib/services/chatGroups.svelte.ts:89) in [`StoredChatGroup`](src/lib/services/chatGroups.svelte.ts:75). This epoch is passed as [`since_epoch`](src/lib/contracts/index.ts:112) in all fetch/subscribe requests so the coordinator filters out messages from epochs before the member joined — messages that are undecryptable to the new member anyway.
+
+- The [`toWatchableGroup`](src/lib/services/chatGroupWatch.svelte.ts:330) function converts `joinEpoch` (a `bigint`) to the wire-compatible `sinceEpoch` string when `joinEpoch > 0n`, and omits it for the group creator (`0n` = "give me everything").
+- All four fetch/subscribe paths pass `since_epoch`: [`fetchGroupBacklog`](src/lib/services/chatGroupWatch.svelte.ts:436), [`fetchCoordinatorGroupBacklog`](src/lib/services/chatGroupWatch.svelte.ts:463), [`startWatchingGroup`](src/lib/services/chatGroupWatch.svelte.ts:511), and [`startWatchingCoordinatorGroups`](src/lib/services/chatGroupWatch.svelte.ts:634).
+- Legacy groups without `joinEpoch` (from before this feature) default to `0n` via [`migrateStoredGroup`](src/lib/services/chatGroups.svelte.ts:114), which means no filtering — backward-compatible with coordinators that don't yet support `since_epoch`.
+
 ## Chat rendering performance
 
 Long group histories are rendered with [`@tanstack/svelte-virtual`](package.json:65) in [`ChatMessageList.svelte`](src/lib/components/chat/ChatMessageList.svelte:55). The message list only mounts the visible message window plus overscan while preserving stable message ids for reply/reference navigation and unread-reference visibility checks.

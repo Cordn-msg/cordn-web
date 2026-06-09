@@ -325,6 +325,7 @@ type WatchableGroup = {
 	coordinatorKey: string;
 	gid: string;
 	after?: number;
+	sinceEpoch?: string;
 };
 
 function toWatchableGroup(groupId: string): WatchableGroup | null {
@@ -338,7 +339,8 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 		id: group.id,
 		coordinatorKey: group.coordinatorKey,
 		gid: groupIdDecoder.decode(state.groupContext.groupId),
-		after: group.fetchCursor > 0 ? group.fetchCursor : undefined
+		after: group.fetchCursor > 0 ? group.fetchCursor : undefined,
+		sinceEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined
 	};
 }
 
@@ -433,7 +435,8 @@ async function fetchGroupBacklog(group: WatchableGroup) {
 	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 		client.FetchGroupMessages({
 			gid: group.gid,
-			after: group.after
+			after: group.after,
+			since_epoch: group.sinceEpoch
 		})
 	);
 
@@ -455,7 +458,11 @@ async function fetchCoordinatorGroupBacklog(input: {
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
 		client.FetchManyGroupMessages({
-			groups: input.groups.map((group) => ({ gid: group.gid, after: group.after }))
+			groups: input.groups.map((group) => ({
+				gid: group.gid,
+				after: group.after,
+				since_epoch: group.sinceEpoch
+			}))
 		})
 	);
 
@@ -506,7 +513,8 @@ export async function startWatchingGroup(groupId: string) {
 			(client) =>
 				client.SubscribeGroupMessages({
 					gid: subscriptionGroup.gid,
-					after: subscriptionGroup.after
+					after: subscriptionGroup.after,
+					since_epoch: subscriptionGroup.sinceEpoch
 				})
 		);
 
@@ -628,7 +636,11 @@ async function startWatchingCoordinatorGroups(
 		const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
 		const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
 			client.SubscribeManyGroupMessages({
-				groups: subscriptionGroups.map((group) => ({ gid: group.gid, after: group.after }))
+				groups: subscriptionGroups.map((group) => ({
+					gid: group.gid,
+					after: group.after,
+					since_epoch: group.sinceEpoch
+				}))
 			})
 		);
 		const buffers = new Map(

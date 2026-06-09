@@ -17,6 +17,7 @@ export interface StoredChatGroupRecord {
 	status?: 'active' | 'removed';
 	removedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
+	joinEpoch?: string;
 }
 
 export interface StoredChatGroupStateRecord {
