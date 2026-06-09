@@ -23,7 +23,7 @@ export function useProfileHints(
 	getPubkeys: () => string[],
 	opts: UseProfileHintsOptions = {}
 ): ProfileHints {
-	let hints = $state<ProfileHints>({});
+	const hints = $state<ProfileHints>({});
 
 	$effect(() => {
 		const pubkeys = [...new SvelteSet(getPubkeys())];
