@@ -84,6 +84,20 @@ export function getDirectChatTargetPubkeyFromWelcome(welcomeName: string): strin
 	return '';
 }
 
+function emojiToNotificationIcon(emoji: string): string {
+	const canvas = document.createElement('canvas');
+	canvas.width = 64;
+	canvas.height = 64;
+	const ctx = canvas.getContext('2d')!;
+	ctx.font = '48px serif';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	ctx.fillText(emoji, 32, 32);
+	return canvas.toDataURL('image/png');
+}
+
 export function getChatGroupNotificationIcon(group: StoredChatGroup): string | undefined {
-	return group.metadata?.imageUrl || undefined;
+	if (group.metadata?.imageUrl) return group.metadata.imageUrl;
+	if (group.metadata?.icon) return emojiToNotificationIcon(group.metadata.icon);
+	return undefined;
 }
