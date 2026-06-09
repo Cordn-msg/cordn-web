@@ -42,7 +42,6 @@
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Server from '@lucide/svelte/icons/server';
-	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import X from '@lucide/svelte/icons/x';
 
 	const coordinators = $derived.by(() => listChatCoordinators());
@@ -279,11 +278,6 @@
 		<div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
 			<div class="flex items-start gap-3">
 				<ChatMobileSidebarButton />
-				<div
-					class="flex h-11 w-11 items-center justify-center rounded-2xl border border-border bg-card"
-				>
-					<Sparkles class="size-5" />
-				</div>
 				<div class="space-y-1">
 					<h1 class="text-xl font-semibold tracking-tight">Chat home</h1>
 				</div>
