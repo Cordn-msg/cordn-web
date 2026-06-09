@@ -533,10 +533,13 @@ export async function inviteChatGroupMember(input: {
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 				group.metadata
 		};
+		const hasCursor = group.fetchCursor > 0;
+		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.FetchGroupMessages({
 				gid: groupIdDecoder.decode(state.groupContext.groupId),
-				after: group.fetchCursor > 0 ? group.fetchCursor : undefined
+				after: hasCursor ? group.fetchCursor : undefined,
+				since_epoch: sinceEpoch
 			})
 		);
 
@@ -776,6 +779,12 @@ export function listChatGroupSyncIssues(groupId: string): StoredChatSyncIssue[] 
 	return group ? [...group.syncIssues].sort((a, b) => a.cursor - b.cursor) : [];
 }
 
+export function clearChatGroupSyncIssues(groupId: string): void {
+	const group = getChatGroup(groupId);
+	if (!group || group.syncIssues.length === 0) return;
+	replaceGroup(groupId, { ...group, syncIssues: [] });
+}
+
 async function applyIncomingChatGroupMessages(
 	group: StoredChatGroup,
 	messages: Array<{
@@ -831,10 +840,13 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 		const state = decodeStoredGroupState(group);
 
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
+		const hasCursor = group.fetchCursor > 0;
+		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.FetchGroupMessages({
 				gid,
-				after: group.fetchCursor > 0 ? group.fetchCursor : undefined
+				after: hasCursor ? group.fetchCursor : undefined,
+				since_epoch: sinceEpoch
 			})
 		);
 

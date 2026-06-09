@@ -420,6 +420,10 @@ function isRemovedMemberCommitIssue(detail: string): boolean {
 	);
 }
 
+function isRatchetTreeInvariantIssue(detail: string): boolean {
+	return detail.includes('non-blank intermediate node must list leaf node in its unmerged_leaves');
+}
+
 function isRemovedFromGroupState(state: ClientState): boolean {
 	return state.groupActiveState?.kind === 'removedFromGroup';
 }
@@ -614,7 +618,8 @@ export async function ingestChatGroupMessages(params: {
 				isFormerEpochIssue(detail) ||
 				isStaleGenerationIssue(detail) ||
 				isUndecryptableStaleMessageIssue(detail) ||
-				isRemovedMemberCommitIssue(detail)
+				isRemovedMemberCommitIssue(detail) ||
+				isRatchetTreeInvariantIssue(detail)
 			) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);

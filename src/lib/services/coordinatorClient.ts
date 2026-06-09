@@ -125,8 +125,8 @@ export class cordnClient implements coordinatorClient {
 			signer: stableSigner,
 			relayHandler,
 			fallbackOperationalRelayUrls: defaultRelays,
-			isStateless: true,
 			logLevel: 'silent',
+			isStateless: true,
 			openStream: {
 				enabled: true
 			},
@@ -141,8 +141,8 @@ export class cordnClient implements coordinatorClient {
 			signer: ephemeralSigner,
 			relayHandler,
 			fallbackOperationalRelayUrls: defaultRelays,
-			isStateless: true,
 			logLevel: 'silent',
+			isStateless: true,
 			openStream: {
 				enabled: true
 			},

@@ -106,7 +106,7 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		lastCursor: params.workingGroup.lastCursor,
 		fetchCursor: params.workingGroup.fetchCursor,
 		messages: params.workingGroup.messages,
-		syncIssues: params.workingGroup.syncIssues,
+		syncIssues: params.workingGroup.syncIssues.slice(-50),
 		status: params.workingGroup.status,
 		removedAtCursor: params.workingGroup.removedAtCursor
 	};

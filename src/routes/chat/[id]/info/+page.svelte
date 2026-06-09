@@ -13,9 +13,12 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import {
+		clearChatGroupSyncIssues,
+		decodeStoredGroupState,
 		getChatGroup,
 		isChatGroupRemoved,
 		listChatGroupMembers,
+		listChatGroupSyncIssues,
 		listChatGroups
 	} from '$lib/services/chatGroups.svelte';
 	import {
@@ -72,6 +75,35 @@
 	let lastMetadataSignature = $state('');
 	let showDeleteGroupDialog = $state(false);
 	let showGroupId = $state(false);
+	let flushingIssues = $state(false);
+
+	const currentEpoch = $derived.by(() => {
+		if (!group) return null;
+		try {
+			const state = decodeStoredGroupState(group);
+			return state.groupContext.epoch;
+		} catch {
+			return null;
+		}
+	});
+
+	const syncIssues = $derived.by(() => {
+		if (!group) return [];
+		return listChatGroupSyncIssues(group.id);
+	});
+
+	const messageCount = $derived.by(() => group?.messages.length ?? 0);
+	const issueCount = $derived.by(() => group?.syncIssues.length ?? 0);
+
+	async function flushSyncIssues() {
+		if (!group) return;
+		flushingIssues = true;
+		try {
+			clearChatGroupSyncIssues(group.id);
+		} finally {
+			flushingIssues = false;
+		}
+	}
 
 	function syncMetadataForm() {
 		if (!group) return;
@@ -260,6 +292,16 @@
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Created</p>
 								<p class="mt-2 text-sm">{new Date(group.createdAt).toLocaleString()}</p>
+							</div>
+							<div class="rounded-2xl border border-border p-4">
+								<p class="text-xs tracking-wide text-muted-foreground uppercase">Current epoch</p>
+								<p class="mt-2 font-mono text-sm">
+									{#if currentEpoch !== null}
+										{currentEpoch.toString()}
+									{:else}
+										Unavailable
+									{/if}
+								</p>
 							</div>
 						</div>
 
@@ -471,6 +513,86 @@
 					</Collapsible.Trigger>
 					<Collapsible.Content>
 						<div class="mt-6 space-y-6">
+							<Card.Root>
+								<Card.Header>
+									<Card.Title>Group state</Card.Title>
+									<Card.Description>
+										Internal diagnostic fields for this saved group.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content>
+									<div class="grid gap-4 md:grid-cols-2">
+										<div class="rounded-2xl border border-border p-4">
+											<p class="text-xs tracking-wide text-muted-foreground uppercase">
+												Join epoch
+											</p>
+											<p class="mt-2 font-mono text-sm">
+												{group.joinEpoch !== undefined ? group.joinEpoch.toString() : 'N/A'}
+											</p>
+										</div>
+										<div class="rounded-2xl border border-border p-4">
+											<p class="text-xs tracking-wide text-muted-foreground uppercase">
+												Last cursor
+											</p>
+											<p class="mt-2 font-mono text-sm">{group.lastCursor}</p>
+										</div>
+										<div class="rounded-2xl border border-border p-4">
+											<p class="text-xs tracking-wide text-muted-foreground uppercase">
+												Fetch cursor
+											</p>
+											<p class="mt-2 font-mono text-sm">{group.fetchCursor}</p>
+										</div>
+										<div class="rounded-2xl border border-border p-4">
+											<p class="text-xs tracking-wide text-muted-foreground uppercase">Messages</p>
+											<p class="mt-2 font-mono text-sm">{messageCount} stored</p>
+										</div>
+									</div>
+								</Card.Content>
+							</Card.Root>
+
+							{#if issueCount > 0}
+								<Card.Root>
+									<Card.Header>
+										<Card.Title>Sync issues</Card.Title>
+										<Card.Description>
+											{issueCount}
+											{issueCount === 1 ? 'message' : 'messages'} could not be processed during catch-up.
+											Flushing removes them from this view only.
+										</Card.Description>
+									</Card.Header>
+									<Card.Content class="space-y-4">
+										<div class="max-h-64 space-y-2 overflow-y-auto">
+											{#each syncIssues as issue (issue.cursor)}
+												<div class="rounded-xl border border-border p-3 text-sm">
+													<div class="flex items-center justify-between gap-2">
+														<span class="font-mono text-xs text-muted-foreground">
+															Cursor {issue.cursor}
+														</span>
+														<span class="text-xs text-muted-foreground">
+															{new Date(issue.createdAt).toLocaleString()}
+														</span>
+													</div>
+													<p class="mt-1 text-xs break-all text-muted-foreground">
+														{issue.detail.length > 200
+															? issue.detail.slice(0, 200) + '…'
+															: issue.detail}
+													</p>
+												</div>
+											{/each}
+										</div>
+										<Button
+											type="button"
+											variant="outline"
+											onclick={flushSyncIssues}
+											disabled={flushingIssues}
+										>
+											<Trash2 class="mr-2 size-4" />
+											{flushingIssues ? 'Flushing…' : 'Flush sync issues'}
+										</Button>
+									</Card.Content>
+								</Card.Root>
+							{/if}
+
 							<Card.Root>
 								<Card.Header>
 									<Card.Title>Local actions</Card.Title>

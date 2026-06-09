@@ -229,24 +229,6 @@ function groupWatchableGroupsByCoordinator(groups: WatchableGroup[]) {
 	return groupsByCoordinator;
 }
 
-async function syncGroupBacklogs(groups: WatchableGroup[]) {
-	if (groups.length === 0) return;
-
-	const account = requireActiveAccount('You must be logged in to sync group messages');
-	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groups);
-
-	for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
-		await fetchCoordinatorGroupBacklog({
-			account,
-			coordinatorKey,
-			groups: coordinatorGroups
-		}).catch((error) => {
-			console.warn('Failed to sync coordinator group backlog', coordinatorKey, error);
-			throw error;
-		});
-	}
-}
-
 async function runResumeChatGroupWatching(reason: string) {
 	const account = manager.getActive();
 	if (!account) {
@@ -280,10 +262,6 @@ async function runResumeChatGroupWatching(reason: string) {
 
 	try {
 		await stopWatchingGroup(undefined, RUNTIME_RESUME_REASON);
-		void syncGroupBacklogs(groupsToResume).catch((error) => {
-			console.warn('Failed to sync group backlogs during chat resume', error);
-			chatGroupWatchStore.error = error instanceof Error ? error.message : 'Failed to update chats';
-		});
 		void startWatchingAllGroups({ skipBacklogSync: false });
 		chatGroupWatchStore.startup = 'ready';
 		lastSuccessfulResumeAt = Date.now();
@@ -335,13 +313,20 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 	}
 
 	const state = decodeStoredGroupState(group);
-	return {
+	const hasCursor = group.fetchCursor > 0;
+	const watchable: WatchableGroup = {
 		id: group.id,
 		coordinatorKey: group.coordinatorKey,
-		gid: groupIdDecoder.decode(state.groupContext.groupId),
-		after: group.fetchCursor > 0 ? group.fetchCursor : undefined,
-		sinceEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined
+		gid: groupIdDecoder.decode(state.groupContext.groupId)
 	};
+
+	if (hasCursor) {
+		watchable.after = group.fetchCursor;
+	} else if (group.joinEpoch > 0n) {
+		watchable.sinceEpoch = group.joinEpoch.toString();
+	}
+
+	return watchable;
 }
 
 function createWatchBuffer(input: {
@@ -432,6 +417,9 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 
 async function fetchGroupBacklog(group: WatchableGroup) {
 	const account = requireActiveAccount('You must be logged in to watch group messages');
+	const requestParams: Record<string, unknown> = { gid: group.gid };
+	if (group.after) requestParams.after = group.after;
+	if (group.sinceEpoch) requestParams.since_epoch = group.sinceEpoch;
 	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 		client.FetchGroupMessages({
 			gid: group.gid,
@@ -507,6 +495,9 @@ export async function startWatchingGroup(groupId: string) {
 		await fetchGroupBacklog(watchableGroup);
 		const subscriptionGroup = toWatchableGroup(groupId);
 		if (!subscriptionGroup) return;
+		const subParams: Record<string, unknown> = { gid: subscriptionGroup.gid };
+		if (subscriptionGroup.after) subParams.after = subscriptionGroup.after;
+		if (subscriptionGroup.sinceEpoch) subParams.since_epoch = subscriptionGroup.sinceEpoch;
 		const subscription = await withCoordinatorClient(
 			account,
 			subscriptionGroup.coordinatorKey,

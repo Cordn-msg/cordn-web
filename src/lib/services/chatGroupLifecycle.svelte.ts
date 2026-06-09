@@ -126,6 +126,7 @@ export async function acceptWelcomeToGroup(params: {
 		privateKeyPackage
 	});
 
+	const epoch = state.groupContext.epoch;
 	const metadata = getCordnGroupMetadataExtension(state) as GroupMetadataInput | undefined;
 	const group = buildStoredChatGroup({
 		id: getProtocolGroupId(state),
@@ -133,7 +134,7 @@ export async function acceptWelcomeToGroup(params: {
 		stateBase64: params.encodeState(state),
 		metadata,
 		joinedWithKeyPackageRef: params.welcome.kpRef,
-		joinEpoch: state.groupContext.epoch
+		joinEpoch: epoch
 	});
 	return group;
 }

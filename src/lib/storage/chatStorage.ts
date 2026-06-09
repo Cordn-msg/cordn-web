@@ -417,6 +417,7 @@ class IndexedDbChatStorage implements ChatStorage {
 				reject(getExistingGroup.error ?? new Error('IndexedDB request failed'));
 			getExistingGroup.onsuccess = () => {
 				const existing = getExistingGroup.result;
+				const existingFetchCursor = existing?.fetchCursor ?? 0;
 				const isReactivatedGroup = group.status === 'active' && group.removedAtCursor === undefined;
 				groupStore.put({
 					...cloneGroupRecord(group),
@@ -429,9 +430,10 @@ class IndexedDbChatStorage implements ChatStorage {
 							? Math.max(existing.removedAtCursor, group.removedAtCursor)
 							: (existing?.removedAtCursor ?? group.removedAtCursor)
 				});
+				if (group.fetchCursor >= existingFetchCursor) {
+					stateStore.put({ groupId: group.id, stateBytes: cloneBytes(group.stateBytes) });
+				}
 			};
-
-			stateStore.put({ groupId: group.id, stateBytes: cloneBytes(group.stateBytes) });
 			for (const message of group.messages) {
 				messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
 			}
