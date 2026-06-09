@@ -145,6 +145,20 @@ export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string
 	return listUnreadChatGroupReferenceTargets(groupId, pubkey).length;
 }
 
+export interface ChatGroupSummary {
+	preview: string;
+	unreadCount: number;
+	unreadReferenceCount: number;
+}
+
+export function getChatGroupSummary(groupId: string, activePubkey?: string): ChatGroupSummary {
+	return {
+		preview: getLatestChatGroupMessagePreview(groupId),
+		unreadCount: getUnreadChatGroupMessageCount(groupId),
+		unreadReferenceCount: activePubkey ? getUnreadChatGroupReferenceCount(groupId, activePubkey) : 0
+	};
+}
+
 export function getLatestChatGroupMessagePreview(groupId: string): string {
 	const draftPreview = getChatDraftPreview(groupId);
 	if (draftPreview) {

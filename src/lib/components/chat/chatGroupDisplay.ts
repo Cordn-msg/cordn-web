@@ -1,18 +1,23 @@
 import { nip19 } from 'nostr-tools';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
 import { normalizePubKey } from '$lib/utils';
+import type { ProfileContent } from 'applesauce-core/helpers';
 
-export type ChatGroupProfileHints = Record<
-	string,
-	{ name?: string; displayName?: string; nip05?: string }
->;
+export type ChatGroupProfileHints = Record<string, ProfileContent>;
 
 export const DIRECT_CHAT_NAME_PREFIX = ':direct_chat:';
 
-function getProfileDisplayName(pubkey: string, profileHints?: ChatGroupProfileHints): string {
+export function getProfileDisplayName(
+	pubkey: string,
+	profileHints?: ChatGroupProfileHints
+): string {
 	const profile = profileHints?.[pubkey];
 	const npub = nip19.npubEncode(pubkey);
 	return profile?.name || profile?.displayName || profile?.nip05 || `${npub.slice(0, 12)}…`;
+}
+
+export function getGroupActivityAt(group: StoredChatGroup): number {
+	return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
 }
 
 export function getDirectChatTargetPubkey(group: StoredChatGroup) {

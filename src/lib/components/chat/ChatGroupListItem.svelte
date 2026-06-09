@@ -1,17 +1,13 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
-	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { listChatGroupMembers, type StoredChatGroup } from '$lib/services/chatGroups.svelte';
 	import { getChatGroupDisplayTitle, type ChatGroupProfileHints } from './chatGroupDisplay';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import ChatGroupUnreadChips from './ChatGroupUnreadChips.svelte';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { normalizePubKey } from '$lib/utils';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let {
 		group,
@@ -37,14 +33,22 @@
 		profileHints?: ChatGroupProfileHints;
 	} = $props();
 
-	let groupProfileHints = $state<ChatGroupProfileHints>({});
-
 	const isSidebar = $derived(variant === 'sidebar');
 	const memberPubkeys = $derived.by(() =>
 		listChatGroupMembers(group.id)
 			.map((member) => normalizePubKey(member.stablePubkey))
 			.filter((pubkey): pubkey is string => Boolean(pubkey))
 	);
+
+	const groupProfileHints = useProfileHints(
+		() => {
+			if (profileHints) return [];
+			const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
+			return [...new Set(memberPubkeys.filter((pubkey) => pubkey !== activePubkey))];
+		},
+		{ relays: metadataRelays }
+	);
+
 	const hints = $derived(profileHints ?? groupProfileHints);
 	const title = $derived.by(() =>
 		getChatGroupDisplayTitle({
@@ -60,36 +64,6 @@
 		}
 
 		return 'group flex items-center gap-3 rounded-2xl border border-border p-4 transition-colors hover:border-foreground/20 hover:bg-muted/30';
-	});
-
-	$effect(() => {
-		if (profileHints) return;
-
-		const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
-		const pubkeys = [...new Set(memberPubkeys.filter((pubkey) => pubkey !== activePubkey))];
-		const subscriptions = pubkeys.flatMap((pubkey) => [
-			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => groupProfileHints[pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-
-				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 </script>
 

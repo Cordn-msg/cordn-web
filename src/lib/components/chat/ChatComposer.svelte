@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
@@ -12,10 +11,9 @@
 	import X from '@lucide/svelte/icons/x';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { eventStore } from '$lib/services/eventStore';
 	import ProfileCard from '../ProfileCard.svelte';
 	import type { ChatMentionCandidate, ChatMentionReference } from './chat.types';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	const COMPOSER_PREVIEW_WRAP_CLASS =
 		'line-clamp-2 min-w-0 max-w-full text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]';
@@ -55,9 +53,9 @@
 	let mentionQuery = $state('');
 	let mentionStart = $state(-1);
 	let highlightedMentionIndex = $state(0);
-	let profileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
+	const profileHints = useProfileHints(() =>
+		mentionCandidates.map((candidate) => candidate.pubkey)
+	);
 
 	const activeMention = $derived(mentionStart >= 0);
 	const mentionMatches = $derived.by(() => {
@@ -219,34 +217,6 @@
 		}).subscribe();
 
 		return () => sub.unsubscribe();
-	});
-
-	$effect(() => {
-		const subscriptions = mentionCandidates.map((candidate) =>
-			eventStore.model(ProfileModel, candidate.pubkey).subscribe((profile) => {
-				const current = untrack(() => profileHints[candidate.pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-
-				profileHints = {
-					...untrack(() => profileHints),
-					[candidate.pubkey]: next
-				};
-			})
-		);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	$effect(() => {

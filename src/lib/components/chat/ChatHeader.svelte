@@ -5,7 +5,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
-	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -19,9 +18,7 @@
 		toggleGroupWatchAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import {
 		getChatGroup,
@@ -37,10 +34,9 @@
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
-	import { ProfileModel } from 'applesauce-core/models';
 	import { setMode } from 'mode-watcher';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let {
 		groupId,
@@ -96,9 +92,13 @@
 	);
 	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
 	let inviteKeyPackageSearch = $state('');
-	let inviteKeyPackageProfileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
+	const inviteKeyPackageProfileHints = useProfileHints(
+		() => {
+			if (!chatHeaderActionsStore.inviteOpen) return [];
+			return [...new Set(visibleInviteKeyPackagePubkeys)];
+		},
+		{ relays: metadataRelays }
+	);
 	let visibleInviteKeyPackageIds = $state<string[]>([]);
 
 	const filteredInviteKeyPackages = $derived.by(() =>
@@ -157,29 +157,6 @@
 		if (chatHeaderActionsStore.inviteOpen) {
 			void refreshAvailableKeyPackages();
 		}
-	});
-
-	$effect(() => {
-		if (!chatHeaderActionsStore.inviteOpen) return;
-		const uniquePubkeys = [...new Set(visibleInviteKeyPackagePubkeys)];
-		if (uniquePubkeys.length === 0) return;
-		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
-			addressLoader({
-				kind: Metadata,
-				pubkey,
-				relays: metadataRelays
-			}).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-				inviteKeyPackageProfileHints = mergeProfileHint(inviteKeyPackageProfileHints, pubkey, next);
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	$effect(() => {

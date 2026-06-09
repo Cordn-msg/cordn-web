@@ -5,7 +5,6 @@
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
-	import { mergeProfileHint } from '$lib/components/chat/keyPackageProfileHints';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -14,6 +13,7 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import {
+		getCoordinatorLabel,
 		getDefaultChatCoordinator,
 		listChatCoordinators,
 		upsertChatCoordinator
@@ -24,21 +24,17 @@
 		listChatGroups
 	} from '$lib/services/chatGroups.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-	import type { StoredCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import {
 		coordinatorDetailsActionsStore,
 		loadCoordinatorRemoteKeyPackagesAction
 	} from '$lib/services/chatUiActions.svelte';
-	import {
-		getLatestChatGroupMessagePreview,
-		getUnreadChatGroupMessageCount,
-		getUnreadChatGroupReferenceCount
-	} from '$lib/services/chatGroupPresence.svelte';
-	import { addressLoader } from '$lib/services/loaders.svelte';
+	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { goto } from '$app/navigation';
-	import { eventStore } from '$lib/services/eventStore';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
+	import { areStringArraysEqual } from '$lib/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -48,8 +44,6 @@
 	import Server from '@lucide/svelte/icons/server';
 	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import X from '@lucide/svelte/icons/x';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
 
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const groups = $derived.by(() => listChatGroups());
@@ -117,14 +111,11 @@
 	let quickChatError = $state('');
 	let quickChatStartingRef = $state('');
 	let keyPackageDirectorySearch = $state('');
-	let keyPackageProfileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
+	const keyPackageProfileHints = useProfileHints(
+		() => [...new Set(visibleDirectoryKeyPackagePubkeys)],
+		{ relays: metadataRelays }
+	);
 	let visibleDirectoryKeyPackageIds = $state<string[]>([]);
-
-	function areStringArraysEqual(left: string[], right: string[]) {
-		return left.length === right.length && left.every((value, index) => value === right[index]);
-	}
 
 	const visibleDirectoryKeyPackagePubkeys = $derived.by(() => {
 		const visibleIds = new SvelteSet(visibleDirectoryKeyPackageIds);
@@ -148,11 +139,6 @@
 			className: 'bg-muted/20'
 		}))
 	);
-
-	function getCoordinatorLabel(coordinator: StoredCoordinator | undefined) {
-		if (!coordinator) return 'No default coordinator yet';
-		return coordinator.label || `Coordinator ${coordinator.pubkey.slice(0, 8)}`;
-	}
 
 	async function addDefaultCoordinator() {
 		try {
@@ -238,45 +224,9 @@
 		return resolve('/chat/[id]', { id: groupId });
 	}
 
-	function getGroupActivityAt(group: (typeof groups)[number]) {
-		return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
-	}
-
-	function getGroupSummary(groupId: string) {
-		return {
-			preview: getLatestChatGroupMessagePreview(groupId),
-			unreadCount: getUnreadChatGroupMessageCount(groupId),
-			unreadReferenceCount: $activeAccount?.pubkey
-				? getUnreadChatGroupReferenceCount(groupId, $activeAccount.pubkey)
-				: 0
-		};
-	}
-
 	async function refreshKeyPackageDirectory() {
 		await loadCoordinatorRemoteKeyPackagesAction(undefined, { force: true });
 	}
-
-	$effect(() => {
-		const uniquePubkeys = [...new Set(visibleDirectoryKeyPackagePubkeys)];
-		if (uniquePubkeys.length === 0) return;
-		const subscriptions = uniquePubkeys.flatMap((pubkey) => [
-			addressLoader({
-				kind: Metadata,
-				pubkey,
-				relays: metadataRelays
-			}).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-				keyPackageProfileHints = mergeProfileHint(keyPackageProfileHints, pubkey, next);
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
-	});
 
 	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
 		const coordinatorKey = defaultCoordinator?.pubkey ?? coordinators[0]?.pubkey;
@@ -512,7 +462,7 @@
 						{#if hasGroups}
 							<div class="space-y-3">
 								{#each sortedGroups as group (group.id)}
-									{@const summary = getGroupSummary(group.id)}
+									{@const summary = getChatGroupSummary(group.id, $activeAccount?.pubkey)}
 									<ChatGroupListItem
 										{group}
 										href={getGroupHref(group.id)}
@@ -635,7 +585,9 @@
 										</div>
 										<p class="text-2xl font-semibold text-foreground">{coordinators.length}</p>
 										<p class="text-sm text-muted-foreground">
-											Default: {getCoordinatorLabel(defaultCoordinator)}
+											Default: {defaultCoordinator
+												? getCoordinatorLabel(defaultCoordinator.pubkey)
+												: 'No default coordinator yet'}
 										</p>
 									</div>
 									<ExternalLink

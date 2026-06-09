@@ -6,6 +6,7 @@
 	import type { AvailableKeyPackage } from '$lib/contracts';
 	import type { CoordinatorAvailableKeyPackage } from '$lib/services/chatGroups.svelte';
 	import type { StoredKeyPackageRecord } from '$lib/services/chatKeyPackages.svelte';
+	import { areStringArraysEqual } from '$lib/utils';
 
 	type KeyPackageEntry =
 		| StoredKeyPackageRecord
@@ -69,10 +70,6 @@
 				getItemKey: (index) => items[index]?.id ?? index
 			});
 		});
-	}
-
-	function areStringArraysEqual(left: string[], right: string[]) {
-		return left.length === right.length && left.every((value, index) => value === right[index]);
 	}
 
 	function measureVisibleItems() {

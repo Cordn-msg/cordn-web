@@ -36,13 +36,9 @@
 	} from '$lib/services/chatGroups.svelte';
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 	import { serializeChatProfileMentions } from '$lib/services/chatMentions';
-	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { untrack } from 'svelte';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getChatDraft, setChatDraft } from '$lib/services/chatDrafts.svelte';
 
 	let {
@@ -79,9 +75,16 @@
 	let composerFocusKey = $state(0);
 	let optimisticMessages = $state<ChatMessage[]>([]);
 	let handledMessageTarget = $state('');
-	let groupProfileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
+	const groupProfileHints = useProfileHints(
+		() => [
+			...new Set(
+				mentionCandidates
+					.map((candidate) => normalizePubKey(candidate.pubkey))
+					.filter((pubkey) => pubkey && pubkey !== activePubkey)
+			)
+		],
+		{ relays: metadataRelays }
+	);
 	let optimisticMessageSequence = 0;
 	let messageListRef: {
 		scrollToBottom: () => Promise<void>;
@@ -511,37 +514,6 @@
 
 		handledMessageTarget = targetMessage;
 		void messageListRef?.scrollToMessage(targetMessage);
-	});
-
-	$effect(() => {
-		const pubkeys = [
-			...new Set(
-				mentionCandidates
-					.map((candidate) => normalizePubKey(candidate.pubkey))
-					.filter((pubkey) => pubkey && pubkey !== activePubkey)
-			)
-		];
-		const subscriptions = pubkeys.flatMap((pubkey) => [
-			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => groupProfileHints[pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 </script>
 

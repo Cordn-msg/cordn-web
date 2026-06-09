@@ -16,19 +16,19 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import {
-		getLatestChatGroupMessagePreview,
-		getUnreadChatGroupReferenceCount,
-		getUnreadChatGroupMessageCount,
+		getChatGroupSummary,
 		pruneChatGroupPresence
 	} from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
-		getCoordinatorColor,
 		getChatCoordinator,
+		getCoordinatorColor,
+		getCoordinatorLabel,
 		listChatCoordinators
 	} from '$lib/services/chatCoordinators.svelte';
-	import type { ChatGroupProfileHints } from '$lib/components/chat/chatGroupDisplay';
 	import { normalizePubKey } from '$lib/utils';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -59,25 +59,23 @@
 	let keywordQuery = $state('');
 	let highlightedKeywordIndex = $state(0);
 	let profileNames: string[] = $state([]);
-	let groupProfileHints = $state<ChatGroupProfileHints>({});
-	const chatMemberFingerprint = $derived.by(() =>
-		chats
-			.map((chat) => {
-				const members = listChatGroupMembers(chat.id)
-					.map((m) => normalizePubKey(m.stablePubkey))
-					.filter(Boolean)
-					.sort()
-					.join(',');
-				return `${chat.id}:${members}`;
-			})
-			.join('|')
+	const groupProfileHints = useProfileHints(
+		() => {
+			const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
+			return [
+				...new Set(
+					chats.flatMap((chat) =>
+						listChatGroupMembers(chat.id)
+							.map((member) => normalizePubKey(member.stablePubkey))
+							.filter((pubkey): pubkey is string => Boolean(pubkey) && pubkey !== activePubkey)
+					)
+				)
+			];
+		},
+		{ relays: metadataRelays }
 	);
 	const chats = $derived.by(() =>
-		[...listChatGroups()].sort((a, b) => {
-			const aLatest = Math.max(a.createdAt, a.messages.at(-1)?.createdAt ?? 0);
-			const bLatest = Math.max(b.createdAt, b.messages.at(-1)?.createdAt ?? 0);
-			return bLatest - aLatest;
-		})
+		[...listChatGroups()].sort((a, b) => getGroupActivityAt(b) - getGroupActivityAt(a))
 	);
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const resolvedSearchQuery = $derived.by(() =>
@@ -101,41 +99,36 @@
 	});
 	const chatSummaries = $derived.by(() =>
 		Object.fromEntries(
-			chats.map((chat) => [
-				chat.id,
-				{
-					preview: getLatestChatGroupMessagePreview(chat.id),
-					unreadCount: getUnreadChatGroupMessageCount(chat.id),
-					unreadReferenceCount: $activeAccount?.pubkey
-						? getUnreadChatGroupReferenceCount(chat.id, $activeAccount.pubkey)
-						: 0
-				}
-			])
+			chats.map((chat) => [chat.id, getChatGroupSummary(chat.id, $activeAccount?.pubkey)])
 		)
 	);
 	const groupedChats = $derived.by(() => {
 		const groups = new SvelteMap<
 			string,
-			{ pubkey: string; label: string; color: string; chats: ReturnType<typeof listChatGroups> }
+			{
+				pubkey: string;
+				label: string;
+				color: string | undefined;
+				chats: ReturnType<typeof listChatGroups>;
+			}
 		>();
 
 		for (const chat of chats) {
-			const coordinator = getChatCoordinator(chat.coordinatorKey) ?? {
-				pubkey: chat.coordinatorKey,
-				label: `Coordinator ${chat.coordinatorKey.slice(0, 8)}`,
-				color: undefined
-			};
+			const coordinator = getChatCoordinator(chat.coordinatorKey);
+			const pubkey = coordinator?.pubkey ?? chat.coordinatorKey;
+			const label = getCoordinatorLabel(chat.coordinatorKey);
+			const color = coordinator ? getCoordinatorColor(coordinator) : undefined;
 
-			const existing = groups.get(coordinator.pubkey);
+			const existing = groups.get(pubkey);
 			if (existing) {
 				existing.chats.push(chat);
 				continue;
 			}
 
-			groups.set(coordinator.pubkey, {
-				pubkey: coordinator.pubkey,
-				label: coordinator.label,
-				color: getCoordinatorColor(coordinator),
+			groups.set(pubkey, {
+				pubkey,
+				label,
+				color,
 				chats: [chat]
 			});
 		}
@@ -312,46 +305,6 @@
 			loader.unsubscribe();
 			sub.unsubscribe();
 		};
-	});
-
-	$effect(() => {
-		const fingerprint = chatMemberFingerprint;
-		void fingerprint;
-
-		const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
-		const pubkeys = [
-			...new Set(
-				untrack(() => chats).flatMap((chat) =>
-					listChatGroupMembers(chat.id)
-						.map((member) => normalizePubKey(member.stablePubkey))
-						.filter((pubkey): pubkey is string => Boolean(pubkey) && pubkey !== activePubkey)
-				)
-			)
-		];
-
-		const subscriptions = pubkeys.flatMap((pubkey) => [
-			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => groupProfileHints[pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-
-				groupProfileHints = { ...untrack(() => groupProfileHints), [pubkey]: next };
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
 	});
 
 	$effect(() => {

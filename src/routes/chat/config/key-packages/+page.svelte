@@ -17,7 +17,7 @@
 		publishChatKeyPackage,
 		removeChatKeyPackage
 	} from '$lib/services/chatKeyPackages.svelte';
-	import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+	import { getCoordinatorLabel, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -36,13 +36,6 @@
 		createdAt?: number;
 		missing: boolean;
 	};
-
-	function getCoordinatorLabel(coordinatorKey: string) {
-		return (
-			coordinators.find((entry) => entry.pubkey === coordinatorKey)?.label ||
-			`Coordinator ${coordinatorKey.slice(0, 8)}`
-		);
-	}
 
 	function getCoordinator(pubkey: string) {
 		return coordinators.find((entry) => entry.pubkey === pubkey);

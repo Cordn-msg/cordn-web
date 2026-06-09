@@ -108,6 +108,10 @@ export function listChatCoordinators(): StoredCoordinator[] {
 	return sortCoordinators(chatCoordinatorsStore.coordinators);
 }
 
+export function getCoordinatorLabel(pubkey: string): string {
+	return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
+}
+
 export function getChatCoordinator(pubkey: string): StoredCoordinator | undefined {
 	const normalized = normalizePubKey(pubkey);
 	return chatCoordinatorsStore.coordinators.find((entry) => entry.pubkey === normalized);

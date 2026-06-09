@@ -109,6 +109,10 @@ export function buildUniqueSlugId(
 	return id;
 }
 
+export function areStringArraysEqual(left: string[], right: string[]): boolean {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 export function normalizePubKey(pubkey: string): string {
 	const normalized = pubkey.trim().toLowerCase();
 	if (!isHex(normalized)) {

@@ -5,13 +5,12 @@
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import {
 		getChatGroupDisplayTitle,
-		getDirectChatTargetPubkeyFromWelcome,
-		resolveWelcomeDisplayName
+		getDirectChatTargetPubkeyFromWelcome
 	} from '$lib/components/chat/chatGroupDisplay';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
-	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import * as Card from '$lib/components/ui/card';
+	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
@@ -45,12 +44,8 @@
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Server from '@lucide/svelte/icons/server';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
-	import { untrack } from 'svelte';
-	import { eventStore } from '$lib/services/eventStore';
-	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let { params } = $props();
 
@@ -85,40 +80,16 @@
 	);
 	let removingKeyPackageRef = $state('');
 	let removeError = $state('');
-	let welcomeProfileHints = $state<
-		Record<string, { name?: string; displayName?: string; nip05?: string }>
-	>({});
-
-	$effect(() => {
-		const welcomePubkeys = [
+	const welcomeProfileHints = useProfileHints(
+		() => [
 			...new Set(
 				pendingWelcomes
 					.map((n) => getDirectChatTargetPubkeyFromWelcome(n.preview?.name ?? ''))
 					.filter((pubkey) => pubkey && pubkey !== activePubkey)
 			)
-		];
-		const subscriptions = welcomePubkeys.flatMap((pubkey) => [
-			addressLoader({ kind: Metadata, pubkey, relays: metadataRelays }).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => welcomeProfileHints[pubkey]);
-				const next = {
-					name: profile?.name,
-					displayName: profile?.display_name,
-					nip05: profile?.nip05
-				};
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-				welcomeProfileHints = { ...untrack(() => welcomeProfileHints), [pubkey]: next };
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
-	});
+		],
+		{ relays: metadataRelays }
+	);
 
 	const ownedRemoteKeyPackagesWithState = $derived.by(() =>
 		ownedRemoteKeyPackages.map((entry) => {
@@ -215,10 +186,6 @@
 
 	async function acceptWelcome(welcomeId: string) {
 		await acceptWelcomeAction(welcomeId);
-	}
-
-	function getWelcomeAvatarFallback(welcome: (typeof pendingWelcomes)[number]) {
-		return welcome.preview?.icon || welcome.preview?.name?.slice(0, 1) || '#';
 	}
 
 	async function removeOwnedKeyPackage(keyPackageRef: string) {
@@ -535,56 +502,14 @@
 							{:else}
 								<div class="space-y-3">
 									{#each pendingWelcomes as welcome (welcome.id)}
-										<div class="rounded-xl border border-border px-4 py-3">
-											<div class="flex items-start justify-between gap-3">
-												<div class="flex min-w-0 gap-3">
-													<Avatar class="h-12 w-12 shrink-0 border border-border bg-background">
-														{#if welcome.preview?.imageUrl}
-															<AvatarImage
-																src={welcome.preview.imageUrl}
-																alt={welcome.preview.name}
-																class="object-cover"
-															/>
-														{/if}
-														<AvatarFallback class="bg-background text-base font-medium">
-															{getWelcomeAvatarFallback(welcome)}
-														</AvatarFallback>
-													</Avatar>
-													<div class="min-w-0">
-														<p class="font-medium">
-															{resolveWelcomeDisplayName({
-																welcomeName: welcome.preview?.name ?? '',
-																profileHints: welcomeProfileHints
-															})}
-														</p>
-														{#if welcome.preview?.description}
-															<p class="mt-1 text-sm text-muted-foreground">
-																{welcome.preview.description}
-															</p>
-														{/if}
-														<p class="mt-2 text-xs text-muted-foreground">
-															{new Date(welcome.at).toLocaleString()}
-														</p>
-														{#if welcome.acceptedGroupId}
-															<p class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
-																Accepted into {getAcceptedGroupLabel(welcome.acceptedGroupId)}
-															</p>
-														{/if}
-													</div>
-												</div>
-												<div class="flex shrink-0 gap-2">
-													{#if !welcome.acceptedGroupId}
-														<Button
-															type="button"
-															size="sm"
-															onclick={() => acceptWelcome(welcome.id)}
-														>
-															Accept
-														</Button>
-													{/if}
-												</div>
-											</div>
-										</div>
+										<WelcomeNotificationCard
+											notification={welcome}
+											profileHints={welcomeProfileHints}
+											showReject={false}
+											showCoordinatorLabel={false}
+											acceptedGroupLabel={getAcceptedGroupLabel(welcome.acceptedGroupId || '')}
+											onAccept={() => acceptWelcome(welcome.id)}
+										/>
 									{/each}
 								</div>
 							{/if}

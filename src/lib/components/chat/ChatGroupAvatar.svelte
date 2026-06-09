@@ -1,15 +1,11 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { listChatGroupMembers, type StoredChatGroup } from '$lib/services/chatGroups.svelte';
-	import { addressLoader } from '$lib/services/loaders.svelte';
-	import { eventStore } from '$lib/services/eventStore';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 	import { getDirectChatTargetPubkey } from '$lib/components/chat/chatGroupDisplay';
-	import { ProfileModel } from 'applesauce-core/models';
-	import { Metadata } from 'nostr-tools/kinds';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let {
 		group,
@@ -20,10 +16,6 @@
 		class?: string;
 		fallbackClass?: string;
 	} = $props();
-
-	let profileHints = $state<
-		Record<string, { picture?: string; name?: string; displayName?: string }>
-	>({});
 
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
@@ -44,6 +36,8 @@
 		Boolean(group.metadata?.imageUrl || group.metadata?.icon)
 	);
 
+	const profileHints = useProfileHints(() => visibleMemberPubkeys, { relays: metadataRelays });
+
 	function getProfile(pubkey: string) {
 		return profileHints[pubkey];
 	}
@@ -56,39 +50,6 @@
 	function getGroupFallback() {
 		return group.metadata?.icon || group.metadata?.name?.slice(0, 1) || '#';
 	}
-
-	$effect(() => {
-		const subscriptions = visibleMemberPubkeys.flatMap((pubkey) => [
-			addressLoader({
-				kind: Metadata,
-				pubkey,
-				relays: metadataRelays
-			}).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((profile) => {
-				const current = untrack(() => profileHints[pubkey]);
-				const next = {
-					picture: profile?.picture,
-					name: profile?.name,
-					displayName: profile?.display_name
-				};
-
-				if (
-					current?.picture === next.picture &&
-					current?.name === next.name &&
-					current?.displayName === next.displayName
-				) {
-					return;
-				}
-
-				profileHints = {
-					...untrack(() => profileHints),
-					[pubkey]: next
-				};
-			})
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
-	});
 </script>
 
 {#if hasExplicitGroupAvatar || visibleMemberPubkeys.length === 0}

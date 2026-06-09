@@ -1,9 +1,7 @@
 import { nip19 } from 'nostr-tools';
+import type { ChatGroupProfileHints } from './chatGroupDisplay';
 
-export type KeyPackageProfileHints = Record<
-	string,
-	{ name?: string; displayName?: string; nip05?: string }
->;
+export type KeyPackageProfileHints = ChatGroupProfileHints;
 
 export function matchesKeyPackageSearch(input: {
 	pubkey: string;

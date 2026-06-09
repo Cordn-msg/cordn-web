@@ -42,11 +42,10 @@
 	import { ProfileModel } from 'applesauce-core/models';
 	import { nip19 } from 'nostr-tools';
 	import { Metadata } from 'nostr-tools/kinds';
-	import { untrack } from 'svelte';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let { params } = $props();
 
-	type ProfileHint = { name?: string; displayName?: string; nip05?: string };
 	type DecodedProfileIdentifier = { pubkey: string; error: string };
 
 	function decodeProfileIdentifier(identifier: string): string {
@@ -125,7 +124,19 @@
 	let availableKeyPackages = $state<AvailableKeyPackage[]>([]);
 	let loadingAvailableKeyPackages = $state(false);
 	let availableKeyPackagesError = $state('');
-	let sharedGroupProfileHints = $state<Record<string, ProfileHint>>({});
+	const sharedGroupPubkeys = $derived.by(() => {
+		if (!profilePubkey) return [] as string[];
+		return [
+			...new Set(
+				sharedGroups.flatMap((group) =>
+					listChatGroupMembers(group.id, $activeAccount?.pubkey)
+						.map((member) => normalizePubKey(member.stablePubkey))
+						.filter((pubkey) => pubkey && pubkey !== profilePubkey)
+				)
+			)
+		];
+	});
+	const sharedGroupProfileHints = useProfileHints(() => sharedGroupPubkeys);
 	let editingProfile = $state(false);
 	let profileName = $state('');
 	let profileDisplayName = $state('');
@@ -184,43 +195,15 @@
 	});
 
 	$effect(() => {
-		if (!profilePubkey) return;
+		if (sharedGroupPubkeys.length === 0) return;
 
-		const pubkeys = [
-			...new Set(
-				sharedGroups.flatMap((group) =>
-					listChatGroupMembers(group.id, $activeAccount?.pubkey)
-						.map((member) => normalizePubKey(member.stablePubkey))
-						.filter((pubkey) => pubkey && pubkey !== profilePubkey)
-				)
-			)
-		];
-
-		if (pubkeys.length === 0) return;
-
-		const subscriptions = pubkeys.flatMap((pubkey) => [
+		const subscriptions = sharedGroupPubkeys.flatMap((pubkey) => [
 			createUserRelayListByPubkeyLoader(pubkey).subscribe(),
 			addressLoader({
 				kind: Metadata,
 				pubkey,
 				relays: getMetadataLookupRelays(pubkey)
-			}).subscribe(),
-			eventStore.model(ProfileModel, pubkey).subscribe((nextProfile) => {
-				const current = untrack(() => sharedGroupProfileHints[pubkey]);
-				const next = {
-					name: nextProfile?.name,
-					displayName: nextProfile?.display_name,
-					nip05: nextProfile?.nip05
-				};
-				if (
-					current?.name === next.name &&
-					current?.displayName === next.displayName &&
-					current?.nip05 === next.nip05
-				) {
-					return;
-				}
-				sharedGroupProfileHints = { ...untrack(() => sharedGroupProfileHints), [pubkey]: next };
-			})
+			}).subscribe()
 		]);
 
 		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
