@@ -1,0 +1,13 @@
+diff --git a/dist/src/createCommit.js b/dist/src/createCommit.js
+index b78da7c9e866bde0b8b123fa1ff1fbc2cb2871fd..2f676a18be6145bcc7ad11d04bd87b6a63f8d075 100644
+--- a/dist/src/createCommit.js
++++ b/dist/src/createCommit.js
+@@ -39,7 +39,7 @@ export async function createCommitInternal(params) {
+     const wireformat = wireAsPublicMessage ? "mls_public_message" : "mls_private_message";
+     const allProposals = bundleAllProposals(state, extraProposals);
+     const mutableTree = state.ratchetTree.slice();
+-    const res = await applyProposals(state, mutableTree, allProposals, toLeafIndex(state.privatePath.leafIndex), pskIndex, true, clientConfig, context.authService, cipherSuite);
++    const res = await applyProposals(state, mutableTree, allProposals, toLeafIndex(state.privatePath.leafIndex), pskIndex, false, clientConfig, context.authService, cipherSuite);
+     if (res.additionalResult.kind === "externalCommit")
+         throw new UsageError("Cannot create externalCommit as a member");
+     const suspendedPendingReinit = res.additionalResult.kind === "reinit" ? res.additionalResult.reinit : undefined;

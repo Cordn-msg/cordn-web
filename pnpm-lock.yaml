@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  ts-mls@2.0.0-rc.13:
+    hash: 07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c
+    path: patches/ts-mls@2.0.0-rc.13.patch
+
 importers:
 
   .:
@@ -57,8 +62,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       ts-mls:
-        specifier: 2.0.0-rc.12
-        version: 2.0.0-rc.12(@noble/ciphers@2.2.0)
+        specifier: 2.0.0-rc.13
+        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -2120,8 +2125,8 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
-  ts-mls@2.0.0-rc.12:
-    resolution: {integrity: sha512-VAjd6uvRuydk529B/On9GgIinrUiDGGENkf7k8nDCaYZzAN7aOmJIQs9IsG8A2q7o+Ldp1bm0Ds2hhlgeqL7cg==}
+  ts-mls@2.0.0-rc.13:
+    resolution: {integrity: sha512-+AOqU3CsVWByAqsTOybP0ZPZrThBIjTh3BSxEvEVPWc+G3hwH8zbDDs7mr1DhhjPNk+oEbmy6pe5gVZ3Ehnrsg==}
     peerDependencies:
       '@hpke/chacha20poly1305': 1.8.0
       '@hpke/dhkem-x448': 1.8.0
@@ -4215,7 +4220,7 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  ts-mls@2.0.0-rc.12(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0

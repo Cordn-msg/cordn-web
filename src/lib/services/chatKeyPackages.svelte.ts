@@ -191,7 +191,11 @@ export async function createChatKeyPackage(input?: {
 		credential: createCredential(ownerPubkey),
 		cipherSuite,
 		capabilities: createCordnMetadataCapabilities(),
-		extensions: input?.isLastResort ? ensureLastResortKeyPackageExtension([]) : undefined
+		extensions: input?.isLastResort ? ensureLastResortKeyPackageExtension([]) : undefined,
+		lifetime: {
+			notBefore: BigInt(Math.floor(Date.now() / 1000) - 86400),
+			notAfter: BigInt(Math.floor(Date.now() / 1000) + 3153600000)
+		}
 	});
 	const isLastResort = isLastResortKeyPackage(generated.publicPackage);
 
