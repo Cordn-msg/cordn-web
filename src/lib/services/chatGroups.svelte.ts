@@ -168,6 +168,7 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 }
 
 async function loadGroups(ownerPubkey?: string) {
+	await persistGroupsPromise;
 	const storage = await getChatStorage();
 	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
 	if (!normalizedOwner) {

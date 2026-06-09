@@ -108,11 +108,12 @@ if (browser) {
 		autoWatchDisabledGroupIds.clear();
 		chatGroupWatchStore.startup = 'idle';
 		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
+		const groupLoadPromise = reloadChatGroupsForOwner(nextOwnerPubkey);
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
 
 		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
-			await reloadChatGroupsForOwner(nextOwnerPubkey);
+			await groupLoadPromise;
 			if (account) {
 				void resumeChatGroupWatching('active account changed');
 			}

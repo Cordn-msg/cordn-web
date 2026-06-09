@@ -16,7 +16,11 @@
 		getDefaultChatCoordinator,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import { createChatGroup, inviteChatGroupMember } from '$lib/services/chatGroups.svelte';
+	import {
+		createChatGroup,
+		ensureGroupsLoaded,
+		inviteChatGroupMember
+	} from '$lib/services/chatGroups.svelte';
 	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import {
@@ -402,6 +406,8 @@
 		try {
 			startingChat = true;
 			startChatError = '';
+
+			await ensureGroupsLoaded();
 
 			if (!defaultCoordinator || defaultCoordinator.pubkey !== selectedCoordinatorKey) {
 				upsertChatCoordinator({
