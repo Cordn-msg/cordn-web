@@ -36,7 +36,6 @@
 	import { getCoordinatorReconnectTone } from '$lib/services/chatReconnectStatus.svelte';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
-	import Plus from '@lucide/svelte/icons/plus';
 	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
 	import {
@@ -164,10 +163,6 @@
 
 	function getChatHomeHref() {
 		return resolve('/chat');
-	}
-
-	function getCreateGroupHref() {
-		return resolve('/chat/create-group');
 	}
 
 	function getCoordinatorHref(pubkey: string) {
@@ -456,25 +451,6 @@
 	{/if}
 
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4">
-		<a
-			href={getCreateGroupHref()}
-			onclick={closeMobileSidebar}
-			class={`flex items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors ${collapsed ? 'justify-center px-2' : ''} ${isActive('/chat/create-group') ? 'border-primary bg-primary/10 text-foreground' : 'border-dashed border-border text-muted-foreground hover:bg-background hover:text-foreground'}`}
-		>
-			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background"
-			>
-				<Plus class="size-4" />
-			</div>
-
-			{#if !collapsed}
-				<div class="min-w-0">
-					<p class="truncate font-medium">Create group</p>
-					<p class="truncate text-xs text-muted-foreground">Start a new Cordn group</p>
-				</div>
-			{/if}
-		</a>
-
 		{#if isSearching && !collapsed}
 			<div class="space-y-2">
 				<div class="flex items-center justify-between px-1">

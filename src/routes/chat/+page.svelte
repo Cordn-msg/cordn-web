@@ -112,7 +112,10 @@
 	let quickChatStartingRef = $state('');
 	let keyPackageDirectorySearch = $state('');
 	const keyPackageProfileHints = useProfileHints(
-		() => [...new Set(visibleDirectoryKeyPackagePubkeys)],
+		() => {
+			if (keyPackageDirectorySearch) return remoteKeyPackages.map((kp) => kp.pk);
+			return [...new Set(visibleDirectoryKeyPackagePubkeys)];
+		},
 		{ relays: metadataRelays }
 	);
 	let visibleDirectoryKeyPackageIds = $state<string[]>([]);

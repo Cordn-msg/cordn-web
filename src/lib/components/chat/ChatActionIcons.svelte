@@ -5,6 +5,7 @@
 	import { browser } from '$app/environment';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
+	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
@@ -16,6 +17,7 @@
 	import Copy from '@lucide/svelte/icons/copy';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Menu from '@lucide/svelte/icons/menu';
+	import Plus from '@lucide/svelte/icons/plus';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 
 	let {
@@ -29,6 +31,7 @@
 	let notificationsOpen = $state(false);
 	let profileShareOpen = $state(false);
 	let copiedProfileLink = $state(false);
+	let newConversationOpen = $state(false);
 
 	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
 	useWelcomeNotifications($activeAccount?.pubkey);
@@ -87,6 +90,11 @@
 				{/snippet}
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content align="end" class="w-56">
+				<DropdownMenu.Item onclick={() => (newConversationOpen = true)} class="gap-2">
+					<Plus class="size-4" />
+					<span>New conversation</span>
+				</DropdownMenu.Item>
+
 				<DropdownMenu.Item onclick={() => (notificationsOpen = true)} class="gap-2">
 					<span class="relative flex items-center">
 						<Inbox class="size-4" />
@@ -116,7 +124,21 @@
 		</DropdownMenu.Root>
 	</div>
 {:else}
-	<div class="grid gap-2 {$activeAccount ? 'grid-cols-3' : 'grid-cols-2'}">
+	<div class="grid gap-2 {$activeAccount ? 'grid-cols-4' : 'grid-cols-3'}">
+		<button
+			type="button"
+			onclick={() => (newConversationOpen = true)}
+			class="flex items-center justify-center rounded-xl border border-transparent px-3 py-3 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
+			aria-label="New conversation"
+			title="New conversation"
+		>
+			<div
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+			>
+				<Plus class="size-4" />
+			</div>
+		</button>
+
 		<button
 			type="button"
 			onclick={() => (notificationsOpen = true)}
@@ -213,3 +235,5 @@
 		</Dialog.Content>
 	</Dialog.Root>
 {/if}
+
+<NewConversationDialog bind:open={newConversationOpen} {onNavigate} />
