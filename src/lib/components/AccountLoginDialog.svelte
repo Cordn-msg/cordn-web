@@ -168,7 +168,7 @@
 		await copyToClipboard(toNsec(privateKey));
 	}
 
-	async function generateRemoteSignerUri() {
+	async function generateRemoteSignerUri(openApp = false) {
 		try {
 			loading = true;
 			error = '';
@@ -185,6 +185,9 @@
 			});
 
 			nostrConnectUri = uri;
+
+			// Open the URI to launch a remote signer app (e.g. Amber)
+			if (openApp) window.location.href = uri;
 
 			remoteSignerStep = 'connecting';
 
@@ -473,10 +476,13 @@
 							<p class="text-sm text-muted-foreground">
 								Connect using a remote signer app that supports NIP-46 (Nostr Connect).
 							</p>
-							<div class="flex gap-2">
+							<div class="flex flex-col gap-2">
+								<Button class="w-full" onclick={() => generateRemoteSignerUri(true)}>
+									Open Remote Signer
+								</Button>
 								<Button
 									variant="outline"
-									class="flex-1"
+									class="w-full"
 									onclick={() => (remoteSignerStep = 'manual')}
 								>
 									Enter Bunker URI
