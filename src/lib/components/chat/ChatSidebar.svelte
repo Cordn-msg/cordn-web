@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -51,7 +52,8 @@
 		mobileSidebarOpen: Writable<boolean>;
 	} = $props();
 
-	let collapsed = $state(false);
+	const SIDEBAR_COLLAPSED_KEY = 'cordn.chatSidebarCollapsed';
+	let collapsed = $state(browser ? localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' : false);
 	let searchQuery = $state('');
 	let debouncedSearchQuery = $state('');
 	let searchInputRef: HTMLInputElement | null = $state(null);
@@ -314,6 +316,13 @@
 		}, 200);
 
 		return () => clearTimeout(timer);
+	});
+
+	$effect(() => {
+		const value = collapsed;
+		if (browser) {
+			localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? '1' : '0');
+		}
 	});
 
 	const sidebarClass = $derived(collapsed ? 'md:w-20 px-2.5' : 'md:w-72 px-3');

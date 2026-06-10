@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import WelcomeNotificationsPanel from '$lib/components/chat/WelcomeNotificationsPanel.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
@@ -13,6 +15,7 @@
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Inbox from '@lucide/svelte/icons/inbox';
+	import Menu from '@lucide/svelte/icons/menu';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 
 	let {
@@ -58,20 +61,66 @@
 			copiedProfileLink = false;
 		}, 1500);
 	}
+
+	async function navigateToConfig() {
+		onNavigate();
+		await goto(resolve('/chat/config'));
+	}
 </script>
 
-<div
-	class="grid gap-2 {collapsed
-		? 'grid-cols-1 justify-items-center'
-		: $activeAccount
-			? 'grid-cols-3'
-			: 'grid-cols-2'}"
->
-	<Dialog.Root bind:open={notificationsOpen}>
-		<Dialog.Trigger
-			class="relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {collapsed
-				? 'w-full max-w-14 px-2'
-				: ''} {notificationsOpen
+{#if collapsed}
+	<div class="flex justify-center">
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<Button
+						{...props}
+						type="button"
+						variant="ghost"
+						size="icon"
+						class="h-12 w-12 rounded-xl"
+						aria-label="Open actions"
+						title="Open actions"
+					>
+						<Menu class="size-5" />
+					</Button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-56">
+				<DropdownMenu.Item onclick={() => (notificationsOpen = true)} class="gap-2">
+					<span class="relative flex items-center">
+						<Inbox class="size-4" />
+						{#if unreadWelcomeNotifications > 0}
+							<span
+								class="ml-2 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+							>
+								{unreadWelcomeNotifications}
+							</span>
+						{/if}
+					</span>
+					<span>Notifications</span>
+				</DropdownMenu.Item>
+
+				{#if $activeAccount}
+					<DropdownMenu.Item onclick={() => (profileShareOpen = true)} class="gap-2">
+						<QrCodeIcon class="size-4" />
+						<span>Share profile</span>
+					</DropdownMenu.Item>
+				{/if}
+
+				<DropdownMenu.Item onclick={navigateToConfig} class="gap-2">
+					<Bolt class="size-4" />
+					<span>Config</span>
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	</div>
+{:else}
+	<div class="grid gap-2 {$activeAccount ? 'grid-cols-3' : 'grid-cols-2'}">
+		<button
+			type="button"
+			onclick={() => (notificationsOpen = true)}
+			class="relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {notificationsOpen
 				? 'border-primary bg-primary/10 text-foreground'
 				: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
 			aria-label="Open notifications"
@@ -89,25 +138,13 @@
 					</span>
 				{/if}
 			</div>
-		</Dialog.Trigger>
+		</button>
 
-		<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),42rem)] sm:max-w-2xl">
-			<Dialog.Header>
-				<Dialog.Description>
-					Unified inbox for welcomes fetched across known coordinators.
-				</Dialog.Description>
-			</Dialog.Header>
-
-			<WelcomeNotificationsPanel maxHeightClass="h-[min(26rem,60vh)]" />
-		</Dialog.Content>
-	</Dialog.Root>
-
-	{#if $activeAccount}
-		<Dialog.Root bind:open={profileShareOpen}>
-			<Dialog.Trigger
-				class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {collapsed
-					? 'w-full max-w-14 px-2'
-					: ''} {profileShareOpen
+		{#if $activeAccount}
+			<button
+				type="button"
+				onclick={() => (profileShareOpen = true)}
+				class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {profileShareOpen
 					? 'border-primary bg-primary/10 text-foreground'
 					: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
 				aria-label="Share profile"
@@ -118,47 +155,61 @@
 				>
 					<QrCodeIcon class="size-4" />
 				</div>
-			</Dialog.Trigger>
+			</button>
+		{/if}
 
-			<Dialog.Content class="sm:max-w-md">
-				<Dialog.Header>
-					<Dialog.Title>Share your profile</Dialog.Title>
-					<Dialog.Description>
-						Share your public Cordn profile link as a QR code.
-					</Dialog.Description>
-				</Dialog.Header>
-
-				<div class="flex flex-col items-center gap-4 py-2">
-					<QrCode data={profileShareUrl} size={220} />
-					<p
-						class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
-					>
-						{profileShareUrl}
-					</p>
-					<Button type="button" variant="outline" class="w-full" onclick={copyProfileShareUrl}>
-						<Copy class="mr-2 size-4" />
-						{copiedProfileLink ? 'Copied profile link' : 'Copy profile link'}
-					</Button>
-				</div>
-			</Dialog.Content>
-		</Dialog.Root>
-	{/if}
-
-	<a
-		href={resolve('/chat/config')}
-		onclick={onNavigate}
-		class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {collapsed
-			? 'w-full max-w-14 px-2'
-			: ''} {isActive('/chat/config')
-			? 'border-primary bg-primary/10 text-foreground'
-			: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
-		aria-label="Open config"
-		title="Open config"
-	>
-		<div
-			class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+		<a
+			href={resolve('/chat/config')}
+			onclick={onNavigate}
+			class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {isActive(
+				'/chat/config'
+			)
+				? 'border-primary bg-primary/10 text-foreground'
+				: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
+			aria-label="Open config"
+			title="Open config"
 		>
-			<Bolt class="size-4" />
-		</div>
-	</a>
-</div>
+			<div
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+			>
+				<Bolt class="size-4" />
+			</div>
+		</a>
+	</div>
+{/if}
+
+<Dialog.Root bind:open={notificationsOpen}>
+	<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),42rem)] sm:max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Description>
+				Unified inbox for welcomes fetched across known coordinators.
+			</Dialog.Description>
+		</Dialog.Header>
+
+		<WelcomeNotificationsPanel maxHeightClass="h-[min(26rem,60vh)]" />
+	</Dialog.Content>
+</Dialog.Root>
+
+{#if $activeAccount}
+	<Dialog.Root bind:open={profileShareOpen}>
+		<Dialog.Content class="sm:max-w-md">
+			<Dialog.Header>
+				<Dialog.Title>Share your profile</Dialog.Title>
+				<Dialog.Description>Share your public Cordn profile link as a QR code.</Dialog.Description>
+			</Dialog.Header>
+
+			<div class="flex flex-col items-center gap-4 py-2">
+				<QrCode data={profileShareUrl} size={220} />
+				<p
+					class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
+				>
+					{profileShareUrl}
+				</p>
+				<Button type="button" variant="outline" class="w-full" onclick={copyProfileShareUrl}>
+					<Copy class="mr-2 size-4" />
+					{copiedProfileLink ? 'Copied profile link' : 'Copy profile link'}
+				</Button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Root>
+{/if}
