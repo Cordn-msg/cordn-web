@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { cn, copyToClipboard } from '$lib/utils';
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
 	import type { Snippet } from 'svelte';
@@ -127,6 +128,9 @@
 				onclick={onAction}
 				disabled={actionDisabled}
 			>
+				{#if actionDisabled}
+					<Spinner class="mr-1 size-3" />
+				{/if}
 				{actionLabel}
 			</Button>
 		{/if}

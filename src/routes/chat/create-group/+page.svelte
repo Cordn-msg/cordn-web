@@ -8,6 +8,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		getDefaultChatCoordinator,
@@ -333,6 +334,9 @@
 
 					<div class="flex justify-end">
 						<Button type="submit" disabled={loading || !name.trim() || !coordinatorKey.trim()}>
+							{#if loading}
+								<Spinner class="mr-2 size-4" />
+							{/if}
 							{loading ? 'Creating…' : 'Create group'}
 						</Button>
 					</div>

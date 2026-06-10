@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
@@ -347,6 +348,9 @@
 									onclick={refreshAvailableKeyPackages}
 									disabled={chatHeaderActionsStore.inviteLoading || !$activeAccount}
 								>
+									{#if chatHeaderActionsStore.inviteLoading}
+										<Spinner class="mr-1 size-3" />
+									{/if}
 									{chatHeaderActionsStore.inviteLoading ? 'Refreshing…' : 'Refresh'}
 								</Button>
 							</div>

@@ -43,11 +43,13 @@ export const chatWelcomeNotificationsStore = $state<{
 	entries: WelcomeNotificationEntry[];
 	lastFetchedAtByCoordinator: Record<string, number>;
 	loading: boolean;
+	submittingIds: Record<string, boolean>;
 	error: string;
 }>({
 	entries: [],
 	lastFetchedAtByCoordinator: {},
 	loading: false,
+	submittingIds: {},
 	error: ''
 });
 
@@ -307,6 +309,24 @@ export function markWelcomeDismissed(id: string) {
 		entry.id === id ? { ...entry, status: 'dismissed', dismissedAt: Date.now() } : entry
 	);
 	saveNotifications();
+}
+
+export function setWelcomeSubmitting(id: string) {
+	chatWelcomeNotificationsStore.submittingIds = {
+		...chatWelcomeNotificationsStore.submittingIds,
+		[id]: true
+	};
+}
+
+export function clearWelcomeSubmitting(id: string) {
+	chatWelcomeNotificationsStore.submittingIds = {
+		...chatWelcomeNotificationsStore.submittingIds,
+		[id]: false
+	};
+}
+
+export function isWelcomeSubmitting(id: string): boolean {
+	return chatWelcomeNotificationsStore.submittingIds[id] === true;
 }
 
 export function listWelcomeNotifications(): WelcomeNotificationEntry[] {

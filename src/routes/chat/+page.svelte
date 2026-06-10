@@ -8,6 +8,7 @@
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { Input } from '$lib/components/ui/input';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -346,6 +347,9 @@
 																settingDefaultCoordinator ||
 																!hasAccount}
 														>
+															{#if creatingKeyPackage}
+																<Spinner class="mr-2 size-4" />
+															{/if}
 															{creatingKeyPackage ? 'Bootstrapping…' : 'Use recommended setup'}
 														</Button>
 													</div>
@@ -367,6 +371,9 @@
 																	disabled={settingDefaultCoordinator}
 																	variant="outline"
 																>
+																	{#if settingDefaultCoordinator}
+																		<Spinner class="mr-2 size-4" />
+																	{/if}
 																	{settingDefaultCoordinator
 																		? 'Saving…'
 																		: 'Use default coordinator'}
@@ -376,6 +383,9 @@
 																	disabled={creatingKeyPackage || !defaultCoordinator}
 																	variant="outline"
 																>
+																	{#if creatingKeyPackage}
+																		<Spinner class="mr-2 size-4" />
+																	{/if}
 																	{creatingKeyPackage ? 'Creating…' : 'Create regular key package'}
 																</Button>
 																<Button href={resolve('/chat/coordinators')} variant="ghost"
@@ -499,6 +509,9 @@
 								disabled={creatingKeyPackage || !$activeAccount || !defaultCoordinator}
 								variant="outline"
 							>
+								{#if creatingKeyPackage}
+									<Spinner class="mr-2 size-4" />
+								{/if}
 								{creatingKeyPackage ? 'Creating…' : 'Create key package'}
 							</Button>
 							<Button
@@ -506,6 +519,9 @@
 								disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
 								variant="outline"
 							>
+								{#if coordinatorDetailsActionsStore.loadingKeyPackages}
+									<Spinner class="mr-2 size-4" />
+								{/if}
 								{coordinatorDetailsActionsStore.loadingKeyPackages ? 'Refreshing…' : 'Refresh'}
 							</Button>
 						</div>

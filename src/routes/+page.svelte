@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import Github from '@lucide/svelte/icons/github';
+	import Github from '@lucide/svelte/icons/git-branch';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import MessageSquare from '@lucide/svelte/icons/message-square';
 	import Server from '@lucide/svelte/icons/server';

@@ -5,6 +5,7 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -301,6 +302,9 @@
 
 							<div class="flex justify-end">
 								<Button type="button" onclick={handleCreate} disabled={loading}>
+									{#if loading}
+										<Spinner class="mr-2 size-4" />
+									{/if}
 									{loading ? 'Generating…' : 'Generate key package'}
 								</Button>
 							</div>
@@ -478,7 +482,11 @@
 									onclick={loadRemoteKeyPackages}
 									disabled={loadingRemoteKeyPackages}
 								>
-									<Boxes class="mr-2 size-4" />
+									{#if loadingRemoteKeyPackages}
+										<Spinner class="mr-2 size-4" />
+									{:else}
+										<Boxes class="mr-2 size-4" />
+									{/if}
 									{loadingRemoteKeyPackages
 										? 'Loading remote key packages…'
 										: remoteKeyPackagesLoaded

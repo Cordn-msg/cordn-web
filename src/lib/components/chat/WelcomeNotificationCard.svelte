@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { resolveWelcomeDisplayName } from '$lib/components/chat/chatGroupDisplay';
 	import type { ProfileHints } from '$lib/services/useProfileHints.svelte';
 	import type { WelcomeNotificationEntry } from '$lib/services/chatWelcomeNotifications.svelte';
@@ -12,6 +13,7 @@
 		showCoordinatorLabel = true,
 		acceptedGroupLabel = 'a local group',
 		coordinatorLabel = '',
+		submitting = false,
 		onAccept,
 		onReject
 	}: {
@@ -21,6 +23,7 @@
 		showCoordinatorLabel?: boolean;
 		acceptedGroupLabel?: string;
 		coordinatorLabel?: string;
+		submitting?: boolean;
 		onAccept: () => void;
 		onReject?: () => void;
 	} = $props();
@@ -78,10 +81,25 @@
 		</div>
 		<div class="flex flex-wrap gap-1.5 sm:max-w-[13rem] sm:justify-end">
 			{#if !notification.acceptedGroupId}
-				<Button type="button" size="sm" class="h-8 px-3" onclick={onAccept}>Accept</Button>
+				<Button type="button" size="sm" class="h-8 px-3" onclick={onAccept} disabled={submitting}>
+					{#if submitting}
+						<Spinner class="mr-1 size-3" />
+					{/if}
+					{submitting ? 'Accepting…' : 'Accept'}
+				</Button>
 				{#if showReject && onReject}
-					<Button type="button" variant="destructive" size="sm" class="h-8 px-3" onclick={onReject}>
-						Reject
+					<Button
+						type="button"
+						variant="destructive"
+						size="sm"
+						class="h-8 px-3"
+						onclick={onReject}
+						disabled={submitting}
+					>
+						{#if submitting}
+							<Spinner class="mr-1 size-3" />
+						{/if}
+						{submitting ? 'Rejecting…' : 'Reject'}
 					</Button>
 				{/if}
 			{/if}

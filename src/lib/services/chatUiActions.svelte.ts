@@ -14,8 +14,10 @@ import {
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
 import {
 	chatWelcomeNotificationsStore,
+	clearWelcomeSubmitting,
 	getWelcomeNotification,
-	markWelcomeDismissed
+	markWelcomeDismissed,
+	setWelcomeSubmitting
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
 	chatGroupWatchStore,
@@ -352,6 +354,7 @@ export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKe
 
 export async function acceptWelcomeAction(welcomeId: string) {
 	chatWelcomeNotificationsStore.error = '';
+	setWelcomeSubmitting(welcomeId);
 	try {
 		const group = await acceptChatWelcome({ welcomeId });
 		await goto(resolve('/chat/[id]', { id: group.id }));
@@ -363,11 +366,14 @@ export async function acceptWelcomeAction(welcomeId: string) {
 				? error.message
 				: `Failed to accept welcome${notification ? ` ${notification.kpRef}` : ''}`;
 		return false;
+	} finally {
+		clearWelcomeSubmitting(welcomeId);
 	}
 }
 
 export async function rejectWelcomeAction(welcomeId: string) {
 	chatWelcomeNotificationsStore.error = '';
+	setWelcomeSubmitting(welcomeId);
 	try {
 		markWelcomeDismissed(welcomeId);
 		return true;
@@ -378,5 +384,7 @@ export async function rejectWelcomeAction(welcomeId: string) {
 				? error.message
 				: `Failed to reject welcome${notification ? ` ${notification.kpRef}` : ''}`;
 		return false;
+	} finally {
+		clearWelcomeSubmitting(welcomeId);
 	}
 }

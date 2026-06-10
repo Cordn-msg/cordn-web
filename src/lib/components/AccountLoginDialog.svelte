@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button, buttonVariants } from '$lib/components/ui/button/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
@@ -549,7 +550,13 @@
 			{#if selectedTab === 'remote' && remoteSignerStep === 'connecting'}
 				<!-- No connect button when waiting for remote signer -->
 			{:else}
-				<Button onclick={handleSubmit} disabled={selectedTab === 'simple' && !privateKey}>
+				<Button
+					onclick={handleSubmit}
+					disabled={loading || (selectedTab === 'simple' && !privateKey)}
+				>
+					{#if loading}
+						<Spinner class="mr-2 size-4" />
+					{/if}
 					{loading
 						? 'Connecting...'
 						: selectedTab === 'remote' && remoteSignerStep === 'manual'

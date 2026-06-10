@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import {
@@ -30,6 +31,7 @@
 	} from '$lib/services/chatGroups.svelte';
 	import {
 		chatWelcomeNotificationsStore,
+		isWelcomeSubmitting,
 		listWelcomeNotificationsForCoordinator
 	} from '$lib/services/chatWelcomeNotifications.svelte';
 	import {
@@ -400,7 +402,11 @@
 										onclick={loadRemoteKeyPackages}
 										disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
 									>
-										<Boxes class="mr-2 size-4" />
+										{#if coordinatorDetailsActionsStore.loadingKeyPackages}
+											<Spinner class="mr-2 size-4" />
+										{:else}
+											<Boxes class="mr-2 size-4" />
+										{/if}
 										{coordinatorDetailsActionsStore.loadingKeyPackages
 											? 'Loading remote key packages…'
 											: hasCachedRemoteKeyPackages
@@ -486,7 +492,11 @@
 						<div class="space-y-3">
 							<div class="flex flex-wrap gap-2">
 								<Button type="button" onclick={loadPendingWelcomes} disabled={loadingWelcomes}>
-									<Inbox class="mr-2 size-4" />
+									{#if loadingWelcomes}
+										<Spinner class="mr-2 size-4" />
+									{:else}
+										<Inbox class="mr-2 size-4" />
+									{/if}
 									{loadingWelcomes ? 'Fetching welcomes…' : 'Fetch pending welcomes'}
 								</Button>
 							</div>
@@ -508,6 +518,7 @@
 											showReject={false}
 											showCoordinatorLabel={false}
 											acceptedGroupLabel={getAcceptedGroupLabel(welcome.acceptedGroupId || '')}
+											submitting={isWelcomeSubmitting(welcome.id)}
 											onAccept={() => acceptWelcome(welcome.id)}
 										/>
 									{/each}

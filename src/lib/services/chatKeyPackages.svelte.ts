@@ -187,14 +187,16 @@ export async function createChatKeyPackage(input?: {
 }> {
 	const ownerPubkey = getActivePubkey();
 	const cipherSuite = await getCipherSuite();
+	const nowSeconds = Math.floor(Date.now() / 1000);
 	const generated = await generateKeyPackage({
 		credential: createCredential(ownerPubkey),
 		cipherSuite,
 		capabilities: createCordnMetadataCapabilities(),
 		extensions: input?.isLastResort ? ensureLastResortKeyPackageExtension([]) : undefined,
 		lifetime: {
-			notBefore: BigInt(Math.floor(Date.now() / 1000) - 86400),
-			notAfter: BigInt(Math.floor(Date.now() / 1000) + 3153600000)
+			notBefore: BigInt(nowSeconds - 86400),
+			// ~100-year notAfter: effectively disables MLS-level key package expiry
+			notAfter: BigInt(nowSeconds + 3153600000)
 		}
 	});
 	const isLastResort = isLastResortKeyPackage(generated.publicPackage);

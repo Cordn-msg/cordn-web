@@ -5,6 +5,7 @@
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import * as Card from '$lib/components/ui/card';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -381,7 +382,11 @@
 													type="submit"
 													disabled={chatGroupInfoActionsStore.metadataSubmitting || !metadataDirty}
 												>
-													<Save class="mr-2 size-4" />
+													{#if chatGroupInfoActionsStore.metadataSubmitting}
+														<Spinner class="mr-2 size-4" />
+													{:else}
+														<Save class="mr-2 size-4" />
+													{/if}
 													{chatGroupInfoActionsStore.metadataSubmitting
 														? 'Saving…'
 														: 'Save metadata'}
@@ -472,16 +477,20 @@
 									</div>
 
 									{#if canManageMembers && !member.isSelf}
+										{@const isRemovingMember =
+											chatGroupInfoActionsStore.removeSubmitting === member.stablePubkey}
 										<Button
 											type="button"
 											variant="outline"
 											onclick={() => removeMember(member.stablePubkey)}
-											disabled={chatGroupInfoActionsStore.removeSubmitting === member.stablePubkey}
+											disabled={isRemovingMember}
 										>
-											<UserRoundX class="mr-2 size-4" />
-											{chatGroupInfoActionsStore.removeSubmitting === member.stablePubkey
-												? 'Removing…'
-												: 'Remove'}
+											{#if isRemovingMember}
+												<Spinner class="mr-2 size-4" />
+											{:else}
+												<UserRoundX class="mr-2 size-4" />
+											{/if}
+											{isRemovingMember ? 'Removing…' : 'Remove'}
 										</Button>
 									{/if}
 								</div>
@@ -586,7 +595,11 @@
 											onclick={flushSyncIssues}
 											disabled={flushingIssues}
 										>
-											<Trash2 class="mr-2 size-4" />
+											{#if flushingIssues}
+												<Spinner class="mr-2 size-4" />
+											{:else}
+												<Trash2 class="mr-2 size-4" />
+											{/if}
 											{flushingIssues ? 'Flushing…' : 'Flush sync issues'}
 										</Button>
 									</Card.Content>
@@ -612,7 +625,11 @@
 										onclick={() => (showDeleteGroupDialog = true)}
 										disabled={chatGroupInfoActionsStore.deleteSubmitting}
 									>
-										<Trash2 class="mr-2 size-4" />
+										{#if chatGroupInfoActionsStore.deleteSubmitting}
+											<Spinner class="mr-2 size-4" />
+										{:else}
+											<Trash2 class="mr-2 size-4" />
+										{/if}
 										{chatGroupInfoActionsStore.deleteSubmitting
 											? 'Deleting…'
 											: 'Delete local group'}
@@ -647,6 +664,9 @@
 						onclick={deleteGroup}
 						disabled={chatGroupInfoActionsStore.deleteSubmitting}
 					>
+						{#if chatGroupInfoActionsStore.deleteSubmitting}
+							<Spinner class="mr-2 size-4" />
+						{/if}
 						{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete local group'}
 					</Button>
 				</Dialog.Footer>

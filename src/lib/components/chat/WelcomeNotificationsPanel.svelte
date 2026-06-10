@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import WelcomeNotificationCard from './WelcomeNotificationCard.svelte';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -14,6 +15,7 @@
 	import { useWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 	import {
 		chatWelcomeNotificationsStore,
+		isWelcomeSubmitting,
 		listWelcomeNotifications,
 		markAllWelcomeNotificationsRead
 	} from '$lib/services/chatWelcomeNotifications.svelte';
@@ -77,6 +79,9 @@
 				onclick={refreshWelcomeNotifications}
 				disabled={chatWelcomeNotificationsStore.loading || !$activeAccount}
 			>
+				{#if chatWelcomeNotificationsStore.loading}
+					<Spinner class="mr-1 size-3" />
+				{/if}
 				{chatWelcomeNotificationsStore.loading ? 'Refreshing…' : 'Refresh'}
 			</Button>
 		</div>
@@ -104,6 +109,7 @@
 						{notification}
 						profileHints={groupProfileHints}
 						coordinatorLabel={getCoordinatorLabel(notification.coordinatorKey)}
+						submitting={isWelcomeSubmitting(notification.id)}
 						onAccept={() => acceptWelcome(notification.id)}
 						onReject={() => rejectWelcome(notification.id)}
 					/>
@@ -118,6 +124,7 @@
 					{notification}
 					profileHints={groupProfileHints}
 					coordinatorLabel={getCoordinatorLabel(notification.coordinatorKey)}
+					submitting={isWelcomeSubmitting(notification.id)}
 					onAccept={() => acceptWelcome(notification.id)}
 					onReject={() => rejectWelcome(notification.id)}
 				/>

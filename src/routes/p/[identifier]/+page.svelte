@@ -7,6 +7,7 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import { fetchPublicCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 	import type { AvailableKeyPackage } from '$lib/contracts';
@@ -19,15 +20,13 @@
 	import {
 		createChatGroup,
 		ensureGroupsLoaded,
-		inviteChatGroupMember
-	} from '$lib/services/chatGroups.svelte';
-	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
-	import {
+		inviteChatGroupMember,
 		listChatGroupMembers,
 		listChatGroups,
 		type StoredChatGroup
 	} from '$lib/services/chatGroups.svelte';
+	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
+	import { eventStore } from '$lib/services/eventStore';
 	import {
 		addressLoader,
 		createUserRelayListByPubkeyLoader,
@@ -623,7 +622,11 @@
 										>Cancel</Button
 									>
 									<Button type="submit" disabled={submittingProfile || !profileDirty}>
-										<Save class="mr-2 size-4" />
+										{#if submittingProfile}
+											<Spinner class="mr-2 size-4" />
+										{:else}
+											<Save class="mr-2 size-4" />
+										{/if}
 										{submittingProfile ? 'Saving…' : 'Save profile'}
 									</Button>
 								</div>
