@@ -27,6 +27,7 @@
 	import {
 		getChatGroup,
 		isChatGroupRemoved,
+		isChatGroupPoisoned,
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
@@ -85,6 +86,7 @@
 	);
 	const group = $derived.by(() => (groupId ? getChatGroup(groupId) : undefined));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
+	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
 	const canInvite = $derived.by(() => {
 		if (!$activeAccount || !group) return false;
 		if (isRemoved) return false;
@@ -508,6 +510,11 @@
 	{#if isRemoved}
 		<p class="px-4 pb-3 text-sm text-muted-foreground md:px-6">
 			This group is inactive for your account. Live watching and sending are disabled.
+		</p>
+	{:else if isPoisoned}
+		<p class="px-4 pb-3 text-sm text-destructive md:px-6">
+			This group's local state is corrupted. New messages cannot be decrypted. Contact a group admin
+			to request a fresh invite.
 		</p>
 	{/if}
 

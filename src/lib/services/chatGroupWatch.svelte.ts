@@ -5,10 +5,13 @@ import {
 	decodeStoredGroupState,
 	getChatGroup,
 	isChatGroupRemoved,
+	isChatGroupPoisoned,
 	listChatGroups,
 	ingestIncomingChatGroupMessages,
-	reloadChatGroupsForOwner
+	reloadChatGroupsForOwner,
+	replaceGroup
 } from '$lib/services/chatGroups.svelte';
+import type { StoredChatSyncIssue } from '$lib/services/chatGroupMessages.svelte';
 import {
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
@@ -309,7 +312,7 @@ type WatchableGroup = {
 
 function toWatchableGroup(groupId: string): WatchableGroup | null {
 	const group = getChatGroup(groupId);
-	if (!group || isChatGroupRemoved(group)) {
+	if (!group || isChatGroupRemoved(group) || isChatGroupPoisoned(group)) {
 		return null;
 	}
 
@@ -356,6 +359,25 @@ function createWatchBuffer(input: {
 			return;
 		}
 
+		console.warn('[watch] failed to ingest watched group messages', {
+			groupId: input.groupId,
+			detail
+		});
+		// Mark group as poisoned on fatal MLS errors
+		if (detail.includes('OperationError') || detail.includes('CryptoError')) {
+			const group = getChatGroup(input.groupId);
+			if (group) {
+				const syncIssue: StoredChatSyncIssue = {
+					cursor: 0,
+					createdAt: Date.now(),
+					detail: `Fatal MLS decryption failure: ${detail}`
+				};
+				replaceGroup(input.groupId, {
+					...group,
+					syncIssues: [...group.syncIssues, syncIssue].slice(-50)
+				});
+			}
+		}
 		chatGroupWatchStore.error =
 			error instanceof Error ? error.message : 'Failed to ingest watched group messages';
 	};
@@ -367,19 +389,28 @@ function createWatchBuffer(input: {
 	};
 
 	const flush = () => {
-		flushPromise = flushPromise.then(async () => {
-			clearFlushTimer();
-			if (pendingMessages.length === 0) return false;
+		flushPromise = flushPromise
+			.catch((error) => {
+				reportFlushError(error);
+				return false;
+			})
+			.then(async () => {
+				clearFlushTimer();
+				if (pendingMessages.length === 0) return false;
 
-			const batch = pendingMessages.splice(0, pendingMessages.length);
-			const result = await ingestIncomingChatGroupMessages(input.groupId, batch);
-			if (isChatGroupRemoved(result.group)) {
-				await input.abort('removed from group');
-				return true;
-			}
+				const batch = pendingMessages.splice(0, pendingMessages.length);
+				const result = await ingestIncomingChatGroupMessages(input.groupId, batch);
+				if (isChatGroupRemoved(result.group)) {
+					await input.abort('removed from group');
+					return true;
+				}
 
-			return false;
-		});
+				return false;
+			})
+			.catch((error) => {
+				reportFlushError(error);
+				return false;
+			});
 		return flushPromise;
 	};
 
@@ -407,8 +438,9 @@ function createWatchBuffer(input: {
 async function ingestGroupMessagesFromCoordinatorFetch(
 	groupsByGid: Map<string, WatchableGroup>,
 	messages: WatchFetchedMessage[]
-) {
+): Promise<Set<string>> {
 	const messagesByGroupId = new SvelteMap<string, WatchIncomingMessage[]>();
+	const failedGroupIds = new SvelteSet<string>();
 
 	for (const message of messages) {
 		const group = groupsByGid.get(message.gid);
@@ -423,8 +455,33 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 	}
 
 	for (const [groupId, groupMessages] of messagesByGroupId) {
-		await ingestIncomingChatGroupMessages(groupId, groupMessages);
+		try {
+			await ingestIncomingChatGroupMessages(groupId, groupMessages);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			console.warn('[watch] failed to ingest coordinator backlog for group', {
+				groupId,
+				messageCount: groupMessages.length,
+				detail
+			});
+			failedGroupIds.add(groupId);
+			// Mark group as sync-broken by adding a sync issue
+			const group = getChatGroup(groupId);
+			if (group) {
+				const syncIssue: StoredChatSyncIssue = {
+					cursor: groupMessages[0]?.cursor ?? 0,
+					createdAt: groupMessages[0]?.createdAt ?? Date.now(),
+					detail: `Fatal MLS decryption failure: ${detail}`
+				};
+				replaceGroup(groupId, {
+					...group,
+					syncIssues: [...group.syncIssues, syncIssue].slice(-50)
+				});
+			}
+		}
 	}
+
+	return failedGroupIds;
 }
 
 async function fetchGroupBacklog(group: WatchableGroup) {
@@ -454,7 +511,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 	account: ReturnType<typeof requireActiveAccount>;
 	coordinatorKey: string;
 	groups: WatchableGroup[];
-}) {
+}): Promise<Set<string>> {
 	console.log('[watch] fetchCoordinatorGroupBacklog', {
 		coordinatorKey: input.coordinatorKey,
 		groupCount: input.groups.length,
@@ -481,7 +538,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 		messageCount: result.messages.length
 	});
 
-	await ingestGroupMessagesFromCoordinatorFetch(
+	return ingestGroupMessagesFromCoordinatorFetch(
 		groupsByGid,
 		result.messages.map((message) => ({
 			gid: message.gid,
@@ -644,10 +701,12 @@ async function startWatchingCoordinatorGroups(
 	};
 
 	handle.ready = (async () => {
+		let failedGroupIds = new Set<string>();
 		if (!options.skipBacklogSync) {
-			await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+			failedGroupIds = await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
 		}
 		const subscriptionGroups = groupIds
+			.filter((groupId) => !failedGroupIds.has(groupId))
 			.map((groupId) => toWatchableGroup(groupId))
 			.filter((group): group is WatchableGroup => Boolean(group));
 		if (subscriptionGroups.length === 0) return;

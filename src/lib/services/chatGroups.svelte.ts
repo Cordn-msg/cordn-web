@@ -269,6 +269,11 @@ export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean 
 	}
 }
 
+export function isChatGroupPoisoned(group: StoredChatGroup | undefined): boolean {
+	if (!group) return false;
+	return group.syncIssues.some((issue) => issue.detail.startsWith('Fatal MLS decryption failure'));
+}
+
 function assertChatGroupIsActive(group: StoredChatGroup): void {
 	if (isChatGroupRemoved(group)) {
 		throw new RemovedFromGroupError(group.metadata?.name || group.id);
@@ -301,7 +306,7 @@ function persistGroup(group: StoredChatGroup) {
 	void persistGroups(chatGroupsStore.groups);
 }
 
-function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
+export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	chatGroupsStore.groups = chatGroupsStore.groups.map((group) =>
 		group.id === groupId ? nextGroup : group
 	);

@@ -31,6 +31,7 @@
 	import {
 		getChatGroup,
 		isChatGroupRemoved,
+		isChatGroupPoisoned,
 		listChatGroupMembers,
 		listChatGroupMessages
 	} from '$lib/services/chatGroups.svelte';
@@ -96,6 +97,7 @@
 	});
 	const group = $derived.by(() => getChatGroup(groupId));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
+	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
 	const mentionCandidates = $derived.by<ChatMentionCandidate[]>(() =>
 		listChatGroupMembers(groupId).map((member) => ({
 			pubkey: member.stablePubkey
@@ -544,6 +546,13 @@
 			You were removed from this group. This local copy is now read-only. Open the info page to
 			delete it from this device.
 		</p>
+	{:else if isPoisoned}
+		<p
+			class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+		>
+			This group's local state is corrupted and cannot decrypt new messages. Contact a group admin
+			to request a fresh invite.
+		</p>
 	{/if}
 
 	{#if sendError || chatComposerActionsStore.error}
@@ -553,7 +562,7 @@
 	<ChatComposer
 		bind:value={draft}
 		onSubmit={handleSubmit}
-		disabled={isRemoved}
+		disabled={isRemoved || isPoisoned}
 		replyTo={composerReplyPreview}
 		editTo={editTarget ? { text: editPreview } : null}
 		onCancelReply={clearReplyTarget}

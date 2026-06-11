@@ -397,6 +397,35 @@ export async function processMessageBase64(params: {
 	});
 }
 
+/**
+ * Extract unprotected MLS envelope metadata for diagnostic logging.
+ * Returns epoch, contentType, and wireformat without requiring decryption.
+ */
+function extractMlsEnvelopeMetadata(opaqueMessageBase64: string): {
+	wireformat: number;
+	epoch?: bigint;
+	contentType?: number;
+} | null {
+	try {
+		const decoded = mlsMessageDecoder(base64ToBytes(opaqueMessageBase64), 0);
+		if (!decoded) return null;
+		const [message] = decoded;
+		const result: { wireformat: number; epoch?: bigint; contentType?: number } = {
+			wireformat: message.wireformat
+		};
+		if (message.wireformat === 2 && 'privateMessage' in message) {
+			result.epoch = message.privateMessage.epoch;
+			result.contentType = message.privateMessage.contentType;
+		} else if (message.wireformat === 1 && 'publicMessage' in message) {
+			result.epoch = message.publicMessage.content.epoch;
+			result.contentType = message.publicMessage.content.contentType;
+		}
+		return result;
+	} catch {
+		return null;
+	}
+}
+
 function isFormerEpochIssue(detail: string): boolean {
 	return (
 		detail === 'Cannot process commit or proposal from former epoch' ||
@@ -621,12 +650,24 @@ export async function ingestChatGroupMessages(params: {
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
+			const envelope = extractMlsEnvelopeMetadata(message.opaqueMessageBase64);
+			const localEpoch = group.state.groupContext.epoch;
 
 			console.warn('[MLS] processMessageBase64 error', {
 				groupId: group.metadata?.name ?? 'unknown',
 				cursor: message.cursor,
 				fetchCursor: group.fetchCursor,
-				detail
+				detail,
+				envelope,
+				localEpoch: localEpoch.toString(),
+				epochComparison:
+					envelope?.epoch !== undefined
+						? envelope.epoch > localEpoch
+							? 'message-ahead'
+							: envelope.epoch < localEpoch
+								? 'message-behind'
+								: 'same-epoch'
+						: 'unknown'
 			});
 
 			if (
