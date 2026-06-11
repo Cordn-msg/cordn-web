@@ -410,6 +410,15 @@ export async function rejectWelcomeAction(welcomeId: string) {
 	}
 }
 
+export async function loadJoinRequestsAction() {
+	const account = requireActiveAccount('You must be logged in to fetch join requests');
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.joinRequests(account.pubkey),
+		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey),
+		staleTime: 60 * 1000
+	});
+}
+
 export async function refreshJoinRequestsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch join requests');
 	await queryClient.invalidateQueries({

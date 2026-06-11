@@ -19,7 +19,8 @@
 	} from '$lib/services/chatKeyPackages.svelte';
 	import {
 		loadCoordinatorRemoteKeyPackagesAction,
-		loadWelcomeNotificationsAction
+		loadWelcomeNotificationsAction,
+		loadJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
 
 	let { children } = $props();
@@ -56,6 +57,39 @@
 				}
 				if (startupWelcomesLoadingFor === pubkey) {
 					startupWelcomesLoadingFor = '';
+				}
+			}
+		});
+	});
+
+	let startupJoinRequestsSyncedFor = $state('');
+	let startupJoinRequestsLoadingFor = $state('');
+
+	$effect(() => {
+		const pubkey = $activeAccount?.pubkey;
+		if (
+			!pubkey ||
+			chatGroupWatchStore.startup !== 'ready' ||
+			startupJoinRequestsSyncedFor === pubkey ||
+			startupJoinRequestsLoadingFor === pubkey
+		)
+			return;
+
+		startupJoinRequestsLoadingFor = pubkey;
+		void untrack(async () => {
+			try {
+				await loadJoinRequestsAction();
+			} catch (error) {
+				console.warn(
+					'Failed to load join requests during chat startup',
+					error instanceof Error ? error.message : error
+				);
+			} finally {
+				if ($activeAccount?.pubkey === pubkey) {
+					startupJoinRequestsSyncedFor = pubkey;
+				}
+				if (startupJoinRequestsLoadingFor === pubkey) {
+					startupJoinRequestsLoadingFor = '';
 				}
 			}
 		});

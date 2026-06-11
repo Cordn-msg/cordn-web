@@ -409,7 +409,15 @@ function isStaleGenerationIssue(detail: string): boolean {
 }
 
 function isUndecryptableStaleMessageIssue(detail: string): boolean {
-	return detail.startsWith('OperationError');
+	// Reverted to narrower match; log full details for diagnosis
+	if (detail.startsWith('OperationError: The operation failed')) {
+		return true;
+	}
+	if (detail.startsWith('OperationError')) {
+		console.warn('[MLS] OperationError caught but not matching narrow pattern:', detail);
+		return false;
+	}
+	return false;
 }
 
 function isRemovedMemberCommitIssue(detail: string): boolean {
@@ -613,6 +621,13 @@ export async function ingestChatGroupMessages(params: {
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
+
+			console.warn('[MLS] processMessageBase64 error', {
+				groupId: group.metadata?.name ?? 'unknown',
+				cursor: message.cursor,
+				fetchCursor: group.fetchCursor,
+				detail
+			});
 
 			if (
 				isFormerEpochIssue(detail) ||

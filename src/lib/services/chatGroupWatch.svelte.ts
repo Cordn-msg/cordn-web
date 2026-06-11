@@ -315,10 +315,11 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 
 	const state = decodeStoredGroupState(group);
 	const hasCursor = group.fetchCursor > 0;
+	const gid = groupIdDecoder.decode(state.groupContext.groupId);
 	const watchable: WatchableGroup = {
 		id: group.id,
 		coordinatorKey: group.coordinatorKey,
-		gid: groupIdDecoder.decode(state.groupContext.groupId)
+		gid
 	};
 
 	if (hasCursor) {
@@ -326,6 +327,16 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 	} else if (group.joinEpoch > 0n) {
 		watchable.sinceEpoch = group.joinEpoch.toString();
 	}
+
+	console.log('[watch] toWatchableGroup', {
+		groupId,
+		gid,
+		coordinatorKey: group.coordinatorKey,
+		fetchCursor: group.fetchCursor,
+		joinEpoch: group.joinEpoch.toString(),
+		after: watchable.after,
+		sinceEpoch: watchable.sinceEpoch
+	});
 
 	return watchable;
 }
@@ -444,6 +455,16 @@ async function fetchCoordinatorGroupBacklog(input: {
 	coordinatorKey: string;
 	groups: WatchableGroup[];
 }) {
+	console.log('[watch] fetchCoordinatorGroupBacklog', {
+		coordinatorKey: input.coordinatorKey,
+		groupCount: input.groups.length,
+		groups: input.groups.map((g) => ({
+			id: g.id,
+			gid: g.gid,
+			after: g.after,
+			sinceEpoch: g.sinceEpoch
+		}))
+	});
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
 		client.FetchManyGroupMessages({
@@ -454,6 +475,11 @@ async function fetchCoordinatorGroupBacklog(input: {
 			}))
 		})
 	);
+
+	console.log('[watch] fetchCoordinatorGroupBacklog result', {
+		coordinatorKey: input.coordinatorKey,
+		messageCount: result.messages.length
+	});
 
 	await ingestGroupMessagesFromCoordinatorFetch(
 		groupsByGid,
@@ -626,6 +652,16 @@ async function startWatchingCoordinatorGroups(
 			.filter((group): group is WatchableGroup => Boolean(group));
 		if (subscriptionGroups.length === 0) return;
 		const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
+		console.log('[watch] startWatchingCoordinatorGroups subscribing', {
+			coordinatorKey,
+			groupCount: subscriptionGroups.length,
+			groups: subscriptionGroups.map((g) => ({
+				id: g.id,
+				gid: g.gid,
+				after: g.after,
+				sinceEpoch: g.sinceEpoch
+			}))
+		});
 		const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
 			client.SubscribeManyGroupMessages({
 				groups: subscriptionGroups.map((group) => ({
@@ -635,6 +671,10 @@ async function startWatchingCoordinatorGroups(
 				}))
 			})
 		);
+		console.log('[watch] startWatchingCoordinatorGroups subscription established', {
+			coordinatorKey,
+			groupCount: subscriptionGroups.length
+		});
 		const buffers = new Map(
 			subscriptionGroups.map((group) => [
 				group.id,

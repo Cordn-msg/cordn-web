@@ -40,7 +40,6 @@
 		refreshJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { useWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
-	import { useJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -75,7 +74,7 @@
 		() => unreadWelcomeNotifications + unreadJoinRequests
 	);
 	useWelcomeNotifications($activeAccount?.pubkey);
-	useJoinRequests($activeAccount?.pubkey);
+	// Join requests are now loaded via layout effect when app is ready
 
 	const profileSharePath = $derived.by(() => {
 		if (!$activeAccount) return '';
