@@ -18,7 +18,7 @@ export const COORDINATOR_METHODS = {
 	fetchPendingWelcomes: 'welcome_take',
 	storeWelcome: 'welcome_store',
 	storeJoinRequest: 'join_request_store',
-	fetchPendingJoinRequests: 'join_request_take',
+	fetchManyPendingJoinRequests: 'join_request_take_many',
 	postGroupMessage: 'msg_post',
 	fetchGroupMessages: 'msg_fetch',
 	fetchManyGroupMessages: 'msg_fetch_many',
@@ -113,12 +113,20 @@ export const joinRequestSchema = z.object({
 	at: z.number()
 });
 
-export const fetchPendingJoinRequestsInputSchema = z.object({
+export const joinRequestWithGroupSchema = joinRequestSchema.extend({
+	gid: z.string()
+});
+
+export const fetchManyPendingJoinRequestsGroupInputSchema = z.object({
 	gid: z.string().min(1)
 });
 
-export const fetchPendingJoinRequestsOutputSchema = z.object({
-	requests: z.array(joinRequestSchema)
+export const fetchManyPendingJoinRequestsInputSchema = z.object({
+	groups: z.array(fetchManyPendingJoinRequestsGroupInputSchema).min(1)
+});
+
+export const fetchManyPendingJoinRequestsOutputSchema = z.object({
+	requests: z.array(joinRequestWithGroupSchema)
 });
 
 export const postGroupMessageInputSchema = z.object({
@@ -186,8 +194,13 @@ export type StoreWelcomeOutput = z.infer<typeof storeWelcomeOutputSchema>;
 export type StoreJoinRequestInput = z.infer<typeof storeJoinRequestInputSchema>;
 export type StoreJoinRequestOutput = z.infer<typeof storeJoinRequestOutputSchema>;
 export type JoinRequest = z.infer<typeof joinRequestSchema>;
-export type FetchPendingJoinRequestsInput = z.infer<typeof fetchPendingJoinRequestsInputSchema>;
-export type FetchPendingJoinRequestsOutput = z.infer<typeof fetchPendingJoinRequestsOutputSchema>;
+export type JoinRequestWithGroup = z.infer<typeof joinRequestWithGroupSchema>;
+export type FetchManyPendingJoinRequestsInput = z.infer<
+	typeof fetchManyPendingJoinRequestsInputSchema
+>;
+export type FetchManyPendingJoinRequestsOutput = z.infer<
+	typeof fetchManyPendingJoinRequestsOutputSchema
+>;
 export type PostGroupMessageInput = z.infer<typeof postGroupMessageInputSchema>;
 export type PostGroupMessageOutput = z.infer<typeof postGroupMessageOutputSchema>;
 export type FetchGroupMessagesInput = z.infer<typeof fetchGroupMessagesInputSchema>;

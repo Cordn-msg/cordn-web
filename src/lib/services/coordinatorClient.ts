@@ -29,9 +29,9 @@ import {
 	type ConsumeKeyPackageOutput,
 	type FetchGroupMessagesOutput,
 	type FetchManyGroupMessagesOutput,
-	type FetchPendingJoinRequestsInput,
-	type FetchPendingJoinRequestsOutput,
-	fetchPendingJoinRequestsOutputSchema,
+	type FetchManyPendingJoinRequestsInput,
+	type FetchManyPendingJoinRequestsOutput,
+	fetchManyPendingJoinRequestsOutputSchema,
 	type FetchPendingWelcomesInput,
 	type FetchPendingWelcomesOutput,
 	type GroupMessage,
@@ -64,9 +64,9 @@ export type coordinatorClient = {
 	FetchPendingWelcomes: (args: FetchPendingWelcomesInput) => Promise<FetchPendingWelcomesOutput>;
 	StoreWelcome: (input: StoreWelcomeInput) => Promise<StoreWelcomeOutput>;
 	StoreJoinRequest: (input: StoreJoinRequestInput) => Promise<StoreJoinRequestOutput>;
-	FetchPendingJoinRequests: (
-		input: FetchPendingJoinRequestsInput
-	) => Promise<FetchPendingJoinRequestsOutput>;
+	FetchManyPendingJoinRequests: (
+		input: FetchManyPendingJoinRequestsInput
+	) => Promise<FetchManyPendingJoinRequestsOutput>;
 	PostGroupMessage: (input: PostGroupMessageInput) => Promise<PostGroupMessageOutput>;
 	FetchGroupMessages: (input: FetchGroupMessagesInput) => Promise<FetchGroupMessagesOutput>;
 	FetchManyGroupMessages: (
@@ -320,18 +320,19 @@ export class cordnClient implements coordinatorClient {
 	}
 
 	/**
-	 * Fetch pending join requests for a group.
-	 * @param {string} gid The group id parameter
-	 * @returns {Promise<FetchPendingJoinRequestsOutput>} The result of the join_request_take operation
+	 * Fetch pending join requests for multiple groups in a single batch call.
+	 * @param groups The array of group input objects, each with a gid
+	 * @returns {Promise<FetchManyPendingJoinRequestsOutput>} The result of the join_request_take_many operation
 	 */
-	async FetchPendingJoinRequests(
-		input: FetchPendingJoinRequestsInput
-	): Promise<FetchPendingJoinRequestsOutput> {
+	async FetchManyPendingJoinRequests(
+		input: FetchManyPendingJoinRequestsInput
+	): Promise<FetchManyPendingJoinRequestsOutput> {
+		console.log('FetchManyPendingJoinRequests', input);
 		return this.call(
 			'ephemeral',
-			COORDINATOR_METHODS.fetchPendingJoinRequests,
+			COORDINATOR_METHODS.fetchManyPendingJoinRequests,
 			input,
-			fetchPendingJoinRequestsOutputSchema
+			fetchManyPendingJoinRequestsOutputSchema
 		);
 	}
 

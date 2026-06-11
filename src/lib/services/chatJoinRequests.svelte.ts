@@ -190,15 +190,15 @@ function wait(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchPendingJoinRequestsWithSignerRetry(
+async function fetchManyPendingJoinRequestsWithSignerRetry(
 	account: IAccount,
 	coordinatorKey: string,
-	groupId: string
+	groups: { gid: string }[]
 ) {
 	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
 		try {
 			return await withCoordinatorClient(account, coordinatorKey, (client) =>
-				client.FetchPendingJoinRequests({ gid: groupId })
+				client.FetchManyPendingJoinRequests({ groups })
 			);
 		} catch (error) {
 			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
@@ -230,19 +230,33 @@ export async function fetchJoinRequestsForAdminGroups() {
 	chatJoinRequestsStore.loading = true;
 	chatJoinRequestsStore.error = '';
 
+	const groupsByCoordinator = new SvelteMap<string, { gid: string }[]>();
+	for (const group of adminGroups) {
+		const list = groupsByCoordinator.get(group.coordinatorKey);
+		if (list) {
+			list.push({ gid: group.id });
+		} else {
+			groupsByCoordinator.set(group.coordinatorKey, [{ gid: group.id }]);
+		}
+	}
+
 	try {
-		for (const group of adminGroups) {
+		for (const [coordinatorKey, groups] of groupsByCoordinator) {
 			try {
-				const result = await fetchPendingJoinRequestsWithSignerRetry(
+				const result = await fetchManyPendingJoinRequestsWithSignerRetry(
 					account,
-					group.coordinatorKey,
-					group.id
+					coordinatorKey,
+					groups
 				);
-				mergeFetchedJoinRequests(group.coordinatorKey, group.id, result.requests);
+				for (const request of result.requests) {
+					mergeFetchedJoinRequests(coordinatorKey, request.gid, [
+						{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
+					]);
+				}
 			} catch (error) {
 				if (isSignerUnavailableError(error)) return;
 				console.warn(
-					`Failed to fetch join requests for group ${group.id} from coordinator ${group.coordinatorKey}:`,
+					`Failed to fetch join requests from coordinator ${coordinatorKey}:`,
 					error instanceof Error ? error.message : error
 				);
 			}
