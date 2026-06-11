@@ -409,7 +409,7 @@ function isStaleGenerationIssue(detail: string): boolean {
 }
 
 function isUndecryptableStaleMessageIssue(detail: string): boolean {
-	return detail.startsWith('OperationError: The operation failed');
+	return detail.startsWith('OperationError');
 }
 
 function isRemovedMemberCommitIssue(detail: string): boolean {
