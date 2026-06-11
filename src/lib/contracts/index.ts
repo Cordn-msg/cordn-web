@@ -17,6 +17,8 @@ export const COORDINATOR_METHODS = {
 	removeKeyPackages: 'kp_remove',
 	fetchPendingWelcomes: 'welcome_take',
 	storeWelcome: 'welcome_store',
+	storeJoinRequest: 'join_request_store',
+	fetchPendingJoinRequests: 'join_request_take',
 	postGroupMessage: 'msg_post',
 	fetchGroupMessages: 'msg_fetch',
 	fetchManyGroupMessages: 'msg_fetch_many',
@@ -96,6 +98,29 @@ export const storeWelcomeOutputSchema = z.object({
 	at: z.number()
 });
 
+export const storeJoinRequestInputSchema = z.object({
+	gid: z.string().min(1),
+	kp_ref: z.string().min(1)
+});
+
+export const storeJoinRequestOutputSchema = z.object({
+	at: z.number()
+});
+
+export const joinRequestSchema = z.object({
+	pk: z.string(),
+	kp_ref: z.string(),
+	at: z.number()
+});
+
+export const fetchPendingJoinRequestsInputSchema = z.object({
+	gid: z.string().min(1)
+});
+
+export const fetchPendingJoinRequestsOutputSchema = z.object({
+	requests: z.array(joinRequestSchema)
+});
+
 export const postGroupMessageInputSchema = z.object({
 	msg_64: z.string().min(1)
 });
@@ -158,6 +183,11 @@ export type FetchPendingWelcomesInput = z.infer<typeof fetchPendingWelcomesInput
 export type FetchPendingWelcomesOutput = z.infer<typeof fetchPendingWelcomesOutputSchema>;
 export type StoreWelcomeInput = z.infer<typeof storeWelcomeInputSchema>;
 export type StoreWelcomeOutput = z.infer<typeof storeWelcomeOutputSchema>;
+export type StoreJoinRequestInput = z.infer<typeof storeJoinRequestInputSchema>;
+export type StoreJoinRequestOutput = z.infer<typeof storeJoinRequestOutputSchema>;
+export type JoinRequest = z.infer<typeof joinRequestSchema>;
+export type FetchPendingJoinRequestsInput = z.infer<typeof fetchPendingJoinRequestsInputSchema>;
+export type FetchPendingJoinRequestsOutput = z.infer<typeof fetchPendingJoinRequestsOutputSchema>;
 export type PostGroupMessageInput = z.infer<typeof postGroupMessageInputSchema>;
 export type PostGroupMessageOutput = z.infer<typeof postGroupMessageOutputSchema>;
 export type FetchGroupMessagesInput = z.infer<typeof fetchGroupMessagesInputSchema>;

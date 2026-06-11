@@ -40,9 +40,11 @@
 			return [
 				...new Set(
 					welcomeNotifications
-						.map((notification) =>
-							getDirectChatTargetPubkeyFromWelcome(notification.preview?.name ?? '')
-						)
+						.flatMap((notification) => [
+							getDirectChatTargetPubkeyFromWelcome(notification.preview?.name ?? ''),
+							...(notification.preview?.memberPubkeys ?? [])
+						])
+						.map((pk) => normalizePubKey(pk))
 						.filter((pubkey) => pubkey && pubkey !== activePubkey)
 				)
 			];

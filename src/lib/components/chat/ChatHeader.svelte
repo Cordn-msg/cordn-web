@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import QrCode from '$lib/components/QrCode.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
@@ -19,6 +21,7 @@
 		toggleGroupWatchAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import {
@@ -27,12 +30,15 @@
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
+	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
 	import Download from '@lucide/svelte/icons/download';
+	import Copy from '@lucide/svelte/icons/copy';
 	import Eye from '@lucide/svelte/icons/eye';
 	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import { setMode } from 'mode-watcher';
@@ -92,7 +98,33 @@
 		groupId ? resolve('/chat/[id]/info', { id: groupId }) : '/chat'
 	);
 	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
+	let groupShareOpen = $state(false);
+	let copiedGroupShareLink = $state(false);
 	let inviteKeyPackageSearch = $state('');
+
+	const groupShareUrl = $derived.by(() => {
+		if (!groupId || !group?.coordinatorKey) return '';
+		const coordinator = getChatCoordinator(group.coordinatorKey);
+		const metadata = group.metadata?.name
+			? { name: group.metadata.name, icon: group.metadata.icon }
+			: undefined;
+		const path = encodeGroupShareLink({
+			groupId,
+			coordinatorKey: group.coordinatorKey,
+			relays: coordinator?.relays,
+			metadata
+		});
+		return browser ? new URL(path, page.url).toString() : path;
+	});
+
+	async function copyGroupShareUrl() {
+		if (!groupShareUrl || !browser) return;
+		await navigator.clipboard.writeText(groupShareUrl);
+		copiedGroupShareLink = true;
+		setTimeout(() => {
+			copiedGroupShareLink = false;
+		}, 1500);
+	}
 	const inviteKeyPackageProfileHints = useProfileHints(
 		() => {
 			if (!chatHeaderActionsStore.inviteOpen) return [];
@@ -384,6 +416,19 @@
 						</div>
 					</Dialog.Content>
 				</Dialog.Root>
+
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="h-10 w-10 rounded-xl"
+					disabled={!$activeAccount || !groupId}
+					aria-label="Share group link"
+					title="Share group link"
+					onclick={() => (groupShareOpen = true)}
+				>
+					<Share2 class="size-4" />
+				</Button>
 			</div>
 
 			<div class="sm:hidden">
@@ -446,6 +491,14 @@
 							<UserPlus class="size-4" />
 							<span>Invite member</span>
 						</DropdownMenu.Item>
+						<DropdownMenu.Item
+							disabled={!$activeAccount || !groupId}
+							onclick={() => (groupShareOpen = true)}
+							class="gap-2"
+						>
+							<Share2 class="size-4" />
+							<span>Share group link</span>
+						</DropdownMenu.Item>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 			</div>
@@ -456,5 +509,31 @@
 		<p class="px-4 pb-3 text-sm text-muted-foreground md:px-6">
 			This group is inactive for your account. Live watching and sending are disabled.
 		</p>
+	{/if}
+
+	{#if $activeAccount && groupShareUrl}
+		<Dialog.Root bind:open={groupShareOpen}>
+			<Dialog.Content class="sm:max-w-md">
+				<Dialog.Header>
+					<Dialog.Title>Share group link</Dialog.Title>
+					<Dialog.Description
+						>Share this group link as a QR code to invite others.</Dialog.Description
+					>
+				</Dialog.Header>
+
+				<div class="flex flex-col items-center gap-4 py-2">
+					<QrCode data={groupShareUrl} size={220} />
+					<p
+						class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
+					>
+						{groupShareUrl}
+					</p>
+					<Button type="button" variant="outline" class="w-full" onclick={copyGroupShareUrl}>
+						<Copy class="mr-2 size-4" />
+						{copiedGroupShareLink ? 'Copied group link' : 'Copy group link'}
+					</Button>
+				</div>
+			</Dialog.Content>
+		</Dialog.Root>
 	{/if}
 </header>

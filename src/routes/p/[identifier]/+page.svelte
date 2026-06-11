@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -9,12 +10,15 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
-	import { fetchPublicCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
-	import type { AvailableKeyPackage } from '$lib/contracts';
+	import {
+		fetchPublicCoordinatorAvailableKeyPackages,
+		type AvailableKeyPackageWithCoordinator
+	} from '$lib/queries/chatKeyPackageQueries';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { activeAccount, logout } from '$lib/services/accountManager.svelte';
 	import {
 		getDefaultChatCoordinator,
+		markCoordinatorUsed,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import {
@@ -36,6 +40,7 @@
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
 	import { normalizePubKey } from '$lib/utils';
+	import { decodeCoordinatorQueryParam } from '$lib/utils/groupShareLink';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import LogOut from '@lucide/svelte/icons/log-out';
@@ -98,14 +103,26 @@
 		if (!$activeAccount) return false;
 		return normalizePubKey($activeAccount.pubkey) === profilePubkey;
 	});
-	const requestedCoordinatorKey = $derived.by(() => {
+	const coordinatorQuery = $derived.by(() => {
 		const value = page.url.searchParams.get('c')?.trim();
-		if (!value) return undefined;
-		return /^[0-9a-f]{64}$/i.test(value) ? normalizePubKey(value) : undefined;
+		if (!value) return null;
+		return decodeCoordinatorQueryParam(value);
 	});
 	const selectedCoordinatorKey = $derived.by(
-		() => requestedCoordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+		() => coordinatorQuery?.coordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
 	);
+
+	// Auto-register unknown coordinators from share links
+	$effect(() => {
+		if (!coordinatorQuery) return;
+		untrack(() => {
+			upsertChatCoordinator({
+				pubkey: coordinatorQuery.coordinatorKey,
+				relays: coordinatorQuery.relays
+			});
+			markCoordinatorUsed(coordinatorQuery.coordinatorKey);
+		});
+	});
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const npub = $derived.by(() => (profilePubkey ? nip19.npubEncode(profilePubkey) : ''));
 	const displayName = $derived.by(
@@ -124,7 +141,7 @@
 	const loadedProfileRelays = $derived.by(() => getUserRelayListFromStore(profilePubkey));
 	const profileLookupRelays = $derived.by(() => getMetadataLookupRelays(profilePubkey));
 	const profilePublishRelays = $derived.by(() => loadedProfileRelays);
-	let availableKeyPackages = $state<AvailableKeyPackage[]>([]);
+	let availableKeyPackages = $state<AvailableKeyPackageWithCoordinator[]>([]);
 	let loadingAvailableKeyPackages = $state(false);
 	let availableKeyPackagesError = $state('');
 	const sharedGroupPubkeys = $derived.by(() => {
@@ -408,20 +425,22 @@
 
 			await ensureGroupsLoaded();
 
-			if (!defaultCoordinator || defaultCoordinator.pubkey !== selectedCoordinatorKey) {
+			const coordinatorKey = profileKeyPackage.coordinatorKey;
+
+			if (!defaultCoordinator || defaultCoordinator.pubkey !== coordinatorKey) {
 				upsertChatCoordinator({
-					pubkey: selectedCoordinatorKey,
+					pubkey: coordinatorKey,
 					label:
-						selectedCoordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY
+						coordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY
 							? 'Default coordinator'
-							: `Coordinator ${selectedCoordinatorKey.slice(0, 8)}`,
+							: `Coordinator ${coordinatorKey.slice(0, 8)}`,
 					isDefault: true
 				});
 			}
 
 			const group = await createChatGroup({
 				name: '',
-				coordinatorKey: selectedCoordinatorKey
+				coordinatorKey
 			});
 			await inviteChatGroupMember({
 				groupId: group.id,

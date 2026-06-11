@@ -4,6 +4,10 @@ import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { deleteChatGroupsForOwner } from '$lib/services/chatGroups.svelte';
 import { deleteChatKeyPackagesForOwner } from '$lib/services/chatKeyPackages.svelte';
 import { deleteChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
+import {
+	deleteJoinRequestsForOwner,
+	deleteSentJoinRequestsForOwner
+} from '$lib/services/chatJoinRequests.svelte';
 import { deleteWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { disconnectCoordinatorClients } from '$lib/services/chatRuntime';
@@ -21,7 +25,9 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 		deleteChatGroupsForOwner(ownerPubkey),
 		deleteChatKeyPackagesForOwner(ownerPubkey),
 		Promise.resolve(deleteChatGroupPresenceForOwner(ownerPubkey)),
-		Promise.resolve(deleteWelcomeNotificationsForOwner(ownerPubkey))
+		Promise.resolve(deleteWelcomeNotificationsForOwner(ownerPubkey)),
+		Promise.resolve(deleteJoinRequestsForOwner(ownerPubkey)),
+		Promise.resolve(deleteSentJoinRequestsForOwner(ownerPubkey))
 	]);
 	manager.clearActive();
 }

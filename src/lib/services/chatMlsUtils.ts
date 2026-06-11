@@ -1,5 +1,6 @@
 import { bytesToHex } from 'applesauce-core/helpers';
 import { normalizePubKey } from '$lib/utils';
+import { listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
 	encode,
 	base64ToBytes,
@@ -51,6 +52,7 @@ export interface CordnGroupMetadataPreview {
 	description?: string;
 	icon?: string;
 	imageUrl?: string;
+	memberPubkeys?: string[];
 }
 
 function decodeExact<T>(bytes: Uint8Array, decoder: Decoder<T>, label: string): T {
@@ -368,11 +370,14 @@ export async function previewGroupMetadataFromWelcome(params: {
 	const metadata = getCordnGroupMetadataExtension(result.state);
 	if (!metadata) return undefined;
 
+	const memberPubkeys = listGroupMembers(result.state).map((m) => m.stablePubkey);
+
 	return {
 		name: metadata.name,
 		description: metadata.description,
 		icon: metadata.icon,
-		imageUrl: metadata.imageUrl
+		imageUrl: metadata.imageUrl,
+		memberPubkeys
 	};
 }
 

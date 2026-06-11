@@ -4,6 +4,7 @@ import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorCl
 import { defaultRelays } from '$lib/services/relay-pool';
 import { relayActions } from '$lib/stores/relay-store.svelte';
 import { normalizePubKey } from '$lib/utils';
+import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import type { NostrSigner } from '@contextvm/sdk';
 import type { IAccount } from 'applesauce-accounts';
 
@@ -12,9 +13,14 @@ type CoordinatorTarget = {
 	relays: string[];
 };
 
-function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordinator>): string[] {
+function resolveCoordinatorRelays(
+	coordinatorKey: string,
+	coordinator: ReturnType<typeof getChatCoordinator>
+): string[] {
 	if (!coordinator) {
-		return relayActions.getSelectedRelays();
+		return normalizePubKey(coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY)
+			? defaultRelays
+			: relayActions.getSelectedRelays();
 	}
 
 	if (coordinator.relays.length > 0) {
@@ -29,7 +35,7 @@ function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 	const coordinator = getChatCoordinator(normalizedCoordinatorKey);
 	return {
 		serverPubkey: normalizedCoordinatorKey,
-		relays: resolveCoordinatorRelays(coordinator)
+		relays: resolveCoordinatorRelays(normalizedCoordinatorKey, coordinator)
 	};
 }
 

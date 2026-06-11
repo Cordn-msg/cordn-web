@@ -31,7 +31,7 @@ export async function fetchCoordinatorWelcomeNotifications(
 
 	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys().map(normalizePubKey))];
 	const staleTime = options?.force ? 0 : 60 * 1000;
-	await Promise.all(
+	await Promise.allSettled(
 		coordinatorKeys.map((key) =>
 			queryClient.fetchQuery({
 				queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, key),

@@ -30,6 +30,37 @@ export function getDirectChatTargetPubkey(group: StoredChatGroup) {
 	return '';
 }
 
+function resolveMemberDisplayName(
+	memberPubkeys: string[],
+	activePubkey: string,
+	profileHints?: ChatGroupProfileHints
+): string | undefined {
+	const normalizedActive = activePubkey ? normalizePubKey(activePubkey) : '';
+	const otherMemberPubkeys = [
+		...new Set(
+			memberPubkeys
+				.map((pubkey) => normalizePubKey(pubkey))
+				.filter((pubkey) => pubkey && pubkey !== normalizedActive)
+		)
+	];
+
+	if (otherMemberPubkeys.length === 1) {
+		return getProfileDisplayName(otherMemberPubkeys[0], profileHints);
+	}
+
+	if (otherMemberPubkeys.length > 1) {
+		const visibleNames = otherMemberPubkeys
+			.slice(0, 1)
+			.map((pubkey) => getProfileDisplayName(pubkey, profileHints));
+		const remainingCount = otherMemberPubkeys.length - visibleNames.length;
+		return remainingCount > 0
+			? `${visibleNames.join(', ')} +${remainingCount}`
+			: visibleNames.join(', ');
+	}
+
+	return undefined;
+}
+
 export function getChatGroupDisplayTitle(input: {
 	group: StoredChatGroup;
 	activePubkey?: string;
@@ -39,28 +70,12 @@ export function getChatGroupDisplayTitle(input: {
 	const explicitName = input.group.metadata?.name?.trim() ?? '';
 	if (explicitName && !explicitName.startsWith(DIRECT_CHAT_NAME_PREFIX)) return explicitName;
 
-	const activePubkey = input.activePubkey ? normalizePubKey(input.activePubkey) : '';
-	const otherMemberPubkeys = [
-		...new Set(
-			(input.memberPubkeys ?? [])
-				.map((pubkey) => normalizePubKey(pubkey))
-				.filter((pubkey) => pubkey && pubkey !== activePubkey)
-		)
-	];
-
-	if (otherMemberPubkeys.length === 1) {
-		return getProfileDisplayName(otherMemberPubkeys[0], input.profileHints);
-	}
-
-	if (otherMemberPubkeys.length > 1) {
-		const visibleNames = otherMemberPubkeys
-			.slice(0, 1)
-			.map((pubkey) => getProfileDisplayName(pubkey, input.profileHints));
-		const remainingCount = otherMemberPubkeys.length - visibleNames.length;
-		return remainingCount > 0
-			? `${visibleNames.join(', ')} +${remainingCount}`
-			: visibleNames.join(', ');
-	}
+	const memberName = resolveMemberDisplayName(
+		input.memberPubkeys ?? [],
+		input.activePubkey ?? '',
+		input.profileHints
+	);
+	if (memberName) return memberName;
 
 	const targetPubkey = getDirectChatTargetPubkey(input.group);
 	if (targetPubkey) {
@@ -73,12 +88,23 @@ export function getChatGroupDisplayTitle(input: {
 export function resolveWelcomeDisplayName(input: {
 	welcomeName: string;
 	profileHints?: ChatGroupProfileHints;
+	memberPubkeys?: string[];
+	activePubkey?: string;
 }): string {
 	const targetPubkey = getDirectChatTargetPubkeyFromWelcome(input.welcomeName);
 	if (targetPubkey) {
 		return getProfileDisplayName(targetPubkey, input.profileHints);
 	}
-	return input.welcomeName || 'New conversation';
+	if (input.welcomeName) return input.welcomeName;
+
+	const memberName = resolveMemberDisplayName(
+		input.memberPubkeys ?? [],
+		input.activePubkey ?? '',
+		input.profileHints
+	);
+	if (memberName) return memberName;
+
+	return 'New conversation';
 }
 
 export function getDirectChatTargetPubkeyFromWelcome(welcomeName: string): string {

@@ -2,6 +2,7 @@ import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
 import {
 	acceptChatWelcome,
+	createChatGroup,
 	deleteChatGroup,
 	fetchChatGroupMessages,
 	inviteChatGroupMember,
@@ -20,16 +21,27 @@ import {
 	setWelcomeSubmitting
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import {
+	acceptJoinRequest,
+	chatJoinRequestsStore,
+	clearJoinRequestSubmitting,
+	getJoinRequest,
+	markJoinRequestDismissed,
+	setJoinRequestSubmitting
+} from '$lib/services/chatJoinRequests.svelte';
+import {
 	chatGroupWatchStore,
 	isWatchingGroup,
 	startWatchingGroup,
 	stopWatchingGroup
 } from '$lib/services/chatGroupWatch.svelte';
-import type { AvailableKeyPackage } from '$lib/contracts';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+import {
+	fetchCoordinatorAvailableKeyPackages,
+	type AvailableKeyPackageWithCoordinator
+} from '$lib/queries/chatKeyPackageQueries';
 import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
+import { fetchCoordinatorJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 import { requireActiveAccount } from '$lib/services/chatRuntime';
 import { SvelteMap } from 'svelte/reactivity';
 import type {
@@ -214,7 +226,7 @@ export const coordinatorDetailsActionsStore = $state<{
 	coordinatorKey: string;
 	loadingKeyPackages: boolean;
 	keyPackageError: string;
-	remoteKeyPackages: AvailableKeyPackage[];
+	remoteKeyPackages: AvailableKeyPackageWithCoordinator[];
 }>({
 	coordinatorKey: '',
 	loadingKeyPackages: false,
@@ -318,6 +330,15 @@ export async function loadCoordinatorRemoteKeyPackagesAction(
 	return request;
 }
 
+export async function startChatWithKeyPackageAction(keyPackage: {
+	kp_ref: string;
+	coordinatorKey: string;
+}): Promise<string> {
+	const group = await createChatGroup({ name: '', coordinatorKey: keyPackage.coordinatorKey });
+	await inviteChatGroupMember({ groupId: group.id, identifier: keyPackage.kp_ref });
+	return group.id;
+}
+
 export async function refreshWelcomeNotificationsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
 	await queryClient.invalidateQueries({
@@ -386,5 +407,57 @@ export async function rejectWelcomeAction(welcomeId: string) {
 		return false;
 	} finally {
 		clearWelcomeSubmitting(welcomeId);
+	}
+}
+
+export async function refreshJoinRequestsAction() {
+	const account = requireActiveAccount('You must be logged in to fetch join requests');
+	await queryClient.invalidateQueries({
+		queryKey: chatQueryKeys.joinRequests(account.pubkey)
+	});
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.joinRequests(account.pubkey),
+		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey, undefined),
+		staleTime: 0
+	});
+}
+
+export async function acceptJoinRequestAction(joinRequestId: string) {
+	chatJoinRequestsStore.error = '';
+	setJoinRequestSubmitting(joinRequestId);
+	try {
+		const entry = getJoinRequest(joinRequestId);
+		if (!entry) {
+			throw new Error(`Join request ${joinRequestId} not found`);
+		}
+		await acceptJoinRequest(entry);
+		return true;
+	} catch (error) {
+		const entry = getJoinRequest(joinRequestId);
+		chatJoinRequestsStore.error =
+			error instanceof Error
+				? error.message
+				: `Failed to accept join request${entry ? ` for ${entry.requesterStablePubkey.slice(0, 12)}…` : ''}`;
+		return false;
+	} finally {
+		clearJoinRequestSubmitting(joinRequestId);
+	}
+}
+
+export async function rejectJoinRequestAction(joinRequestId: string) {
+	chatJoinRequestsStore.error = '';
+	setJoinRequestSubmitting(joinRequestId);
+	try {
+		markJoinRequestDismissed(joinRequestId);
+		return true;
+	} catch (error) {
+		const entry = getJoinRequest(joinRequestId);
+		chatJoinRequestsStore.error =
+			error instanceof Error
+				? error.message
+				: `Failed to reject join request${entry ? ` for ${entry.requesterStablePubkey.slice(0, 12)}…` : ''}`;
+		return false;
+	} finally {
+		clearJoinRequestSubmitting(joinRequestId);
 	}
 }

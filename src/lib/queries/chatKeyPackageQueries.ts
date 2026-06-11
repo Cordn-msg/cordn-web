@@ -30,7 +30,7 @@ function resolveGuestCoordinatorRelays(coordinatorKey: string): string[] {
 
 export async function fetchPublicCoordinatorAvailableKeyPackages(
 	coordinatorKey: string
-): Promise<AvailableKeyPackage[]> {
+): Promise<AvailableKeyPackageWithCoordinator[]> {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
 	const client = new cordnClient({
 		serverPubkey: normalizedCoordinatorKey,
@@ -39,36 +39,49 @@ export async function fetchPublicCoordinatorAvailableKeyPackages(
 
 	try {
 		const result = await client.ListAvailableKeyPackages({});
-		return result.keyPackages.sort((a, b) => b.at - a.at);
+		return result.keyPackages
+			.map((entry) => ({ ...entry, coordinatorKey: normalizedCoordinatorKey }))
+			.sort((a, b) => b.at - a.at);
 	} finally {
 		await client.disconnect().catch(() => undefined);
 	}
 }
 
+export type AvailableKeyPackageWithCoordinator = AvailableKeyPackage & { coordinatorKey: string };
+
 export async function fetchCoordinatorAvailableKeyPackages(
 	coordinatorKey?: string,
 	options: { force?: boolean } = {}
-): Promise<AvailableKeyPackage[]> {
+): Promise<AvailableKeyPackageWithCoordinator[]> {
 	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
 	if (coordinatorKey?.trim()) {
-		return fetchSingleCoordinatorAvailableKeyPackages(coordinatorKey);
+		const entries = await fetchSingleCoordinatorAvailableKeyPackages(coordinatorKey);
+		return entries.map((entry) => ({ ...entry, coordinatorKey }));
 	}
 
 	const coordinatorKeys = [
 		...new Set(listChatCoordinators().map((entry) => normalizePubKey(entry.pubkey)))
 	];
 
-	const results = await Promise.all(
+	const results = await Promise.allSettled(
 		coordinatorKeys.map((key) =>
-			queryClient.fetchQuery({
-				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
-				queryFn: () => fetchSingleCoordinatorAvailableKeyPackages(key),
-				staleTime: options.force ? 0 : 30 * 1000
-			})
+			queryClient
+				.fetchQuery({
+					queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
+					queryFn: () => fetchSingleCoordinatorAvailableKeyPackages(key),
+					staleTime: options.force ? 0 : 30 * 1000
+				})
+				.then((entries) => entries.map((entry) => ({ ...entry, coordinatorKey: key })))
 		)
 	);
 
-	return results.flat().sort((a, b) => b.at - a.at);
+	return results
+		.filter(
+			(r): r is PromiseFulfilledResult<AvailableKeyPackageWithCoordinator[]> =>
+				r.status === 'fulfilled'
+		)
+		.flatMap((r) => r.value)
+		.sort((a, b) => b.at - a.at);
 }
 
 export function availableKeyPackagesQueryOptions(stablePubkey: string, coordinatorKey?: string) {

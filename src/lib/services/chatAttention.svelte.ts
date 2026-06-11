@@ -13,6 +13,7 @@ import {
 } from '$lib/services/chatGroupPresence.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
+import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import {
 	getChatGroup,
 	listChatGroupMembers,
@@ -57,7 +58,8 @@ function getUnreadAttentionCount() {
 			)
 		: 0;
 	const unreadWelcomes = getUnreadWelcomeNotificationCount();
-	return unreadMessages + unreadMentions + unreadWelcomes;
+	const unreadJoinRequests = getUnreadJoinRequestCount();
+	return unreadMessages + unreadMentions + unreadWelcomes + unreadJoinRequests;
 }
 
 export function hasUnreadChatAttention() {

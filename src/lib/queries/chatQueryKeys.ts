@@ -20,5 +20,7 @@ export const chatQueryKeys = {
 	availableKeyPackages: (stablePubkey: string, coordinatorKey?: string) =>
 		[...chatQueryKeys.coordinator(stablePubkey, coordinatorKey), 'available-key-packages'] as const,
 	welcomeNotifications: (stablePubkey: string, coordinatorKey?: string) =>
-		[...chatQueryKeys.coordinator(stablePubkey, coordinatorKey), 'welcome-notifications'] as const
+		[...chatQueryKeys.coordinator(stablePubkey, coordinatorKey), 'welcome-notifications'] as const,
+	joinRequests: (stablePubkey: string, coordinatorKey?: string) =>
+		[...chatQueryKeys.coordinator(stablePubkey, coordinatorKey), 'join-requests'] as const
 } as const;

@@ -29,6 +29,9 @@ import {
 	type ConsumeKeyPackageOutput,
 	type FetchGroupMessagesOutput,
 	type FetchManyGroupMessagesOutput,
+	type FetchPendingJoinRequestsInput,
+	type FetchPendingJoinRequestsOutput,
+	fetchPendingJoinRequestsOutputSchema,
 	type FetchPendingWelcomesInput,
 	type FetchPendingWelcomesOutput,
 	type GroupMessage,
@@ -38,6 +41,9 @@ import {
 	type PublishKeyPackageOutput,
 	type RemoveKeyPackagesInput,
 	type RemoveKeyPackagesOutput,
+	type StoreJoinRequestInput,
+	type StoreJoinRequestOutput,
+	storeJoinRequestOutputSchema,
 	type SubscribeGroupMessagesInput,
 	type SubscribeGroupMessagesOutput,
 	type SubscribeManyGroupMessagesInput,
@@ -57,6 +63,10 @@ export type coordinatorClient = {
 	RemoveKeyPackages: (input: RemoveKeyPackagesInput) => Promise<RemoveKeyPackagesOutput>;
 	FetchPendingWelcomes: (args: FetchPendingWelcomesInput) => Promise<FetchPendingWelcomesOutput>;
 	StoreWelcome: (input: StoreWelcomeInput) => Promise<StoreWelcomeOutput>;
+	StoreJoinRequest: (input: StoreJoinRequestInput) => Promise<StoreJoinRequestOutput>;
+	FetchPendingJoinRequests: (
+		input: FetchPendingJoinRequestsInput
+	) => Promise<FetchPendingJoinRequestsOutput>;
 	PostGroupMessage: (input: PostGroupMessageInput) => Promise<PostGroupMessageOutput>;
 	FetchGroupMessages: (input: FetchGroupMessagesInput) => Promise<FetchGroupMessagesOutput>;
 	FetchManyGroupMessages: (
@@ -196,6 +206,19 @@ export class cordnClient implements coordinatorClient {
 			name,
 			arguments: { ...args }
 		});
+
+		// Check if the server returned an error
+		if (result.isError) {
+			// Extract error message from content array
+			const content = result.content as Array<{ type: string; text?: string }> | undefined;
+			const errorMessage =
+				content
+					?.filter((c) => c.type === 'text')
+					.map((c) => c.text ?? '')
+					.join('\n') || 'Unknown coordinator error';
+			throw new Error(errorMessage);
+		}
+
 		return schema ? schema.parse(result.structuredContent) : (result.structuredContent as T);
 	}
 
@@ -278,6 +301,37 @@ export class cordnClient implements coordinatorClient {
 			COORDINATOR_METHODS.storeWelcome,
 			input,
 			storeWelcomeOutputSchema
+		);
+	}
+
+	/**
+	 * Store a join request for a group.
+	 * @param {string} gid The group id parameter
+	 * @param {string} kp_ref The key package reference parameter
+	 * @returns {Promise<StoreJoinRequestOutput>} The result of the join_request_store operation
+	 */
+	async StoreJoinRequest(input: StoreJoinRequestInput): Promise<StoreJoinRequestOutput> {
+		return this.call(
+			'stable',
+			COORDINATOR_METHODS.storeJoinRequest,
+			input,
+			storeJoinRequestOutputSchema
+		);
+	}
+
+	/**
+	 * Fetch pending join requests for a group.
+	 * @param {string} gid The group id parameter
+	 * @returns {Promise<FetchPendingJoinRequestsOutput>} The result of the join_request_take operation
+	 */
+	async FetchPendingJoinRequests(
+		input: FetchPendingJoinRequestsInput
+	): Promise<FetchPendingJoinRequestsOutput> {
+		return this.call(
+			'ephemeral',
+			COORDINATOR_METHODS.fetchPendingJoinRequests,
+			input,
+			fetchPendingJoinRequestsOutputSchema
 		);
 	}
 

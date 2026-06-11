@@ -19,15 +19,12 @@
 		listChatCoordinators,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import {
-		createChatGroup,
-		inviteChatGroupMember,
-		listChatGroups
-	} from '$lib/services/chatGroups.svelte';
+	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import {
 		coordinatorDetailsActionsStore,
-		loadCoordinatorRemoteKeyPackagesAction
+		loadCoordinatorRemoteKeyPackagesAction,
+		startChatWithKeyPackageAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
@@ -232,8 +229,7 @@
 	}
 
 	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
-		const coordinatorKey = defaultCoordinator?.pubkey ?? coordinators[0]?.pubkey;
-		if (!coordinatorKey) {
+		if (!keyPackage.coordinatorKey) {
 			quickChatError = 'Add a coordinator before starting a chat';
 			return;
 		}
@@ -241,15 +237,8 @@
 		try {
 			quickChatStartingRef = keyPackage.kp_ref;
 			quickChatError = '';
-			const group = await createChatGroup({
-				name: '',
-				coordinatorKey
-			});
-			await inviteChatGroupMember({
-				groupId: group.id,
-				identifier: keyPackage.kp_ref
-			});
-			await goto(getGroupHref(group.id));
+			const groupId = await startChatWithKeyPackageAction(keyPackage);
+			await goto(getGroupHref(groupId));
 		} catch (error) {
 			quickChatError = error instanceof Error ? error.message : 'Failed to start chat';
 		} finally {
