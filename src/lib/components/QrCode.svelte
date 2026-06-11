@@ -24,15 +24,16 @@
 				padY: 4
 			});
 
-			// Set the canvas display size using CSS
-			canvas.style.width = `${size}px`;
-			canvas.style.height = `${size}px`;
+			// Render fluid so the dialog never overflows on narrow screens; the
+			// wrapper caps the width at `size` (see below).
+			canvas.style.width = '100%';
+			canvas.style.height = 'auto';
 		} catch (error) {
 			console.error('Failed to generate QR code:', error);
 		}
 	});
 </script>
 
-<div class="inline-block rounded-lg bg-white p-2 shadow-sm">
+<div class="block w-full rounded-lg bg-white p-2 shadow-sm" style="max-width: {size}px">
 	<canvas bind:this={canvas} class="block" style="image-rendering: pixelated;"></canvas>
 </div>
