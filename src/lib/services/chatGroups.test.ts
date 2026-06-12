@@ -102,6 +102,31 @@ describe('isChatGroupPoisoned()', () => {
 		expect(isChatGroupPoisoned(poisonedGroup)).toBe(true);
 	});
 
+	test('returns true for legacy fatal MLS sync issues', async () => {
+		const { isChatGroupPoisoned } = await import('./chatGroups.svelte');
+
+		const legacyPoisonedGroup = {
+			id: 'legacy-poisoned',
+			status: 'active' as const,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [
+				{
+					cursor: 7,
+					createdAt: 1,
+					detail: 'Fatal MLS decryption failure: OperationError: The operation failed'
+				}
+			],
+			joinEpoch: 0n
+		};
+
+		expect(isChatGroupPoisoned(legacyPoisonedGroup)).toBe(true);
+	});
+
 	test('returns false when group status is active', async () => {
 		const { isChatGroupPoisoned } = await import('./chatGroups.svelte');
 
@@ -115,6 +140,31 @@ describe('isChatGroupPoisoned()', () => {
 			fetchCursor: 0,
 			messages: [],
 			syncIssues: [],
+			joinEpoch: 0n
+		};
+
+		expect(isChatGroupPoisoned(activeGroup)).toBe(false);
+	});
+
+	test('returns false for non-fatal sync issues', async () => {
+		const { isChatGroupPoisoned } = await import('./chatGroups.svelte');
+
+		const activeGroup = {
+			id: 'active-with-issue',
+			status: 'active' as const,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [
+				{
+					cursor: 3,
+					createdAt: 1,
+					detail: 'Cannot process message, epoch too old'
+				}
+			],
 			joinEpoch: 0n
 		};
 

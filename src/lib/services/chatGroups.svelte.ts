@@ -308,9 +308,13 @@ export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean 
 	}
 }
 
+function isPoisoningSyncIssue(issue: StoredChatSyncIssue): boolean {
+	return issue.detail.startsWith('Fatal MLS decryption failure');
+}
+
 export function isChatGroupPoisoned(group: StoredChatGroup | undefined): boolean {
 	if (!group) return false;
-	return group.status === 'poisoned';
+	return group.status === 'poisoned' || group.syncIssues.some(isPoisoningSyncIssue);
 }
 
 function assertChatGroupIsActive(group: StoredChatGroup): void {
