@@ -7,6 +7,7 @@ import {
 	fetchChatGroupMessages,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
+	recoverPoisonedChatGroup,
 	removeChatGroupMember,
 	sendChatGroupMessage,
 	updateChatGroupMetadata,
@@ -74,11 +75,15 @@ export const chatGroupInfoActionsStore = $state<{
 	removeSubmitting: string;
 	deleteSubmitting: boolean;
 	metadataSubmitting: boolean;
+	recoverySubmitting: boolean;
+	recoveryResult: 'success' | 'failure' | null;
 	error: string;
 }>({
 	removeSubmitting: '',
 	deleteSubmitting: false,
 	metadataSubmitting: false,
+	recoverySubmitting: false,
+	recoveryResult: null,
 	error: ''
 });
 
@@ -468,5 +473,26 @@ export async function rejectJoinRequestAction(joinRequestId: string) {
 		return false;
 	} finally {
 		clearJoinRequestSubmitting(joinRequestId);
+	}
+}
+
+export async function recoverPoisonedGroupAction(groupId?: string) {
+	if (!groupId || chatGroupInfoActionsStore.recoverySubmitting) return;
+	chatGroupInfoActionsStore.recoverySubmitting = true;
+	chatGroupInfoActionsStore.recoveryResult = null;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		const success = await recoverPoisonedChatGroup(groupId);
+		chatGroupInfoActionsStore.recoveryResult = success ? 'success' : 'failure';
+		if (!success) {
+			chatGroupInfoActionsStore.error =
+				'Recovery failed. The group state could not be restored from available snapshots.';
+		}
+	} catch (error) {
+		chatGroupInfoActionsStore.recoveryResult = 'failure';
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to recover group';
+	} finally {
+		chatGroupInfoActionsStore.recoverySubmitting = false;
 	}
 }

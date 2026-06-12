@@ -26,6 +26,7 @@ export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;
 export type GroupIngestionOutcome = {
 	appliedPendingCommitMessages: Set<string>;
 	rejectedPendingCommitMessages: Set<string>;
+	poisoned: boolean;
 };
 
 export function createGroupPendingEpochStore(): GroupPendingEpochStore {

@@ -119,8 +119,9 @@ export interface GroupMessageIngestionTarget {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
-	status?: 'active' | 'removed';
+	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
+	poisonedAtCursor?: number;
 }
 
 export interface RawChatGroupMessage {
@@ -600,6 +601,7 @@ export async function ingestChatGroupMessages(params: {
 	appliedPendingCommitMessages: Set<string>;
 	rejectedPendingCommitMessages: Set<string>;
 	removedLocalMember: boolean;
+	poisoned: boolean;
 }> {
 	const { group, messages } = params;
 	const received: StoredChatMessage[] = [];
@@ -609,6 +611,7 @@ export async function ingestChatGroupMessages(params: {
 	const appliedPendingCommitMessages = new SvelteSet<string>();
 	const rejectedPendingCommitMessages = new SvelteSet<string>();
 	let removedLocalMember = false;
+	let poisoned = false;
 
 	for (const message of messages) {
 		const isPendingOperationMessage =
@@ -687,6 +690,19 @@ export async function ingestChatGroupMessages(params: {
 				};
 				group.syncIssues.push(issue);
 				issues.push(issue);
+
+				// Mark group as poisoned on fatal MLS decryption failure
+				// (undecryptable stale message that is not a former epoch issue)
+				if (
+					isUndecryptableStaleMessageIssue(detail) &&
+					!isFormerEpochIssue(detail) &&
+					group.status !== 'removed'
+				) {
+					group.status = 'poisoned';
+					group.poisonedAtCursor = message.cursor;
+					poisoned = true;
+				}
+
 				continue;
 			}
 
@@ -797,6 +813,7 @@ export async function ingestChatGroupMessages(params: {
 		cursorAdvancedTo: group.fetchCursor,
 		appliedPendingCommitMessages,
 		rejectedPendingCommitMessages,
-		removedLocalMember
+		removedLocalMember,
+		poisoned
 	};
 }

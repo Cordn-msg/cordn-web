@@ -22,8 +22,9 @@ export interface PersistedChatGroupLike {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
-	status?: 'active' | 'removed';
+	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
+	poisonedAtCursor?: number;
 }
 
 export interface WorkingChatGroupSession {
@@ -33,8 +34,9 @@ export interface WorkingChatGroupSession {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
-	status?: 'active' | 'removed';
+	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
+	poisonedAtCursor?: number;
 }
 
 export function createWorkingChatGroupSession(
@@ -49,7 +51,8 @@ export function createWorkingChatGroupSession(
 		messages: [...group.messages],
 		syncIssues: [...group.syncIssues],
 		status: group.status,
-		removedAtCursor: group.removedAtCursor
+		removedAtCursor: group.removedAtCursor,
+		poisonedAtCursor: group.poisonedAtCursor
 	};
 }
 
@@ -108,6 +111,7 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		messages: params.workingGroup.messages,
 		syncIssues: params.workingGroup.syncIssues.slice(-50),
 		status: params.workingGroup.status,
-		removedAtCursor: params.workingGroup.removedAtCursor
+		removedAtCursor: params.workingGroup.removedAtCursor,
+		poisonedAtCursor: params.workingGroup.poisonedAtCursor
 	};
 }

@@ -65,12 +65,31 @@ import {
 	requireActiveAccount,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
-import { getChatStorage, type StoredChatGroupData } from '$lib/storage/chatStorage';
+import {
+	getChatStorage,
+	type StoredChatGroupData,
+	type ChatGroupStateSnapshotStatus
+} from '$lib/storage/chatStorage';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 
 const groupIdDecoder = new TextDecoder();
+
+/**
+ * Service-layer snapshot type using base64-encoded state.
+ * Mirrors StoredChatGroupStateSnapshot but uses stateBase64 instead of stateBytes.
+ */
+export interface ChatGroupStateSnapshot {
+	groupId: string;
+	status: ChatGroupStateSnapshotStatus;
+	epoch: string;
+	cursor: number;
+	createdAt: number;
+	stateBase64: string;
+	triggerCursor?: number;
+	triggerMessageId?: string;
+}
 
 export interface StoredChatGroup {
 	id: string;
@@ -82,8 +101,10 @@ export interface StoredChatGroup {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
-	status?: 'active' | 'removed';
+	snapshots?: ChatGroupStateSnapshot[];
+	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
+	poisonedAtCursor?: number;
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch: bigint;
@@ -109,8 +130,10 @@ function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
 		fetchCursor: group.fetchCursor ?? 0,
 		messages: group.messages ?? [],
 		syncIssues: group.syncIssues ?? [],
+		snapshots: group.snapshots ?? [],
 		status: group.status ?? 'active',
 		removedAtCursor: group.removedAtCursor,
+		poisonedAtCursor: group.poisonedAtCursor,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch ?? 0n
 	};
@@ -130,6 +153,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		fetchCursor: group.fetchCursor,
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
+		poisonedAtCursor: group.poisonedAtCursor,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
 		stateBytes: base64ToBytes(group.stateBase64),
@@ -137,7 +161,17 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 			...message,
 			tags: message.tags.map((tag) => [...tag])
 		})),
-		syncIssues: group.syncIssues.map((issue) => ({ ...issue }))
+		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
+		snapshots: group.snapshots?.map((snapshot) => ({
+			groupId: snapshot.groupId,
+			status: snapshot.status,
+			epoch: snapshot.epoch,
+			cursor: snapshot.cursor,
+			createdAt: snapshot.createdAt,
+			stateBytes: base64ToBytes(snapshot.stateBase64),
+			triggerCursor: snapshot.triggerCursor,
+			triggerMessageId: snapshot.triggerMessageId
+		}))
 	};
 }
 
@@ -159,8 +193,13 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 			tags: message.tags.map((tag) => [...tag])
 		})),
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
+		snapshots: group.snapshots?.map((snapshot) => ({
+			...snapshot,
+			stateBase64: bytesToBase64(snapshot.stateBytes)
+		})),
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
+		poisonedAtCursor: group.poisonedAtCursor,
 		metadata,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : undefined
@@ -271,13 +310,157 @@ export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean 
 
 export function isChatGroupPoisoned(group: StoredChatGroup | undefined): boolean {
 	if (!group) return false;
-	return group.syncIssues.some((issue) => issue.detail.startsWith('Fatal MLS decryption failure'));
+	return group.status === 'poisoned';
 }
 
 function assertChatGroupIsActive(group: StoredChatGroup): void {
 	if (isChatGroupRemoved(group)) {
 		throw new RemovedFromGroupError(group.metadata?.name || group.id);
 	}
+	if (isChatGroupPoisoned(group)) {
+		throw new Error('This group is unhealthy and is read-only until recovered.');
+	}
+}
+
+/**
+ * Snapshot registry helpers for MLS state health tracking.
+ *
+ * Rules:
+ * - Keep at most 3 snapshots per group
+ * - Keep at most 1 tentative snapshot
+ * - Tentative snapshot (if present) is always newest
+ * - New tentative replaces old tentative
+ * - Promotion flips tentative to healthy without evicting previous healthy snapshots
+ */
+
+export function appendHealthySnapshot(
+	snapshots: ChatGroupStateSnapshot[],
+	next: ChatGroupStateSnapshot
+): ChatGroupStateSnapshot[] {
+	const withoutTentative = snapshots.filter((snapshot) => snapshot.status === 'healthy');
+	const healthySnapshot: ChatGroupStateSnapshot = { ...next, status: 'healthy' };
+	return [...withoutTentative, healthySnapshot].slice(-3);
+}
+
+function replaceTentativeSnapshot(
+	snapshots: ChatGroupStateSnapshot[],
+	next: ChatGroupStateSnapshot
+): ChatGroupStateSnapshot[] {
+	const healthy = snapshots.filter((snapshot) => snapshot.status === 'healthy').slice(-2);
+	const tentativeSnapshot: ChatGroupStateSnapshot = { ...next, status: 'tentative' };
+	return [...healthy, tentativeSnapshot];
+}
+
+function promoteTentativeSnapshot(snapshots: ChatGroupStateSnapshot[]): ChatGroupStateSnapshot[] {
+	return snapshots.map((snapshot) =>
+		snapshot.status === 'tentative'
+			? { ...snapshot, status: 'healthy' as ChatGroupStateSnapshotStatus }
+			: snapshot
+	);
+}
+
+export function getNewestHealthySnapshot(
+	snapshots: ChatGroupStateSnapshot[]
+): ChatGroupStateSnapshot | undefined {
+	return [...snapshots]
+		.filter((snapshot) => snapshot.status === 'healthy')
+		.sort((a, b) => b.createdAt - a.createdAt)[0];
+}
+
+/**
+ * Create a tentative snapshot for an outbound epoch-changing operation.
+ * This is called after a successful commit is posted and synced.
+ */
+function createOutboundTentativeSnapshot(params: {
+	groupId: string;
+	nextGroup: StoredChatGroup;
+	newEpoch: bigint;
+	triggerCursor: number;
+}): ChatGroupStateSnapshot {
+	return {
+		groupId: params.groupId,
+		status: 'tentative',
+		epoch: params.newEpoch.toString(),
+		cursor: params.nextGroup.fetchCursor,
+		createdAt: Date.now(),
+		stateBase64: params.nextGroup.stateBase64,
+		triggerCursor: params.triggerCursor
+	};
+}
+
+/**
+ * Catch up with coordinator messages before performing an outbound operation.
+ * This runs inline (not through runGroupOperation) since it is called from
+ * within an already-serialized group operation context.
+ * Returns the refreshed group after catch-up.
+ */
+async function catchUpGroupBeforeOutboundOperation(
+	group: StoredChatGroup,
+	gid: string
+): Promise<StoredChatGroup> {
+	assertChatGroupIsActive(group);
+
+	const account = requireActiveAccount('You must be logged in to catch up group messages');
+	const hasCursor = group.fetchCursor > 0;
+	const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
+
+	let result: { messages: Array<{ cursor: number; at: number; msg_64: string }> };
+	try {
+		result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchGroupMessages({
+				gid,
+				after: hasCursor ? group.fetchCursor : undefined,
+				since_epoch: sinceEpoch
+			})
+		);
+	} catch (error) {
+		// Network/fetch errors are transient - log and continue with current state
+		console.warn('[catch-up] failed to fetch messages before outbound operation', {
+			groupId: group.id,
+			error: error instanceof Error ? error.message : String(error)
+		});
+		return requireChatGroup(group.id);
+	}
+
+	if (result.messages.length > 0) {
+		// Ingestion errors (including poison) must propagate - they indicate real problems
+		await applyIncomingChatGroupMessages(
+			group,
+			result.messages.map((message) => ({
+				cursor: message.cursor,
+				createdAt: message.at,
+				opaqueMessageBase64: message.msg_64
+			}))
+		);
+	}
+
+	return requireChatGroup(group.id);
+}
+
+/**
+ * Assert that a group can perform outbound operations.
+ * Performs catch-up with the coordinator and validates the group is healthy.
+ * Must be called from within a runGroupOperation context.
+ */
+export async function assertGroupCanPerformOutboundOperation(
+	groupId: string
+): Promise<StoredChatGroup> {
+	const group = requireChatGroup(groupId);
+	assertChatGroupIsActive(group);
+
+	const state = decodeStoredGroupState(group);
+	const gid = groupIdDecoder.decode(state.groupContext.groupId);
+
+	const refreshed = await catchUpGroupBeforeOutboundOperation(group, gid);
+	assertChatGroupIsActive(refreshed);
+
+	if (isChatGroupPoisoned(refreshed)) {
+		throw new Error(
+			'This group is unhealthy and is read-only until recovered. Contact an admin for assistance.'
+		);
+	}
+
+	return refreshed;
 }
 
 export function listChatGroups(): StoredChatGroup[] {
@@ -391,6 +574,17 @@ export async function createChatGroup(input: {
 		joinedWithKeyPackageRef: memberArtifacts.keyPackageRef
 	});
 
+	// Create initial healthy snapshot for recovery baseline
+	const initialSnapshot: ChatGroupStateSnapshot = {
+		groupId: group.id,
+		status: 'healthy',
+		epoch: state.groupContext.epoch.toString(),
+		cursor: 0,
+		createdAt: Date.now(),
+		stateBase64: group.stateBase64
+	};
+	group.snapshots = [initialSnapshot];
+
 	persistGroup(group);
 	return group;
 }
@@ -413,6 +607,18 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
 	group.ownerPubkey = normalizePubKey(account.pubkey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
+
+	// Create initial healthy snapshot for recovery baseline
+	const state = decodeStoredGroupState(group);
+	const initialSnapshot: ChatGroupStateSnapshot = {
+		groupId: group.id,
+		status: 'healthy',
+		epoch: state.groupContext.epoch.toString(),
+		cursor: 0,
+		createdAt: Date.now(),
+		stateBase64: group.stateBase64
+	};
+	group.snapshots = [initialSnapshot];
 
 	const existingGroup = getChatGroup(group.id);
 	if (existingGroup) {
@@ -469,8 +675,7 @@ export async function inviteChatGroupMember(input: {
 }): Promise<StoredChatGroup> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
-		const group = requireChatGroup(input.groupId);
-		assertChatGroupIsActive(group);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,
@@ -583,6 +788,15 @@ export async function inviteChatGroupMember(input: {
 			metadata: toPersistedGroupMetadata(sync.workingGroup.metadata)
 		});
 
+		// Create tentative snapshot for the new epoch
+		const tentativeSnapshot = createOutboundTentativeSnapshot({
+			groupId: group.id,
+			nextGroup,
+			newEpoch: commitResult.newState.groupContext.epoch,
+			triggerCursor: posted.cursor
+		});
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
 	});
@@ -623,8 +837,7 @@ export async function removeChatGroupMember(input: {
 }): Promise<StoredChatGroup> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to remove a member');
-		const group = requireChatGroup(input.groupId);
-		assertChatGroupIsActive(group);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,
@@ -691,6 +904,15 @@ export async function removeChatGroupMember(input: {
 				group.metadata
 		});
 
+		// Create tentative snapshot for the new epoch
+		const tentativeSnapshot = createOutboundTentativeSnapshot({
+			groupId: group.id,
+			nextGroup,
+			newEpoch: commitResult.newState.groupContext.epoch,
+			triggerCursor: posted.cursor
+		});
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
 	});
@@ -706,8 +928,7 @@ export async function updateChatGroupMetadata(input: {
 }): Promise<StoredChatGroup> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to update group metadata');
-		const group = requireChatGroup(input.groupId);
-		assertChatGroupIsActive(group);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,
@@ -770,6 +991,15 @@ export async function updateChatGroupMetadata(input: {
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ?? metadata
 		});
 
+		// Create tentative snapshot for the new epoch
+		const tentativeSnapshot = createOutboundTentativeSnapshot({
+			groupId: group.id,
+			nextGroup,
+			newEpoch: commitResult.newState.groupContext.epoch,
+			triggerCursor: posted.cursor
+		});
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
 	});
@@ -802,6 +1032,7 @@ async function applyIncomingChatGroupMessages(
 	group: StoredChatGroup;
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
+	poisoned: boolean;
 }> {
 	const account = requireActiveAccount('You must be logged in to process group messages');
 	assertChatGroupIsActive(group);
@@ -825,11 +1056,47 @@ async function applyIncomingChatGroupMessages(
 		metadata: toPersistedGroupMetadata(workingGroup.metadata)
 	});
 
+	// Track snapshots for MLS state health
+	const oldEpoch = state.groupContext.epoch;
+	const newEpoch = workingGroup.state.groupContext.epoch;
+	const epochChanged = oldEpoch !== newEpoch;
+
+	let updatedSnapshots = nextGroup.snapshots ?? [];
+
+	if (epochChanged) {
+		// Epoch changed - create tentative snapshot
+		const newSnapshot: ChatGroupStateSnapshot = {
+			groupId: group.id,
+			status: 'tentative',
+			epoch: newEpoch.toString(),
+			cursor: workingGroup.fetchCursor,
+			createdAt: Date.now(),
+			stateBase64: nextGroup.stateBase64,
+			triggerCursor: messages[messages.length - 1]?.cursor
+		};
+		updatedSnapshots = replaceTentativeSnapshot(updatedSnapshots, newSnapshot);
+	} else if (sync.received.length > 0) {
+		// Successfully decrypted messages in same epoch - promote tentative if present
+		const hasTentative = updatedSnapshots.some((s) => s.status === 'tentative');
+		if (hasTentative) {
+			updatedSnapshots = promoteTentativeSnapshot(updatedSnapshots);
+		}
+	}
+
+	nextGroup.snapshots = updatedSnapshots;
+
 	replaceGroup(group.id, nextGroup);
+
+	// If ingestion poisoned the group, throw so the caller aborts
+	if (sync.ingestion.poisoned) {
+		throw new Error('Group became poisoned during message ingestion');
+	}
+
 	return {
 		group: nextGroup,
 		received: sync.received,
-		issues: sync.issues
+		issues: sync.issues,
+		poisoned: sync.ingestion.poisoned
 	};
 }
 
@@ -879,6 +1146,11 @@ export async function ingestIncomingChatGroupMessages(
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
 }> {
+	if (messages.length === 0) {
+		const group = requireChatGroup(groupId);
+		return { group, received: [], issues: [] };
+	}
+
 	return runGroupOperation(groupId, async () => {
 		const group = requireChatGroup(groupId);
 		return applyIncomingChatGroupMessages(group, messages);
@@ -896,8 +1168,7 @@ export async function sendChatGroupMessage(input: {
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
-		const group = requireChatGroup(input.groupId);
-		assertChatGroupIsActive(group);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 
 		const isReaction = Boolean(input.reactionTo);
 		const isEdit = Boolean(input.editTo);
@@ -959,6 +1230,109 @@ export async function sendChatGroupMessage(input: {
 
 		replaceGroup(group.id, nextGroup);
 		return stored;
+	});
+}
+
+/**
+ * Attempt to recover a poisoned group by replaying from the newest healthy snapshot.
+ *
+ * Algorithm:
+ * 1. Find newest healthy snapshot
+ * 2. Restore state from snapshot
+ * 3. Fetch messages using since_epoch from snapshot
+ * 4. Replay through ingestion pipeline
+ * 5. Clear poisoned status if successful, keep it if failed
+ *
+ * Returns true if recovery succeeded, false otherwise.
+ */
+export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean> {
+	return runGroupOperation(groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to recover a group');
+		const group = requireChatGroup(groupId);
+
+		if (!isChatGroupPoisoned(group)) {
+			// Group is not poisoned, nothing to recover
+			return true;
+		}
+
+		const snapshots = group.snapshots ?? [];
+		const healthySnapshot = getNewestHealthySnapshot(snapshots);
+
+		if (!healthySnapshot) {
+			console.warn('[recovery] no healthy snapshot available for group', { groupId });
+			return false;
+		}
+
+		console.log('[recovery] attempting recovery from healthy snapshot', {
+			groupId,
+			snapshotEpoch: healthySnapshot.epoch,
+			snapshotCursor: healthySnapshot.cursor
+		});
+
+		// Restore state from snapshot, clearing poisoned status for replay
+		const restoredGroup: StoredChatGroup = {
+			...group,
+			stateBase64: healthySnapshot.stateBase64,
+			fetchCursor: healthySnapshot.cursor,
+			status: 'active',
+			poisonedAtCursor: undefined,
+			syncIssues: []
+		};
+
+		// Fetch messages from snapshot epoch
+		const state = decodeStoredGroupState(restoredGroup);
+		const gid = groupIdDecoder.decode(state.groupContext.groupId);
+		const sinceEpoch = healthySnapshot.epoch;
+
+		try {
+			const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+				client.FetchGroupMessages({
+					gid,
+					after: healthySnapshot.cursor,
+					since_epoch: sinceEpoch
+				})
+			);
+
+			// Replay through ingestion pipeline
+			const sync = await applyIncomingChatGroupMessages(
+				restoredGroup,
+				result.messages.map((message) => ({
+					cursor: message.cursor,
+					createdAt: message.at,
+					opaqueMessageBase64: message.msg_64
+				}))
+			);
+
+			// If replay poisoned the group again, it is unrecoverable
+			if (isChatGroupPoisoned(sync.group)) {
+				console.warn('[recovery] replay re-poisoned the group', {
+					groupId,
+					issueCount: sync.issues.length
+				});
+				return false;
+			}
+
+			console.log('[recovery] successful recovery from snapshot', {
+				groupId,
+				recoveredEpoch: healthySnapshot.epoch,
+				messagesReplayed: result.messages.length
+			});
+
+			return true;
+		} catch (error) {
+			console.warn('[recovery] replay failed with error', {
+				groupId,
+				error: error instanceof Error ? error.message : String(error)
+			});
+			// Re-persist poisoned status on failure
+			const currentGroup = requireChatGroup(groupId);
+			replaceGroup(groupId, {
+				...currentGroup,
+				status: 'poisoned',
+				poisonedAtCursor: group.poisonedAtCursor
+			});
+			return false;
+		}
 	});
 }
 

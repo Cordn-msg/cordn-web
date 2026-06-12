@@ -8,10 +8,8 @@ import {
 	isChatGroupPoisoned,
 	listChatGroups,
 	ingestIncomingChatGroupMessages,
-	reloadChatGroupsForOwner,
-	replaceGroup
+	reloadChatGroupsForOwner
 } from '$lib/services/chatGroups.svelte';
-import type { StoredChatSyncIssue } from '$lib/services/chatGroupMessages.svelte';
 import {
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
@@ -52,7 +50,7 @@ let lastActiveAccountId = '';
 const groupIdDecoder = new TextDecoder();
 const RUNTIME_RESUME_REASON = 'runtime resume';
 const WATCH_INGEST_BATCH_SIZE = 50;
-const WATCH_INGEST_FLUSH_MS = 50;
+const WATCH_INGEST_FLUSH_MS = 0;
 const RESUME_DEBOUNCE_MS = 500;
 const RECONNECT_STATUS_SHOW_DELAY_MS = 200;
 const MIN_RESUME_INTERVAL_MS = 5000;
@@ -215,7 +213,8 @@ function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
 			(group) =>
 				(input.includeCurrentWatches || getCurrentWatch(group.id) === undefined) &&
 				!autoWatchDisabledGroupIds.has(group.id) &&
-				!isChatGroupRemoved(group)
+				!isChatGroupRemoved(group) &&
+				!isChatGroupPoisoned(group)
 		)
 		.map((group) => toWatchableGroup(group.id))
 		.filter((group): group is WatchableGroup => Boolean(group));
@@ -331,16 +330,6 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 		watchable.sinceEpoch = group.joinEpoch.toString();
 	}
 
-	console.log('[watch] toWatchableGroup', {
-		groupId,
-		gid,
-		coordinatorKey: group.coordinatorKey,
-		fetchCursor: group.fetchCursor,
-		joinEpoch: group.joinEpoch.toString(),
-		after: watchable.after,
-		sinceEpoch: watchable.sinceEpoch
-	});
-
 	return watchable;
 }
 
@@ -363,21 +352,6 @@ function createWatchBuffer(input: {
 			groupId: input.groupId,
 			detail
 		});
-		// Mark group as poisoned on fatal MLS errors
-		if (detail.includes('OperationError') || detail.includes('CryptoError')) {
-			const group = getChatGroup(input.groupId);
-			if (group) {
-				const syncIssue: StoredChatSyncIssue = {
-					cursor: 0,
-					createdAt: Date.now(),
-					detail: `Fatal MLS decryption failure: ${detail}`
-				};
-				replaceGroup(input.groupId, {
-					...group,
-					syncIssues: [...group.syncIssues, syncIssue].slice(-50)
-				});
-			}
-		}
 		chatGroupWatchStore.error =
 			error instanceof Error ? error.message : 'Failed to ingest watched group messages';
 	};
@@ -402,6 +376,12 @@ function createWatchBuffer(input: {
 				const result = await ingestIncomingChatGroupMessages(input.groupId, batch);
 				if (isChatGroupRemoved(result.group)) {
 					await input.abort('removed from group');
+					return true;
+				}
+
+				// Abort watch if group became poisoned
+				if (isChatGroupPoisoned(result.group)) {
+					await input.abort('group poisoned');
 					return true;
 				}
 
@@ -456,7 +436,11 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 
 	for (const [groupId, groupMessages] of messagesByGroupId) {
 		try {
-			await ingestIncomingChatGroupMessages(groupId, groupMessages);
+			const result = await ingestIncomingChatGroupMessages(groupId, groupMessages);
+			// Mark as failed if group became poisoned
+			if (isChatGroupPoisoned(result.group)) {
+				failedGroupIds.add(groupId);
+			}
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			console.warn('[watch] failed to ingest coordinator backlog for group', {
@@ -465,19 +449,6 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 				detail
 			});
 			failedGroupIds.add(groupId);
-			// Mark group as sync-broken by adding a sync issue
-			const group = getChatGroup(groupId);
-			if (group) {
-				const syncIssue: StoredChatSyncIssue = {
-					cursor: groupMessages[0]?.cursor ?? 0,
-					createdAt: groupMessages[0]?.createdAt ?? Date.now(),
-					detail: `Fatal MLS decryption failure: ${detail}`
-				};
-				replaceGroup(groupId, {
-					...group,
-					syncIssues: [...group.syncIssues, syncIssue].slice(-50)
-				});
-			}
 		}
 	}
 
@@ -496,6 +467,7 @@ async function fetchGroupBacklog(group: WatchableGroup) {
 			since_epoch: group.sinceEpoch
 		})
 	);
+	if (result.messages.length === 0) return;
 
 	await ingestIncomingChatGroupMessages(
 		group.id,
@@ -512,16 +484,6 @@ async function fetchCoordinatorGroupBacklog(input: {
 	coordinatorKey: string;
 	groups: WatchableGroup[];
 }): Promise<Set<string>> {
-	console.log('[watch] fetchCoordinatorGroupBacklog', {
-		coordinatorKey: input.coordinatorKey,
-		groupCount: input.groups.length,
-		groups: input.groups.map((g) => ({
-			id: g.id,
-			gid: g.gid,
-			after: g.after,
-			sinceEpoch: g.sinceEpoch
-		}))
-	});
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
 		client.FetchManyGroupMessages({
@@ -532,11 +494,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			}))
 		})
 	);
-
-	console.log('[watch] fetchCoordinatorGroupBacklog result', {
-		coordinatorKey: input.coordinatorKey,
-		messageCount: result.messages.length
-	});
+	if (result.messages.length === 0) return new Set<string>();
 
 	return ingestGroupMessagesFromCoordinatorFetch(
 		groupsByGid,
@@ -711,16 +669,6 @@ async function startWatchingCoordinatorGroups(
 			.filter((group): group is WatchableGroup => Boolean(group));
 		if (subscriptionGroups.length === 0) return;
 		const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
-		console.log('[watch] startWatchingCoordinatorGroups subscribing', {
-			coordinatorKey,
-			groupCount: subscriptionGroups.length,
-			groups: subscriptionGroups.map((g) => ({
-				id: g.id,
-				gid: g.gid,
-				after: g.after,
-				sinceEpoch: g.sinceEpoch
-			}))
-		});
 		const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
 			client.SubscribeManyGroupMessages({
 				groups: subscriptionGroups.map((group) => ({
@@ -730,10 +678,6 @@ async function startWatchingCoordinatorGroups(
 				}))
 			})
 		);
-		console.log('[watch] startWatchingCoordinatorGroups subscription established', {
-			coordinatorKey,
-			groupCount: subscriptionGroups.length
-		});
 		const buffers = new Map(
 			subscriptionGroups.map((group) => [
 				group.id,

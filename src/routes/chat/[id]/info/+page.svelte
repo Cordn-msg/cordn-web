@@ -17,6 +17,8 @@
 		clearChatGroupSyncIssues,
 		decodeStoredGroupState,
 		getChatGroup,
+		getNewestHealthySnapshot,
+		isChatGroupPoisoned,
 		isChatGroupRemoved,
 		listChatGroupMembers,
 		listChatGroupSyncIssues,
@@ -25,6 +27,7 @@
 	import {
 		chatGroupInfoActionsStore,
 		deleteGroupAction,
+		recoverPoisonedGroupAction,
 		removeGroupMemberAction,
 		updateGroupMetadataAction
 	} from '$lib/services/chatUiActions.svelte';
@@ -50,6 +53,11 @@
 		return isGroupAdmin({ metadata: group.metadata, stablePubkey: $activeAccount.pubkey });
 	});
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
+	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
+	const hasHealthySnapshot = $derived.by(() => {
+		if (!group) return false;
+		return getNewestHealthySnapshot(group.snapshots ?? []) !== undefined;
+	});
 	const adminPubkeys = $derived.by(() =>
 		(group?.metadata?.adminPubkeys ?? []).map((pubkey) => normalizePubKey(pubkey))
 	);
@@ -92,9 +100,11 @@
 		if (!group) return [];
 		return listChatGroupSyncIssues(group.id);
 	});
+	const snapshots = $derived.by(() => group?.snapshots ?? []);
 
 	const messageCount = $derived.by(() => group?.messages.length ?? 0);
 	const issueCount = $derived.by(() => group?.syncIssues.length ?? 0);
+	const snapshotCount = $derived.by(() => snapshots.length);
 
 	async function flushSyncIssues() {
 		if (!group) return;
@@ -177,6 +187,10 @@
 		chatGroupInfoActionsStore.error = '';
 		metadataFormOpen = false;
 	}
+
+	function formatSnapshotStatus(status: string) {
+		return status === 'healthy' ? 'Healthy' : 'Tentative';
+	}
 </script>
 
 <svelte:head>
@@ -238,6 +252,51 @@
 					>
 						You were removed from this group. Sending and live watching are disabled. Deleting the
 						local group below is recommended.
+					</div>
+				{/if}
+
+				{#if isPoisoned}
+					<div
+						class="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-4 text-sm text-destructive"
+					>
+						<p class="font-semibold">This group is in an unhealthy state</p>
+						<p class="mt-1 text-xs">
+							MLS decryption failed and the group cannot send or receive messages. This usually
+							happens when the local state diverged from the coordinator history.
+						</p>
+						{#if hasHealthySnapshot}
+							<div class="mt-3 flex gap-2">
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									disabled={chatGroupInfoActionsStore.recoverySubmitting}
+									onclick={() => recoverPoisonedGroupAction(group.id)}
+								>
+									{#if chatGroupInfoActionsStore.recoverySubmitting}
+										<Spinner class="mr-2 size-4" />
+										Recovering…
+									{:else}
+										Attempt recovery
+									{/if}
+								</Button>
+							</div>
+							{#if chatGroupInfoActionsStore.recoveryResult === 'success'}
+								<p class="mt-2 text-xs text-green-600 dark:text-green-400">
+									Recovery successful. The group is now healthy.
+								</p>
+							{:else if chatGroupInfoActionsStore.recoveryResult === 'failure'}
+								<p class="mt-2 text-xs">
+									Recovery failed. Contact a group admin to be re-invited, or delete this group
+									locally.
+								</p>
+							{/if}
+						{:else}
+							<p class="mt-2 text-xs">
+								No recovery snapshot is available. Contact a group admin to be re-invited, or delete
+								this group locally.
+							</p>
+						{/if}
 					</div>
 				{/if}
 
@@ -556,6 +615,47 @@
 											<p class="mt-2 font-mono text-sm">{messageCount} stored</p>
 										</div>
 									</div>
+								</Card.Content>
+							</Card.Root>
+
+							<Card.Root>
+								<Card.Header>
+									<Card.Title>MLS snapshots</Card.Title>
+									<Card.Description>
+										{snapshotCount}
+										{snapshotCount === 1 ? 'snapshot' : 'snapshots'} saved for local state recovery.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content>
+									{#if snapshots.length === 0}
+										<p class="text-sm text-muted-foreground">
+											No MLS state snapshots are available for this group.
+										</p>
+									{:else}
+										<div class="space-y-2">
+											{#each snapshots as snapshot (`${snapshot.status}-${snapshot.epoch}-${snapshot.cursor}-${snapshot.createdAt}`)}
+												<div class="rounded-xl border border-border p-3 text-sm">
+													<div class="flex flex-wrap items-center justify-between gap-2">
+														<span
+															class={`rounded-full px-2 py-0.5 text-xs font-medium ${snapshot.status === 'healthy' ? 'bg-green-500/10 text-green-700 dark:text-green-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'}`}
+														>
+															{formatSnapshotStatus(snapshot.status)}
+														</span>
+														<span class="text-xs text-muted-foreground">
+															{new Date(snapshot.createdAt).toLocaleString()}
+														</span>
+													</div>
+													<div
+														class="mt-3 grid gap-2 font-mono text-xs text-muted-foreground md:grid-cols-3"
+													>
+														<p>Epoch {snapshot.epoch}</p>
+														<p>Cursor {snapshot.cursor}</p>
+														<p>Trigger {snapshot.triggerCursor ?? 'N/A'}</p>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{/if}
 								</Card.Content>
 							</Card.Root>
 

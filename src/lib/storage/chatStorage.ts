@@ -7,6 +7,19 @@ import type {
 
 export type ChatStorageBackend = 'indexeddb' | 'memory';
 
+export type ChatGroupStateSnapshotStatus = 'healthy' | 'tentative';
+
+export interface StoredChatGroupStateSnapshot {
+	groupId: string;
+	status: ChatGroupStateSnapshotStatus;
+	epoch: string;
+	cursor: number;
+	createdAt: number;
+	stateBytes: Uint8Array;
+	triggerCursor?: number;
+	triggerMessageId?: string;
+}
+
 export interface StoredChatGroupRecord {
 	id: string;
 	ownerPubkey?: string;
@@ -14,8 +27,9 @@ export interface StoredChatGroupRecord {
 	createdAt: number;
 	lastCursor: number;
 	fetchCursor: number;
-	status?: 'active' | 'removed';
+	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
+	poisonedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: string;
 }
@@ -29,6 +43,7 @@ export interface StoredChatGroupData extends StoredChatGroupRecord {
 	stateBytes: Uint8Array;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
+	snapshots?: StoredChatGroupStateSnapshot[];
 }
 
 interface StoredChatMessageRecord extends StoredChatMessage {
@@ -112,12 +127,20 @@ function cloneIssueRecord(issue: StoredChatSyncIssueRecord): StoredChatSyncIssue
 	};
 }
 
+function cloneSnapshot(snapshot: StoredChatGroupStateSnapshot): StoredChatGroupStateSnapshot {
+	return {
+		...snapshot,
+		stateBytes: cloneBytes(snapshot.stateBytes)
+	};
+}
+
 function cloneGroup(group: StoredChatGroupData): StoredChatGroupData {
 	return {
 		...group,
 		stateBytes: cloneBytes(group.stateBytes),
 		messages: group.messages.map(cloneMessage),
-		syncIssues: group.syncIssues.map(cloneIssue)
+		syncIssues: group.syncIssues.map(cloneIssue),
+		snapshots: group.snapshots?.map(cloneSnapshot)
 	};
 }
 
@@ -135,6 +158,7 @@ function cloneGroupRecord(group: StoredChatGroupData): StoredChatGroupRecord {
 	delete (record as Partial<StoredChatGroupData>).stateBytes;
 	delete (record as Partial<StoredChatGroupData>).messages;
 	delete (record as Partial<StoredChatGroupData>).syncIssues;
+	delete (record as Partial<StoredChatGroupData>).snapshots;
 	return { ...record };
 }
 
@@ -147,7 +171,10 @@ function compareKeyPackages(a: StoredChatKeyPackageRecord, b: StoredChatKeyPacka
 }
 
 function materializeGroupData(params: {
-	group: StoredChatGroupRecord & { stateBytes: Uint8Array };
+	group: StoredChatGroupRecord & {
+		stateBytes: Uint8Array;
+		snapshots?: StoredChatGroupStateSnapshot[];
+	};
 	messages: StoredChatMessageRecord[];
 	syncIssues: StoredChatSyncIssueRecord[];
 }): StoredChatGroupData {
@@ -167,7 +194,8 @@ function materializeGroupData(params: {
 				void groupId;
 				return cloneIssue(issue);
 			})
-			.sort((a, b) => a.cursor - b.cursor)
+			.sort((a, b) => a.cursor - b.cursor),
+		snapshots: params.group.snapshots?.map(cloneSnapshot)
 	};
 }
 
