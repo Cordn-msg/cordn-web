@@ -2,9 +2,15 @@
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import { getProfileDisplayName } from '$lib/components/chat/chatGroupDisplay';
+	import {
+		getProfileDisplayName,
+		getChatGroupDisplayTitle
+	} from '$lib/components/chat/chatGroupDisplay';
 	import type { ChatGroupProfileHints } from '$lib/components/chat/chatGroupDisplay';
 	import type { JoinRequestEntry } from '$lib/services/chatJoinRequests.svelte';
+	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { getChatGroup, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
+	import { normalizePubKey } from '$lib/utils';
 
 	let {
 		entry,
@@ -25,6 +31,25 @@
 		onAccept: () => void;
 		onReject?: () => void;
 	} = $props();
+
+	const group = $derived.by(() => getChatGroup(entry.groupId));
+
+	const groupMemberPubkeys = $derived.by(() =>
+		group
+			? listChatGroupMembers(group.id)
+					.map((member) => normalizePubKey(member.stablePubkey))
+					.filter((pubkey): pubkey is string => Boolean(pubkey))
+			: []
+	);
+
+	const groupDisplayName = $derived.by(() => {
+		if (!group) return 'group';
+		return getChatGroupDisplayTitle({
+			group,
+			activePubkey: $activeAccount?.pubkey,
+			memberPubkeys: groupMemberPubkeys
+		});
+	});
 
 	function getDisplayName() {
 		return getProfileDisplayName(entry.requesterStablePubkey, profileHints);
@@ -51,7 +76,9 @@
 				<p class="truncate text-sm font-medium sm:whitespace-normal">
 					{getDisplayName()}
 				</p>
-				<p class="line-clamp-2 text-xs break-words text-muted-foreground">Wants to join group</p>
+				<p class="line-clamp-2 text-xs wrap-break-word text-muted-foreground">
+					Wants to join {groupDisplayName}
+				</p>
 				{#if showCoordinatorLabel && coordinatorLabel}
 					<p class="truncate text-[11px] text-muted-foreground">
 						{coordinatorLabel}
