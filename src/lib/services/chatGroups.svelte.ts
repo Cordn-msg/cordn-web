@@ -1084,6 +1084,19 @@ async function applyIncomingChatGroupMessages(
 		const hasTentative = updatedSnapshots.some((s) => s.status === 'tentative');
 		if (hasTentative) {
 			updatedSnapshots = promoteTentativeSnapshot(updatedSnapshots);
+		} else if (updatedSnapshots.length === 0) {
+			// Bootstrap: group has no snapshots yet — seed with tentative so it
+			// follows the same lifecycle (tentative → healthy on next decrypt).
+			const bootstrapSnapshot: ChatGroupStateSnapshot = {
+				groupId: group.id,
+				status: 'tentative',
+				epoch: newEpoch.toString(),
+				cursor: workingGroup.fetchCursor,
+				createdAt: Date.now(),
+				stateBase64: nextGroup.stateBase64,
+				triggerCursor: messages[messages.length - 1]?.cursor
+			};
+			updatedSnapshots = [bootstrapSnapshot];
 		}
 	}
 

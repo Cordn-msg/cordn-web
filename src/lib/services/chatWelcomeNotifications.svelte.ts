@@ -150,11 +150,7 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 	const seenIds = new SvelteSet<string>();
 	chatWelcomeNotificationsStore.entries = [...existingById.values()]
 		.filter((entry) => {
-			if (
-				entry.coordinatorKey === normalizedCoordinatorKey &&
-				!responseIds.has(entry.id) &&
-				(entry.status === 'accepted' || entry.status === 'dismissed')
-			) {
+			if (entry.coordinatorKey === normalizedCoordinatorKey && !responseIds.has(entry.id)) {
 				return false;
 			}
 			if (seenIds.has(entry.id)) return false;

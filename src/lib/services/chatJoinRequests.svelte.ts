@@ -164,8 +164,7 @@ function mergeFetchedJoinRequests(
 			if (
 				entry.coordinatorKey === normalizedCoordinatorKey &&
 				entry.groupId === groupId &&
-				!responseIds.has(entry.id) &&
-				(entry.status === 'accepted' || entry.status === 'dismissed')
+				!responseIds.has(entry.id)
 			) {
 				return false;
 			}
@@ -248,10 +247,20 @@ export async function fetchJoinRequestsForAdminGroups() {
 					coordinatorKey,
 					groups
 				);
+				const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
 				for (const request of result.requests) {
-					mergeFetchedJoinRequests(coordinatorKey, request.gid, [
-						{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
-					]);
+					const list = requestsByGroup.get(request.gid);
+					if (list) {
+						list.push({ pk: request.pk, kp_ref: request.kp_ref, at: request.at });
+					} else {
+						requestsByGroup.set(request.gid, [
+							{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
+						]);
+					}
+				}
+				for (const group of groups) {
+					const requests = requestsByGroup.get(group.gid) ?? [];
+					mergeFetchedJoinRequests(coordinatorKey, group.gid, requests);
 				}
 			} catch (error) {
 				if (isSignerUnavailableError(error)) return;
