@@ -14,8 +14,8 @@ importers:
   .:
     dependencies:
       '@contextvm/sdk':
-        specifier: ^0.11.14
-        version: 0.11.14(typescript@6.0.3)
+        specifier: ^0.12
+        version: 0.12.0(typescript@6.0.3)
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -179,8 +179,14 @@ packages:
   '@capacitor/core@7.6.5':
     resolution: {integrity: sha512-JWyxD9LaK1oY588B/khJIG3Ec4NHI/Ki4v1b4XzqPNt2a27au0F2AhLTwYexV4Bp3Ruxf+8oYqxFAC8/7sGBWA==}
 
-  '@contextvm/sdk@0.11.14':
-    resolution: {integrity: sha512-QTRReNJ3NP6kOT2umHYmhYLSUBK4PtX5wFy4MUm7U/CJq1vnmPnmQ3HnHTG+gNtyLNiv4I3epuUPA6MJm3K/WA==}
+  '@contextvm/mcp-sdk@1.29.1':
+    resolution: {integrity: sha512-2UKIRdxuGZHTTafLtKhx3PULwFG9e4aDWv2rIBa4kifaYa3Cnnpm7xl0kSGJi5zZQlcHHxd1hYXsDGfdIf2OrA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25 || ^4.0
+
+  '@contextvm/sdk@0.12.0':
+    resolution: {integrity: sha512-1mQbe337rXhorjJWsXv3+5LuyjWgoeFpC6M5j5mDT9uczQ8aGDtW+qKAf9OOKlGrvLt3chC61uuEDB/G4ArP4g==}
     engines: {bun: '>=1.2.0'}
     peerDependencies:
       typescript: ^5.9.3
@@ -2347,9 +2353,17 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@contextvm/sdk@0.11.14(typescript@6.0.3)':
+  '@contextvm/mcp-sdk@1.29.1(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      cross-spawn: 7.0.6
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+
+  '@contextvm/sdk@0.12.0(typescript@6.0.3)':
+    dependencies:
+      '@contextvm/mcp-sdk': 1.29.1(zod@4.4.3)
       '@noble/hashes': 2.2.0
       applesauce-relay: 5.2.0(typescript@6.0.3)
       canonicalize: 2.1.0
@@ -2360,7 +2374,6 @@ snapshots:
       ws: 8.20.1
       zod: 4.4.3
     transitivePeerDependencies:
-      - '@cfworker/json-schema'
       - bufferutil
       - supports-color
       - utf-8-validate
