@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import type { StoredChatGroup } from './chatGroups.svelte';
 
 const clientStateDecoderMock = vi.fn();
 const requireActiveAccountMock = vi.fn();
@@ -96,6 +97,7 @@ describe('isChatGroupPoisoned()', () => {
 			fetchCursor: 0,
 			messages: [],
 			syncIssues: [],
+			snapshots: [],
 			joinEpoch: 0n
 		};
 
@@ -121,6 +123,7 @@ describe('isChatGroupPoisoned()', () => {
 					detail: 'Fatal MLS decryption failure: OperationError: The operation failed'
 				}
 			],
+			snapshots: [],
 			joinEpoch: 0n
 		};
 
@@ -140,6 +143,7 @@ describe('isChatGroupPoisoned()', () => {
 			fetchCursor: 0,
 			messages: [],
 			syncIssues: [],
+			snapshots: [],
 			joinEpoch: 0n
 		};
 
@@ -165,6 +169,7 @@ describe('isChatGroupPoisoned()', () => {
 					detail: 'Cannot process message, epoch too old'
 				}
 			],
+			snapshots: [],
 			joinEpoch: 0n
 		};
 
@@ -211,7 +216,7 @@ describe('recoverPoisonedChatGroup()', () => {
 				snapshots: [],
 				joinEpoch: 0n
 			}
-		] as never;
+		] as StoredChatGroup[];
 
 		const result = await recoverPoisonedChatGroup('healthy');
 		expect(result).toBe(true);
@@ -234,7 +239,7 @@ describe('recoverPoisonedChatGroup()', () => {
 				snapshots: [],
 				joinEpoch: 0n
 			}
-		] as never;
+		] as StoredChatGroup[];
 
 		const result = await recoverPoisonedChatGroup('poisoned');
 		expect(result).toBe(false);
@@ -267,7 +272,7 @@ describe('recoverPoisonedChatGroup()', () => {
 			joinEpoch: 0n
 		};
 
-		chatGroupsStore.groups = [poisonedGroup] as never;
+		chatGroupsStore.groups = [poisonedGroup] as StoredChatGroup[];
 
 		// Mock fetch to throw an error
 		const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'));
@@ -362,7 +367,6 @@ describe('inviteChatGroupMember()', () => {
 		chatGroupsStore.groups = [
 			{
 				id: 'demo',
-				alias: 'demo',
 				coordinatorKey: 'cc'.repeat(32),
 				createdAt: 1,
 				stateBase64: 'AA==',
@@ -370,9 +374,11 @@ describe('inviteChatGroupMember()', () => {
 				fetchCursor: 0,
 				messages: [],
 				syncIssues: [],
+				snapshots: [],
+				joinEpoch: 0n,
 				metadata: { name: 'Admins Only', adminPubkeys: ['aa'.repeat(32)] }
 			}
-		] as never;
+		] as StoredChatGroup[];
 
 		await expect(
 			inviteChatGroupMember({ groupId: 'demo', identifier: 'carol' })
@@ -392,7 +398,6 @@ describe('inviteChatGroupMember()', () => {
 		createWorkingChatGroupSessionMock.mockReturnValue({ metadata: { name: 'demo' } });
 		buildPersistedChatGroupMock.mockReturnValue({
 			id: 'demo',
-			alias: 'demo',
 			coordinatorKey: 'cc'.repeat(32),
 			createdAt: 1,
 			stateBase64: 'AA==',
@@ -400,13 +405,14 @@ describe('inviteChatGroupMember()', () => {
 			fetchCursor: 0,
 			messages: [],
 			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n,
 			metadata: { name: 'demo', adminPubkeys: ['aa'.repeat(32)] }
 		});
 
 		chatGroupsStore.groups = [
 			{
 				id: 'demo',
-				alias: 'demo',
 				coordinatorKey: 'cc'.repeat(32),
 				createdAt: 1,
 				stateBase64: 'AA==',
@@ -414,9 +420,11 @@ describe('inviteChatGroupMember()', () => {
 				fetchCursor: 0,
 				messages: [],
 				syncIssues: [],
+				snapshots: [],
+				joinEpoch: 0n,
 				metadata: { name: 'demo', adminPubkeys: ['bb'.repeat(32)] }
 			}
-		] as never;
+		] as StoredChatGroup[];
 
 		await removeChatGroupMember({ groupId: 'demo', targetStablePubkey: 'aa'.repeat(32) });
 
@@ -426,5 +434,368 @@ describe('inviteChatGroupMember()', () => {
 			expect.anything(),
 			expect.objectContaining({ kind: 'remove-member', targetStablePubkey: 'aa'.repeat(32) })
 		);
+	});
+});
+
+describe('snapshot persistence', () => {
+	test('round-trips snapshots through storage put and get', async () => {
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const group = {
+			id: 'snapshot-roundtrip',
+			ownerPubkey: 'aa'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 5,
+			fetchCursor: 5,
+			status: 'active' as const,
+			stateBytes: new Uint8Array([1, 2, 3]),
+			messages: [],
+			syncIssues: [],
+			snapshots: [
+				{
+					groupId: 'snapshot-roundtrip',
+					status: 'healthy' as const,
+					epoch: '2',
+					cursor: 3,
+					createdAt: 200,
+					stateBytes: new Uint8Array([4, 5, 6]),
+					triggerCursor: 3
+				}
+			]
+		};
+
+		await storage.putGroup(group);
+		const loaded = await storage.getGroup('snapshot-roundtrip');
+
+		expect(loaded).toBeDefined();
+		expect(loaded!.snapshots).toBeDefined();
+		expect(loaded!.snapshots!.length).toBe(1);
+		expect(loaded!.snapshots![0].status).toBe('healthy');
+		expect(loaded!.snapshots![0].epoch).toBe('2');
+		expect(loaded!.snapshots![0].cursor).toBe(3);
+		expect(loaded!.snapshots![0].triggerCursor).toBe(3);
+
+		await storage.deleteGroup('snapshot-roundtrip');
+	});
+
+	test('returns undefined snapshots when group has no snapshots', async () => {
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const group = {
+			id: 'no-snapshots',
+			ownerPubkey: 'aa'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 0,
+			fetchCursor: 0,
+			status: 'active' as const,
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: []
+		};
+
+		await storage.putGroup(group);
+		const loaded = await storage.getGroup('no-snapshots');
+
+		expect(loaded).toBeDefined();
+		expect(loaded!.snapshots).toBeUndefined();
+
+		await storage.deleteGroup('no-snapshots');
+	});
+
+	test('overwrites existing snapshot record on subsequent put', async () => {
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const groupId = 'overwrite-snapshots';
+		const first = {
+			id: groupId,
+			ownerPubkey: 'aa'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 5,
+			fetchCursor: 5,
+			status: 'active' as const,
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: [],
+			snapshots: [
+				{
+					groupId,
+					status: 'healthy' as const,
+					epoch: '1',
+					cursor: 0,
+					createdAt: 100,
+					stateBytes: new Uint8Array([1])
+				}
+			]
+		};
+
+		await storage.putGroup(first);
+		const loaded1 = await storage.getGroup(groupId);
+		expect(loaded1!.snapshots!.length).toBe(1);
+		expect(loaded1!.snapshots![0].epoch).toBe('1');
+
+		const second = {
+			...first,
+			fetchCursor: 10,
+			snapshots: [
+				{
+					groupId,
+					status: 'tentative' as const,
+					epoch: '2',
+					cursor: 10,
+					createdAt: 200,
+					stateBytes: new Uint8Array([2])
+				}
+			]
+		};
+
+		await storage.putGroup(second);
+		const loaded2 = await storage.getGroup(groupId);
+		expect(loaded2!.snapshots!.length).toBe(1);
+		expect(loaded2!.snapshots![0].epoch).toBe('2');
+		expect(loaded2!.snapshots![0].status).toBe('tentative');
+
+		await storage.deleteGroup(groupId);
+	});
+
+	test('clears snapshot record when putting group with empty snapshots', async () => {
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const groupId = 'clear-snapshots';
+		const withSnapshots = {
+			id: groupId,
+			ownerPubkey: 'aa'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 5,
+			fetchCursor: 5,
+			status: 'active' as const,
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: [],
+			snapshots: [
+				{
+					groupId,
+					status: 'healthy' as const,
+					epoch: '1',
+					cursor: 0,
+					createdAt: 100,
+					stateBytes: new Uint8Array([1])
+				}
+			]
+		};
+
+		await storage.putGroup(withSnapshots);
+		const loaded1 = await storage.getGroup(groupId);
+		expect(loaded1!.snapshots!.length).toBe(1);
+
+		const withoutSnapshots = {
+			...withSnapshots,
+			fetchCursor: 10,
+			snapshots: []
+		};
+
+		await storage.putGroup(withoutSnapshots);
+		const loaded2 = await storage.getGroup(groupId);
+		expect(loaded2!.snapshots).toBeUndefined();
+
+		await storage.deleteGroup(groupId);
+	});
+});
+
+describe('appendHealthySnapshot()', () => {
+	test('adds a healthy snapshot to empty list', async () => {
+		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+
+		const result = appendHealthySnapshot([], {
+			groupId: 'test',
+			status: 'healthy',
+			epoch: '1',
+			cursor: 0,
+			createdAt: 100,
+			stateBase64: 'AA=='
+		});
+
+		expect(result.length).toBe(1);
+		expect(result[0].status).toBe('healthy');
+		expect(result[0].epoch).toBe('1');
+	});
+
+	test('keeps at most 3 snapshots', async () => {
+		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+
+		const base = [
+			{
+				groupId: 'test',
+				status: 'healthy' as const,
+				epoch: '1',
+				cursor: 0,
+				createdAt: 100,
+				stateBase64: 'AA=='
+			},
+			{
+				groupId: 'test',
+				status: 'healthy' as const,
+				epoch: '2',
+				cursor: 5,
+				createdAt: 200,
+				stateBase64: 'BB=='
+			},
+			{
+				groupId: 'test',
+				status: 'healthy' as const,
+				epoch: '3',
+				cursor: 10,
+				createdAt: 300,
+				stateBase64: 'CC=='
+			}
+		];
+
+		const result = appendHealthySnapshot(base, {
+			groupId: 'test',
+			status: 'healthy',
+			epoch: '4',
+			cursor: 15,
+			createdAt: 400,
+			stateBase64: 'DD=='
+		});
+
+		expect(result.length).toBe(3);
+		expect(result[0].epoch).toBe('2');
+		expect(result[1].epoch).toBe('3');
+		expect(result[2].epoch).toBe('4');
+	});
+
+	test('drops tentative snapshots when appending healthy', async () => {
+		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+
+		const base = [
+			{
+				groupId: 'test',
+				status: 'healthy' as const,
+				epoch: '1',
+				cursor: 0,
+				createdAt: 100,
+				stateBase64: 'AA=='
+			},
+			{
+				groupId: 'test',
+				status: 'tentative' as const,
+				epoch: '2',
+				cursor: 5,
+				createdAt: 200,
+				stateBase64: 'BB=='
+			}
+		];
+
+		const result = appendHealthySnapshot(base, {
+			groupId: 'test',
+			status: 'healthy',
+			epoch: '3',
+			cursor: 10,
+			createdAt: 300,
+			stateBase64: 'CC=='
+		});
+
+		expect(result.length).toBe(2);
+		expect(result[0].status).toBe('healthy');
+		expect(result[1].status).toBe('healthy');
+	});
+});
+
+describe('loadGroups snapshot baseline', () => {
+	test('creates baseline healthy snapshot for legacy group with no snapshots', async () => {
+		vi.doMock('$lib/services/chatRuntime', () => ({
+			getCoordinatorClient: getCoordinatorClientMock,
+			requireActiveAccount: requireActiveAccountMock,
+			withCoordinatorClient: withCoordinatorClientMock
+		}));
+
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const ownerPubkey = 'bb'.repeat(32);
+		const groupId = 'legacy-baseline';
+
+		// Seed storage with a group that has no snapshots and a decodable state
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+
+		await storage.putGroup({
+			id: groupId,
+			ownerPubkey,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 0,
+			fetchCursor: 5,
+			status: 'active',
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: []
+			// no snapshots
+		});
+
+		// Load groups for this owner
+		const { reloadChatGroupsForOwner, chatGroupsStore } = await import('./chatGroups.svelte');
+		await reloadChatGroupsForOwner(ownerPubkey);
+
+		const loaded = chatGroupsStore.groups.find((g) => g.id === groupId);
+		expect(loaded).toBeDefined();
+		expect(loaded!.snapshots.length).toBe(1);
+		expect(loaded!.snapshots[0].status).toBe('healthy');
+		expect(loaded!.snapshots[0].cursor).toBe(5); // fetchCursor
+		expect(loaded!.snapshots[0].epoch).toBe('2');
+
+		// Cleanup
+		await storage.deleteGroup(groupId);
+		clientStateDecoderMock.mockReset();
+	});
+
+	test('skips baseline for poisoned group', async () => {
+		vi.doMock('$lib/services/chatRuntime', () => ({
+			getCoordinatorClient: getCoordinatorClientMock,
+			requireActiveAccount: requireActiveAccountMock,
+			withCoordinatorClient: withCoordinatorClientMock
+		}));
+
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+
+		const ownerPubkey = 'bb'.repeat(32);
+		const groupId = 'poisoned-no-baseline';
+
+		await storage.putGroup({
+			id: groupId,
+			ownerPubkey,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 0,
+			fetchCursor: 5,
+			status: 'poisoned',
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: []
+			// no snapshots
+		});
+
+		const { reloadChatGroupsForOwner, chatGroupsStore } = await import('./chatGroups.svelte');
+		await reloadChatGroupsForOwner(ownerPubkey);
+
+		const loaded = chatGroupsStore.groups.find((g) => g.id === groupId);
+		expect(loaded).toBeDefined();
+		expect(loaded!.snapshots.length).toBe(0);
+
+		await storage.deleteGroup(groupId);
 	});
 });

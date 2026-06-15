@@ -67,6 +67,7 @@ import {
 } from '$lib/services/chatRuntime';
 import {
 	getChatStorage,
+	type ChatStorage,
 	type StoredChatGroupData,
 	type ChatGroupStateSnapshotStatus
 } from '$lib/storage/chatStorage';
@@ -101,7 +102,7 @@ export interface StoredChatGroup {
 	fetchCursor: number;
 	messages: StoredChatMessage[];
 	syncIssues: StoredChatSyncIssue[];
-	snapshots?: ChatGroupStateSnapshot[];
+	snapshots: ChatGroupStateSnapshot[];
 	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
 	poisonedAtCursor?: number;
@@ -122,22 +123,6 @@ const pendingEpochOperations = createGroupPendingEpochStore();
 let groupsReady: Promise<void> | null = null;
 let persistGroupsPromise: Promise<void> = Promise.resolve();
 let groupsLoaded = false;
-
-function migrateStoredGroup(group: StoredChatGroup): StoredChatGroup {
-	return {
-		...group,
-		lastCursor: group.lastCursor ?? 0,
-		fetchCursor: group.fetchCursor ?? 0,
-		messages: group.messages ?? [],
-		syncIssues: group.syncIssues ?? [],
-		snapshots: group.snapshots ?? [],
-		status: group.status ?? 'active',
-		removedAtCursor: group.removedAtCursor,
-		poisonedAtCursor: group.poisonedAtCursor,
-		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
-		joinEpoch: group.joinEpoch ?? 0n
-	};
-}
 
 export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 	groups: []
@@ -162,7 +147,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 			tags: message.tags.map((tag) => [...tag])
 		})),
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
-		snapshots: group.snapshots?.map((snapshot) => ({
+		snapshots: group.snapshots.map((snapshot) => ({
 			groupId: snapshot.groupId,
 			status: snapshot.status,
 			epoch: snapshot.epoch,
@@ -180,76 +165,86 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 	const metadata = decoded
 		? toPersistedGroupMetadata(getCordnGroupMetadataExtension(decoded[0]))
 		: undefined;
-	return migrateStoredGroup({
+	return {
 		id: group.id,
 		ownerPubkey: group.ownerPubkey,
 		coordinatorKey: group.coordinatorKey,
 		createdAt: group.createdAt,
 		stateBase64: bytesToBase64(group.stateBytes),
-		lastCursor: group.lastCursor,
-		fetchCursor: group.fetchCursor,
+		lastCursor: group.lastCursor ?? 0,
+		fetchCursor: group.fetchCursor ?? 0,
 		messages: group.messages.map((message) => ({
 			...message,
 			tags: message.tags.map((tag) => [...tag])
 		})),
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
-		snapshots: group.snapshots?.map((snapshot) => ({
-			...snapshot,
-			stateBase64: bytesToBase64(snapshot.stateBytes)
-		})),
-		status: group.status,
+		snapshots:
+			group.snapshots?.map((snapshot) => ({
+				...snapshot,
+				stateBase64: bytesToBase64(snapshot.stateBytes)
+			})) ?? [],
+		status: group.status ?? 'active',
 		removedAtCursor: group.removedAtCursor,
 		poisonedAtCursor: group.poisonedAtCursor,
 		metadata,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
-		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : undefined
-	} as StoredChatGroup);
+		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : 0n
+	};
+}
+
+async function loadAndNormalizeChatGroup(
+	storage: ChatStorage,
+	groupId: string
+): Promise<{ group: StoredChatGroup; changed: boolean }> {
+	const data = await storage.getGroup(groupId);
+	if (!data) {
+		throw new Error(`Stored group ${groupId} not found`);
+	}
+
+	const group = fromStoredGroupData(data);
+	let changed = false;
+
+	if (group.snapshots.length === 0 && !isChatGroupPoisoned(group)) {
+		try {
+			const state = decodeStoredGroupState(group);
+			group.snapshots = [
+				{
+					groupId: group.id,
+					status: 'healthy',
+					epoch: state.groupContext.epoch.toString(),
+					cursor: group.fetchCursor,
+					createdAt: Date.now(),
+					stateBase64: group.stateBase64
+				}
+			];
+			changed = true;
+		} catch {
+			// State is undecodable; leave snapshots empty.
+		}
+	}
+
+	return { group, changed };
 }
 
 async function loadGroups(ownerPubkey?: string) {
 	await persistGroupsPromise;
 	const storage = await getChatStorage();
 	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
+
 	if (!normalizedOwner) {
 		chatGroupsStore.groups = [];
 		groupsLoaded = false;
 		return;
 	}
-	const groupRecords = await storage.listGroups();
-	const hasLegacyGroups = groupRecords.some((group) => !group.ownerPubkey);
-	const recordsToLoad = hasLegacyGroups
-		? groupRecords
-		: groupRecords.filter((group) => normalizePubKey(group.ownerPubkey ?? '') === normalizedOwner);
-	const groups = await Promise.all(
-		recordsToLoad.map(async (group) => {
-			const fullGroup = await storage.getGroup(group.id);
-			if (!fullGroup) {
-				throw new Error(`Stored group ${group.id} not found`);
-			}
-			return fromStoredGroupData(fullGroup);
-		})
-	);
-	const visibleGroups = hasLegacyGroups
-		? groups.filter((group) => {
-				if (group.ownerPubkey) {
-					return normalizePubKey(group.ownerPubkey) === normalizedOwner;
-				}
 
-				try {
-					return listGroupMembers(decodeStoredGroupState(group)).some(
-						(member) => normalizePubKey(member.stablePubkey) === normalizedOwner
-					);
-				} catch {
-					return false;
-				}
-			})
-		: groups;
-	const migratedGroups = visibleGroups.map((group) =>
-		group.ownerPubkey ? group : { ...group, ownerPubkey: normalizedOwner }
+	const records = await storage.listGroups(normalizedOwner);
+	const loaded = await Promise.all(
+		records.map((record) => loadAndNormalizeChatGroup(storage, record.id))
 	);
-	chatGroupsStore.groups = migratedGroups;
-	if (migratedGroups.some((group, index) => group !== visibleGroups[index])) {
-		void persistGroups(migratedGroups);
+
+	chatGroupsStore.groups = loaded.map((entry) => entry.group);
+	if (loaded.some((entry) => entry.changed)) {
+		void persistGroups(chatGroupsStore.groups);
 	}
 	groupsLoaded = true;
 }
@@ -799,7 +794,7 @@ export async function inviteChatGroupMember(input: {
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});
-		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
 
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
@@ -915,7 +910,7 @@ export async function removeChatGroupMember(input: {
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});
-		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
 
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
@@ -1002,7 +997,7 @@ export async function updateChatGroupMetadata(input: {
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});
-		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots ?? [], tentativeSnapshot);
+		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
 
 		replaceGroup(group.id, nextGroup);
 		return nextGroup;
@@ -1065,7 +1060,7 @@ async function applyIncomingChatGroupMessages(
 	const newEpoch = workingGroup.state.groupContext.epoch;
 	const epochChanged = oldEpoch !== newEpoch;
 
-	let updatedSnapshots = nextGroup.snapshots ?? [];
+	let updatedSnapshots = nextGroup.snapshots;
 
 	if (epochChanged) {
 		// Epoch changed - create tentative snapshot
@@ -1084,19 +1079,6 @@ async function applyIncomingChatGroupMessages(
 		const hasTentative = updatedSnapshots.some((s) => s.status === 'tentative');
 		if (hasTentative) {
 			updatedSnapshots = promoteTentativeSnapshot(updatedSnapshots);
-		} else if (updatedSnapshots.length === 0) {
-			// Bootstrap: group has no snapshots yet — seed with tentative so it
-			// follows the same lifecycle (tentative → healthy on next decrypt).
-			const bootstrapSnapshot: ChatGroupStateSnapshot = {
-				groupId: group.id,
-				status: 'tentative',
-				epoch: newEpoch.toString(),
-				cursor: workingGroup.fetchCursor,
-				createdAt: Date.now(),
-				stateBase64: nextGroup.stateBase64,
-				triggerCursor: messages[messages.length - 1]?.cursor
-			};
-			updatedSnapshots = [bootstrapSnapshot];
 		}
 	}
 
@@ -1272,7 +1254,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 			return true;
 		}
 
-		const snapshots = group.snapshots ?? [];
+		const snapshots = group.snapshots;
 		const healthySnapshot = getNewestHealthySnapshot(snapshots);
 
 		if (!healthySnapshot) {

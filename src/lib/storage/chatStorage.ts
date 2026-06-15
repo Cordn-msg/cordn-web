@@ -39,6 +39,11 @@ export interface StoredChatGroupStateRecord {
 	stateBytes: Uint8Array;
 }
 
+export interface StoredChatGroupSnapshotRecord {
+	groupId: string;
+	snapshots: StoredChatGroupStateSnapshot[];
+}
+
 export interface StoredChatGroupData extends StoredChatGroupRecord {
 	stateBytes: Uint8Array;
 	messages: StoredChatMessage[];
@@ -91,12 +96,13 @@ export interface ChatStorage {
 }
 
 const DATABASE_NAME = 'cordn-web';
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const GROUP_STORE = 'groups';
 const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
 const SYNC_ISSUE_STORE = 'syncIssues';
 const KEY_PACKAGE_STORE = 'keyPackages';
+const SNAPSHOT_STORE = 'snapshots';
 
 function cloneBytes(bytes: Uint8Array): Uint8Array {
 	return new Uint8Array(bytes);
@@ -228,7 +234,11 @@ class MemoryChatStorage implements ChatStorage {
 	}
 
 	async putGroup(group: StoredChatGroupData): Promise<void> {
-		this.groups.set(group.id, cloneGroup(group));
+		const stored = cloneGroup(group);
+		if (stored.snapshots && stored.snapshots.length === 0) {
+			delete stored.snapshots;
+		}
+		this.groups.set(group.id, stored);
 		this.messages.set(
 			group.id,
 			group.messages.map((message) => cloneMessageRecord({ ...message, groupId: group.id }))
@@ -330,6 +340,9 @@ class IndexedDbChatStorage implements ChatStorage {
 				if (!db.objectStoreNames.contains(KEY_PACKAGE_STORE)) {
 					db.createObjectStore(KEY_PACKAGE_STORE, { keyPath: 'keyPackageRef' });
 				}
+				if (!db.objectStoreNames.contains(SNAPSHOT_STORE)) {
+					db.createObjectStore(SNAPSHOT_STORE, { keyPath: 'groupId' });
+				}
 			};
 			request.onsuccess = () => resolve(request.result);
 		});
@@ -388,13 +401,14 @@ class IndexedDbChatStorage implements ChatStorage {
 		const db = this.requireDatabase();
 		return new Promise<StoredChatGroupData | undefined>((resolve, reject) => {
 			const transaction = db.transaction(
-				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE],
+				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE, SNAPSHOT_STORE],
 				'readonly'
 			);
 			const groupStore = transaction.objectStore(GROUP_STORE);
 			const stateStore = transaction.objectStore(GROUP_STATE_STORE);
 			const messageIndex = transaction.objectStore(MESSAGE_STORE).index('groupId');
 			const syncIssueIndex = transaction.objectStore(SYNC_ISSUE_STORE).index('groupId');
+			const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
 			const groupRequest = groupStore.get(groupId) as IDBRequest<StoredChatGroupRecord | undefined>;
 			const stateRequest = stateStore.get(groupId) as IDBRequest<
 				StoredChatGroupStateRecord | undefined
@@ -402,6 +416,9 @@ class IndexedDbChatStorage implements ChatStorage {
 			const messageRequest = messageIndex.getAll(groupId) as IDBRequest<StoredChatMessageRecord[]>;
 			const syncIssueRequest = syncIssueIndex.getAll(groupId) as IDBRequest<
 				StoredChatSyncIssueRecord[]
+			>;
+			const snapshotRequest = snapshotStore.get(groupId) as IDBRequest<
+				StoredChatGroupSnapshotRecord | undefined
 			>;
 			transaction.onerror = () =>
 				reject(transaction.error ?? new Error('IndexedDB transaction failed'));
@@ -412,9 +429,14 @@ class IndexedDbChatStorage implements ChatStorage {
 					resolve(undefined);
 					return;
 				}
+				const snapshotRecord = snapshotRequest.result;
 				resolve(
 					materializeGroupData({
-						group: { ...group, stateBytes: state.stateBytes },
+						group: {
+							...group,
+							stateBytes: state.stateBytes,
+							snapshots: snapshotRecord?.snapshots
+						},
 						messages: messageRequest.result ?? [],
 						syncIssues: syncIssueRequest.result ?? []
 					})
@@ -427,13 +449,14 @@ class IndexedDbChatStorage implements ChatStorage {
 		const db = this.requireDatabase();
 		await new Promise<void>((resolve, reject) => {
 			const transaction = db.transaction(
-				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE],
+				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE, SNAPSHOT_STORE],
 				'readwrite'
 			);
 			const groupStore = transaction.objectStore(GROUP_STORE);
 			const stateStore = transaction.objectStore(GROUP_STATE_STORE);
 			const messageStore = transaction.objectStore(MESSAGE_STORE);
 			const syncIssueStore = transaction.objectStore(SYNC_ISSUE_STORE);
+			const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
 			transaction.onerror = () =>
 				reject(transaction.error ?? new Error('IndexedDB transaction failed'));
 			transaction.oncomplete = () => resolve();
@@ -461,6 +484,14 @@ class IndexedDbChatStorage implements ChatStorage {
 				if (group.fetchCursor >= existingFetchCursor) {
 					stateStore.put({ groupId: group.id, stateBytes: cloneBytes(group.stateBytes) });
 				}
+				if (group.snapshots && group.snapshots.length > 0) {
+					snapshotStore.put({
+						groupId: group.id,
+						snapshots: group.snapshots.map(cloneSnapshot)
+					});
+				} else {
+					snapshotStore.delete(group.id);
+				}
 			};
 			for (const message of group.messages) {
 				messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
@@ -475,7 +506,7 @@ class IndexedDbChatStorage implements ChatStorage {
 		const db = this.requireDatabase();
 		await new Promise<void>((resolve, reject) => {
 			const transaction = db.transaction(
-				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE],
+				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE, SNAPSHOT_STORE],
 				'readwrite'
 			);
 			const groupStore = transaction.objectStore(GROUP_STORE);
@@ -484,11 +515,13 @@ class IndexedDbChatStorage implements ChatStorage {
 			const messageIndex = messageStore.index('groupId');
 			const syncIssueStore = transaction.objectStore(SYNC_ISSUE_STORE);
 			const syncIssueIndex = syncIssueStore.index('groupId');
+			const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
 			transaction.onerror = () =>
 				reject(transaction.error ?? new Error('IndexedDB transaction failed'));
 			transaction.oncomplete = () => resolve();
 			groupStore.delete(groupId);
 			stateStore.delete(groupId);
+			snapshotStore.delete(groupId);
 			const deleteMessages = messageIndex.openKeyCursor(IDBKeyRange.only(groupId));
 			deleteMessages.onsuccess = () => {
 				const cursor = deleteMessages.result;

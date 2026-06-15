@@ -104,6 +104,7 @@ export function buildStoredChatGroup(params: {
 		fetchCursor: 0,
 		messages: [],
 		syncIssues: [],
+		snapshots: [],
 		metadata: params.metadata,
 		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef,
 		joinEpoch: params.joinEpoch ?? 0n
