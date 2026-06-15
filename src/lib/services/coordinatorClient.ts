@@ -5,7 +5,8 @@ import {
 	NostrClientTransport,
 	type NostrTransportOptions,
 	PrivateKeySigner,
-	ApplesauceRelayPool
+	ApplesauceRelayPool,
+	GiftWrapMode
 } from '@contextvm/sdk';
 import type { ZodType } from 'zod';
 import { defaultRelays } from './relay-pool';
@@ -137,6 +138,7 @@ export class cordnClient implements coordinatorClient {
 			fallbackOperationalRelayUrls: defaultRelays,
 			logLevel: 'silent',
 			isStateless: true,
+			giftWrapMode: GiftWrapMode.EPHEMERAL,
 			openStream: {
 				enabled: true
 			},
@@ -152,6 +154,7 @@ export class cordnClient implements coordinatorClient {
 			relayHandler,
 			fallbackOperationalRelayUrls: defaultRelays,
 			logLevel: 'silent',
+			giftWrapMode: GiftWrapMode.EPHEMERAL,
 			isStateless: true,
 			openStream: {
 				enabled: true
