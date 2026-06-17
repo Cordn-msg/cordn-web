@@ -205,10 +205,17 @@ export class cordnClient implements coordinatorClient {
 		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
 		await connected;
-		const result = await client.callTool({
-			name,
-			arguments: { ...args }
-		});
+		const result = await client.callTool(
+			{
+				name,
+				arguments: { ...args }
+			},
+			undefined,
+			{
+				onprogress: () => undefined,
+				resetTimeoutOnProgress: true
+			}
+		);
 
 		// Check if the server returned an error
 		if (result.isError) {
