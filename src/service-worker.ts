@@ -49,6 +49,13 @@ worker.addEventListener('fetch', (event) => {
 		return;
 	}
 
+	// The version marker must always be fetched fresh so update polling
+	// (src/lib/services/appUpdate.svelte.ts) never reads a stale cached copy.
+	if (url.pathname === '/version.json') {
+		event.respondWith(fetch(event.request));
+		return;
+	}
+
 	if (ASSETS.includes(url.pathname)) {
 		event.respondWith(cacheFirst(event.request));
 	}

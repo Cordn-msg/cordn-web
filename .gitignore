@@ -7,6 +7,8 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+# Generated at build time by scripts/write-version.mjs
+/static/version.json
 
 # OS
 .DS_Store

@@ -49,6 +49,16 @@ Per-message render work is reduced by caching parsed mention parts in [`chatMess
 - Browser notifications for newly ingested inbound chat messages are dispatched by [`notifyForUnreadChatMessages()`](src/lib/services/chatAttention.svelte.ts:104), while suppressing alerts for the currently visible open group.
 - The mobile sidebar toggle in [`ChatMobileSidebarButton.svelte`](src/lib/components/chat/ChatMobileSidebarButton.svelte) shows a small red dot when unread chat or welcome-notification attention is pending.
 
+## Update detection
+
+To prompt users to reload after a new deploy, the app compares a build-time version stamp against the deployed `static/version.json`:
+
+- [`scripts/write-version.mjs`](scripts/write-version.mjs) writes [`static/version.json`](static/version.json) (`{ version, builtAt }`) from `git rev-parse --short HEAD` as a `prebuild` step before `pnpm build`. The file is gitignored because it is regenerated per build.
+- [`vite.config.ts`](vite.config.ts) reads the same version and injects it into the bundle as `__APP_VERSION__` via Vite `define`, with a git-based fallback for `pnpm dev`. This guarantees the running bundle and the served marker share a source.
+- [`src/lib/services/appUpdate.svelte.ts`](src/lib/services/appUpdate.svelte.ts) exposes the [`appUpdateStore`](src/lib/services/appUpdate.svelte.ts:32) and polls `/version.json` (cache-busted, `no-store`) on load and every 10 minutes, production only. A mismatch sets `appUpdateStore.available`. Detection is centralized here instead of duplicated per route.
+- The sticky [`AppUpdateBanner.svelte`](src/lib/components/AppUpdateBanner.svelte), mounted once in [`src/routes/+layout.svelte`](src/routes/+layout.svelte), renders a reload prompt and starts/stops the watcher via `onMount`. Reload is always manual; dismissing remembers the skipped version in `sessionStorage` for the session.
+- The service worker in [`src/service-worker.ts`](src/service-worker.ts) bypasses its cache for `/version.json` so polling never reads a stale marker.
+
 ## Identity and profile UX
 
 - [`AccountLoginDialog.svelte`](src/lib/components/AccountLoginDialog.svelte) now supports revealing the private-key input with an eye toggle so users signing in with a raw key can verify and copy it for backup.
