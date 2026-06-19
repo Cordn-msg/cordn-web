@@ -240,17 +240,32 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	chatWelcomeNotificationsStore.error = '';
 	try {
 		const account = requireActiveAccount('You must be logged in to fetch welcomes');
-		for (const coordinatorKey of keys) {
-			try {
-				const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
-				mergeFetchedWelcomes(coordinatorKey, result.welcomes);
-			} catch (error) {
-				if (isSignerUnavailableError(error)) return;
-				console.warn(
-					`Failed to fetch welcomes from coordinator ${coordinatorKey}:`,
-					error instanceof Error ? error.message : error
-				);
+		// Fetch from every coordinator concurrently (the slow part) but merge
+		// sequentially (store mutation) so concurrent merges can't lose updates.
+		const outcomes = await Promise.all(
+			keys.map(async (coordinatorKey) => {
+				try {
+					const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
+					return {
+						coordinatorKey,
+						welcomes: result.welcomes,
+						error: undefined as Error | undefined
+					};
+				} catch (error) {
+					return { coordinatorKey, welcomes: [], error: error as Error };
+				}
+			})
+		);
+		for (const outcome of outcomes) {
+			if (!outcome.error) {
+				mergeFetchedWelcomes(outcome.coordinatorKey, outcome.welcomes);
+				continue;
 			}
+			if (isSignerUnavailableError(outcome.error)) return;
+			console.warn(
+				`Failed to fetch welcomes from coordinator ${outcome.coordinatorKey}:`,
+				outcome.error instanceof Error ? outcome.error.message : outcome.error
+			);
 		}
 		await resolveFetchedWelcomePreviews();
 	} catch (error) {

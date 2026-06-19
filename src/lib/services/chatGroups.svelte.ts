@@ -74,6 +74,7 @@ import {
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
+import { isGroupActivelyWatched } from '$lib/services/chatGroupWatchStatus.svelte';
 
 const groupIdDecoder = new TextDecoder();
 
@@ -460,6 +461,25 @@ export async function assertGroupCanPerformOutboundOperation(
 	}
 
 	return refreshed;
+}
+
+/**
+ * Resolve the group state to use when sending an application message.
+ *
+ * Application messages (kind 9 / 7 / 1111 / 1010 / 5) never change the MLS
+ * epoch, so for a group with an active live subscription the pre-send
+ * catch-up fetch is redundant: the subscription keeps local state current up
+ * to the last delivered message, and this runs inside the serialized group
+ * operation chain so it always sees the post-ingestion state. Only fall back
+ * to a full catch-up for groups that are not currently watched.
+ */
+async function prepareGroupForApplicationMessage(groupId: string): Promise<StoredChatGroup> {
+	if (isGroupActivelyWatched(groupId)) {
+		const group = requireChatGroup(groupId);
+		assertChatGroupIsActive(group);
+		return group;
+	}
+	return assertGroupCanPerformOutboundOperation(groupId);
 }
 
 export function listChatGroups(): StoredChatGroup[] {
@@ -1167,7 +1187,7 @@ export async function sendChatGroupMessage(input: {
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
-		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
+		const group = await prepareGroupForApplicationMessage(input.groupId);
 
 		const isReaction = Boolean(input.reactionTo);
 		const isEdit = Boolean(input.editTo);

@@ -240,34 +240,55 @@ export async function fetchJoinRequestsForAdminGroups() {
 	}
 
 	try {
-		for (const [coordinatorKey, groups] of groupsByCoordinator) {
-			try {
-				const result = await fetchManyPendingJoinRequestsWithSignerRetry(
-					account,
-					coordinatorKey,
-					groups
-				);
-				const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
-				for (const request of result.requests) {
-					const list = requestsByGroup.get(request.gid);
-					if (list) {
-						list.push({ pk: request.pk, kp_ref: request.kp_ref, at: request.at });
-					} else {
-						requestsByGroup.set(request.gid, [
-							{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
-						]);
+		// Fetch concurrently across coordinators (the slow part) but merge
+		// sequentially (store mutation) so concurrent merges can't lose updates.
+		const outcomes = await Promise.all(
+			[...groupsByCoordinator].map(async ([coordinatorKey, groups]) => {
+				try {
+					const result = await fetchManyPendingJoinRequestsWithSignerRetry(
+						account,
+						coordinatorKey,
+						groups
+					);
+					const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
+					for (const request of result.requests) {
+						const list = requestsByGroup.get(request.gid);
+						if (list) {
+							list.push({ pk: request.pk, kp_ref: request.kp_ref, at: request.at });
+						} else {
+							requestsByGroup.set(request.gid, [
+								{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
+							]);
+						}
 					}
+					return {
+						coordinatorKey,
+						groups,
+						requestsByGroup,
+						error: undefined as Error | undefined
+					};
+				} catch (error) {
+					return {
+						coordinatorKey,
+						groups,
+						requestsByGroup: new SvelteMap<string, JoinRequest[]>(),
+						error: error as Error
+					};
 				}
-				for (const group of groups) {
-					const requests = requestsByGroup.get(group.gid) ?? [];
-					mergeFetchedJoinRequests(coordinatorKey, group.gid, requests);
-				}
-			} catch (error) {
-				if (isSignerUnavailableError(error)) return;
+			})
+		);
+		for (const outcome of outcomes) {
+			if (outcome.error) {
+				if (isSignerUnavailableError(outcome.error)) return;
 				console.warn(
-					`Failed to fetch join requests from coordinator ${coordinatorKey}:`,
-					error instanceof Error ? error.message : error
+					`Failed to fetch join requests from coordinator ${outcome.coordinatorKey}:`,
+					outcome.error instanceof Error ? outcome.error.message : outcome.error
 				);
+				continue;
+			}
+			for (const group of outcome.groups) {
+				const requests = outcome.requestsByGroup.get(group.gid) ?? [];
+				mergeFetchedJoinRequests(outcome.coordinatorKey, group.gid, requests);
 			}
 		}
 	} catch (error) {

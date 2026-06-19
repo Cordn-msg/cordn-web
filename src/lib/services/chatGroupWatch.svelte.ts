@@ -26,10 +26,16 @@ import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
+import {
+	markAllGroupsUnwatched,
+	markGroupUnwatched,
+	markGroupWatched
+} from '$lib/services/chatGroupWatchStatus.svelte';
 import { normalizePubKey } from '$lib/utils';
 
 type GroupWatchTask = {
 	groupIds: string[];
+	coordinatorKey: string;
 	abort: (reason?: string) => Promise<void>;
 	ready: Promise<void>;
 	task: Promise<void>;
@@ -73,12 +79,14 @@ function getCurrentWatch(groupId: string) {
 function clearCurrentWatch(handle?: GroupWatchTask | null) {
 	if (!handle) {
 		currentWatches.clear();
+		markAllGroupsUnwatched();
 		return;
 	}
 
 	for (const groupId of handle.groupIds) {
 		if (currentWatches.get(groupId) === handle) {
 			currentWatches.delete(groupId);
+			markGroupUnwatched(groupId);
 		}
 	}
 }
@@ -101,7 +109,10 @@ if (browser) {
 		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
 			await groupLoadPromise;
 			if (account) {
-				void resumeChatGroupWatching('active account changed');
+				// Account switches converge on the same delta-based starter as the
+				// steady-state layout effect instead of a stop-the-world resume, so the
+				// two paths never race to open duplicate fetches/subscriptions.
+				void startWatchingAllGroups();
 			}
 		});
 		if (previousAccount) {
@@ -126,11 +137,23 @@ if (browser) {
 }
 
 async function closeWatch(handle: GroupWatchTask, reason: string) {
-	// Abort is best-effort: OpenStreamSession.abort() finalizes the local stream
-	// synchronously before publishing the abort notification, so we never block a
-	// resume on a dead relay's publish handshake (the SDK already bounds the
-	// publish timeout). The discarded socket is torn down regardless.
-	void handle.abort(reason).catch(() => undefined);
+	// Await the abort so a fresh watch for the same groups cannot open before the
+	// previous subscription is torn down. Aborts are bounded: the SDK bounds the
+	// publish timeout, and for a handle whose subscription has not resolved yet
+	// `abort` only records intent (handled in startWatchingCoordinatorGroups).
+	try {
+		await handle.abort(reason);
+	} catch {
+		// Abort failures must not block teardown; the discarded socket is torn
+		// down regardless once it falls out of scope.
+	}
+	// Awaiting `ready` guarantees that, if abort arrived before the subscription
+	// resolved, the post-resolve closing check has run and aborted it.
+	try {
+		await handle.ready;
+	} catch {
+		// Ready rejections (e.g. backlog fetch failure) are not teardown blockers.
+	}
 	void handle.task.catch(() => undefined);
 }
 
@@ -149,14 +172,14 @@ function isExpectedWatchTeardown(detail: string, reason?: string) {
 	);
 }
 
-function scheduleChatGroupResume(reason: string) {
+function scheduleChatGroupResume(reason: string, coordinatorKey?: string) {
 	if (resumeTimer) {
 		clearTimeout(resumeTimer);
 	}
 
 	resumeTimer = setTimeout(() => {
 		resumeTimer = null;
-		void resumeChatGroupWatching(reason);
+		void resumeChatGroupWatching(reason, coordinatorKey);
 	}, RESUME_DEBOUNCE_MS);
 }
 
@@ -201,7 +224,26 @@ function groupWatchableGroupsByCoordinator(groups: WatchableGroup[]) {
 	return groupsByCoordinator;
 }
 
-async function runResumeChatGroupWatching(reason: string) {
+async function stopCoordinatorWatches(coordinatorKey: string | undefined, reason: string) {
+	// When a single coordinator degraded, only tear down that coordinator's
+	// watches so healthy subscriptions on other coordinators are not disrupted.
+	if (!coordinatorKey) {
+		return stopWatchingGroup(undefined, reason);
+	}
+
+	const handlesToStop = new SvelteSet<GroupWatchTask>();
+	for (const handle of currentWatches.values()) {
+		if (handle.coordinatorKey === coordinatorKey) {
+			handlesToStop.add(handle);
+		}
+	}
+	for (const handle of handlesToStop) {
+		clearCurrentWatch(handle);
+	}
+	await Promise.all([...handlesToStop].map((handle) => closeWatch(handle, reason)));
+}
+
+async function runResumeChatGroupWatching(reason: string, coordinatorKey?: string) {
 	const account = manager.getActive();
 	if (!account) {
 		return;
@@ -225,7 +267,7 @@ async function runResumeChatGroupWatching(reason: string) {
 	}
 
 	try {
-		await stopWatchingGroup(undefined, RUNTIME_RESUME_REASON);
+		await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON);
 		await startWatchingAllGroups({ skipBacklogSync: false });
 		chatGroupWatchStore.startup = 'ready';
 		lastSuccessfulResumeAt = Date.now();
@@ -240,7 +282,7 @@ async function runResumeChatGroupWatching(reason: string) {
 	}
 }
 
-export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON) {
+export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordinatorKey?: string) {
 	if (resumePromise) {
 		return resumePromise;
 	}
@@ -253,7 +295,7 @@ export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON) {
 	}
 
 	const epoch = ++resumeEpoch;
-	resumePromise = runResumeChatGroupWatching(reason).finally(() => {
+	resumePromise = runResumeChatGroupWatching(reason, coordinatorKey).finally(() => {
 		if (resumeEpoch === epoch) {
 			resumePromise = null;
 		}
@@ -452,66 +494,80 @@ async function startWatchingCoordinatorGroups(
 	const coordinatorKey = groups[0].coordinatorKey;
 	const groupIds = groups.map((group) => group.id);
 
-	let abort: (reason?: string) => Promise<void> = async () => undefined;
+	// `realAbort` is assigned once the subscription resolves. Until then, calls to
+	// `handle.abort` only record intent (`closing = true`); the post-resolve
+	// closing checks below abort the subscription (or skip creating it) so a
+	// watch torn down mid-start can never leak an orphaned subscription.
+	let realAbort: ((reason?: string) => Promise<void>) | undefined;
 	let expectedAbortReason: string | undefined;
 	let closing = false;
 	const handle: GroupWatchTask = {
 		groupIds,
-		abort: async (reason?: string) => abort(reason),
+		coordinatorKey,
+		abort: async (reason?: string) => {
+			closing = true;
+			if (expectedAbortReason === undefined) expectedAbortReason = reason;
+			if (realAbort) await realAbort(reason);
+		},
 		ready: Promise.resolve(),
 		task: Promise.resolve()
 	};
 
+	// Register synchronously, before any await, so stopWatchingGroup can always
+	// find and abort this handle during the backlog fetch / subscribe window.
+	for (const groupId of groupIds) {
+		currentWatches.set(groupId, handle);
+		markGroupWatched(groupId);
+	}
+
 	handle.ready = (async () => {
-		let failedGroupIds = new Set<string>();
-		if (!options.skipBacklogSync) {
-			failedGroupIds = await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
-		}
-		const subscriptionGroups = groupIds
-			.filter((groupId) => !failedGroupIds.has(groupId))
-			.map((groupId) => toWatchableGroup(groupId))
-			.filter((group): group is WatchableGroup => Boolean(group));
-		if (subscriptionGroups.length === 0) return;
-		const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
-		const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
-			client.SubscribeManyGroupMessages({
-				groups: subscriptionGroups.map((group) => ({
-					gid: group.gid,
-					after: group.after,
-					since_epoch: group.sinceEpoch
-				}))
-			})
-		);
-		const buffers = new Map(
-			subscriptionGroups.map((group) => [
-				group.id,
-				createWatchBuffer({
-					groupId: group.id,
-					getExpectedAbortReason: () => expectedAbortReason,
-					abort: async (reason?: string) => abort(reason)
+		try {
+			let failedGroupIds = new Set<string>();
+			if (!options.skipBacklogSync && !closing) {
+				failedGroupIds = await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+			}
+			// Aborted during the backlog fetch — never open a subscription.
+			if (closing) {
+				clearCurrentWatch(handle);
+				return;
+			}
+			const subscriptionGroups = groupIds
+				.filter((groupId) => !failedGroupIds.has(groupId))
+				.map((groupId) => toWatchableGroup(groupId))
+				.filter((group): group is WatchableGroup => Boolean(group));
+			if (subscriptionGroups.length === 0) {
+				clearCurrentWatch(handle);
+				return;
+			}
+			const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
+			const subscription = await withCoordinatorClient(account, coordinatorKey, (client) =>
+				client.SubscribeManyGroupMessages({
+					groups: subscriptionGroups.map((group) => ({
+						gid: group.gid,
+						after: group.after,
+						since_epoch: group.sinceEpoch
+					}))
 				})
-			])
-		);
+			);
+			// Aborted while the subscribe request was in flight — tear it down
+			// immediately instead of consuming its stream as an orphan.
+			if (closing) {
+				await subscription.abort(expectedAbortReason).catch(() => undefined);
+				clearCurrentWatch(handle);
+				return;
+			}
+			const buffers = new Map(
+				subscriptionGroups.map((group) => [
+					group.id,
+					createWatchBuffer({
+						groupId: group.id,
+						getExpectedAbortReason: () => expectedAbortReason,
+						abort: async (reason?: string) => handle.abort(reason)
+					})
+				])
+			);
 
-		handle.task = (async () => {
-			void subscription.result.catch((error) => {
-				const detail = error instanceof Error ? error.message : String(error);
-				if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
-					return;
-				}
-				if (isTransientCoordinatorError(error)) {
-					markCoordinatorDegraded(coordinatorKey, detail);
-					scheduleChatGroupResume('coordinator subscription result failed');
-					return;
-				}
-
-				console.warn('[watch] coordinator subscription result failed', {
-					coordinatorKey,
-					detail
-				});
-			});
-
-			abort = (reason?: string) => {
+			realAbort = (reason?: string) => {
 				expectedAbortReason = reason;
 				closing = true;
 
@@ -528,73 +584,98 @@ async function startWatchingCoordinatorGroups(
 				});
 			};
 
-			try {
-				for await (const message of subscription.stream) {
-					const group = groupsByGid.get(message.gid);
-					const buffer = group ? buffers.get(group.id) : undefined;
-					if (!buffer) continue;
-
-					if (
-						await buffer.push({
-							cursor: message.cursor,
-							createdAt: message.at,
-							opaqueMessageBase64: message.msg_64
-						})
-					) {
+			handle.task = (async () => {
+				void subscription.result.catch((error) => {
+					const detail = error instanceof Error ? error.message : String(error);
+					if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
 						return;
 					}
+					if (isTransientCoordinatorError(error)) {
+						markCoordinatorDegraded(coordinatorKey, detail);
+						scheduleChatGroupResume('coordinator subscription result failed', coordinatorKey);
+						return;
+					}
+
+					console.warn('[watch] coordinator subscription result failed', {
+						coordinatorKey,
+						detail
+					});
+				});
+
+				try {
+					for await (const message of subscription.stream) {
+						const group = groupsByGid.get(message.gid);
+						const buffer = group ? buffers.get(group.id) : undefined;
+						if (!buffer) continue;
+
+						if (
+							await buffer.push({
+								cursor: message.cursor,
+								createdAt: message.at,
+								opaqueMessageBase64: message.msg_64
+							})
+						) {
+							return;
+						}
+					}
+				} catch (error) {
+					const detail = error instanceof Error ? error.message : String(error);
+					if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
+						return;
+					}
+
+					throw error;
+				} finally {
+					await Promise.all(
+						[...buffers.values()].map((buffer) => buffer.flush().catch(() => false))
+					);
+					for (const buffer of buffers.values()) {
+						buffer.clearFlushTimer();
+					}
+					clearCurrentWatch(handle);
 				}
-			} catch (error) {
+			})();
+
+			void handle.task.catch((error) => {
 				const detail = error instanceof Error ? error.message : String(error);
 				if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
 					return;
 				}
 
-				throw error;
-			} finally {
-				await Promise.all([...buffers.values()].map((buffer) => buffer.flush().catch(() => false)));
-				for (const buffer of buffers.values()) {
-					buffer.clearFlushTimer();
+				if (isTransientCoordinatorError(error)) {
+					markCoordinatorDegraded(coordinatorKey, detail);
+					scheduleChatGroupResume('coordinator subscription stream failed', coordinatorKey);
+					return;
 				}
+
+				console.warn('[watch] coordinator subscription stream failed', {
+					coordinatorKey,
+					detail
+				});
 				clearCurrentWatch(handle);
-			}
-		})();
-
-		void handle.task.catch((error) => {
-			const detail = error instanceof Error ? error.message : String(error);
-			if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
-				return;
-			}
-
-			if (isTransientCoordinatorError(error)) {
-				markCoordinatorDegraded(coordinatorKey, detail);
-				scheduleChatGroupResume('coordinator subscription stream failed');
-				return;
-			}
-
-			console.warn('[watch] coordinator subscription stream failed', {
-				coordinatorKey,
-				detail
 			});
+		} catch (error) {
+			// Backlog fetch or subscribe threw before the handle was self-managed;
+			// drop the registration so a later start can retry.
 			clearCurrentWatch(handle);
-		});
+			throw error;
+		}
 	})();
-
-	for (const groupId of groupIds) {
-		currentWatches.set(groupId, handle);
-	}
 
 	return handle.ready;
 }
 
-export async function startWatchingAllGroups(options: { skipBacklogSync?: boolean } = {}) {
-	chatGroupWatchStore.startup = 'starting';
+let startAllPromise: Promise<void> | null = null;
+let startAllRequestedDuringRun = false;
+
+async function runStartWatchingAllGroups(options: { skipBacklogSync?: boolean }) {
 	const groupsToWatch = getWatchableGroups({ includeCurrentWatches: false });
 	if (groupsToWatch.length === 0) {
 		chatGroupWatchStore.startup = 'ready';
 		return;
 	}
 
+	chatGroupWatchStore.startup = 'starting';
 	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groupsToWatch);
 
 	try {
@@ -610,4 +691,41 @@ export async function startWatchingAllGroups(options: { skipBacklogSync?: boolea
 		chatGroupWatchStore.startup = 'error';
 		throw error;
 	}
+}
+
+/**
+ * Single authoritative "ensure every watchable group is watched" entry point.
+ *
+ * Re-entrancy is guarded by a singleton promise so the two natural callers —
+ * the account-change handler and the steady-state layout `$effect` — can never
+ * race to open duplicate backlog fetches or subscriptions on a cold start.
+ * `getWatchableGroups({ includeCurrentWatches: false })` plus synchronous
+ * handle registration in `startWatchingCoordinatorGroups` make each run a pure
+ * delta over the current watches, so a call that lands while another is in
+ * flight simply re-evaluates the delta once (catching groups added concurrently
+ * or watches cleared by a scoped resume) instead of duplicating work.
+ */
+export function startWatchingAllGroups(options: { skipBacklogSync?: boolean } = {}) {
+	if (startAllPromise) {
+		startAllRequestedDuringRun = true;
+		return startAllPromise;
+	}
+
+	startAllPromise = (async () => {
+		await runStartWatchingAllGroups(options);
+		if (startAllRequestedDuringRun) {
+			startAllRequestedDuringRun = false;
+			await runStartWatchingAllGroups(options);
+		}
+	})()
+		.catch((error) => {
+			// runStartWatchingAllGroups logs per-coordinator failures; surface
+			// unexpected throws without breaking the singleton guard.
+			console.warn('Failed to start group watches', error);
+		})
+		.finally(() => {
+			startAllPromise = null;
+		});
+
+	return startAllPromise;
 }
