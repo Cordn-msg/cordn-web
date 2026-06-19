@@ -21,6 +21,7 @@ import {
 	failChatReconnectStatus,
 	setChatReconnectStatus
 } from '$lib/services/chatReconnectStatus.svelte';
+import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
@@ -35,24 +36,20 @@ type GroupWatchTask = {
 };
 
 export const chatGroupWatchStore = $state<{
-	watchingGroupIds: string[];
 	startup: 'idle' | 'starting' | 'ready' | 'error';
 	error: string;
 }>({
-	watchingGroupIds: [],
 	startup: 'idle',
 	error: ''
 });
 
 const currentWatches = new SvelteMap<string, GroupWatchTask>();
-const autoWatchDisabledGroupIds = new SvelteSet<string>();
 let lastActiveAccountId = '';
 const groupIdDecoder = new TextDecoder();
 const RUNTIME_RESUME_REASON = 'runtime resume';
 const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 0;
 const RESUME_DEBOUNCE_MS = 500;
-const RECONNECT_STATUS_SHOW_DELAY_MS = 200;
 const MIN_RESUME_INTERVAL_MS = 5000;
 let resumePromise: Promise<void> | null = null;
 let resumeEpoch = 0;
@@ -69,10 +66,6 @@ type WatchFetchedMessage = WatchIncomingMessage & {
 	gid: string;
 };
 
-function syncWatchingGroupIds() {
-	chatGroupWatchStore.watchingGroupIds = [...currentWatches.keys()];
-}
-
 function getCurrentWatch(groupId: string) {
 	return currentWatches.get(groupId);
 }
@@ -80,20 +73,13 @@ function getCurrentWatch(groupId: string) {
 function clearCurrentWatch(handle?: GroupWatchTask | null) {
 	if (!handle) {
 		currentWatches.clear();
-		syncWatchingGroupIds();
 		return;
 	}
 
-	let changed = false;
 	for (const groupId of handle.groupIds) {
-		const active = currentWatches.get(groupId);
-		if (active !== handle) continue;
-		currentWatches.delete(groupId);
-		changed = true;
-	}
-
-	if (changed) {
-		syncWatchingGroupIds();
+		if (currentWatches.get(groupId) === handle) {
+			currentWatches.delete(groupId);
+		}
 	}
 }
 
@@ -106,7 +92,6 @@ if (browser) {
 
 		const previousAccount = manager.getAccount(lastActiveAccountId);
 		lastActiveAccountId = nextAccountId;
-		autoWatchDisabledGroupIds.clear();
 		chatGroupWatchStore.startup = 'idle';
 		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
 		const groupLoadPromise = reloadChatGroupsForOwner(nextOwnerPubkey);
@@ -140,12 +125,12 @@ if (browser) {
 	}
 }
 
-export function isWatchingGroup(groupId?: string): boolean {
-	return groupId ? getCurrentWatch(groupId) !== undefined : false;
-}
-
 async function closeWatch(handle: GroupWatchTask, reason: string) {
-	await handle.abort(reason).catch(() => undefined);
+	// Abort is best-effort: OpenStreamSession.abort() finalizes the local stream
+	// synchronously before publishing the abort notification, so we never block a
+	// resume on a dead relay's publish handshake (the SDK already bounds the
+	// publish timeout). The discarded socket is torn down regardless.
+	void handle.abort(reason).catch(() => undefined);
 	void handle.task.catch(() => undefined);
 }
 
@@ -175,36 +160,21 @@ function scheduleChatGroupResume(reason: string) {
 	}, RESUME_DEBOUNCE_MS);
 }
 
-function scheduleChatGroupResumeAfterTransientError(reason: string) {
-	scheduleChatGroupResume(reason);
-}
-
-export function stopWatchingGroup(groupId?: string, reason = 'user stopped watching') {
-	const watch = groupId ? (currentWatches.get(groupId) ?? null) : null;
-	if (groupId && reason === 'user stopped watching') {
-		autoWatchDisabledGroupIds.add(groupId);
-	}
-
-	if (groupId) {
-		clearCurrentWatch(watch);
-	} else {
+export function stopWatchingGroup(groupId?: string, reason = 'group stopped') {
+	if (!groupId) {
 		const watches = [...currentWatches.values()].filter(
 			(watch, index, allWatches) => allWatches.indexOf(watch) === index
 		);
-		autoWatchDisabledGroupIds.clear();
 		clearCurrentWatch();
 		return Promise.all(watches.map((entry) => closeWatch(entry, reason)));
 	}
 
+	const watch = currentWatches.get(groupId) ?? null;
+	clearCurrentWatch(watch);
 	if (!watch) {
 		return Promise.resolve();
 	}
-
-	return closeWatch(watch, reason).then(() => {
-		if (reason === 'user stopped watching') {
-			void resumeChatGroupWatching('watch manually stopped');
-		}
-	});
+	return closeWatch(watch, reason);
 }
 
 function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
@@ -212,7 +182,6 @@ function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
 		.filter(
 			(group) =>
 				(input.includeCurrentWatches || getCurrentWatch(group.id) === undefined) &&
-				!autoWatchDisabledGroupIds.has(group.id) &&
 				!isChatGroupRemoved(group) &&
 				!isChatGroupPoisoned(group)
 		)
@@ -238,13 +207,10 @@ async function runResumeChatGroupWatching(reason: string) {
 		return;
 	}
 
-	const ownerPubkey = normalizePubKey(account.pubkey);
 	chatGroupWatchStore.startup = 'starting';
 	chatGroupWatchStore.error = '';
 
-	await reloadChatGroupsForOwner(ownerPubkey);
 	const groupsToResume = getWatchableGroups({ includeCurrentWatches: true });
-	const activeCoordinatorKeys = groupsToResume.map((group) => group.coordinatorKey);
 
 	if (groupsToResume.length === 0) {
 		chatGroupWatchStore.startup = 'ready';
@@ -252,20 +218,15 @@ async function runResumeChatGroupWatching(reason: string) {
 		return;
 	}
 
-	const showReconnectStatus =
-		reason !== 'chat layout active' && reason !== 'active account changed';
+	// The banner is for connectivity recovery only. Account switches run silently.
+	const showReconnectStatus = reason !== 'active account changed';
 	if (showReconnectStatus) {
-		setChatReconnectStatus({
-			phase: 'syncing',
-			message: 'Updating chats…',
-			activeCoordinatorKeys,
-			showDelayMs: RECONNECT_STATUS_SHOW_DELAY_MS
-		});
+		setChatReconnectStatus('Updating chats…');
 	}
 
 	try {
 		await stopWatchingGroup(undefined, RUNTIME_RESUME_REASON);
-		void startWatchingAllGroups({ skipBacklogSync: false });
+		await startWatchingAllGroups({ skipBacklogSync: false });
 		chatGroupWatchStore.startup = 'ready';
 		lastSuccessfulResumeAt = Date.now();
 		clearChatReconnectStatus();
@@ -279,7 +240,7 @@ async function runResumeChatGroupWatching(reason: string) {
 	}
 }
 
-export function resumeChatGroupWatching(reason = 'runtime resume') {
+export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON) {
 	if (resumePromise) {
 		return resumePromise;
 	}
@@ -352,8 +313,6 @@ function createWatchBuffer(input: {
 			groupId: input.groupId,
 			detail
 		});
-		chatGroupWatchStore.error =
-			error instanceof Error ? error.message : 'Failed to ingest watched group messages';
 	};
 
 	const clearFlushTimer = () => {
@@ -455,30 +414,6 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 	return failedGroupIds;
 }
 
-async function fetchGroupBacklog(group: WatchableGroup) {
-	const account = requireActiveAccount('You must be logged in to watch group messages');
-	const requestParams: Record<string, unknown> = { gid: group.gid };
-	if (group.after) requestParams.after = group.after;
-	if (group.sinceEpoch) requestParams.since_epoch = group.sinceEpoch;
-	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-		client.FetchGroupMessages({
-			gid: group.gid,
-			after: group.after,
-			since_epoch: group.sinceEpoch
-		})
-	);
-	if (result.messages.length === 0) return;
-
-	await ingestIncomingChatGroupMessages(
-		group.id,
-		result.messages.map((message) => ({
-			cursor: message.cursor,
-			createdAt: message.at,
-			opaqueMessageBase64: message.msg_64
-		}))
-	);
-}
-
 async function fetchCoordinatorGroupBacklog(input: {
 	account: ReturnType<typeof requireActiveAccount>;
 	coordinatorKey: string;
@@ -507,135 +442,6 @@ async function fetchCoordinatorGroupBacklog(input: {
 	);
 }
 
-export async function startWatchingGroup(groupId: string) {
-	const existingWatch = getCurrentWatch(groupId);
-	if (existingWatch) {
-		return existingWatch.task;
-	}
-
-	autoWatchDisabledGroupIds.delete(groupId);
-
-	const account = requireActiveAccount('You must be logged in to watch group messages');
-	const watchableGroup = toWatchableGroup(groupId);
-	if (!watchableGroup) {
-		throw new Error('Group not found');
-	}
-
-	chatGroupWatchStore.error = '';
-
-	let abort: (reason?: string) => Promise<void> = async () => undefined;
-	let expectedAbortReason: string | undefined;
-	let closing = false;
-	const handle: GroupWatchTask = {
-		groupIds: [groupId],
-		abort: async (reason?: string) => abort(reason),
-		ready: Promise.resolve(),
-		task: Promise.resolve()
-	};
-
-	handle.ready = (async () => {
-		await fetchGroupBacklog(watchableGroup);
-		const subscriptionGroup = toWatchableGroup(groupId);
-		if (!subscriptionGroup) return;
-		const subParams: Record<string, unknown> = { gid: subscriptionGroup.gid };
-		if (subscriptionGroup.after) subParams.after = subscriptionGroup.after;
-		if (subscriptionGroup.sinceEpoch) subParams.since_epoch = subscriptionGroup.sinceEpoch;
-		const subscription = await withCoordinatorClient(
-			account,
-			subscriptionGroup.coordinatorKey,
-			(client) =>
-				client.SubscribeGroupMessages({
-					gid: subscriptionGroup.gid,
-					after: subscriptionGroup.after,
-					since_epoch: subscriptionGroup.sinceEpoch
-				})
-		);
-
-		handle.task = (async () => {
-			const buffer = createWatchBuffer({
-				groupId,
-				getExpectedAbortReason: () => expectedAbortReason,
-				abort: async (reason?: string) => abort(reason)
-			});
-
-			void subscription.result.catch((error) => {
-				const detail = error instanceof Error ? error.message : String(error);
-				if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
-					return;
-				}
-				if (isTransientCoordinatorError(error)) {
-					scheduleChatGroupResumeAfterTransientError('single group subscription result failed');
-					return;
-				}
-
-				chatGroupWatchStore.error =
-					error instanceof Error ? error.message : 'Failed to watch group messages';
-			});
-
-			abort = (reason?: string) => {
-				expectedAbortReason = reason;
-				closing = true;
-
-				return subscription.abort(reason).catch((error) => {
-					const detail = error instanceof Error ? error.message : String(error);
-					if (isExpectedWatchTeardown(detail, reason)) {
-						return;
-					}
-
-					chatGroupWatchStore.error =
-						error instanceof Error ? error.message : 'Failed to stop watching group messages';
-				});
-			};
-
-			try {
-				for await (const message of subscription.stream) {
-					if (
-						await buffer.push({
-							cursor: message.cursor,
-							createdAt: message.at,
-							opaqueMessageBase64: message.msg_64
-						})
-					) {
-						return;
-					}
-				}
-			} catch (error) {
-				const detail = error instanceof Error ? error.message : String(error);
-				if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
-					return;
-				}
-
-				throw error;
-			} finally {
-				await buffer.flush().catch(() => undefined);
-				buffer.clearFlushTimer();
-				clearCurrentWatch(handle);
-			}
-		})();
-
-		void handle.task.catch((error) => {
-			const detail = error instanceof Error ? error.message : String(error);
-			if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
-				return;
-			}
-
-			if (isTransientCoordinatorError(error)) {
-				scheduleChatGroupResumeAfterTransientError('single group subscription stream failed');
-				return;
-			}
-
-			chatGroupWatchStore.error =
-				error instanceof Error ? error.message : 'Failed to watch group messages';
-			clearCurrentWatch(handle);
-		});
-	})();
-
-	currentWatches.set(groupId, handle);
-	syncWatchingGroupIds();
-
-	return handle.ready;
-}
-
 async function startWatchingCoordinatorGroups(
 	groups: WatchableGroup[],
 	options: { skipBacklogSync?: boolean } = {}
@@ -645,8 +451,6 @@ async function startWatchingCoordinatorGroups(
 	const account = requireActiveAccount('You must be logged in to watch group messages');
 	const coordinatorKey = groups[0].coordinatorKey;
 	const groupIds = groups.map((group) => group.id);
-
-	chatGroupWatchStore.error = '';
 
 	let abort: (reason?: string) => Promise<void> = async () => undefined;
 	let expectedAbortReason: string | undefined;
@@ -696,12 +500,15 @@ async function startWatchingCoordinatorGroups(
 					return;
 				}
 				if (isTransientCoordinatorError(error)) {
-					scheduleChatGroupResumeAfterTransientError('coordinator subscription result failed');
+					markCoordinatorDegraded(coordinatorKey, detail);
+					scheduleChatGroupResume('coordinator subscription result failed');
 					return;
 				}
 
-				chatGroupWatchStore.error =
-					error instanceof Error ? error.message : 'Failed to watch group messages';
+				console.warn('[watch] coordinator subscription result failed', {
+					coordinatorKey,
+					detail
+				});
 			});
 
 			abort = (reason?: string) => {
@@ -714,8 +521,10 @@ async function startWatchingCoordinatorGroups(
 						return;
 					}
 
-					chatGroupWatchStore.error =
-						error instanceof Error ? error.message : 'Failed to stop watching group messages';
+					console.warn('[watch] failed to stop watching group messages', {
+						coordinatorKey,
+						detail
+					});
 				});
 			};
 
@@ -758,12 +567,15 @@ async function startWatchingCoordinatorGroups(
 			}
 
 			if (isTransientCoordinatorError(error)) {
-				scheduleChatGroupResumeAfterTransientError('coordinator subscription stream failed');
+				markCoordinatorDegraded(coordinatorKey, detail);
+				scheduleChatGroupResume('coordinator subscription stream failed');
 				return;
 			}
 
-			chatGroupWatchStore.error =
-				error instanceof Error ? error.message : 'Failed to watch group messages';
+			console.warn('[watch] coordinator subscription stream failed', {
+				coordinatorKey,
+				detail
+			});
 			clearCurrentWatch(handle);
 		});
 	})();
@@ -771,7 +583,6 @@ async function startWatchingCoordinatorGroups(
 	for (const groupId of groupIds) {
 		currentWatches.set(groupId, handle);
 	}
-	syncWatchingGroupIds();
 
 	return handle.ready;
 }
@@ -787,11 +598,13 @@ export async function startWatchingAllGroups(options: { skipBacklogSync?: boolea
 	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groupsToWatch);
 
 	try {
-		for (const [coordinatorKey, coordinatorGroups] of groupsByCoordinator) {
-			await startWatchingCoordinatorGroups(coordinatorGroups, options).catch((error) => {
-				console.warn('Failed to start coordinator group watch', coordinatorKey, error);
-			});
-		}
+		await Promise.all(
+			[...groupsByCoordinator].map(([coordinatorKey, coordinatorGroups]) =>
+				startWatchingCoordinatorGroups(coordinatorGroups, options).catch((error) => {
+					console.warn('Failed to start coordinator group watch', coordinatorKey, error);
+				})
+			)
+		);
 		chatGroupWatchStore.startup = 'ready';
 	} catch (error) {
 		chatGroupWatchStore.startup = 'error';

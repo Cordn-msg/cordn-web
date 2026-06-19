@@ -33,7 +33,7 @@
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getCoordinatorReconnectTone } from '$lib/services/chatReconnectStatus.svelte';
+	import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Search from '@lucide/svelte/icons/search';
@@ -251,17 +251,16 @@
 	}
 
 	function getCoordinatorStatusClass(coordinatorKey: string) {
-		const tone = getCoordinatorReconnectTone(coordinatorKey);
-		if (tone === 'error') {
-			return 'bg-destructive';
-		}
-
-		if (tone === 'active') {
+		const tone = getCoordinatorHealthTone(coordinatorKey);
+		if (tone === 'degraded') {
 			return 'bg-amber-500';
 		}
 
-		const hasChats = groupedChats.some((entry) => entry.pubkey === coordinatorKey);
-		return hasChats ? 'bg-emerald-500' : 'bg-muted-foreground/40';
+		if (tone === 'healthy') {
+			return 'bg-emerald-500';
+		}
+
+		return 'bg-muted-foreground/40';
 	}
 
 	$effect(() => {

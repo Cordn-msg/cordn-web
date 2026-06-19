@@ -55,6 +55,12 @@ import {
 	removeKeyPackagesOutputSchema
 } from '../contracts/index.ts';
 
+/**
+ * Health signal emitted by `cordnClient` after every coordinator call. The
+ * registry maps this onto the per-coordinator health store.
+ */
+export type CoordinatorHealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
+
 export type coordinatorClient = {
 	PublishKeyPackage: (input: PublishKeyPackageInput) => Promise<PublishKeyPackageOutput>;
 	ListAvailableKeyPackages: (
@@ -92,12 +98,14 @@ export class cordnClient implements coordinatorClient {
 	private readonly ephemeralClient: Client;
 	private readonly ephemeralTransport: NostrClientTransport;
 	private readonly ephemeralConnected: Promise<void>;
+	private readonly onHealth?: (signal: CoordinatorHealthSignal) => void;
 
 	constructor(
 		options: Partial<NostrTransportOptions> & {
 			privateKey?: string;
 			ephemeralPrivateKey?: string;
 			relays?: string[];
+			onHealth?: (signal: CoordinatorHealthSignal) => void;
 		} = {}
 	) {
 		this.stableClient = new Client({
@@ -120,7 +128,8 @@ export class cordnClient implements coordinatorClient {
 				'Missing coordinator server pubkey. Pass serverPubkey explicitly or configure the CLI entrypoint to provide one.'
 			);
 		}
-		const { signer: providedSigner, ...rest } = options;
+		const { signer: providedSigner, onHealth, ...rest } = options;
+		this.onHealth = onHealth;
 		delete (rest as Partial<typeof options>).privateKey;
 		delete (rest as Partial<typeof options>).ephemeralPrivateKey;
 		delete (rest as Partial<typeof options>).serverPubkey;
@@ -204,32 +213,41 @@ export class cordnClient implements coordinatorClient {
 		const client = transportKind === 'stable' ? this.stableClient : this.ephemeralClient;
 		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
-		await connected;
-		const result = await client.callTool(
-			{
-				name,
-				arguments: { ...args }
-			},
-			undefined,
-			{
-				onprogress: () => undefined,
-				resetTimeoutOnProgress: true
+		try {
+			await connected;
+			const result = await client.callTool(
+				{
+					name,
+					arguments: { ...args }
+				},
+				undefined,
+				{
+					onprogress: () => undefined,
+					resetTimeoutOnProgress: true
+				}
+			);
+
+			// Check if the server returned an error
+			if (result.isError) {
+				const content = result.content as Array<{ type: string; text?: string }> | undefined;
+				const errorMessage =
+					content
+						?.filter((c) => c.type === 'text')
+						.map((c) => c.text ?? '')
+						.join('\n') || 'Unknown coordinator error';
+				throw new Error(errorMessage);
 			}
-		);
 
-		// Check if the server returned an error
-		if (result.isError) {
-			// Extract error message from content array
-			const content = result.content as Array<{ type: string; text?: string }> | undefined;
-			const errorMessage =
-				content
-					?.filter((c) => c.type === 'text')
-					.map((c) => c.text ?? '')
-					.join('\n') || 'Unknown coordinator error';
-			throw new Error(errorMessage);
+			const parsed = schema
+				? schema.parse(result.structuredContent)
+				: (result.structuredContent as T);
+			this.onHealth?.({ status: 'healthy' });
+			return parsed;
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			this.onHealth?.({ status: 'degraded', error: detail });
+			throw error;
 		}
-
-		return schema ? schema.parse(result.structuredContent) : (result.structuredContent as T);
 	}
 
 	/**
@@ -337,7 +355,6 @@ export class cordnClient implements coordinatorClient {
 	async FetchManyPendingJoinRequests(
 		input: FetchManyPendingJoinRequestsInput
 	): Promise<FetchManyPendingJoinRequestsOutput> {
-		console.log('FetchManyPendingJoinRequests', input);
 		return this.call(
 			'ephemeral',
 			COORDINATOR_METHODS.fetchManyPendingJoinRequests,

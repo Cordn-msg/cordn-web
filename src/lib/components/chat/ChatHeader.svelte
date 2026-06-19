@@ -15,10 +15,8 @@
 	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
-		fetchGroupMessagesAction,
 		inviteGroupMemberAction,
-		refreshInviteKeyPackagesAction,
-		toggleGroupWatchAction
+		refreshInviteKeyPackagesAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
@@ -30,12 +28,8 @@
 		isChatGroupPoisoned,
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
-	import { chatGroupWatchStore } from '$lib/services/chatGroupWatch.svelte';
 	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
-	import Download from '@lucide/svelte/icons/download';
 	import Copy from '@lucide/svelte/icons/copy';
-	import Eye from '@lucide/svelte/icons/eye';
-	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
@@ -58,14 +52,6 @@
 		imageUrl?: string;
 	} = $props();
 
-	async function fetchMessages() {
-		await fetchGroupMessagesAction(groupId);
-	}
-
-	async function toggleWatch() {
-		await toggleGroupWatchAction(groupId);
-	}
-
 	async function refreshAvailableKeyPackages() {
 		if (!$activeAccount) return;
 		await refreshInviteKeyPackagesAction(groupId);
@@ -81,9 +67,6 @@
 		return `${entry.stablePubkey.slice(0, 12)}…${entry.stablePubkey.slice(-8)}`;
 	}
 
-	const isWatching = $derived.by(() =>
-		groupId ? chatGroupWatchStore.watchingGroupIds.includes(groupId) : false
-	);
 	const group = $derived.by(() => (groupId ? getChatGroup(groupId) : undefined));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
@@ -92,7 +75,6 @@
 		if (isRemoved) return false;
 		return isGroupAdmin({ metadata: group.metadata, stablePubkey: $activeAccount.pubkey });
 	});
-	const watchLabel = $derived.by(() => (isWatching ? 'Stop watching group' : 'Watch group'));
 	const inviteLabel = $derived.by(() =>
 		canInvite ? 'Invite member' : 'Only configured group admins can invite members'
 	);
@@ -286,7 +268,6 @@
 					/>
 					<span class="sr-only">{themeLabel}</span>
 				</Button>
-
 				<Button
 					type="button"
 					variant="outline"
@@ -298,38 +279,6 @@
 				>
 					<Info class="size-4" />
 				</Button>
-
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="h-10 w-10 rounded-xl"
-					disabled={!$activeAccount || chatHeaderActionsStore.watchLoading || isRemoved}
-					aria-label={watchLabel}
-					title={watchLabel}
-					onclick={toggleWatch}
-				>
-					{#if isWatching}
-						<EyeOff class="size-4" />
-					{:else}
-						<Eye class="size-4" />
-					{/if}
-				</Button>
-
-				{#if !isWatching}
-					<Button
-						type="button"
-						variant="outline"
-						size="icon"
-						class="h-10 w-10 rounded-xl"
-						disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading || isRemoved}
-						aria-label="Fetch messages"
-						onclick={fetchMessages}
-					>
-						<Download class="size-4" />
-					</Button>
-				{/if}
-
 				<Dialog.Root bind:open={chatHeaderActionsStore.inviteOpen}>
 					<Dialog.Trigger
 						class="inline-flex"
@@ -463,28 +412,6 @@
 							<Info class="size-4" />
 							<span>Group info</span>
 						</DropdownMenu.Item>
-						<DropdownMenu.Item
-							disabled={!$activeAccount || chatHeaderActionsStore.watchLoading || isRemoved}
-							onclick={toggleWatch}
-							class="gap-2"
-						>
-							{#if isWatching}
-								<EyeOff class="size-4" />
-							{:else}
-								<Eye class="size-4" />
-							{/if}
-							<span>{watchLabel}</span>
-						</DropdownMenu.Item>
-						{#if !isWatching}
-							<DropdownMenu.Item
-								disabled={!$activeAccount || chatHeaderActionsStore.fetchLoading || isRemoved}
-								onclick={fetchMessages}
-								class="gap-2"
-							>
-								<Download class="size-4" />
-								<span>Fetch messages</span>
-							</DropdownMenu.Item>
-						{/if}
 						<DropdownMenu.Item
 							disabled={!$activeAccount || !canInvite}
 							onclick={() => (chatHeaderActionsStore.inviteOpen = true)}

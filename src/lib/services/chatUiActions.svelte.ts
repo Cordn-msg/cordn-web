@@ -4,7 +4,6 @@ import {
 	acceptChatWelcome,
 	createChatGroup,
 	deleteChatGroup,
-	fetchChatGroupMessages,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
 	recoverPoisonedChatGroup,
@@ -29,12 +28,7 @@ import {
 	markJoinRequestDismissed,
 	setJoinRequestSubmitting
 } from '$lib/services/chatJoinRequests.svelte';
-import {
-	chatGroupWatchStore,
-	isWatchingGroup,
-	startWatchingGroup,
-	stopWatchingGroup
-} from '$lib/services/chatGroupWatch.svelte';
+import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import {
@@ -54,19 +48,15 @@ import type {
 } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
-	fetchLoading: boolean;
 	inviteOpen: boolean;
 	inviteLoading: boolean;
 	inviteSubmitting: boolean;
-	watchLoading: boolean;
 	error: string;
 	availableKeyPackages: CoordinatorAvailableKeyPackage[];
 }>({
-	fetchLoading: false,
 	inviteOpen: false,
 	inviteLoading: false,
 	inviteSubmitting: false,
-	watchLoading: false,
 	error: '',
 	availableKeyPackages: []
 });
@@ -87,20 +77,6 @@ export const chatGroupInfoActionsStore = $state<{
 	error: ''
 });
 
-export async function fetchGroupMessagesAction(groupId?: string) {
-	if (!groupId || chatHeaderActionsStore.fetchLoading) return;
-	chatHeaderActionsStore.fetchLoading = true;
-	chatHeaderActionsStore.error = '';
-	try {
-		await fetchChatGroupMessages(groupId);
-	} catch (error) {
-		chatHeaderActionsStore.error =
-			error instanceof Error ? error.message : 'Failed to fetch messages';
-	} finally {
-		chatHeaderActionsStore.fetchLoading = false;
-	}
-}
-
 export async function refreshInviteKeyPackagesAction(groupId?: string) {
 	if (!groupId) return;
 	chatHeaderActionsStore.inviteLoading = true;
@@ -113,28 +89,6 @@ export async function refreshInviteKeyPackagesAction(groupId?: string) {
 			error instanceof Error ? error.message : 'Failed to load available key packages';
 	} finally {
 		chatHeaderActionsStore.inviteLoading = false;
-	}
-}
-
-export async function toggleGroupWatchAction(groupId?: string) {
-	if (!groupId || chatHeaderActionsStore.watchLoading) return;
-	chatHeaderActionsStore.watchLoading = true;
-	chatHeaderActionsStore.error = '';
-	chatGroupWatchStore.error = '';
-
-	try {
-		if (isWatchingGroup(groupId)) {
-			await stopWatchingGroup(groupId);
-			return;
-		}
-
-		await startWatchingGroup(groupId);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : 'Failed to watch group messages';
-		chatHeaderActionsStore.error = message;
-		chatGroupWatchStore.error = message;
-	} finally {
-		chatHeaderActionsStore.watchLoading = false;
 	}
 }
 

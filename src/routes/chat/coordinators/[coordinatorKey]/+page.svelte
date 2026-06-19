@@ -19,11 +19,11 @@
 		getCoordinatorColor,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
+	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import {
-		chatReconnectStatusStore,
-		getCoordinatorReconnectLabel,
-		getCoordinatorReconnectTone
-	} from '$lib/services/chatReconnectStatus.svelte';
+		getCoordinatorHealthLabel,
+		getCoordinatorHealthTone
+	} from '$lib/services/coordinatorHealth.svelte';
 	import {
 		getChatGroup,
 		listChatGroupMembers,
@@ -124,38 +124,30 @@
 			pubkey: entry.pk
 		}))
 	);
-	const coordinatorConnectionTone = $derived.by(() => getCoordinatorReconnectTone(coordinatorKey));
-	const coordinatorConnectionLabel = $derived.by(() =>
-		getCoordinatorReconnectLabel(coordinatorKey)
-	);
+	const coordinatorConnectionTone = $derived.by(() => getCoordinatorHealthTone(coordinatorKey));
+	const coordinatorConnectionLabel = $derived.by(() => getCoordinatorHealthLabel(coordinatorKey));
 	const coordinatorConnectionDotClass = $derived.by(() => {
-		if (coordinatorConnectionTone === 'error') return 'bg-destructive';
-		if (coordinatorConnectionTone === 'active') return 'bg-amber-500';
-		return relatedGroups.length > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/40';
+		if (coordinatorConnectionTone === 'degraded') return 'bg-amber-500';
+		if (coordinatorConnectionTone === 'healthy') return 'bg-emerald-500';
+		return 'bg-muted-foreground/40';
 	});
 	const coordinatorConnectionCardClass = $derived.by(() => {
-		if (coordinatorConnectionTone === 'error') {
-			return 'border-destructive/40 bg-destructive/5';
-		}
-
-		if (coordinatorConnectionTone === 'active') {
+		if (coordinatorConnectionTone === 'degraded') {
 			return 'border-amber-500/40 bg-amber-500/5';
 		}
 
 		return 'border-border bg-background';
 	});
 	const coordinatorConnectionDetail = $derived.by(() => {
-		if (coordinatorConnectionTone === 'error') {
-			return 'The latest reconnect attempt for this coordinator did not complete cleanly.';
+		if (coordinatorConnectionTone === 'degraded') {
+			return 'Recent coordinator requests failed. Reconnecting automatically.';
 		}
 
-		if (coordinatorConnectionTone === 'active') {
-			return 'A reconnect rebuild is currently running for this coordinator.';
+		if (coordinatorConnectionTone === 'healthy') {
+			return 'Coordinator is reachable.';
 		}
 
-		return relatedGroups.length > 0
-			? 'No reconnect work is currently running for this coordinator.'
-			: 'No reconnect activity is currently tracked for this coordinator.';
+		return 'Waiting for the first response from this coordinator.';
 	});
 
 	async function loadRemoteKeyPackages() {

@@ -1,5 +1,10 @@
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+import {
+	markCoordinatorDegraded,
+	markCoordinatorHealthy,
+	resetCoordinatorHealth
+} from '$lib/services/coordinatorHealth.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { defaultRelays } from '$lib/services/relay-pool';
 import { relayActions } from '$lib/stores/relay-store.svelte';
@@ -54,10 +59,15 @@ class AccountCoordinatorClientRegistry {
 			return existingClient;
 		}
 
+		const serverPubkey = target.serverPubkey;
 		const client = new cordnClient({
 			signer: this.signer,
-			serverPubkey: target.serverPubkey,
-			relays: target.relays
+			serverPubkey,
+			relays: target.relays,
+			onHealth: (signal) => {
+				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
+				else markCoordinatorDegraded(serverPubkey, signal.error);
+			}
 		} as ConstructorParameters<typeof cordnClient>[0]);
 
 		this.clients.set(target.serverPubkey, client);
@@ -76,6 +86,9 @@ class AccountCoordinatorClientRegistry {
 	}
 
 	async disconnect(): Promise<void> {
+		for (const serverPubkey of this.coordinatorKeys.keys()) {
+			resetCoordinatorHealth(serverPubkey);
+		}
 		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
 		this.clients.clear();
 		this.coordinatorKeys.clear();
