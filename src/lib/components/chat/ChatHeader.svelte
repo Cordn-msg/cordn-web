@@ -2,7 +2,8 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import QrCode from '$lib/components/QrCode.svelte';
@@ -42,14 +43,10 @@
 
 	let {
 		groupId,
-		title = 'Cordn',
-		icon,
-		imageUrl
+		title = 'Cordn'
 	}: {
 		groupId?: string;
 		title?: string;
-		icon?: string;
-		imageUrl?: string;
 	} = $props();
 
 	async function refreshAvailableKeyPackages() {
@@ -194,37 +191,17 @@
 </script>
 
 <header
-	class="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+	class="border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80"
 >
 	<div class="flex items-start justify-between gap-3 px-4 py-3 sm:items-center md:px-6">
 		<div class="flex min-w-0 flex-1 items-center gap-3 pr-2">
 			<ChatMobileSidebarButton />
 
-			<Avatar class="h-10 w-10 border border-border bg-card">
-				{#if imageUrl}
-					<AvatarImage src={imageUrl} alt={title} class="object-cover" />
+			{#if group}
+				<ChatGroupAvatar {group} class="h-10 w-10" />
+			{:else}
+				<Avatar class="h-10 w-10 border border-border bg-card p-1.5">
 					<AvatarFallback class="bg-card text-base">
-						{#if icon}
-							{icon}
-						{:else if title.length === 1}
-							{title.slice(0, 1)}
-						{:else}
-							<img
-								src="/cordn-logo-black.svg"
-								alt="Cordn"
-								class="h-full w-full object-contain dark:hidden"
-							/>
-							<img
-								src="/cordn-logo.svg"
-								alt="Cordn"
-								class="hidden h-full w-full object-contain dark:block"
-							/>
-						{/if}
-					</AvatarFallback>
-				{:else if icon}
-					<AvatarFallback class="bg-card text-base">{icon}</AvatarFallback>
-				{:else}
-					<AvatarFallback class="bg-card p-1.5 text-base">
 						<img
 							src="/cordn-logo-black.svg"
 							alt="Cordn"
@@ -236,8 +213,8 @@
 							class="hidden h-full w-full object-contain dark:block"
 						/>
 					</AvatarFallback>
-				{/if}
-			</Avatar>
+				</Avatar>
+			{/if}
 
 			<button
 				type="button"
@@ -261,10 +238,10 @@
 					onclick={toggleTheme}
 				>
 					<Sun
-						class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 !transition-all dark:scale-0 dark:-rotate-90"
+						class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all! dark:scale-0 dark:-rotate-90"
 					/>
 					<Moon
-						class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 !transition-all dark:scale-100 dark:rotate-0"
+						class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all! dark:scale-100 dark:rotate-0"
 					/>
 					<span class="sr-only">{themeLabel}</span>
 				</Button>

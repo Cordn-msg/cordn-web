@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { toast } from 'svelte-sonner';
 
 /**
  * Update detection.
@@ -11,9 +12,16 @@ import { browser } from '$app/environment';
  *
  * Detection runs on load and then every 10 minutes. On a mismatch the sticky
  * `AppUpdateBanner` prompts the user to reload. Reload is always manual.
+ *
+ * A one-shot post-update toast complements the banner: the banner prompts a
+ * reload while a tab is open across a deploy, while the toast confirms the
+ * update landed after the reload that installed it. Because the service worker
+ * serves navigations network-first, a reload often silently picks up the new
+ * bundle without the banner ever showing, so the toast is the reliable signal.
  */
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 const DISMISS_KEY = 'cordn-app-update-dismissed';
+const LAST_SEEN_VERSION_KEY = 'cordn-app-last-seen-version';
 
 const CURRENT_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
@@ -32,6 +40,39 @@ function getDismissedVersion(): string | null {
 	} catch {
 		return null;
 	}
+}
+
+function getLastSeenVersion(): string | null {
+	if (!browser) return null;
+	try {
+		return localStorage.getItem(LAST_SEEN_VERSION_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function setLastSeenVersion(version: string) {
+	if (!browser) return;
+	try {
+		localStorage.setItem(LAST_SEEN_VERSION_KEY, version);
+	} catch {
+		// ignore storage failures
+	}
+}
+
+/**
+ * Fire one toast on startup when the running version differs from the last one
+ * the user saw, then remember the current version. Runs once per page load,
+ * production only. Skipped in dev (no real version stamp) without touching
+ * storage so a dev session can't trigger a spurious toast on the next prod load.
+ */
+function notifyAppVersionOnStartup() {
+	if (!browser || !import.meta.env.PROD) return;
+	const previous = getLastSeenVersion();
+	if (previous && previous !== CURRENT_VERSION) {
+		toast.success('Cordn updated', { description: `Now running v${CURRENT_VERSION}` });
+	}
+	setLastSeenVersion(CURRENT_VERSION);
 }
 
 async function pollVersion() {
@@ -65,6 +106,7 @@ async function pollVersion() {
 /** Start polling. Mount once via `AppUpdateBanner.svelte` in the root layout. */
 export function startAppUpdateWatcher() {
 	if (!browser) return;
+	notifyAppVersionOnStartup();
 	void pollVersion();
 	pollTimer = setInterval(pollVersion, POLL_INTERVAL_MS);
 }

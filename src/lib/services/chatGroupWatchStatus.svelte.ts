@@ -32,3 +32,22 @@ export function markAllGroupsUnwatched(): void {
 export function isGroupActivelyWatched(groupId: string): boolean {
 	return watchedGroupIds.has(groupId);
 }
+
+/**
+ * Mirror of the in-flight resume promise from `chatGroupWatch.svelte`.
+ *
+ * Outbound message sends read `getChatGroupResumePromise()` so they can wait
+ * for an in-progress rebuild (the "Updating chats…" window) to settle before
+ * touching group state, instead of racing the teardown/backlog fetch and
+ * failing. Lives here for the same cycle-avoidance reason as `watchedGroupIds`:
+ * `chatGroups.svelte` can read it without importing `chatGroupWatch.svelte`.
+ */
+let currentResumePromise: Promise<void> | null = null;
+
+export function setChatGroupResumePromise(promise: Promise<void> | null): void {
+	currentResumePromise = promise;
+}
+
+export function getChatGroupResumePromise(): Promise<void> | null {
+	return currentResumePromise;
+}

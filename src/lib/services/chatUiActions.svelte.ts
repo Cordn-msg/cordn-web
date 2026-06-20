@@ -173,12 +173,8 @@ export async function updateGroupMetadataAction(
 	}
 }
 
-export const chatComposerActionsStore = $state<{
-	error: string;
-	sending: boolean;
-}>({
-	error: '',
-	sending: false
+export const chatComposerActionsStore = $state<{ error: string }>({
+	error: ''
 });
 
 export const coordinatorDetailsActionsStore = $state<{
@@ -220,10 +216,8 @@ export async function sendGroupMessageAction(
 	deleteTo?: ChatMessageDeleteTarget
 ): Promise<StoredChatMessage | false> {
 	const text = content.trim();
-	if ((!text && !reactionTo && !deleteTo) || !groupId || chatComposerActionsStore.sending)
-		return false;
+	if ((!text && !reactionTo && !deleteTo) || !groupId) return false;
 	chatComposerActionsStore.error = '';
-	chatComposerActionsStore.sending = true;
 	try {
 		return await sendChatGroupMessage({
 			groupId,
@@ -238,8 +232,6 @@ export async function sendGroupMessageAction(
 		chatComposerActionsStore.error =
 			error instanceof Error ? error.message : 'Failed to send message';
 		return false;
-	} finally {
-		chatComposerActionsStore.sending = false;
 	}
 }
 

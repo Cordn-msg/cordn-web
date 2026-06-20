@@ -29,7 +29,8 @@ import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotif
 import {
 	markAllGroupsUnwatched,
 	markGroupUnwatched,
-	markGroupWatched
+	markGroupWatched,
+	setChatGroupResumePromise
 } from '$lib/services/chatGroupWatchStatus.svelte';
 import { normalizePubKey } from '$lib/utils';
 
@@ -298,8 +299,10 @@ export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordina
 	resumePromise = runResumeChatGroupWatching(reason, coordinatorKey).finally(() => {
 		if (resumeEpoch === epoch) {
 			resumePromise = null;
+			setChatGroupResumePromise(null);
 		}
 	});
+	setChatGroupResumePromise(resumePromise);
 
 	return resumePromise;
 }

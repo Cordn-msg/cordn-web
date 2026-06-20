@@ -74,7 +74,10 @@ import {
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { isGroupActivelyWatched } from '$lib/services/chatGroupWatchStatus.svelte';
+import {
+	getChatGroupResumePromise,
+	isGroupActivelyWatched
+} from '$lib/services/chatGroupWatchStatus.svelte';
 
 const groupIdDecoder = new TextDecoder();
 
@@ -472,8 +475,18 @@ export async function assertGroupCanPerformOutboundOperation(
  * to the last delivered message, and this runs inside the serialized group
  * operation chain so it always sees the post-ingestion state. Only fall back
  * to a full catch-up for groups that are not currently watched.
+ *
+ * If a chat rebuild (the "Updating chats…" resume flow) is in flight, wait for
+ * it to settle before proceeding. A send racing the resume would read state
+ * mid-teardown and fail; waiting lets it run against the rebuilt client
+ * instead. The resume rejection is swallowed so a failed rebuild still gives
+ * the send (and its own error path) a chance rather than aborting outright.
  */
 async function prepareGroupForApplicationMessage(groupId: string): Promise<StoredChatGroup> {
+	const resumePromise = getChatGroupResumePromise();
+	if (resumePromise) {
+		await resumePromise.catch(() => {});
+	}
 	if (isGroupActivelyWatched(groupId)) {
 		const group = requireChatGroup(groupId);
 		assertChatGroupIsActive(group);

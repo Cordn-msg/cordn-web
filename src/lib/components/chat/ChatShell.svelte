@@ -520,12 +520,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<ChatHeader
-		{groupId}
-		title={displayTitle}
-		icon={group?.metadata?.icon}
-		imageUrl={group?.metadata?.imageUrl}
-	/>
+	<ChatHeader {groupId} title={displayTitle} />
 
 	<div class="min-h-0 flex-1">
 		<ChatMessageList
