@@ -29,6 +29,7 @@ import {
 	setJoinRequestSubmitting
 } from '$lib/services/chatJoinRequests.svelte';
 import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
+import { getChatGroupResumePromise } from '$lib/services/chatGroupWatchStatus.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import {
@@ -218,6 +219,16 @@ export async function sendGroupMessageAction(
 	const text = content.trim();
 	if ((!text && !reactionTo && !deleteTo) || !groupId) return false;
 	chatComposerActionsStore.error = '';
+	// If a chat rebuild (the "Updating chats…" resume flow) is in flight, wait
+	// for it to settle before sending. This is awaited OUTSIDE the per-group
+	// operation lock (acquired inside sendChatGroupMessage): the rebuild's
+	// backlog ingestion takes that same lock, so awaiting it from inside would
+	// deadlock. The rejection is swallowed so a failed rebuild still gives the
+	// send (and its own error path) a chance rather than aborting outright.
+	const resumePromise = getChatGroupResumePromise();
+	if (resumePromise) {
+		await resumePromise.catch(() => undefined);
+	}
 	try {
 		return await sendChatGroupMessage({
 			groupId,
