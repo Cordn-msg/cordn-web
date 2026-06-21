@@ -26,16 +26,12 @@
 		errorMessage = '';
 		try {
 			if (!scanner) {
-				scanner = new QrScanner(
-					video,
-					(result) => onResult(result.data),
-					{
-						preferredCamera: 'environment',
-						highlightScanRegion: true,
-						highlightCodeOutline: true,
-						returnDetailedScanResult: true,
-					}
-				);
+				scanner = new QrScanner(video, (result) => onResult(result.data), {
+					preferredCamera: 'environment',
+					highlightScanRegion: true,
+					highlightCodeOutline: true,
+					returnDetailedScanResult: true
+				});
 			}
 			const hasCamera = await QrScanner.hasCamera();
 			if (!hasCamera) {

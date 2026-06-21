@@ -267,6 +267,24 @@ function persistGroups(groups: StoredChatGroup[]) {
 	return persistGroupsPromise;
 }
 
+/**
+ * Persist a single group on the shared chain. Single-group mutations (a new
+ * message ingested, a sent message, a status change) must not re-write every
+ * group: each `putGroup` rewrites that group's full message history, so
+ * persisting all N groups on every incoming message makes live delivery
+ * latency scale with the total group count. The shared `persistGroupsPromise`
+ * chain is kept so bulk loads and single-group writes still order safely.
+ */
+function persistSingleGroup(group: StoredChatGroup) {
+	persistGroupsPromise = persistGroupsPromise
+		.then(async () => {
+			const storage = await getChatStorage();
+			await storage.putGroup(toStoredGroupData(group));
+		})
+		.catch(() => undefined);
+	return persistGroupsPromise;
+}
+
 void ensureGroupsLoaded();
 
 export function reloadChatGroupsForOwner(ownerPubkey?: string) {
@@ -505,14 +523,14 @@ function requireChatGroup(groupId: string): StoredChatGroup {
 
 function persistGroup(group: StoredChatGroup) {
 	chatGroupsStore.groups = [...chatGroupsStore.groups, group];
-	void persistGroups(chatGroupsStore.groups);
+	void persistSingleGroup(group);
 }
 
 export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	chatGroupsStore.groups = chatGroupsStore.groups.map((group) =>
 		group.id === groupId ? nextGroup : group
 	);
-	void persistGroups(chatGroupsStore.groups);
+	void persistSingleGroup(nextGroup);
 }
 
 async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>): Promise<T> {

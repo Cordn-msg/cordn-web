@@ -492,10 +492,17 @@ class IndexedDbChatStorage implements ChatStorage {
 				} else {
 					snapshotStore.delete(group.id);
 				}
+				// Only write messages beyond the durable fetch cursor. The group record
+				// (carrying fetchCursor) and its messages are committed in this same
+				// atomic transaction, so every message with cursor <= existingFetchCursor
+				// is already durable; re-putting it on every ingest makes live delivery
+				// latency scale with the group's history size. New ingestion only ever
+				// produces messages with cursor > fetchCursor.
+				for (const message of group.messages) {
+					if (existing && message.cursor <= existingFetchCursor) continue;
+					messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
+				}
 			};
-			for (const message of group.messages) {
-				messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
-			}
 			for (const issue of group.syncIssues) {
 				syncIssueStore.put(cloneIssueRecord({ ...issue, groupId: group.id }));
 			}

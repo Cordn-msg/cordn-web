@@ -112,7 +112,7 @@
 
 		{#if tab === 'share'}
 			<div class="flex flex-col items-center gap-4 py-2">
-				<QrCode data={data} size={220} />
+				<QrCode {data} size={220} />
 				<p
 					class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
 				>
