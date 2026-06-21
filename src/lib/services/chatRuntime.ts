@@ -46,21 +46,13 @@ function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 
 class AccountCoordinatorClientRegistry {
 	private readonly clients = new Map<string, cordnClient>();
-	private readonly coordinatorKeys = new Map<string, string>();
 
 	constructor(private readonly signer: NostrSigner) {}
 
-	getClient(coordinatorKey: string): cordnClient {
+	private createClient(coordinatorKey: string): cordnClient {
 		const target = resolveCoordinatorTarget(coordinatorKey);
-		const existingClient = this.clients.get(target.serverPubkey);
-
-		if (existingClient) {
-			this.coordinatorKeys.set(target.serverPubkey, coordinatorKey);
-			return existingClient;
-		}
-
 		const serverPubkey = target.serverPubkey;
-		const client = new cordnClient({
+		return new cordnClient({
 			signer: this.signer,
 			serverPubkey,
 			relays: target.relays,
@@ -69,34 +61,53 @@ class AccountCoordinatorClientRegistry {
 				else markCoordinatorDegraded(serverPubkey, signal.error);
 			}
 		} as ConstructorParameters<typeof cordnClient>[0]);
+	}
 
+	getClient(coordinatorKey: string): cordnClient {
+		const target = resolveCoordinatorTarget(coordinatorKey);
+		const existingClient = this.clients.get(target.serverPubkey);
+
+		if (existingClient) {
+			return existingClient;
+		}
+
+		const client = this.createClient(coordinatorKey);
 		this.clients.set(target.serverPubkey, client);
-		this.coordinatorKeys.set(target.serverPubkey, coordinatorKey);
 		return client;
 	}
 
-	listCoordinatorKeys(): string[] {
-		return [...this.coordinatorKeys.values()];
-	}
-
-	primeClients(coordinatorKeys: Iterable<string>) {
-		for (const coordinatorKey of coordinatorKeys) {
-			this.getClient(coordinatorKey);
-		}
+	/**
+	 * Swaps in a fresh client for a single coordinator and returns the previous
+	 * one for the caller to disconnect. Used by the resume path to bring up a
+	 * fresh socket without disrupting healthy coordinators.
+	 */
+	replaceClient(coordinatorKey: string): cordnClient | undefined {
+		const target = resolveCoordinatorTarget(coordinatorKey);
+		const oldClient = this.clients.get(target.serverPubkey);
+		resetCoordinatorHealth(target.serverPubkey);
+		const client = this.createClient(coordinatorKey);
+		this.clients.set(target.serverPubkey, client);
+		return oldClient;
 	}
 
 	async disconnect(): Promise<void> {
-		for (const serverPubkey of this.coordinatorKeys.keys()) {
+		for (const serverPubkey of this.clients.keys()) {
 			resetCoordinatorHealth(serverPubkey);
 		}
 		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
 		this.clients.clear();
-		this.coordinatorKeys.clear();
 	}
 }
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
-let refreshActiveClientsPromise: Promise<void> | null = null;
+
+/**
+ * Per-(account, coordinator) in-flight client rebuild promises. Keyed by the
+ * same chain key as `coordinatorOperationChains` so operations on a rebuilding
+ * coordinator await its rebuild, while operations on healthy coordinators
+ * proceed independently.
+ */
+const refreshPromisesByCoordinator = new Map<string, Promise<void>>();
 
 function getAccountRegistryKey(account: IAccount): string {
 	return account.id;
@@ -125,7 +136,7 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 }
 
 export function isCoordinatorClientRefreshInProgress(): boolean {
-	return refreshActiveClientsPromise !== null;
+	return refreshPromisesByCoordinator.size > 0;
 }
 
 export async function disconnectCoordinatorClients(account?: IAccount): Promise<void> {
@@ -153,7 +164,7 @@ export function isTransientCoordinatorError(error: unknown): boolean {
 
 /**
  * In-memory per-coordinator operation queue used to flush operations that
- * were requested while `replaceActiveCoordinatorClients()` is rebuilding the
+ * were requested while `replaceCoordinatorClient()` is rebuilding the
  * coordinator client.
  */
 function getCoordinatorOperationKey(account: IAccount, coordinatorKey: string): string {
@@ -178,7 +189,7 @@ async function runCoordinatorOperation<T>(
 	const queued = previous
 		.catch(() => undefined)
 		.then(async () => {
-			const refresh = refreshActiveClientsPromise;
+			const refresh = refreshPromisesByCoordinator.get(chainKey);
 			if (refresh) {
 				await refresh.catch(() => undefined);
 			}
@@ -206,36 +217,52 @@ export async function withCoordinatorClient<T>(
 			if (!isTransientCoordinatorError(error)) {
 				throw error;
 			}
-			await replaceActiveCoordinatorClients();
+			await replaceCoordinatorClient(coordinatorKey, account);
 			return operation(getCoordinatorClient(account, coordinatorKey));
 		}
 	});
 }
 
-export async function replaceActiveCoordinatorClients(
-	account = manager.getActive()
+/**
+ * Rebuild a single coordinator's client so subsequent calls use a fresh
+ * socket. Rebuilding replaces the client in-place and disconnects the old one
+ * locally (no network publishes), which is what makes this safe to use from
+ * the resume path: tearing down an unhealthy socket via an abort publish would
+ * hang indefinitely, since relay publishes retry forever until ACKed.
+ *
+ * Concurrent rebuilds for the same coordinator dedup onto a single in-flight
+ * promise (tracked in `refreshPromisesByCoordinator`) so the operation chain
+ * can await them without forcing a second disconnect.
+ */
+export async function replaceCoordinatorClient(
+	coordinatorKey: string,
+	account: IAccount | undefined = manager.getActive()
 ): Promise<void> {
-	if (refreshActiveClientsPromise) {
-		return refreshActiveClientsPromise;
-	}
-
 	if (!account) {
 		return;
 	}
 
-	const registryKey = getAccountRegistryKey(account);
-	const existingRegistry = accountClientRegistries.get(registryKey);
-	if (!existingRegistry) {
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	if (!registry) {
 		return;
 	}
 
-	const nextRegistry = new AccountCoordinatorClientRegistry(account.signer);
-	nextRegistry.primeClients(existingRegistry.listCoordinatorKeys());
-	accountClientRegistries.set(registryKey, nextRegistry);
+	const chainKey = getCoordinatorOperationKey(account, coordinatorKey);
+	const existing = refreshPromisesByCoordinator.get(chainKey);
+	if (existing) {
+		return existing;
+	}
 
-	refreshActiveClientsPromise = existingRegistry.disconnect().finally(() => {
-		refreshActiveClientsPromise = null;
+	const oldClient = registry.replaceClient(coordinatorKey);
+	if (!oldClient) {
+		return;
+	}
+
+	const promise = oldClient.disconnect().finally(() => {
+		if (refreshPromisesByCoordinator.get(chainKey) === promise) {
+			refreshPromisesByCoordinator.delete(chainKey);
+		}
 	});
-
-	return refreshActiveClientsPromise;
+	refreshPromisesByCoordinator.set(chainKey, promise);
+	return promise;
 }

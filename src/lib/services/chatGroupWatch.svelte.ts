@@ -12,10 +12,13 @@ import {
 } from '$lib/services/chatGroups.svelte';
 import {
 	disconnectCoordinatorClients,
+	getCoordinatorClient,
 	isTransientCoordinatorError,
+	replaceCoordinatorClient,
 	requireActiveAccount,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
+import type { coordinatorClient } from '$lib/services/coordinatorClient';
 import {
 	clearChatReconnectStatus,
 	failChatReconnectStatus,
@@ -37,7 +40,10 @@ import { normalizePubKey } from '$lib/utils';
 type GroupWatchTask = {
 	groupIds: string[];
 	coordinatorKey: string;
+	/** Graceful teardown: marks closing and publishes an abort over the socket. */
 	abort: (reason?: string) => Promise<void>;
+	/** Local teardown: marks closing without any network publish (used by resume). */
+	discard: () => void;
 	ready: Promise<void>;
 	task: Promise<void>;
 };
@@ -58,10 +64,24 @@ const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 0;
 const RESUME_DEBOUNCE_MS = 500;
 const MIN_RESUME_INTERVAL_MS = 5000;
+/** Bounds graceful teardowns so an abort publish on an unhealthy socket can't hang forever. */
+const CLOSE_WATCH_TIMEOUT_MS = 3000;
+/** Bounds the resume liveness probe; a healthy relay responds well under this. */
+const RESUME_LIVENESS_TIMEOUT_MS = 3000;
+/** Hides the "Updating chats…" banner for rebuilds that finish quickly. */
+const RECONNECT_BANNER_DELAY_MS = 500;
 let resumePromise: Promise<void> | null = null;
 let resumeEpoch = 0;
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSuccessfulResumeAt = 0;
+/**
+ * Set once the first watch startup has completed. Before this, the lifecycle
+ * listeners (pageshow/focus/visibilitychange) stay silent so a fresh app open
+ * doesn't churn the watches the steady-state layout effect is already starting
+ * (and doesn't flash the reconnect banner). `online` is exempt since it signals
+ * genuine connectivity recovery.
+ */
+let warmed = false;
 
 type WatchIncomingMessage = {
 	cursor: number;
@@ -125,52 +145,60 @@ if (browser) {
 	const likelyMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
 	window.addEventListener('online', () => scheduleChatGroupResume('browser online'));
-	window.addEventListener('pageshow', () => scheduleChatGroupResume('page show'));
+	window.addEventListener('pageshow', () => {
+		if (warmed) scheduleChatGroupResume('page show');
+	});
 
 	if (likelyMobile) {
-		window.addEventListener('focus', () => scheduleChatGroupResume('window focus'));
+		window.addEventListener('focus', () => {
+			if (warmed) scheduleChatGroupResume('window focus');
+		});
 		document.addEventListener('visibilitychange', () => {
-			if (document.visibilityState === 'visible') {
+			if (warmed && document.visibilityState === 'visible') {
 				scheduleChatGroupResume('page visible');
 			}
 		});
 	}
 }
 
-async function closeWatch(handle: GroupWatchTask, reason: string) {
-	// Await the abort so a fresh watch for the same groups cannot open before the
-	// previous subscription is torn down. Aborts are bounded: the SDK bounds the
-	// publish timeout, and for a handle whose subscription has not resolved yet
-	// `abort` only records intent (handled in startWatchingCoordinatorGroups).
-	try {
-		await handle.abort(reason);
-	} catch {
-		// Abort failures must not block teardown; the discarded socket is torn
-		// down regardless once it falls out of scope.
-	}
-	// Awaiting `ready` guarantees that, if abort arrived before the subscription
-	// resolved, the post-resolve closing check has run and aborted it.
-	try {
-		await handle.ready;
-	} catch {
-		// Ready rejections (e.g. backlog fetch failure) are not teardown blockers.
-	}
+async function closeWatch(
+	handle: GroupWatchTask,
+	reason: string,
+	options: { local?: boolean } = {}
+) {
+	// Local teardown (resume) just marks the handle closing without any network
+	// publish, so it never depends on socket health. Graceful teardown still
+	// publishes an abort for prompt server-side cleanup, but is bounded so an
+	// unhealthy socket can't hang teardown indefinitely.
+	const teardown = (async () => {
+		if (options.local) {
+			// Local discard (resume): just mark closing. We don't await `ready`
+			// because the client rebuild disconnects the socket, which interrupts
+			// any in-flight fetch/subscribe whose rejection is handled by the
+			// `closing` guard — awaiting it would just wait for that interruption.
+			handle.discard();
+		} else {
+			// Graceful teardown: publish an abort for prompt server-side cleanup,
+			// and await `ready` so a subscription resolving mid-abort actually gets
+			// aborted by the post-resolve closing check.
+			try {
+				await handle.abort(reason);
+			} catch {
+				// Abort failures must not block teardown; the discarded socket is torn
+				// down regardless once it falls out of scope.
+			}
+			try {
+				await handle.ready;
+			} catch {
+				// Ready rejections (e.g. backlog fetch failure) are not teardown blockers.
+			}
+		}
+	})();
+	await Promise.race([
+		teardown,
+		new Promise((resolve) => setTimeout(resolve, CLOSE_WATCH_TIMEOUT_MS))
+	]);
 	void handle.task.catch(() => undefined);
-}
-
-function isExpectedAbort(detail: string, reason?: string) {
-	return reason !== undefined && detail === `Open stream aborted: ${reason}`;
-}
-
-function isExpectedWatchTeardown(detail: string, reason?: string) {
-	if (isExpectedAbort(detail, reason)) {
-		return true;
-	}
-
-	return (
-		reason === RUNTIME_RESUME_REASON &&
-		(detail.includes('Connection closed') || detail.includes('Failed to publish event'))
-	);
 }
 
 function scheduleChatGroupResume(reason: string, coordinatorKey?: string) {
@@ -184,13 +212,17 @@ function scheduleChatGroupResume(reason: string, coordinatorKey?: string) {
 	}, RESUME_DEBOUNCE_MS);
 }
 
-export function stopWatchingGroup(groupId?: string, reason = 'group stopped') {
+export function stopWatchingGroup(
+	groupId?: string,
+	reason = 'group stopped',
+	options: { local?: boolean } = {}
+) {
 	if (!groupId) {
 		const watches = [...currentWatches.values()].filter(
 			(watch, index, allWatches) => allWatches.indexOf(watch) === index
 		);
 		clearCurrentWatch();
-		return Promise.all(watches.map((entry) => closeWatch(entry, reason)));
+		return Promise.all(watches.map((entry) => closeWatch(entry, reason, options)));
 	}
 
 	const watch = currentWatches.get(groupId) ?? null;
@@ -198,7 +230,7 @@ export function stopWatchingGroup(groupId?: string, reason = 'group stopped') {
 	if (!watch) {
 		return Promise.resolve();
 	}
-	return closeWatch(watch, reason);
+	return closeWatch(watch, reason, options);
 }
 
 function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
@@ -225,11 +257,15 @@ function groupWatchableGroupsByCoordinator(groups: WatchableGroup[]) {
 	return groupsByCoordinator;
 }
 
-async function stopCoordinatorWatches(coordinatorKey: string | undefined, reason: string) {
+async function stopCoordinatorWatches(
+	coordinatorKey: string | undefined,
+	reason: string,
+	options: { local?: boolean } = {}
+) {
 	// When a single coordinator degraded, only tear down that coordinator's
 	// watches so healthy subscriptions on other coordinators are not disrupted.
 	if (!coordinatorKey) {
-		return stopWatchingGroup(undefined, reason);
+		return stopWatchingGroup(undefined, reason, options);
 	}
 
 	const handlesToStop = new SvelteSet<GroupWatchTask>();
@@ -241,7 +277,7 @@ async function stopCoordinatorWatches(coordinatorKey: string | undefined, reason
 	for (const handle of handlesToStop) {
 		clearCurrentWatch(handle);
 	}
-	await Promise.all([...handlesToStop].map((handle) => closeWatch(handle, reason)));
+	await Promise.all([...handlesToStop].map((handle) => closeWatch(handle, reason, options)));
 }
 
 async function runResumeChatGroupWatching(reason: string, coordinatorKey?: string) {
@@ -257,30 +293,80 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 
 	if (groupsToResume.length === 0) {
 		chatGroupWatchStore.startup = 'ready';
+		warmed = true;
 		clearChatReconnectStatus();
 		return;
 	}
 
-	// The banner is for connectivity recovery only. Account switches run silently.
-	const showReconnectStatus = reason !== 'active account changed';
+	// The banner is for connectivity recovery only, and only after the initial
+	// watch has completed (fresh opens start silently via the layout effect). It
+	// is also delayed so a fast rebuild doesn't flash a useless banner.
+	const showReconnectStatus = warmed && reason !== 'active account changed';
+	let bannerTimer: ReturnType<typeof setTimeout> | undefined;
 	if (showReconnectStatus) {
-		setChatReconnectStatus('Updating chats…');
+		bannerTimer = setTimeout(
+			() => setChatReconnectStatus('Updating chats…'),
+			RECONNECT_BANNER_DELAY_MS
+		);
 	}
+	const clearBannerTimer = () => {
+		if (bannerTimer) {
+			clearTimeout(bannerTimer);
+			bannerTimer = undefined;
+		}
+	};
 
 	try {
-		await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON);
+		if (coordinatorKey) {
+			// Scoped resume: that coordinator's stream already failed, so it is
+			// known-dead. Skip the probe and rebuild it directly.
+			await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON, { local: true });
+			await replaceCoordinatorClient(coordinatorKey, account);
+		} else {
+			// Unscoped resume (view change / online): probe each coordinator and
+			// rebuild only the ones whose socket stopped responding. Healthy
+			// coordinators keep their client and subscriptions; the probe also
+			// catches them up, so we skip the expensive teardown + rebuild there.
+			await rebuildUnreachableCoordinators(account, groupsToResume);
+		}
 		await startWatchingAllGroups({ skipBacklogSync: false });
 		chatGroupWatchStore.startup = 'ready';
+		// Mark warm explicitly: `startWatchingAllGroups` sets this on its happy
+		// path but swallows unexpected throws, so don't rely on the inner call.
+		warmed = true;
 		lastSuccessfulResumeAt = Date.now();
+		clearBannerTimer();
 		clearChatReconnectStatus();
 	} catch (error) {
 		chatGroupWatchStore.startup = 'error';
 		chatGroupWatchStore.error = error instanceof Error ? error.message : 'Failed to update chats';
+		clearBannerTimer();
 		if (showReconnectStatus) {
 			failChatReconnectStatus(chatGroupWatchStore.error);
 		}
 		throw error;
 	}
+}
+
+/**
+ * Per-coordinator liveness-gated recovery. For each coordinator, probe its
+ * socket and rebuild only the unreachable ones, leaving healthy coordinators'
+ * clients and subscriptions untouched. Sending an abort on an unhealthy socket
+ * hangs indefinitely (relay publishes retry forever until ACKed); rebuilding
+ * avoids depending on the degraded socket for teardown and re-subscribe.
+ */
+async function rebuildUnreachableCoordinators(
+	account: ReturnType<typeof requireActiveAccount>,
+	groupsToResume: WatchableGroup[]
+) {
+	const groupsByCoordinator = groupWatchableGroupsByCoordinator(groupsToResume);
+	await Promise.all(
+		[...groupsByCoordinator].map(async ([coordinatorKey, groups]) => {
+			if (await probeCoordinatorLiveness(account, coordinatorKey, groups)) return;
+			await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON, { local: true });
+			await replaceCoordinatorClient(coordinatorKey, account);
+		})
+	);
 }
 
 export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordinatorKey?: string) {
@@ -341,7 +427,7 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 
 function createWatchBuffer(input: {
 	groupId: string;
-	getExpectedAbortReason: () => string | undefined;
+	isClosing: () => boolean;
 	abort: (reason?: string) => Promise<void>;
 }) {
 	const pendingMessages: WatchIncomingMessage[] = [];
@@ -349,11 +435,10 @@ function createWatchBuffer(input: {
 	let flushPromise = Promise.resolve(false);
 
 	const reportFlushError = (error: unknown) => {
-		const detail = error instanceof Error ? error.message : String(error);
-		if (isExpectedWatchTeardown(detail, input.getExpectedAbortReason())) {
+		if (input.isClosing()) {
 			return;
 		}
-
+		const detail = error instanceof Error ? error.message : String(error);
 		console.warn('[watch] failed to ingest watched group messages', {
 			groupId: input.groupId,
 			detail
@@ -459,21 +544,18 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 	return failedGroupIds;
 }
 
-async function fetchCoordinatorGroupBacklog(input: {
-	account: ReturnType<typeof requireActiveAccount>;
-	coordinatorKey: string;
-	groups: WatchableGroup[];
-}): Promise<Set<string>> {
-	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
-	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
-		client.FetchManyGroupMessages({
-			groups: input.groups.map((group) => ({
-				gid: group.gid,
-				after: group.after,
-				since_epoch: group.sinceEpoch
-			}))
-		})
-	);
+async function fetchAndIngestBacklog(
+	client: coordinatorClient,
+	groupsByGid: Map<string, WatchableGroup>,
+	groups: WatchableGroup[]
+): Promise<Set<string>> {
+	const result = await client.FetchManyGroupMessages({
+		groups: groups.map((group) => ({
+			gid: group.gid,
+			after: group.after,
+			since_epoch: group.sinceEpoch
+		}))
+	});
 	if (result.messages.length === 0) return new Set<string>();
 
 	return ingestGroupMessagesFromCoordinatorFetch(
@@ -485,6 +567,51 @@ async function fetchCoordinatorGroupBacklog(input: {
 			opaqueMessageBase64: message.msg_64
 		}))
 	);
+}
+
+async function fetchCoordinatorGroupBacklog(input: {
+	account: ReturnType<typeof requireActiveAccount>;
+	coordinatorKey: string;
+	groups: WatchableGroup[];
+}): Promise<Set<string>> {
+	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
+	return withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
+		fetchAndIngestBacklog(client, groupsByGid, input.groups)
+	);
+}
+
+/**
+ * Cheap liveness probe + catch-up: fetch backlog on the current client raced
+ * against a short timeout. Resolves `true` if the socket responded (the fetch
+ * also ingests anything missed while backgrounded), `false` if it timed out.
+ * Called directly on the client (not via `withCoordinatorClient`) so a hung
+ * probe can't block the operation chain and isn't bound to MCP's 60s timeout.
+ * Outbound sends are quiesced during resume via the resume promise, so reading
+ * the client directly here is safe.
+ */
+async function probeCoordinatorLiveness(
+	account: ReturnType<typeof requireActiveAccount>,
+	coordinatorKey: string,
+	groups: WatchableGroup[]
+): Promise<boolean> {
+	const client = getCoordinatorClient(account, coordinatorKey);
+	const groupsByGid = new Map(groups.map((group) => [group.gid, group]));
+	const fetchPromise = fetchAndIngestBacklog(client, groupsByGid, groups);
+	try {
+		await Promise.race([
+			fetchPromise,
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error('liveness probe timed out')), RESUME_LIVENESS_TIMEOUT_MS)
+			)
+		]);
+		return true;
+	} catch {
+		// Probe timed out. The fetch is still pending on the (presumed dead)
+		// socket; swallow its eventual settlement so it doesn't surface as an
+		// unhandled rejection when the client rebuild disconnects it.
+		void fetchPromise.catch(() => {});
+		return false;
+	}
 }
 
 async function startWatchingCoordinatorGroups(
@@ -504,6 +631,10 @@ async function startWatchingCoordinatorGroups(
 	let realAbort: ((reason?: string) => Promise<void>) | undefined;
 	let expectedAbortReason: string | undefined;
 	let closing = false;
+	// Set when teardown was initiated locally (resume) without an abort publish.
+	// The post-resolve closing check then skips publishing on the discarded
+	// socket; the client rebuild tears it down regardless.
+	let localDiscard = false;
 	const handle: GroupWatchTask = {
 		groupIds,
 		coordinatorKey,
@@ -511,6 +642,10 @@ async function startWatchingCoordinatorGroups(
 			closing = true;
 			if (expectedAbortReason === undefined) expectedAbortReason = reason;
 			if (realAbort) await realAbort(reason);
+		},
+		discard: () => {
+			closing = true;
+			localDiscard = true;
 		},
 		ready: Promise.resolve(),
 		task: Promise.resolve()
@@ -553,9 +688,13 @@ async function startWatchingCoordinatorGroups(
 				})
 			);
 			// Aborted while the subscribe request was in flight — tear it down
-			// immediately instead of consuming its stream as an orphan.
+			// immediately instead of consuming its stream as an orphan. A local
+			// discard (resume) skips the abort publish; the client rebuild closes
+			// the socket regardless.
 			if (closing) {
-				await subscription.abort(expectedAbortReason).catch(() => undefined);
+				if (!localDiscard) {
+					await subscription.abort(expectedAbortReason).catch(() => undefined);
+				}
 				clearCurrentWatch(handle);
 				return;
 			}
@@ -564,7 +703,7 @@ async function startWatchingCoordinatorGroups(
 					group.id,
 					createWatchBuffer({
 						groupId: group.id,
-						getExpectedAbortReason: () => expectedAbortReason,
+						isClosing: () => closing,
 						abort: async (reason?: string) => handle.abort(reason)
 					})
 				])
@@ -576,10 +715,6 @@ async function startWatchingCoordinatorGroups(
 
 				return subscription.abort(reason).catch((error) => {
 					const detail = error instanceof Error ? error.message : String(error);
-					if (isExpectedWatchTeardown(detail, reason)) {
-						return;
-					}
-
 					console.warn('[watch] failed to stop watching group messages', {
 						coordinatorKey,
 						detail
@@ -589,10 +724,8 @@ async function startWatchingCoordinatorGroups(
 
 			handle.task = (async () => {
 				void subscription.result.catch((error) => {
+					if (closing) return;
 					const detail = error instanceof Error ? error.message : String(error);
-					if (closing && isExpectedWatchTeardown(detail, expectedAbortReason)) {
-						return;
-					}
 					if (isTransientCoordinatorError(error)) {
 						markCoordinatorDegraded(coordinatorKey, detail);
 						scheduleChatGroupResume('coordinator subscription result failed', coordinatorKey);
@@ -622,11 +755,7 @@ async function startWatchingCoordinatorGroups(
 						}
 					}
 				} catch (error) {
-					const detail = error instanceof Error ? error.message : String(error);
-					if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
-						return;
-					}
-
+					if (closing) return;
 					throw error;
 				} finally {
 					await Promise.all(
@@ -640,11 +769,8 @@ async function startWatchingCoordinatorGroups(
 			})();
 
 			void handle.task.catch((error) => {
+				if (closing) return;
 				const detail = error instanceof Error ? error.message : String(error);
-				if (isExpectedWatchTeardown(detail, expectedAbortReason)) {
-					return;
-				}
-
 				if (isTransientCoordinatorError(error)) {
 					markCoordinatorDegraded(coordinatorKey, detail);
 					scheduleChatGroupResume('coordinator subscription stream failed', coordinatorKey);
@@ -658,9 +784,12 @@ async function startWatchingCoordinatorGroups(
 				clearCurrentWatch(handle);
 			});
 		} catch (error) {
-			// Backlog fetch or subscribe threw before the handle was self-managed;
-			// drop the registration so a later start can retry.
+			// Backlog fetch or subscribe threw. If we were torn down mid-start
+			// (abort or local discard), resolve cleanly instead of surfacing a
+			// spurious start failure — the client rebuild closes the discarded
+			// socket regardless, which can interrupt an in-flight fetch.
 			clearCurrentWatch(handle);
+			if (closing) return;
 			throw error;
 		}
 	})();
@@ -675,6 +804,7 @@ async function runStartWatchingAllGroups(options: { skipBacklogSync?: boolean })
 	const groupsToWatch = getWatchableGroups({ includeCurrentWatches: false });
 	if (groupsToWatch.length === 0) {
 		chatGroupWatchStore.startup = 'ready';
+		warmed = true;
 		return;
 	}
 
@@ -690,6 +820,7 @@ async function runStartWatchingAllGroups(options: { skipBacklogSync?: boolean })
 			)
 		);
 		chatGroupWatchStore.startup = 'ready';
+		warmed = true;
 	} catch (error) {
 		chatGroupWatchStore.startup = 'error';
 		throw error;
