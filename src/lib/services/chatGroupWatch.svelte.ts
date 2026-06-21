@@ -13,7 +13,6 @@ import {
 import {
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
-	replaceCoordinatorClient,
 	requireActiveAccount,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
@@ -306,20 +305,24 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 
 	try {
 		if (coordinatorKey) {
-			// Scoped resume: that coordinator's subscription already failed, so its
-			// socket is suspect. Locally discard its watches (no abort publish —
-			// those hang on an unhealthy relay) and rebuild the client so the
-			// restart re-subscribes on a fresh socket.
+			// Scoped resume: that coordinator's subscription emitted a transient
+			// error. Locally discard its watches (no abort publish — those hang on
+			// an unhealthy relay) so the delta restart below re-opens them. We do
+			// NOT rebuild the client: a transient stream error (timeout, momentary
+			// close) does not mean the socket is dead, and forcing a full relay
+			// reconnect + health reset here makes time-to-"Connected" scale with
+			// group count on flaky mobile networks. `withCoordinatorClient` already
+			// rebuilds lazily (via `replaceCoordinatorClient`) only if the restart's
+			// backlog fetch actually fails on the current client, so a genuinely
+			// dead socket is still recovered — without paying a reconnect on every
+			// harmless blip.
 			await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON, { local: true });
-			await replaceCoordinatorClient(coordinatorKey, account);
 		}
 		// Delta restart: `startWatchingAllGroups` only opens backlog fetches and
 		// subscriptions for groups not already in `currentWatches`. Subscriptions
-		// that died while backgrounded unregister themselves on stream end, so
-		// this restarts exactly those; healthy (and stale-but-idle) subscriptions
-		// are left untouched — the SDK's dead-socket detection drives their
-		// scoped recovery. This avoids tearing down + re-fetching every group on
-		// every foreground, which matters for clients with many groups.
+		// that died while backgrounded (or were discarded by the scoped branch
+		// above) unregister themselves on stream end, so this restarts exactly
+		// those; healthy subscriptions are left untouched.
 		await startWatchingAllGroups({ skipBacklogSync: false });
 		lastSuccessfulResumeAt = Date.now();
 		chatGroupWatchStore.startup = 'ready';
