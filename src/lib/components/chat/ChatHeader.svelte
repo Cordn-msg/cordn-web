@@ -6,7 +6,7 @@
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import QrCode from '$lib/components/QrCode.svelte';
+	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
@@ -30,7 +30,6 @@
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
 	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
-	import Copy from '@lucide/svelte/icons/copy';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
@@ -80,7 +79,6 @@
 	);
 	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
 	let groupShareOpen = $state(false);
-	let copiedGroupShareLink = $state(false);
 	let inviteKeyPackageSearch = $state('');
 
 	const groupShareUrl = $derived.by(() => {
@@ -98,14 +96,6 @@
 		return browser ? new URL(path, page.url).toString() : path;
 	});
 
-	async function copyGroupShareUrl() {
-		if (!groupShareUrl || !browser) return;
-		await navigator.clipboard.writeText(groupShareUrl);
-		copiedGroupShareLink = true;
-		setTimeout(() => {
-			copiedGroupShareLink = false;
-		}, 1500);
-	}
 	const inviteKeyPackageProfileHints = useProfileHints(
 		() => {
 			if (!chatHeaderActionsStore.inviteOpen) return [];
@@ -423,28 +413,13 @@
 	{/if}
 
 	{#if $activeAccount && groupShareUrl}
-		<Dialog.Root bind:open={groupShareOpen}>
-			<Dialog.Content class="sm:max-w-md">
-				<Dialog.Header>
-					<Dialog.Title>Share group link</Dialog.Title>
-					<Dialog.Description
-						>Share this group link as a QR code to invite others.</Dialog.Description
-					>
-				</Dialog.Header>
-
-				<div class="flex flex-col items-center gap-4 py-2">
-					<QrCode data={groupShareUrl} size={220} />
-					<p
-						class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
-					>
-						{groupShareUrl}
-					</p>
-					<Button type="button" variant="outline" class="w-full" onclick={copyGroupShareUrl}>
-						<Copy class="mr-2 size-4" />
-						{copiedGroupShareLink ? 'Copied group link' : 'Copy group link'}
-					</Button>
-				</div>
-			</Dialog.Content>
-		</Dialog.Root>
+		<QrShareDialog
+			bind:open={groupShareOpen}
+			title="Share group link"
+			description="Share this group link as a QR code to invite others, or scan one to join."
+			data={groupShareUrl}
+			copyLabel="Copy group link"
+			copiedLabel="Copied group link"
+		/>
 	{/if}
 </header>

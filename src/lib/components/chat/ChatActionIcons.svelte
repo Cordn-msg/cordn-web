@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
-	import QrCode from '$lib/components/QrCode.svelte';
+	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import JoinRequestCard from '$lib/components/chat/JoinRequestCard.svelte';
 	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
@@ -45,7 +45,6 @@
 	import { normalizePubKey } from '$lib/utils';
 	import { nip19 } from 'nostr-tools';
 	import Bolt from '@lucide/svelte/icons/bolt';
-	import Copy from '@lucide/svelte/icons/copy';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Menu from '@lucide/svelte/icons/menu';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -65,7 +64,6 @@
 
 	let notificationsOpen = $state(false);
 	let profileShareOpen = $state(false);
-	let copiedProfileLink = $state(false);
 	let newConversationOpen = $state(false);
 
 	const unreadWelcomeNotifications = $derived.by(() => getUnreadWelcomeNotificationCount());
@@ -143,15 +141,6 @@
 			return `${unreadNotificationTotal} unread: ${parts.join(', ')}`;
 		}
 		return 'No unread notifications';
-	}
-
-	async function copyProfileShareUrl() {
-		if (!profileShareUrl || !browser) return;
-		await navigator.clipboard.writeText(profileShareUrl);
-		copiedProfileLink = true;
-		setTimeout(() => {
-			copiedProfileLink = false;
-		}, 1500);
 	}
 
 	async function navigateToConfig() {
@@ -430,27 +419,15 @@
 </Dialog.Root>
 
 {#if $activeAccount}
-	<Dialog.Root bind:open={profileShareOpen}>
-		<Dialog.Content class="sm:max-w-md">
-			<Dialog.Header>
-				<Dialog.Title>Share your profile</Dialog.Title>
-				<Dialog.Description>Share your public Cordn profile link as a QR code.</Dialog.Description>
-			</Dialog.Header>
-
-			<div class="flex flex-col items-center gap-4 py-2">
-				<QrCode data={profileShareUrl} size={220} />
-				<p
-					class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
-				>
-					{profileShareUrl}
-				</p>
-				<Button type="button" variant="outline" class="w-full" onclick={copyProfileShareUrl}>
-					<Copy class="mr-2 size-4" />
-					{copiedProfileLink ? 'Copied profile link' : 'Copy profile link'}
-				</Button>
-			</div>
-		</Dialog.Content>
-	</Dialog.Root>
+	<QrShareDialog
+		bind:open={profileShareOpen}
+		title="Share your profile"
+		description="Share your public Cordn profile link as a QR code, or scan someone else's."
+		data={profileShareUrl}
+		copyLabel="Copy profile link"
+		copiedLabel="Copied profile link"
+		{onNavigate}
+	/>
 {/if}
 
 <NewConversationDialog bind:open={newConversationOpen} {onNavigate} />
