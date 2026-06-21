@@ -59,7 +59,7 @@
 	},
 	"dependencies": {
 		"@contextvm/mcp-sdk": "^1.30",
-		"@contextvm/sdk": "^0.12.4",
+		"@contextvm/sdk": "^0.12.5",
 		"@noble/ciphers": "2.2.0",
 		"@tanstack/svelte-query": "^6.1.33",
 		"@tanstack/svelte-virtual": "^3.13.25",
