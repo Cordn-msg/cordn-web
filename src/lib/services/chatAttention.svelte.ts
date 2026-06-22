@@ -4,7 +4,9 @@ import { resolve } from '$app/paths';
 import { page } from '$app/state';
 import {
 	getChatGroupDisplayTitle,
-	getChatGroupNotificationIcon
+	getChatGroupNotificationIcon,
+	getRepresentativeMemberPubkey,
+	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
@@ -19,6 +21,10 @@ import {
 	listChatGroupMembers,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
+import { eventStore } from '$lib/services/eventStore';
+import { firstValueFrom } from 'applesauce-core/observable';
+import { ProfileModel } from 'applesauce-core/models';
+import type { ProfileContent } from 'applesauce-core/helpers';
 
 const DEFAULT_TITLE = 'Cordn';
 const DEFAULT_FAVICON = '/favicon.svg';
@@ -116,6 +122,35 @@ function shouldSuppressNotification(groupId: string) {
 	return false;
 }
 
+const NOTIFICATION_PROFILE_TIMEOUT_MS = 1500;
+
+/**
+ * Reads the current profile for a pubkey from the live event store, bounded by a
+ * short timeout so a missing profile never blocks a notification. Maps to the
+ * camelCase `ProfileContent` shape consumed by the display helpers (matching
+ * `useProfileHints`).
+ */
+async function resolveProfileHint(pubkey: string): Promise<ProfileContent | undefined> {
+	if (!pubkey) return undefined;
+	try {
+		const profile = await Promise.race([
+			firstValueFrom(eventStore.model(ProfileModel, pubkey)),
+			new Promise<undefined>((resolve) =>
+				setTimeout(() => resolve(undefined), NOTIFICATION_PROFILE_TIMEOUT_MS)
+			)
+		]);
+		if (!profile) return undefined;
+		return {
+			name: profile.name,
+			displayName: profile.display_name,
+			nip05: profile.nip05,
+			picture: profile.picture
+		};
+	} catch {
+		return undefined;
+	}
+}
+
 export async function notifyForUnreadChatMessages() {
 	if (!browser) return;
 	await requestBrowserNotificationPermission();
@@ -136,6 +171,23 @@ export async function notifyForUnreadChatMessages() {
 
 		if (shouldSuppressNotification(group.id)) continue;
 
+		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
+		const profileHints: ChatGroupProfileHints = {};
+		const representative = getRepresentativeMemberPubkey(group, { activePubkey, memberPubkeys });
+		if (representative) {
+			const hint = await resolveProfileHint(representative);
+			if (hint) profileHints[representative] = hint;
+		}
+		const title = getChatGroupDisplayTitle({
+			group,
+			activePubkey,
+			profileHints,
+			memberPubkeys
+		});
+		const icon =
+			getChatGroupNotificationIcon(group, { activePubkey, memberPubkeys, profileHints }) ??
+			DEFAULT_FAVICON;
+
 		for (const message of nextMessages) {
 			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
 			if (message.direction !== 'inbound') continue;
@@ -143,15 +195,9 @@ export async function notifyForUnreadChatMessages() {
 			if (notificationState.notifiedMessageIds.has(message.id)) continue;
 
 			notificationState.notifiedMessageIds.add(message.id);
-			const title = getChatGroupDisplayTitle({
-				group,
-				activePubkey,
-				profileHints: {},
-				memberPubkeys: listChatGroupMembers(group.id).map((member) => member.stablePubkey)
-			});
 			const notification = new Notification(title || 'Cordn', {
 				body: getNotificationBody(message.sender, message.content),
-				icon: getChatGroupNotificationIcon(group) ?? DEFAULT_FAVICON,
+				icon,
 				tag: `cordn-group-${group.id}`
 			});
 			notification.onclick = () => {

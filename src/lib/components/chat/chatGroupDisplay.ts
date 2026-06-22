@@ -30,19 +30,23 @@ export function getDirectChatTargetPubkey(group: StoredChatGroup) {
 	return '';
 }
 
-function resolveMemberDisplayName(
-	memberPubkeys: string[],
-	activePubkey: string,
-	profileHints?: ChatGroupProfileHints
-): string | undefined {
+function dedupeOtherMemberPubkeys(memberPubkeys: string[], activePubkey: string): string[] {
 	const normalizedActive = activePubkey ? normalizePubKey(activePubkey) : '';
-	const otherMemberPubkeys = [
+	return [
 		...new Set(
 			memberPubkeys
 				.map((pubkey) => normalizePubKey(pubkey))
 				.filter((pubkey) => pubkey && pubkey !== normalizedActive)
 		)
 	];
+}
+
+function resolveMemberDisplayName(
+	memberPubkeys: string[],
+	activePubkey: string,
+	profileHints?: ChatGroupProfileHints
+): string | undefined {
+	const otherMemberPubkeys = dedupeOtherMemberPubkeys(memberPubkeys, activePubkey);
 
 	if (otherMemberPubkeys.length === 1) {
 		return getProfileDisplayName(otherMemberPubkeys[0], profileHints);
@@ -134,8 +138,42 @@ function emojiToNotificationIcon(emoji: string): string {
 	return dataUrl;
 }
 
-export function getChatGroupNotificationIcon(group: StoredChatGroup): string | undefined {
+/**
+ * Returns the single member pubkey that represents a 1:1 conversation (the
+ * explicit direct-chat target, or the one other member), or `undefined` for
+ * group conversations. Mirrors the single-avatar selection rule used by
+ * `ChatGroupAvatar.svelte`.
+ */
+export function getRepresentativeMemberPubkey(
+	group: StoredChatGroup,
+	ctx: { activePubkey?: string; memberPubkeys?: string[] } = {}
+): string | undefined {
+	const direct = getDirectChatTargetPubkey(group);
+	if (direct) return direct;
+	const others = dedupeOtherMemberPubkeys(ctx.memberPubkeys ?? [], ctx.activePubkey ?? '');
+	return others.length === 1 ? others[0] : undefined;
+}
+
+export interface ChatGroupNotificationIconContext {
+	activePubkey?: string;
+	memberPubkeys?: string[];
+	profileHints?: ChatGroupProfileHints;
+}
+
+/**
+ * Resolves the image URL to display as a chat group's notification icon.
+ *
+ * Precedence matches `ChatGroupAvatar.svelte`: explicit group image → emoji
+ * icon → (for 1:1 chats) the other member's profile picture. Returns
+ * `undefined` when no suitable image is available so callers can fall back to
+ * the default favicon.
+ */
+export function getChatGroupNotificationIcon(
+	group: StoredChatGroup,
+	ctx: ChatGroupNotificationIconContext = {}
+): string | undefined {
 	if (group.metadata?.imageUrl) return group.metadata.imageUrl;
 	if (group.metadata?.icon) return emojiToNotificationIcon(group.metadata.icon);
-	return undefined;
+	const representative = getRepresentativeMemberPubkey(group, ctx);
+	return representative ? ctx.profileHints?.[representative]?.picture : undefined;
 }
