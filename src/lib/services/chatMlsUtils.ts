@@ -417,49 +417,6 @@ export async function addMemberToGroup(params: {
 	};
 }
 
-export async function replaceMemberInGroup(params: {
-	state: ClientState;
-	memberKeyPackage: KeyPackage;
-	removedLeafIndex: number;
-}): Promise<{
-	newState: ClientState;
-	welcome: Welcome;
-	commitMessageBase64: string;
-	welcomeBase64: string;
-}> {
-	const cipherSuite = await getCordnCipherSuite();
-	const result = await createCommit({
-		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
-		state: params.state,
-		ratchetTreeExtension: true,
-		extraProposals: [
-			{
-				proposalType: defaultProposalTypes.remove,
-				remove: {
-					removed: params.removedLeafIndex
-				}
-			},
-			{
-				proposalType: defaultProposalTypes.add,
-				add: {
-					keyPackage: params.memberKeyPackage
-				}
-			}
-		]
-	});
-
-	if (!result.welcome) {
-		throw new Error('Commit did not produce a welcome message');
-	}
-
-	return {
-		newState: result.newState,
-		welcome: result.welcome.welcome,
-		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit)),
-		welcomeBase64: encodeWelcomeBase64(result.welcome.welcome)
-	};
-}
-
 export function findMemberLeafIndexByStablePubkey(
 	state: ClientState,
 	stablePubkey: string

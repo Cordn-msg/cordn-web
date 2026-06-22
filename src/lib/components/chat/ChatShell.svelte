@@ -196,8 +196,13 @@
 		optimisticDeletes = next;
 	}
 
-	const messages = $derived.by<ChatMessage[]>(() => {
-		const storedMessages = listChatGroupMessages(groupId);
+	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
+
+	// Reaction/edit/delete maps are pure functions of the stored messages.
+	// Splitting them into their own $derived means Svelte only rebuilds them when
+	// messages actually change — not on every optimistic edit/delete/reply which
+	// only affects the `messages` derived below.
+	const messageMaps = $derived.by(() => {
 		const byEventId = new SvelteMap(storedMessages.map((message) => [message.id, message]));
 		const reactionMap = new SvelteMap<
 			string,
@@ -251,6 +256,12 @@
 				editMap.set(editReference.targetId, message);
 			}
 		}
+
+		return { byEventId, reactionMap, editMap, deletedMessageIds };
+	});
+
+	const messages = $derived.by<ChatMessage[]>(() => {
+		const { byEventId, reactionMap, editMap, deletedMessageIds } = messageMaps;
 
 		function parseSystemMessageData(content: string): StoredChatSystemMessageData | null {
 			try {

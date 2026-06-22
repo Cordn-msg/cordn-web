@@ -72,8 +72,6 @@ function getNotificationsStorageKey(ownerPubkey?: string) {
 	return ownerPubkey ? `${STORAGE_KEY}:${ownerPubkey}` : STORAGE_KEY;
 }
 
-loadWelcomeNotificationsForOwner();
-
 export function loadWelcomeNotificationsForOwner(ownerPubkey?: string) {
 	if (!browser) return;
 	activeNotificationsStorageKey = getNotificationsStorageKey(ownerPubkey);

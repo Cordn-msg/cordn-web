@@ -289,7 +289,7 @@ describe('recoverPoisonedChatGroup()', () => {
 
 describe('getNewestHealthySnapshot()', () => {
 	test('returns the newest healthy snapshot by createdAt', async () => {
-		const { getNewestHealthySnapshot } = await import('./chatGroups.svelte');
+		const { getNewestHealthySnapshot } = await import('./chatGroupSnapshots');
 
 		const snapshots = [
 			{
@@ -324,7 +324,7 @@ describe('getNewestHealthySnapshot()', () => {
 	});
 
 	test('returns undefined when no healthy snapshots exist', async () => {
-		const { getNewestHealthySnapshot } = await import('./chatGroups.svelte');
+		const { getNewestHealthySnapshot } = await import('./chatGroupSnapshots');
 
 		const snapshots = [
 			{
@@ -611,7 +611,7 @@ describe('snapshot persistence', () => {
 
 describe('appendHealthySnapshot()', () => {
 	test('adds a healthy snapshot to empty list', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
 
 		const result = appendHealthySnapshot([], {
 			groupId: 'test',
@@ -628,7 +628,7 @@ describe('appendHealthySnapshot()', () => {
 	});
 
 	test('keeps at most 3 snapshots', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
 
 		const base = [
 			{
@@ -673,7 +673,7 @@ describe('appendHealthySnapshot()', () => {
 	});
 
 	test('drops tentative snapshots when appending healthy', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroups.svelte');
+		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
 
 		const base = [
 			{

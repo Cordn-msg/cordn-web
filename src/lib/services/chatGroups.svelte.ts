@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import {
 	bytesToBase64,
 	base64ToBytes,
@@ -60,6 +60,7 @@ import {
 	markWelcomeAccepted
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { normalizePubKey } from '$lib/utils';
+import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getCoordinatorClient,
 	requireActiveAccount,
@@ -68,30 +69,21 @@ import {
 import {
 	getChatStorage,
 	type ChatStorage,
-	type StoredChatGroupData,
-	type ChatGroupStateSnapshotStatus
+	type StoredChatGroupData
 } from '$lib/storage/chatStorage';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { isGroupActivelyWatched } from '$lib/services/chatGroupWatchStatus.svelte';
+import {
+	createOutboundTentativeSnapshot,
+	getNewestHealthySnapshot,
+	promoteTentativeSnapshot,
+	replaceTentativeSnapshot,
+	type ChatGroupStateSnapshot
+} from '$lib/services/chatGroupSnapshots';
 
 const groupIdDecoder = new TextDecoder();
-
-/**
- * Service-layer snapshot type using base64-encoded state.
- * Mirrors StoredChatGroupStateSnapshot but uses stateBase64 instead of stateBytes.
- */
-export interface ChatGroupStateSnapshot {
-	groupId: string;
-	status: ChatGroupStateSnapshotStatus;
-	epoch: string;
-	cursor: number;
-	createdAt: number;
-	stateBase64: string;
-	triggerCursor?: number;
-	triggerMessageId?: string;
-}
 
 export interface StoredChatGroup {
 	id: string;
@@ -125,6 +117,21 @@ let groupsReady: Promise<void> | null = null;
 let persistGroupsPromise: Promise<void> = Promise.resolve();
 let groupsLoaded = false;
 
+/**
+ * Memoizes the decoded MLS ClientState per StoredChatGroup object.
+ *
+ * `clientStateDecoder` is expensive and was re-run on every read/render that
+ * needed members, admin checks, or removed/poisoned status. Group objects in
+ * the store are never mutated in place — every state change produces a new
+ * object via `replaceGroup`/`fromStoredGroupData`/`buildPersistedChatGroup`,
+ * so stale entries are reclaimed automatically when the old object is GC'd.
+ * The `stateBase64` guard defends against any future in-place mutation.
+ */
+const decodedStateCache = new WeakMap<
+	StoredChatGroup,
+	{ stateBase64: string; state: ClientState }
+>();
+
 export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 	groups: []
 });
@@ -143,10 +150,10 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
 		stateBytes: base64ToBytes(group.stateBase64),
-		messages: group.messages.map((message) => ({
-			...message,
-			tags: message.tags.map((tag) => [...tag])
-		})),
+		// Shallow spread only: both storage backends deep-clone the messages they
+		// actually persist, so re-cloning every tag array here was redundant work
+		// on every persist (including single-message ingests).
+		messages: group.messages.map((message) => ({ ...message })),
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
 		snapshots: group.snapshots.map((snapshot) => ({
 			groupId: snapshot.groupId,
@@ -174,10 +181,9 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		stateBase64: bytesToBase64(group.stateBytes),
 		lastCursor: group.lastCursor ?? 0,
 		fetchCursor: group.fetchCursor ?? 0,
-		messages: group.messages.map((message) => ({
-			...message,
-			tags: message.tags.map((tag) => [...tag])
-		})),
+		// Shallow spread only: both storage backends return freshly-cloned
+		// messages from getGroup(), so the per-tag clone here was redundant.
+		messages: group.messages.map((message) => ({ ...message })),
 		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
 		snapshots:
 			group.snapshots?.map((snapshot) => ({
@@ -251,7 +257,7 @@ async function loadGroups(ownerPubkey?: string) {
 }
 
 export async function ensureGroupsLoaded() {
-	groupsReady ??= loadGroups();
+	groupsReady ??= loadGroups(manager.getActive()?.pubkey);
 	await groupsReady;
 }
 
@@ -285,8 +291,6 @@ function persistSingleGroup(group: StoredChatGroup) {
 	return persistGroupsPromise;
 }
 
-void ensureGroupsLoaded();
-
 export function reloadChatGroupsForOwner(ownerPubkey?: string) {
 	groupsLoaded = false;
 	groupsReady = loadGroups(ownerPubkey);
@@ -298,11 +302,17 @@ function encodeState(state: ClientState): string {
 }
 
 export function decodeStoredGroupState(group: StoredChatGroup): ClientState {
+	const cached = decodedStateCache.get(group);
+	if (cached && cached.stateBase64 === group.stateBase64) {
+		return cached.state;
+	}
 	const decoded = clientStateDecoder(base64ToBytes(group.stateBase64), 0);
 	if (!decoded) {
 		throw new Error(`Unable to decode stored group state for ${group.id}`);
 	}
-	return decoded[0];
+	const state = decoded[0];
+	decodedStateCache.set(group, { stateBase64: group.stateBase64, state });
+	return state;
 }
 
 export class RemovedFromGroupError extends Error {
@@ -338,72 +348,6 @@ function assertChatGroupIsActive(group: StoredChatGroup): void {
 	if (isChatGroupPoisoned(group)) {
 		throw new Error('This group is unhealthy and is read-only until recovered.');
 	}
-}
-
-/**
- * Snapshot registry helpers for MLS state health tracking.
- *
- * Rules:
- * - Keep at most 3 snapshots per group
- * - Keep at most 1 tentative snapshot
- * - Tentative snapshot (if present) is always newest
- * - New tentative replaces old tentative
- * - Promotion flips tentative to healthy without evicting previous healthy snapshots
- */
-
-export function appendHealthySnapshot(
-	snapshots: ChatGroupStateSnapshot[],
-	next: ChatGroupStateSnapshot
-): ChatGroupStateSnapshot[] {
-	const withoutTentative = snapshots.filter((snapshot) => snapshot.status === 'healthy');
-	const healthySnapshot: ChatGroupStateSnapshot = { ...next, status: 'healthy' };
-	return [...withoutTentative, healthySnapshot].slice(-3);
-}
-
-function replaceTentativeSnapshot(
-	snapshots: ChatGroupStateSnapshot[],
-	next: ChatGroupStateSnapshot
-): ChatGroupStateSnapshot[] {
-	const healthy = snapshots.filter((snapshot) => snapshot.status === 'healthy').slice(-2);
-	const tentativeSnapshot: ChatGroupStateSnapshot = { ...next, status: 'tentative' };
-	return [...healthy, tentativeSnapshot];
-}
-
-function promoteTentativeSnapshot(snapshots: ChatGroupStateSnapshot[]): ChatGroupStateSnapshot[] {
-	return snapshots.map((snapshot) =>
-		snapshot.status === 'tentative'
-			? { ...snapshot, status: 'healthy' as ChatGroupStateSnapshotStatus }
-			: snapshot
-	);
-}
-
-export function getNewestHealthySnapshot(
-	snapshots: ChatGroupStateSnapshot[]
-): ChatGroupStateSnapshot | undefined {
-	return [...snapshots]
-		.filter((snapshot) => snapshot.status === 'healthy')
-		.sort((a, b) => b.createdAt - a.createdAt)[0];
-}
-
-/**
- * Create a tentative snapshot for an outbound epoch-changing operation.
- * This is called after a successful commit is posted and synced.
- */
-function createOutboundTentativeSnapshot(params: {
-	groupId: string;
-	nextGroup: StoredChatGroup;
-	newEpoch: bigint;
-	triggerCursor: number;
-}): ChatGroupStateSnapshot {
-	return {
-		groupId: params.groupId,
-		status: 'tentative',
-		epoch: params.newEpoch.toString(),
-		cursor: params.nextGroup.fetchCursor,
-		createdAt: Date.now(),
-		stateBase64: params.nextGroup.stateBase64,
-		triggerCursor: params.triggerCursor
-	};
 }
 
 /**
@@ -828,7 +772,8 @@ export async function inviteChatGroupMember(input: {
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
 			groupId: group.id,
-			nextGroup,
+			stateBase64: nextGroup.stateBase64,
+			fetchCursor: nextGroup.fetchCursor,
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});
@@ -851,21 +796,18 @@ export function listChatGroupMembers(
 	const group = requireChatGroup(groupId);
 	const state = decodeStoredGroupState(group);
 	const normalizedActivePubkey = activePubkey ? normalizePubKey(activePubkey) : '';
-	return listGroupMembers(state).map((member) => ({
-		...member,
-		isAdmin: assertMemberAdmin(group, member.stablePubkey),
-		isSelf: normalizedActivePubkey
-			? normalizePubKey(member.stablePubkey) === normalizedActivePubkey
-			: false
-	}));
-}
-
-function assertMemberAdmin(group: StoredChatGroup, stablePubkey: string): boolean {
-	return (
-		group.metadata?.adminPubkeys?.length === 0 ||
-		!group.metadata?.adminPubkeys ||
-		group.metadata.adminPubkeys.map(normalizePubKey).includes(normalizePubKey(stablePubkey))
-	);
+	const adminPubkeys = group.metadata?.adminPubkeys;
+	// No admin list (or empty) means everyone is an admin. Build the normalized
+	// set once instead of re-normalizing the whole list per member.
+	const adminSet = adminPubkeys?.length ? new SvelteSet(adminPubkeys.map(normalizePubKey)) : null;
+	return listGroupMembers(state).map((member) => {
+		const normalizedMember = normalizePubKey(member.stablePubkey);
+		return {
+			...member,
+			isAdmin: !adminSet || adminSet.has(normalizedMember),
+			isSelf: normalizedActivePubkey ? normalizedMember === normalizedActivePubkey : false
+		};
+	});
 }
 
 export async function removeChatGroupMember(input: {
@@ -944,7 +886,8 @@ export async function removeChatGroupMember(input: {
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
 			groupId: group.id,
-			nextGroup,
+			stateBase64: nextGroup.stateBase64,
+			fetchCursor: nextGroup.fetchCursor,
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});
@@ -1031,7 +974,8 @@ export async function updateChatGroupMetadata(input: {
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
 			groupId: group.id,
-			nextGroup,
+			stateBase64: nextGroup.stateBase64,
+			fetchCursor: nextGroup.fetchCursor,
 			newEpoch: commitResult.newState.groupContext.epoch,
 			triggerCursor: posted.cursor
 		});

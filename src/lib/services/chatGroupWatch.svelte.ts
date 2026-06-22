@@ -24,8 +24,12 @@ import {
 import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { loadChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
+import {
+	loadChatGroupPresenceForOwner,
+	pruneChatGroupPresence
+} from '$lib/services/chatGroupPresence.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
+import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
 import {
 	markAllGroupsUnwatched,
 	markGroupUnwatched,
@@ -122,9 +126,11 @@ if (browser) {
 		const groupLoadPromise = reloadChatGroupsForOwner(nextOwnerPubkey);
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
+		loadJoinRequestsForOwner(nextOwnerPubkey);
 
 		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
 			await groupLoadPromise;
+			pruneChatGroupPresence();
 			if (account) {
 				// Account switches converge on the same delta-based starter as the
 				// steady-state layout effect instead of a stop-the-world resume, so the

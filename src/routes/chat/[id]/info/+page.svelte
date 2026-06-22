@@ -13,11 +13,11 @@
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
+	import { getNewestHealthySnapshot } from '$lib/services/chatGroupSnapshots';
 	import {
 		clearChatGroupSyncIssues,
 		decodeStoredGroupState,
 		getChatGroup,
-		getNewestHealthySnapshot,
 		isChatGroupPoisoned,
 		isChatGroupRemoved,
 		listChatGroupMembers,

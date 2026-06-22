@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { addressLoader } from '$lib/services/loaders.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '../services/eventStore';
+	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import { ProfileModel } from 'applesauce-core/models';
 	import Button, { type ButtonVariant } from './ui/button/button.svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -9,7 +8,6 @@
 	import { logout } from '$lib/services/accountManager.svelte';
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
 	import { pubkeyToHexColor } from '$lib/utils';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
 	import { cn } from '$lib/utils';
 	import { copyToClipboard } from '$lib/utils';
@@ -63,12 +61,7 @@
 	}
 	$effect(() => {
 		if ($profile) return;
-		const sub = addressLoader({
-			kind: Metadata,
-			pubkey,
-			relays: metadataRelays
-		}).subscribe();
-		return () => sub.unsubscribe();
+		ensureProfileLoaded(pubkey);
 	});
 </script>
 

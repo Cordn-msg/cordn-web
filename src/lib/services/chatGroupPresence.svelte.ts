@@ -6,7 +6,10 @@ import {
 	listChatGroupMessages,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
-import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
+import {
+	SYSTEM_MESSAGE_KIND,
+	type StoredChatMessage
+} from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
@@ -41,8 +44,6 @@ function savePresence() {
 function getPresenceStorageKey(ownerPubkey?: string) {
 	return ownerPubkey ? `${STORAGE_KEY}:${ownerPubkey}` : STORAGE_KEY;
 }
-
-loadChatGroupPresenceForOwner();
 
 export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 	if (!browser) return;
@@ -112,10 +113,14 @@ export function markChatGroupMentionsRead(groupId: string, cursor: number) {
 }
 
 export function getUnreadChatGroupMessageCount(groupId: string): number {
+	const group = getChatGroup(groupId);
+	if (!group) return 0;
 	const lastReadCursor = getChatGroupLastReadCursor(groupId);
-	return listChatGroupMessages(groupId).filter(
-		(message) => message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND
-	).length;
+	let count = 0;
+	for (const message of group.messages) {
+		if (message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) count++;
+	}
+	return count;
 }
 
 export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
@@ -166,12 +171,13 @@ export function getLatestChatGroupMessagePreview(groupId: string): string {
 	}
 
 	const group = getChatGroup(groupId);
-	const messages = listChatGroupMessages(groupId);
-	let latestMessage: (typeof messages)[number] | undefined;
-	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i].kind !== SYSTEM_MESSAGE_KIND) {
-			latestMessage = messages[i];
-			break;
+	let latestMessage: StoredChatMessage | undefined;
+	if (group) {
+		for (const message of group.messages) {
+			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
+			if (!latestMessage || message.cursor > latestMessage.cursor) {
+				latestMessage = message;
+			}
 		}
 	}
 	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();

@@ -17,7 +17,6 @@ import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte
 import {
 	getChatGroup,
 	listChatGroupMembers,
-	listChatGroupMessages,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
 
@@ -132,9 +131,7 @@ export async function notifyForUnreadChatMessages() {
 
 		if (group.lastCursor <= previousCursor) continue;
 
-		const nextMessages = listChatGroupMessages(group.id).filter(
-			(message) => message.cursor > previousCursor
-		);
+		const nextMessages = group.messages.filter((message) => message.cursor > previousCursor);
 		notificationState.lastProcessedCursorByGroup.set(group.id, group.lastCursor);
 
 		if (shouldSuppressNotification(group.id)) continue;
@@ -161,12 +158,6 @@ export async function notifyForUnreadChatMessages() {
 				window.focus();
 				goto(resolve('/chat/[id]', { id: group.id }));
 			};
-		}
-	}
-
-	for (const group of listChatGroups()) {
-		if (!notificationState.lastProcessedCursorByGroup.has(group.id)) {
-			notificationState.lastProcessedCursorByGroup.set(group.id, group.lastCursor);
 		}
 	}
 }

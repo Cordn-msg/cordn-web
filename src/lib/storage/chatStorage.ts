@@ -209,8 +209,6 @@ class MemoryChatStorage implements ChatStorage {
 	readonly capabilities: ChatStorageCapabilities;
 
 	protected groups = new Map<string, StoredChatGroupData>();
-	protected messages = new Map<string, StoredChatMessageRecord[]>();
-	protected syncIssues = new Map<string, StoredChatSyncIssueRecord[]>();
 	protected keyPackages = new Map<string, StoredChatKeyPackageRecord>();
 
 	constructor(capabilities: ChatStorageCapabilities) {
@@ -239,20 +237,10 @@ class MemoryChatStorage implements ChatStorage {
 			delete stored.snapshots;
 		}
 		this.groups.set(group.id, stored);
-		this.messages.set(
-			group.id,
-			group.messages.map((message) => cloneMessageRecord({ ...message, groupId: group.id }))
-		);
-		this.syncIssues.set(
-			group.id,
-			group.syncIssues.map((issue) => cloneIssueRecord({ ...issue, groupId: group.id }))
-		);
 	}
 
 	async deleteGroup(groupId: string): Promise<void> {
 		this.groups.delete(groupId);
-		this.messages.delete(groupId);
-		this.syncIssues.delete(groupId);
 	}
 
 	async deleteGroupsByOwner(ownerPubkey: string): Promise<void> {

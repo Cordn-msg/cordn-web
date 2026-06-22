@@ -8,6 +8,7 @@ export function normalizeQueryCoordinatorKey(coordinatorKey?: string): string {
 
 export const chatQueryKeys = {
 	all: ['chat'] as const,
+	profile: (pubkey: string) => [...chatQueryKeys.all, 'profile', normalizePubKey(pubkey)] as const,
 	account: (stablePubkey: string) =>
 		[...chatQueryKeys.all, 'account', normalizePubKey(stablePubkey)] as const,
 	coordinators: (stablePubkey: string) =>

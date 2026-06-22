@@ -92,13 +92,16 @@ export type coordinatorClient = {
 };
 
 export class cordnClient implements coordinatorClient {
-	private readonly stableClient: Client;
-	private readonly stableTransport: NostrClientTransport;
+	private stableClient: Client | null = null;
+	private stableTransport: NostrClientTransport | null = null;
 	private stableConnected: Promise<void> | null = null;
 	private readonly ephemeralClient: Client;
 	private readonly ephemeralTransport: NostrClientTransport;
 	private readonly ephemeralConnected: Promise<void>;
 	private readonly onHealth?: (signal: CoordinatorHealthSignal) => void;
+	/** Stored for lazy stable transport construction (see connectStable). */
+	private readonly stableSigner: NostrTransportOptions['signer'];
+	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
 
 	constructor(
 		options: Partial<NostrTransportOptions> & {
@@ -108,10 +111,6 @@ export class cordnClient implements coordinatorClient {
 			onHealth?: (signal: CoordinatorHealthSignal) => void;
 		} = {}
 	) {
-		this.stableClient = new Client({
-			name: 'CvmMlsDeliveryServiceClient',
-			version: '1.0.0'
-		});
 		this.ephemeralClient = new Client({
 			name: 'CvmMlsDeliveryServiceClientEphemeral',
 			version: '1.0.0'
@@ -135,14 +134,16 @@ export class cordnClient implements coordinatorClient {
 		delete (rest as Partial<typeof options>).serverPubkey;
 		delete (rest as Partial<typeof options>).relays;
 		delete (rest as Partial<typeof options>).relayHandler;
-		const stableSigner = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
 		const ephemeralSigner = resolvedEphemeralPrivateKey
 			? new PrivateKeySigner(resolvedEphemeralPrivateKey)
 			: new PrivateKeySigner();
 
-		this.stableTransport = new NostrClientTransport({
+		// Shared transport config — stable and ephemeral differ only in signer.
+		// Stored for lazy stable construction so read/receive-only sessions never
+		// allocate the ~10 SDK helper objects the transport constructor creates.
+		this.stableSigner = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
+		this.transportBase = {
 			serverPubkey,
-			signer: stableSigner,
 			relayHandler,
 			fallbackOperationalRelayUrls: defaultRelays,
 			logLevel: 'silent',
@@ -155,23 +156,11 @@ export class cordnClient implements coordinatorClient {
 				enabled: true
 			},
 			...rest
-		});
+		};
 
 		this.ephemeralTransport = new NostrClientTransport({
-			serverPubkey,
-			signer: ephemeralSigner,
-			relayHandler,
-			fallbackOperationalRelayUrls: defaultRelays,
-			logLevel: 'silent',
-			giftWrapMode: GiftWrapMode.EPHEMERAL,
-			isStateless: true,
-			openStream: {
-				enabled: true
-			},
-			oversizedTransfer: {
-				enabled: true
-			},
-			...rest
+			...this.transportBase,
+			signer: ephemeralSigner
 		});
 
 		this.ephemeralConnected = this.ephemeralClient
@@ -188,13 +177,23 @@ export class cordnClient implements coordinatorClient {
 			this.ephemeralConnected.catch(() => undefined)
 		]);
 		await Promise.all([
-			this.stableTransport.close().catch(() => undefined),
+			this.stableTransport?.close().catch(() => undefined),
 			this.ephemeralTransport.close().catch(() => undefined)
 		]);
 	}
 
 	private connectStable(): Promise<void> {
 		if (!this.stableConnected) {
+			// Lazy-construct the stable transport + client on first stable call.
+			// Most sessions are receive-only (ephemeral) and never need this.
+			this.stableClient = new Client({
+				name: 'CvmMlsDeliveryServiceClient',
+				version: '1.0.0'
+			});
+			this.stableTransport = new NostrClientTransport({
+				...this.transportBase,
+				signer: this.stableSigner
+			});
 			this.stableConnected = this.stableClient.connect(this.stableTransport).catch((error) => {
 				console.error(`Failed to connect stable client to server: ${error}`);
 				throw error;
@@ -210,11 +209,11 @@ export class cordnClient implements coordinatorClient {
 		args: Record<string, unknown>,
 		schema?: ZodType<T>
 	): Promise<T> {
-		const client = transportKind === 'stable' ? this.stableClient : this.ephemeralClient;
 		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
 		try {
 			await connected;
+			const client = transportKind === 'stable' ? this.stableClient! : this.ephemeralClient;
 			const result = await client.callTool(
 				{
 					name,

@@ -1,23 +1,22 @@
 import { SvelteSet } from 'svelte/reactivity';
-import { addressLoader } from '$lib/services/loaders.svelte';
 import { eventStore } from '$lib/services/eventStore';
+import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 import { ProfileModel } from 'applesauce-core/models';
-import { Metadata } from 'nostr-tools/kinds';
 import type { ProfileContent } from 'applesauce-core/helpers';
 
 export type ProfileHints = Record<string, ProfileContent>;
 
 export interface UseProfileHintsOptions {
-	/** Relay URLs for addressLoader metadata subscription. Omit to skip addressLoader. */
+	/** When non-empty, triggers a deduplicated profile metadata fetch for each pubkey. */
 	relays?: string[];
 }
 
 /**
  * Shared Svelte rune that manages profile hint subscriptions for a reactive list of pubkeys.
  *
- * Subscribes to `eventStore.model(ProfileModel, pubkey)` for each unique pubkey and
- * optionally wraps each with `addressLoader` when `relays` are provided.
- *
+ * Subscribes to `eventStore.model(ProfileModel, pubkey)` for each unique pubkey and,
+ * when `relays` is provided, triggers a deduplicated metadata fetch via
+ * `ensureProfileLoaded` so the live store populates.
  */
 export function useProfileHints(
 	getPubkeys: () => string[],
@@ -56,13 +55,7 @@ export function useProfileHints(
 			);
 
 			if (relays.length > 0) {
-				subs.push(
-					addressLoader({
-						kind: Metadata,
-						pubkey,
-						relays
-					}).subscribe()
-				);
+				ensureProfileLoaded(pubkey);
 			}
 
 			return subs;

@@ -115,7 +115,12 @@ export function getDirectChatTargetPubkeyFromWelcome(welcomeName: string): strin
 	return '';
 }
 
+const emojiIconCache = new Map<string, string>();
+
 function emojiToNotificationIcon(emoji: string): string {
+	const cached = emojiIconCache.get(emoji);
+	if (cached) return cached;
+
 	const canvas = document.createElement('canvas');
 	canvas.width = 64;
 	canvas.height = 64;
@@ -124,7 +129,9 @@ function emojiToNotificationIcon(emoji: string): string {
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'middle';
 	ctx.fillText(emoji, 32, 32);
-	return canvas.toDataURL('image/png');
+	const dataUrl = canvas.toDataURL('image/png');
+	emojiIconCache.set(emoji, dataUrl);
+	return dataUrl;
 }
 
 export function getChatGroupNotificationIcon(group: StoredChatGroup): string | undefined {

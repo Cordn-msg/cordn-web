@@ -16,10 +16,7 @@
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import {
-		getChatGroupSummary,
-		pruneChatGroupPresence
-	} from '$lib/services/chatGroupPresence.svelte';
+	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getChatCoordinator,
@@ -262,11 +259,6 @@
 
 		return 'bg-muted-foreground/40';
 	}
-
-	$effect(() => {
-		void chats.length;
-		pruneChatGroupPresence();
-	});
 
 	$effect(() => {
 		const pubkey = $activeAccount?.pubkey;

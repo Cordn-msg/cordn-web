@@ -74,8 +74,6 @@ function getJoinRequestsStorageKey(ownerPubkey?: string) {
 	return ownerPubkey ? `${STORAGE_KEY}:${ownerPubkey}` : STORAGE_KEY;
 }
 
-loadJoinRequestsForOwner();
-
 export function loadJoinRequestsForOwner(ownerPubkey?: string) {
 	if (!browser) return;
 	activeNotificationsStorageKey = getJoinRequestsStorageKey(ownerPubkey);
