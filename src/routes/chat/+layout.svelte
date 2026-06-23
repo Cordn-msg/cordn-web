@@ -10,6 +10,7 @@
 		notifyForUnreadChatMessages,
 		syncChatAttention
 	} from '$lib/services/chatAttention.svelte';
+	import { loadNewsReadState } from '$lib/news/newsReadState.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { chatGroupWatchStore, startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
@@ -113,6 +114,7 @@
 	$effect(() => {
 		void groups.length;
 		void $activeAccount?.pubkey;
+		loadNewsReadState();
 		syncChatAttention();
 		void notifyForUnreadChatMessages();
 	});
