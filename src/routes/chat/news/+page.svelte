@@ -4,8 +4,9 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import NewsFeedItem from '$lib/components/news/NewsFeedItem.svelte';
 	import DonationDialog from '$lib/components/news/DonationDialog.svelte';
+	import SupportersList from '$lib/components/news/SupportersList.svelte';
 	import Megaphone from '@lucide/svelte/icons/megaphone';
-	import { getNewsFeedItems } from '$lib/news/feedItems';
+	import { getNewsFeedItems, DEFAULT_DONATION, type DonationConfig } from '$lib/news/feedItems';
 	import {
 		loadNewsReadState,
 		markNewsRead,
@@ -15,6 +16,7 @@
 	const items = getNewsFeedItems();
 
 	let donateOpen = $state(false);
+	let donateConfig = $state<DonationConfig | undefined>(undefined);
 
 	// Hydrate before first paint so the "New" badges reflect stored read state.
 	loadNewsReadState();
@@ -72,12 +74,17 @@
 					<NewsFeedItem
 						{item}
 						unread={isUnread(item.createdAt)}
-						onDonate={() => (donateOpen = true)}
+						onDonate={(config) => {
+							donateConfig = config;
+							donateOpen = true;
+						}}
 					/>
 				{/each}
 			</div>
 		</div>
 	</div>
+
+	<SupportersList config={DEFAULT_DONATION} />
 </div>
 
-<DonationDialog bind:open={donateOpen} />
+<DonationDialog bind:open={donateOpen} config={donateConfig} />
