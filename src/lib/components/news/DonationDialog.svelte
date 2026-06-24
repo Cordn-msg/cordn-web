@@ -5,6 +5,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import Heart from '@lucide/svelte/icons/heart';
 	import Zap from '@lucide/svelte/icons/zap';
@@ -13,6 +14,7 @@
 	import Shield from '@lucide/svelte/icons/shield';
 	import UserRound from '@lucide/svelte/icons/user-round';
 	import Check from '@lucide/svelte/icons/check';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import { copyToClipboard } from '$lib/utils';
 	import { DEFAULT_DONATION, type DonationConfig } from '$lib/news/feedItems';
@@ -28,13 +30,24 @@
 		config = DEFAULT_DONATION
 	}: { open?: boolean; config?: DonationConfig } = $props();
 
-	const PRESETS = [21, 100, 420, 1000, 2100, 4200, 10000, 21000];
+	const PRESETS = [
+		{ sats: 21, emoji: '🌱' },
+		{ sats: 420, emoji: '⚡' },
+		{ sats: 1000, emoji: '☕' },
+		{ sats: 2100, emoji: '🍺' },
+		{ sats: 4200, emoji: '🍕' },
+		{ sats: 10000, emoji: '🍔' },
+		{ sats: 42000, emoji: '🚀' },
+		{ sats: 210000, emoji: '🐋' }
+	] as const;
 
-	let selectedSats = $state(1000);
+	let selectedSats = $state(2100);
 	let customSats = $state('');
 	let message = $state('');
 	let anonymous = $state(false);
 	let publishEvent = $state(true);
+	let customAmountOpen = $state(false);
+	let advancedOpen = $state(false);
 
 	const accountAvailable = $derived(canSignWithActiveAccount());
 	const amountSats = $derived.by(() => {
@@ -99,11 +112,13 @@
 	// subscription) on close. Cancelling is silent — it never surfaces an error.
 	$effect(() => {
 		if (open) {
-			selectedSats = 1000;
+			selectedSats = 2100;
 			customSats = '';
 			message = '';
 			anonymous = !accountAvailable;
 			publishEvent = true;
+			customAmountOpen = false;
+			advancedOpen = false;
 		} else {
 			resetDonationFlow();
 		}
@@ -198,30 +213,40 @@
 
 			<div class="space-y-4">
 				<div class="grid grid-cols-4 gap-2">
-					{#each PRESETS as sats (sats)}
+					{#each PRESETS as preset (preset.sats)}
 						<Button
-							variant={customSats === '' && selectedSats === sats ? 'default' : 'outline'}
+							variant={customSats === '' && selectedSats === preset.sats ? 'default' : 'outline'}
 							size="sm"
-							onclick={() => pickPreset(sats)}
+							onclick={() => pickPreset(preset.sats)}
 						>
-							{formatSats(sats)}
+							<span aria-hidden="true">{preset.emoji}</span>
+							{formatSats(preset.sats)}
 						</Button>
 					{/each}
 				</div>
 
-				<div class="space-y-1.5">
-					<Label for="donation-custom" class="text-xs text-muted-foreground">
-						Custom amount (sats)
-					</Label>
-					<Input
-						id="donation-custom"
-						type="number"
-						min="1"
-						step="1"
-						placeholder="e.g. 5000"
-						bind:value={customSats}
-					/>
-				</div>
+				<Collapsible.Root bind:open={customAmountOpen}>
+					<Collapsible.Trigger
+						class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						Custom amount
+						<ChevronDown
+							class={`size-3.5 transition-transform ${customAmountOpen ? 'rotate-180' : ''}`}
+						/>
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="mt-2">
+							<Input
+								id="donation-custom"
+								type="number"
+								min="1"
+								step="1"
+								placeholder="e.g. 500000 sats"
+								bind:value={customSats}
+							/>
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
 
 				<div
 					class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
@@ -259,32 +284,46 @@
 							bind:value={message}
 						/>
 					</div>
-
-					<div
-						class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
-					>
-						<div class="flex items-center gap-2">
-							{#if anonymous}
-								<Shield class="size-4 text-muted-foreground" />
-							{:else}
-								<UserRound class="size-4 text-muted-foreground" />
-							{/if}
-							<div class="min-w-0">
-								<p class="text-sm leading-tight font-medium">Anonymous zap</p>
-								<p class="truncate text-xs text-muted-foreground">
-									{#if !accountAvailable}
-										Sign in to zap as yourself
-									{:else if anonymous}
-										Signed with an ephemeral key
-									{:else}
-										Signed as your account
-									{/if}
-								</p>
-							</div>
-						</div>
-						<Switch bind:checked={anonymous} disabled={!accountAvailable} />
-					</div>
 				{/if}
+
+				<Collapsible.Root bind:open={advancedOpen}>
+					<Collapsible.Trigger
+						class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						Advanced
+						<ChevronDown
+							class={`size-3.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+						/>
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						{#if publishEvent}
+							<div
+								class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
+							>
+								<div class="flex items-center gap-2">
+									{#if anonymous}
+										<Shield class="size-4 text-muted-foreground" />
+									{:else}
+										<UserRound class="size-4 text-muted-foreground" />
+									{/if}
+									<div class="min-w-0">
+										<p class="text-sm leading-tight font-medium">Anonymous zap</p>
+										<p class="truncate text-xs text-muted-foreground">
+											{#if !accountAvailable}
+												Sign in to zap as yourself
+											{:else if anonymous}
+												Signed with an ephemeral key
+											{:else}
+												Signed as your account
+											{/if}
+										</p>
+									</div>
+								</div>
+								<Switch bind:checked={anonymous} disabled={!accountAvailable} />
+							</div>
+						{/if}
+					</Collapsible.Content>
+				</Collapsible.Root>
 			</div>
 
 			<Dialog.Footer>
