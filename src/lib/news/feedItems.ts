@@ -58,9 +58,6 @@ export interface NewsFeedItem {
 	donation?: DonationConfig;
 }
 
-/** Stable identifier for the news "channel" (read-state + routing). */
-export const NEWS_FEED_ID = 'cordn-news';
-
 /**
  * Default donation configuration. Releases can selectively override any field.
  */

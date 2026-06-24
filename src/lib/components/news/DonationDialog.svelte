@@ -135,7 +135,7 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="sm:max-w-md">
+	<Dialog.Content class="gap-4 p-4 sm:max-w-md sm:gap-6 sm:p-6">
 		{#if phase.kind === 'awaiting-payment'}
 			<Dialog.Header>
 				<Dialog.Title class="flex items-center gap-2">
@@ -147,7 +147,7 @@
 				</Dialog.Description>
 			</Dialog.Header>
 
-			<div class="flex flex-col items-center gap-3 py-2">
+			<div class="flex min-w-0 flex-col items-center gap-3 py-2">
 				<QrCode data={`lightning:${phase.invoice}`} size={220} />
 				<Button variant="outline" class="w-full" onclick={copyInvoice}>
 					<Copy class="size-4" />
@@ -185,10 +185,10 @@
 					<Check class="size-6" />
 				</div>
 				<div>
-					<p class="text-base font-semibold">Thank you for your support!</p>
-					<p class="text-sm text-muted-foreground">
+					<Dialog.Title class="text-base font-semibold">Thank you for your support!</Dialog.Title>
+					<Dialog.Description>
 						Your {formatSats(phase.amountSats)} sat zap was received.
-					</p>
+					</Dialog.Description>
 				</div>
 			</div>
 			<Dialog.Footer>
@@ -211,10 +211,20 @@
 				</div>
 			{/if}
 
-			<div class="space-y-4">
-				<div class="grid grid-cols-4 gap-2">
+			<div class="min-w-0 space-y-3 sm:space-y-4">
+				{#snippet collapsibleTrigger(label: string, isOpen: boolean)}
+					<Collapsible.Trigger
+						class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+					>
+						{label}
+						<ChevronDown class={`size-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+					</Collapsible.Trigger>
+				{/snippet}
+
+				<div class="grid grid-cols-3 gap-2 sm:grid-cols-4">
 					{#each PRESETS as preset (preset.sats)}
 						<Button
+							class="w-full"
 							variant={customSats === '' && selectedSats === preset.sats ? 'default' : 'outline'}
 							size="sm"
 							onclick={() => pickPreset(preset.sats)}
@@ -226,14 +236,7 @@
 				</div>
 
 				<Collapsible.Root bind:open={customAmountOpen}>
-					<Collapsible.Trigger
-						class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-					>
-						Custom amount
-						<ChevronDown
-							class={`size-3.5 transition-transform ${customAmountOpen ? 'rotate-180' : ''}`}
-						/>
-					</Collapsible.Trigger>
+					{@render collapsibleTrigger('Custom amount', customAmountOpen)}
 					<Collapsible.Content>
 						<div class="mt-2">
 							<Input
@@ -251,7 +254,7 @@
 				<div
 					class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
 				>
-					<div class="flex items-center gap-2">
+					<div class="flex min-w-0 items-center gap-2">
 						{#if publishEvent}
 							<Zap class="size-4 text-muted-foreground" />
 						{:else}
@@ -284,23 +287,14 @@
 							bind:value={message}
 						/>
 					</div>
-				{/if}
 
-				<Collapsible.Root bind:open={advancedOpen}>
-					<Collapsible.Trigger
-						class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-					>
-						Advanced
-						<ChevronDown
-							class={`size-3.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-						/>
-					</Collapsible.Trigger>
-					<Collapsible.Content>
-						{#if publishEvent}
+					<Collapsible.Root bind:open={advancedOpen}>
+						{@render collapsibleTrigger('Advanced', advancedOpen)}
+						<Collapsible.Content>
 							<div
 								class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5"
 							>
-								<div class="flex items-center gap-2">
+								<div class="flex min-w-0 items-center gap-2">
 									{#if anonymous}
 										<Shield class="size-4 text-muted-foreground" />
 									{:else}
@@ -321,9 +315,9 @@
 								</div>
 								<Switch bind:checked={anonymous} disabled={!accountAvailable} />
 							</div>
-						{/if}
-					</Collapsible.Content>
-				</Collapsible.Root>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				{/if}
 			</div>
 
 			<Dialog.Footer>

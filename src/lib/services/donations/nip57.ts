@@ -21,7 +21,8 @@ export interface LnurlPayParams {
 	maxSendable?: number;
 }
 
-export function parseLnAddress(lnAddress: string): { username: string; domain: string } {
+/** Parse a LUD-16 lightning address into its local and domain parts. */
+function parseLnAddress(lnAddress: string): { username: string; domain: string } {
 	const parts = lnAddress.split('@');
 	if (parts.length !== 2 || !parts[0] || !parts[1]) {
 		throw new Error(`Invalid lightning address: ${lnAddress}`);
