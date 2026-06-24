@@ -16,6 +16,7 @@ import {
 import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
+import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
 import {
 	getChatGroup,
 	listChatGroupMembers,
@@ -36,6 +37,9 @@ const notificationState = {
 };
 
 function getBaseTitle(pathname: string) {
+	if (pathname.startsWith('/chat/news')) {
+		return 'News | Cordn';
+	}
 	if (pathname.startsWith('/chat/')) {
 		const groupId = pathname.split('/')[2];
 		const group = groupId ? getChatGroup(groupId) : undefined;
@@ -64,7 +68,8 @@ function getUnreadAttentionCount() {
 		: 0;
 	const unreadWelcomes = getUnreadWelcomeNotificationCount();
 	const unreadJoinRequests = getUnreadJoinRequestCount();
-	return unreadMessages + unreadMentions + unreadWelcomes + unreadJoinRequests;
+	const unreadNews = getUnreadNewsCount();
+	return unreadMessages + unreadMentions + unreadWelcomes + unreadJoinRequests + unreadNews;
 }
 
 export function hasUnreadChatAttention() {

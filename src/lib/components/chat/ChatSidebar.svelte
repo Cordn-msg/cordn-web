@@ -28,6 +28,8 @@
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
+	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
+	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
@@ -75,6 +77,8 @@
 	const chats = $derived.by(() =>
 		[...listChatGroups()].sort((a, b) => getGroupActivityAt(b) - getGroupActivityAt(a))
 	);
+	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
+	const newsHasUnread = $derived.by(() => hasUnreadNews());
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const resolvedSearchQuery = $derived.by(() =>
 		resolveSearchQuery(debouncedSearchQuery, $activeAccount?.pubkey, profileNames)
@@ -146,6 +150,10 @@
 
 	function getGroupHref(groupId: string) {
 		return resolve('/chat/[id]', { id: groupId });
+	}
+
+	function getNewsHref() {
+		return resolve('/chat/news');
 	}
 
 	async function navigateToMessage(groupId: string, messageKey: string) {
@@ -442,6 +450,16 @@
 	{/if}
 
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4">
+		{#if !(isSearching && !collapsed) && newsHasUnread}
+			<NewsListItem
+				href={getNewsHref()}
+				variant="sidebar"
+				{collapsed}
+				unreadCount={newsUnreadCount}
+				active={isActive(getNewsHref())}
+				onclick={closeMobileSidebar}
+			/>
+		{/if}
 		{#if isSearching && !collapsed}
 			<div class="space-y-2">
 				<div class="flex items-center justify-between px-1">
@@ -549,6 +567,16 @@
 					</div>
 				</div>
 			{/each}
+		{/if}
+		{#if !(isSearching && !collapsed) && !newsHasUnread}
+			<NewsListItem
+				href={getNewsHref()}
+				variant="sidebar"
+				{collapsed}
+				unreadCount={0}
+				active={isActive(getNewsHref())}
+				onclick={closeMobileSidebar}
+			/>
 		{/if}
 	</nav>
 

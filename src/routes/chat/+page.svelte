@@ -20,6 +20,8 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
+	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
+	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import {
 		coordinatorDetailsActionsStore,
@@ -47,6 +49,8 @@
 	const sortedGroups = $derived.by(() =>
 		[...groups].sort((a, b) => getGroupActivityAt(b) - getGroupActivityAt(a))
 	);
+	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
+	const newsHasUnread = $derived.by(() => hasUnreadNews());
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const remoteKeyPackages = $derived.by(() =>
 		coordinatorDetailsActionsStore.remoteKeyPackages.filter(
@@ -222,6 +226,10 @@
 
 	function getGroupHref(groupId: string) {
 		return resolve('/chat/[id]', { id: groupId });
+	}
+
+	function getNewsHref() {
+		return resolve('/chat/news');
 	}
 
 	async function refreshKeyPackageDirectory() {
@@ -455,6 +463,9 @@
 						<Card.Title>Groups</Card.Title>
 					</Card.Header>
 					<Card.Content class="space-y-4">
+						{#if newsHasUnread}
+							<NewsListItem href={getNewsHref()} variant="card" unreadCount={newsUnreadCount} />
+						{/if}
 						{#if hasGroups}
 							<div class="space-y-3">
 								{#each sortedGroups as group (group.id)}
@@ -475,6 +486,9 @@
 								No groups yet. Create one after your account, coordinator, and key package are
 								ready.
 							</div>
+						{/if}
+						{#if !newsHasUnread}
+							<NewsListItem href={getNewsHref()} variant="card" unreadCount={0} />
 						{/if}
 					</Card.Content>
 					<Card.Footer class="pt-0">

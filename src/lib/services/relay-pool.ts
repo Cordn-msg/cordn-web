@@ -13,7 +13,8 @@ export const commonRelays = [
 	'wss://relay.damus.io',
 	'wss://relay.nostr.net',
 	'wss://nos.lol',
-	'wss://nostr.mom'
+	'wss://nostr.mom',
+	'wss://relay.primal.net'
 ];
 
 export const metadataRelays = [
