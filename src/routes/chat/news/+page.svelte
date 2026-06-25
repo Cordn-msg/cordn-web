@@ -8,9 +8,9 @@
 	import Megaphone from '@lucide/svelte/icons/megaphone';
 	import { getNewsFeedItems, DEFAULT_DONATION, type DonationConfig } from '$lib/news/feedItems';
 	import {
+		isNewsItemUnread,
 		loadNewsReadState,
-		markNewsRead,
-		newsReadStateStore
+		markNewsRead
 	} from '$lib/news/newsReadState.svelte';
 
 	const items = getNewsFeedItems();
@@ -20,10 +20,6 @@
 
 	// Hydrate before first paint so the "New" badges reflect stored read state.
 	loadNewsReadState();
-
-	function isUnread(createdAt: number) {
-		return createdAt > newsReadStateStore.lastReadAt;
-	}
 
 	function formatDayLabel(createdAt: number) {
 		return new Date(createdAt).toLocaleDateString(undefined, {
@@ -73,7 +69,7 @@
 					{/if}
 					<NewsFeedItem
 						{item}
-						unread={isUnread(item.createdAt)}
+						unread={isNewsItemUnread(item)}
 						onDonate={(config) => {
 							donateConfig = config;
 							donateOpen = true;

@@ -22,6 +22,7 @@
 		badge?: string;
 		compact?: boolean;
 		className?: string;
+		style?: string;
 	};
 
 	const ESTIMATED_ROW_HEIGHT = 180;
@@ -173,6 +174,7 @@
 								badge={item.badge}
 								compact={item.compact}
 								class={item.className}
+								style={item.style}
 							/>
 						</div>
 					</div>

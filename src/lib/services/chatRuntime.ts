@@ -97,6 +97,15 @@ class AccountCoordinatorClientRegistry {
 		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
 		this.clients.clear();
 	}
+
+	async disconnectCoordinator(coordinatorKey: string): Promise<void> {
+		const normalized = normalizePubKey(coordinatorKey);
+		const client = this.clients.get(normalized);
+		if (!client) return;
+		this.clients.delete(normalized);
+		resetCoordinatorHealth(normalized);
+		await client.disconnect();
+	}
 }
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
@@ -155,11 +164,53 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 	accountClientRegistries.delete(registryKey);
 }
 
+export async function disconnectCoordinatorClient(
+	account: IAccount,
+	coordinatorKey: string
+): Promise<void> {
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	if (!registry) return;
+	await registry.disconnectCoordinator(coordinatorKey);
+}
+
 export function isTransientCoordinatorError(error: unknown): boolean {
 	const detail = error instanceof Error ? error.message : String(error);
 	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected/i.test(
 		detail
 	);
+}
+
+const SIGNER_READY_RETRY_ATTEMPTS = 3;
+const SIGNER_READY_RETRY_DELAY_MS = 500;
+
+export function isSignerUnavailableError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /signer extension missing/i.test(message);
+}
+
+/**
+ * Run a coordinator call, retrying on signer-not-ready errors. The NIP-46 /
+ * extension signer can take a moment to become ready after account activation,
+ * so a handful of bounded retries covers the cold-start window without
+ * surfacing a spurious failure to the user.
+ */
+export async function withCoordinatorClientRetry<T>(
+	account: IAccount,
+	coordinatorKey: string,
+	operation: (client: coordinatorClient) => Promise<T>
+): Promise<T> {
+	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
+		try {
+			return await withCoordinatorClient(account, coordinatorKey, operation);
+		} catch (error) {
+			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
+				throw error;
+			}
+			await new Promise((resolve) => setTimeout(resolve, SIGNER_READY_RETRY_DELAY_MS));
+		}
+	}
+	// Unreachable: the loop either returns or throws on the final attempt.
+	throw new Error('Failed to complete coordinator request');
 }
 
 /**

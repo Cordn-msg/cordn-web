@@ -1,15 +1,20 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
+	import CoordinatorPurgeDialog from '$lib/components/chat/CoordinatorPurgeDialog.svelte';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
-	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
+	import VirtualKeyPackageList, {
+		type VirtualKeyPackageListItem
+	} from '$lib/components/chat/VirtualKeyPackageList.svelte';
 	import {
 		getChatGroupDisplayTitle,
 		getDirectChatTargetPubkeyFromWelcome
 	} from '$lib/components/chat/chatGroupDisplay';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { resolve } from '$app/paths';
+	import { goto } from '$app/navigation';
 	import * as Card from '$lib/components/ui/card';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -44,8 +49,10 @@
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
+	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Server from '@lucide/svelte/icons/server';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
@@ -81,6 +88,7 @@
 		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) !== activePubkey)
 	);
 	let removingKeyPackageRef = $state('');
+	let showPurgeDialog = $state(false);
 	let removeError = $state('');
 	const welcomeProfileHints = useProfileHints(
 		() => [
@@ -117,12 +125,34 @@
 			onAction: () => removeOwnedKeyPackage(item.entry.kp_ref)
 		}))
 	);
-	const otherRemoteKeyPackageItems = $derived.by(() =>
-		otherRemoteKeyPackages.map((entry) => ({
-			id: entry.kp_ref,
-			entry,
-			pubkey: entry.pk
-		}))
+	// Unified, deduped key-package list for the single card. Merges three former
+	// sources — remote-owned (with local-copy state), local-published-not-on-
+	// remote (drift, surfaced as “Local only”), and other-identities remote —
+	// keyed by kp_ref so a package never appears twice.
+	const keyPackageItems = $derived.by<VirtualKeyPackageListItem[]>(() => {
+		const items: VirtualKeyPackageListItem[] = [];
+		const seen: string[] = [];
+		for (const item of ownedRemoteKeyPackageItems) {
+			seen.push(item.id);
+			items.push(item);
+		}
+		for (const kp of relatedPublishedKeyPackages) {
+			if (seen.includes(kp.keyPackageRef)) continue;
+			items.push({
+				id: kp.keyPackageRef,
+				entry: kp,
+				badge: remoteKeyPackages.length > 0 ? 'Local only' : undefined
+			});
+		}
+		for (const entry of otherRemoteKeyPackages) {
+			items.push({ id: entry.kp_ref, entry });
+		}
+		return items;
+	});
+	const keyPackageEmptyMessage = $derived.by(() =>
+		remoteKeyPackages.length === 0 && relatedPublishedKeyPackages.length === 0
+			? 'No key packages published here yet.'
+			: 'No key packages available.'
 	);
 	const coordinatorConnectionTone = $derived.by(() => getCoordinatorHealthTone(coordinatorKey));
 	const coordinatorConnectionLabel = $derived.by(() => getCoordinatorHealthLabel(coordinatorKey));
@@ -162,6 +192,10 @@
 
 	function storeCoordinator() {
 		upsertChatCoordinator({ pubkey: coordinatorKey });
+	}
+
+	function handleCoordinatorPurged() {
+		goto(resolve('/chat/coordinators'));
 	}
 
 	function getAcceptedGroupLabel(groupId: string) {
@@ -215,6 +249,34 @@
 					{coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
 				</h1>
 				<ProfileCard pubkey={coordinatorKey} />
+			</div>
+			<div class="ml-auto shrink-0">
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								type="button"
+								variant="outline"
+								size="icon"
+								class="h-10 w-10 rounded-xl"
+								aria-label="Coordinator actions"
+								title="Coordinator actions"
+							>
+								<EllipsisVertical class="size-4" />
+							</Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" class="w-48">
+						<DropdownMenu.Item
+							onclick={() => (showPurgeDialog = true)}
+							class="gap-2 text-destructive data-[highlighted]:text-destructive"
+						>
+							<Trash2 class="size-4" />
+							<span>Remove coordinator</span>
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			</div>
 		</div>
 	</header>
@@ -330,39 +392,12 @@
 								</div>
 							{:else}
 								{#each relatedGroups as group (group.id)}
-									<a
+									<ChatGroupListItem
+										{group}
 										href={resolve('/chat/[id]', { id: group.id })}
-										class="block rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
-									>
-										<p class="font-medium">{getRelatedGroupTitle(group)}</p>
-										<p class="mt-1 text-sm text-muted-foreground">
-											{group.metadata?.description || 'Coordinator-assisted messaging'}
-										</p>
-									</a>
-								{/each}
-							{/if}
-						</div>
-					</Card.Content>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Local key packages published here</Card.Title>
-						<Card.Description
-							>Saved key packages that reference this coordinator pubkey.</Card.Description
-						>
-					</Card.Header>
-					<Card.Content>
-						<div class="space-y-3">
-							{#if relatedPublishedKeyPackages.length === 0}
-								<div
-									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-								>
-									No saved key packages reference this coordinator yet.
-								</div>
-							{:else}
-								{#each relatedPublishedKeyPackages as keyPackage (keyPackage.keyPackageRef)}
-									<KeyPackageCard entry={keyPackage} />
+										preview={group.metadata?.description || 'Coordinator-assisted messaging'}
+										profileHints={welcomeProfileHints}
+									/>
 								{/each}
 							{/if}
 						</div>
@@ -370,100 +405,64 @@
 				</Card.Root>
 			</div>
 
-			<div class="grid gap-6 xl:grid-cols-2">
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Owned key packages</Card.Title>
-						<Card.Description>
-							Remote key packages whose credential pubkey matches the active account.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content>
-						{#if !$activeAccount}
-							<div class="space-y-3">
-								<p class="text-sm text-muted-foreground">
-									Log in to inspect remote coordinator state.
-								</p>
-								<AccountLoginDialog />
-							</div>
-						{:else}
-							<div class="space-y-3">
-								<div class="flex flex-wrap gap-2">
-									<Button
-										type="button"
-										onclick={loadRemoteKeyPackages}
-										disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
-									>
-										{#if coordinatorDetailsActionsStore.loadingKeyPackages}
-											<Spinner class="mr-2 size-4" />
-										{:else}
-											<Boxes class="mr-2 size-4" />
-										{/if}
-										{coordinatorDetailsActionsStore.loadingKeyPackages
-											? 'Loading remote key packages…'
-											: hasCachedRemoteKeyPackages
-												? 'Refresh remote key packages'
-												: 'Load remote key packages'}
-									</Button>
-								</div>
-								{#if coordinatorDetailsActionsStore.keyPackageError}
-									<p class="text-sm text-destructive">
-										{coordinatorDetailsActionsStore.keyPackageError}
-									</p>
-								{/if}
-								{#if remoteKeyPackages.length === 0}
-									<div
-										class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-									>
-										Load remote data to inspect owned key packages.
-									</div>
-								{:else if ownedRemoteKeyPackagesWithState.length === 0}
-									<div
-										class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-									>
-										No remote key packages owned by the active account were found.
-									</div>
+			<Card.Root>
+				<Card.Header>
+					<div class="flex flex-wrap items-start justify-between gap-3">
+						<div class="space-y-1">
+							<Card.Title>Key packages</Card.Title>
+							<Card.Description>
+								Local key packages published here plus the remote coordinator directory. Yours show
+								a local-copy state; others appear read-only.
+							</Card.Description>
+						</div>
+						{#if $activeAccount}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onclick={loadRemoteKeyPackages}
+								disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
+							>
+								{#if coordinatorDetailsActionsStore.loadingKeyPackages}
+									<Spinner class="mr-2 size-4" />
 								{:else}
-									<div class="space-y-3">
-										{#if removeError}
-											<p class="text-sm text-destructive">{removeError}</p>
-										{/if}
-										<VirtualKeyPackageList items={ownedRemoteKeyPackageItems} />
-									</div>
+									<Boxes class="mr-2 size-4" />
 								{/if}
-							</div>
+								{coordinatorDetailsActionsStore.loadingKeyPackages
+									? 'Loading…'
+									: hasCachedRemoteKeyPackages
+										? 'Refresh remote'
+										: 'Load remote'}
+							</Button>
 						{/if}
-					</Card.Content>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Other available key packages</Card.Title>
-						<Card.Description
-							>Remote directory entries published by other credential pubkeys.</Card.Description
-						>
-					</Card.Header>
-					<Card.Content>
+					</div>
+				</Card.Header>
+				<Card.Content>
+					{#if !$activeAccount}
 						<div class="space-y-3">
-							{#if remoteKeyPackages.length === 0}
-								<div
-									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-								>
-									Load remote key packages to inspect the coordinator directory.
-								</div>
-							{:else if otherRemoteKeyPackages.length === 0}
-								<div
-									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-								>
-									No remote key packages from other identities are currently visible.
-								</div>
-							{:else}
-								<VirtualKeyPackageList items={otherRemoteKeyPackageItems} />
-							{/if}
+							<p class="text-sm text-muted-foreground">
+								Log in to inspect and manage key packages for this coordinator.
+							</p>
+							<AccountLoginDialog />
 						</div>
-					</Card.Content>
-				</Card.Root>
-			</div>
+					{:else}
+						<div class="space-y-3">
+							{#if coordinatorDetailsActionsStore.keyPackageError}
+								<p class="text-sm text-destructive">
+									{coordinatorDetailsActionsStore.keyPackageError}
+								</p>
+							{/if}
+							{#if removeError}
+								<p class="text-sm text-destructive">{removeError}</p>
+							{/if}
+							<VirtualKeyPackageList
+								items={keyPackageItems}
+								emptyMessage={keyPackageEmptyMessage}
+							/>
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
 
 			<Card.Root>
 				<Card.Header>
@@ -521,5 +520,12 @@
 				</Card.Content>
 			</Card.Root>
 		</div>
+
+		<CoordinatorPurgeDialog
+			bind:open={showPurgeDialog}
+			pubkey={coordinatorKey}
+			label={coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
+			onpurged={handleCoordinatorPurged}
+		/>
 	</div>
 </div>

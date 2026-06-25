@@ -2,7 +2,6 @@ import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
-import type { IAccount } from 'applesauce-accounts';
 import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
 import {
@@ -12,12 +11,14 @@ import {
 } from '$lib/services/chatKeyPackages.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
-import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import {
+	isSignerUnavailableError,
+	requireActiveAccount,
+	withCoordinatorClientRetry
+} from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-welcome-notifications';
-const SIGNER_READY_RETRY_ATTEMPTS = 3;
-const SIGNER_READY_RETRY_DELAY_MS = 500;
 
 export interface WelcomeNotificationEntry {
 	id: string;
@@ -105,6 +106,20 @@ export function deleteWelcomeNotificationsForOwner(ownerPubkey: string) {
 	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {};
 }
 
+export function deleteWelcomeNotificationsForCoordinator(coordinatorKey: string) {
+	if (!browser) return;
+	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
+	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.filter(
+		(entry) => entry.coordinatorKey !== normalizedCoordinatorKey
+	);
+	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = Object.fromEntries(
+		Object.entries(chatWelcomeNotificationsStore.lastFetchedAtByCoordinator).filter(
+			([key]) => key !== normalizedCoordinatorKey
+		)
+	);
+	saveNotifications();
+}
+
 export function listKnownCoordinatorKeys(): string[] {
 	const keys = new SvelteSet<string>();
 	const fromCoordinators = listChatCoordinators();
@@ -163,33 +178,6 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 	saveNotifications();
 }
 
-function isSignerUnavailableError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return /signer extension missing/i.test(message);
-}
-
-function wait(ms: number) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchPendingWelcomesWithSignerRetry(account: IAccount, coordinatorKey: string) {
-	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
-		try {
-			return await withCoordinatorClient(account, coordinatorKey, (client) =>
-				client.FetchPendingWelcomes({})
-			);
-		} catch (error) {
-			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
-				throw error;
-			}
-
-			await wait(SIGNER_READY_RETRY_DELAY_MS);
-		}
-	}
-
-	throw new Error('Failed to fetch welcome notifications');
-}
-
 async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
 	if (entry.preview) return entry.preview;
 
@@ -243,7 +231,9 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 		const outcomes = await Promise.all(
 			keys.map(async (coordinatorKey) => {
 				try {
-					const result = await fetchPendingWelcomesWithSignerRetry(account, coordinatorKey);
+					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
+						client.FetchPendingWelcomes({})
+					);
 					return {
 						coordinatorKey,
 						welcomes: result.welcomes,

@@ -1,7 +1,6 @@
 import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { JoinRequest } from '$lib/contracts';
-import type { IAccount } from 'applesauce-accounts';
 import {
 	decodeStoredGroupState,
 	ensureGroupsLoaded,
@@ -10,7 +9,12 @@ import {
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
 import { isGroupAdmin, listGroupMembers } from '$lib/services/chatAdminPolicy';
-import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import {
+	isSignerUnavailableError,
+	requireActiveAccount,
+	withCoordinatorClient,
+	withCoordinatorClientRetry
+} from '$lib/services/chatRuntime';
 import { manager } from '$lib/services/accountManager.svelte';
 import { normalizePubKey } from '$lib/utils';
 import { queryClient } from '$lib/query-client';
@@ -18,8 +22,6 @@ import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 
 const STORAGE_KEY = 'cordn-chat-join-requests';
 const SENT_STORAGE_KEY = 'cordn-chat-sent-join-requests';
-const SIGNER_READY_RETRY_ATTEMPTS = 3;
-const SIGNER_READY_RETRY_DELAY_MS = 500;
 
 export interface JoinRequestEntry {
 	id: string;
@@ -178,37 +180,6 @@ function mergeFetchedJoinRequests(
 	saveJoinRequests();
 }
 
-function isSignerUnavailableError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return /signer extension missing/i.test(message);
-}
-
-function wait(ms: number) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchManyPendingJoinRequestsWithSignerRetry(
-	account: IAccount,
-	coordinatorKey: string,
-	groups: { gid: string }[]
-) {
-	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
-		try {
-			return await withCoordinatorClient(account, coordinatorKey, (client) =>
-				client.FetchManyPendingJoinRequests({ groups })
-			);
-		} catch (error) {
-			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
-				throw error;
-			}
-
-			await wait(SIGNER_READY_RETRY_DELAY_MS);
-		}
-	}
-
-	throw new Error('Failed to fetch join requests');
-}
-
 export async function fetchJoinRequestsForAdminGroups() {
 	await ensureGroupsLoaded();
 
@@ -243,10 +214,8 @@ export async function fetchJoinRequestsForAdminGroups() {
 		const outcomes = await Promise.all(
 			[...groupsByCoordinator].map(async ([coordinatorKey, groups]) => {
 				try {
-					const result = await fetchManyPendingJoinRequestsWithSignerRetry(
-						account,
-						coordinatorKey,
-						groups
+					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
+						client.FetchManyPendingJoinRequests({ groups })
 					);
 					const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
 					for (const request of result.requests) {

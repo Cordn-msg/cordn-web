@@ -129,6 +129,38 @@ export function listChatKeyPackages(ownerPubkey?: string): StoredKeyPackageRecor
 	return [...filtered].sort((a, b) => b.createdAt - a.createdAt);
 }
 
+export async function purgeCoordinatorKeyPackages(
+	coordinatorKey: string,
+	deleteRefs: string[] = []
+): Promise<void> {
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	// Remove every key package still published to this coordinator (remote RPC
+	// + local prune of publishedCoordinatorKeys).
+	for (const entry of chatKeyPackagesStore.keyPackages.filter((entry) =>
+		entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
+	)) {
+		try {
+			await removeChatKeyPackage(entry.keyPackageRef, {
+				coordinatorKey: normalizedCoordinator
+			});
+		} catch (error) {
+			console.warn(
+				`Failed to remove key package ${entry.keyPackageRef} from coordinator ${normalizedCoordinator}:`,
+				error instanceof Error ? error.message : error
+			);
+		}
+	}
+	// Drop only the consumed records the caller resolved for THIS coordinator.
+	// Never nuke records attributable to another coordinator's groups — the old
+	// global "publishedCoordinatorKeys.length === 0" sweep did exactly that.
+	if (deleteRefs.length > 0) {
+		await setKeyPackages(
+			chatKeyPackagesStore.keyPackages.filter((entry) => !deleteRefs.includes(entry.keyPackageRef))
+		);
+	}
+	await reconcilePublishedKeyPackagesForActiveAccount().catch(() => {});
+}
+
 export async function deleteChatKeyPackagesForOwner(ownerPubkey: string): Promise<void> {
 	const normalizedOwner = normalizePubKey(ownerPubkey);
 	chatKeyPackagesStore.keyPackages = chatKeyPackagesStore.keyPackages.filter(
@@ -271,7 +303,7 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	markCoordinatorUsed(normalizedCoordinator);
 	await markKeyPackagePublished(record.keyPackageRef, normalizedCoordinator, result.last_resort);
 	void queryClient.invalidateQueries({
-		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, normalizedCoordinator)
+		queryKey: chatQueryKeys.coordinators(account.pubkey)
 	});
 }
 
@@ -305,9 +337,6 @@ export async function removeChatKeyPackage(
 					throw error;
 				}
 			}
-			void queryClient.invalidateQueries({
-				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
-			});
 		}
 	}
 

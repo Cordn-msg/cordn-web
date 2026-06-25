@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -26,8 +26,7 @@
 		ensureGroupsLoaded,
 		inviteChatGroupMember,
 		listChatGroupMembers,
-		listChatGroups,
-		type StoredChatGroup
+		listChatGroups
 	} from '$lib/services/chatGroups.svelte';
 	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
@@ -103,13 +102,18 @@
 		if (!$activeAccount) return false;
 		return normalizePubKey($activeAccount.pubkey) === profilePubkey;
 	});
-	const coordinatorQuery = $derived.by(() => {
-		const value = page.url.searchParams.get('c')?.trim();
-		if (!value) return null;
-		return decodeCoordinatorQueryParam(value);
-	});
-	const selectedCoordinatorKey = $derived.by(
-		() => coordinatorQuery?.coordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+	// Default to the public coordinator ONLY when no `c=` is present, so
+	// profiles on the default coordinator keep short links. A present-but-
+	// malformed `c=` must not silently default — surface it instead.
+	const coordinatorParam = $derived(page.url.searchParams.get('c')?.trim() ?? '');
+	const coordinatorQuery = $derived(
+		coordinatorParam ? decodeCoordinatorQueryParam(coordinatorParam) : null
+	);
+	const selectedCoordinatorKey = $derived(
+		!coordinatorParam ? DEFAULT_CHAT_COORDINATOR_PUBKEY : (coordinatorQuery?.coordinatorKey ?? '')
+	);
+	const coordinatorError = $derived(
+		coordinatorParam && !coordinatorQuery ? 'This profile link has a malformed coordinator.' : ''
 	);
 
 	// Auto-register unknown coordinators from share links
@@ -186,6 +190,12 @@
 			availableKeyPackages = [];
 			loadingAvailableKeyPackages = false;
 			availableKeyPackagesError = '';
+			return;
+		}
+
+		if (!selectedCoordinatorKey) {
+			availableKeyPackages = [];
+			loadingAvailableKeyPackages = false;
 			return;
 		}
 
@@ -277,15 +287,6 @@
 
 	function getGroupHref(groupId: string) {
 		return resolve('/chat/[id]', { id: groupId });
-	}
-
-	function getSharedGroupTitle(group: StoredChatGroup) {
-		return getChatGroupDisplayTitle({
-			group,
-			activePubkey: $activeAccount?.pubkey,
-			profileHints: sharedGroupProfileHints,
-			memberPubkeys: listChatGroupMembers(group.id).map((member) => member.stablePubkey)
-		});
 	}
 
 	function resetProfileEditor() {
@@ -433,8 +434,7 @@
 					label:
 						coordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY
 							? 'Default coordinator'
-							: `Coordinator ${coordinatorKey.slice(0, 8)}`,
-					isDefault: true
+							: `Coordinator ${coordinatorKey.slice(0, 8)}`
 				});
 			}
 
@@ -662,7 +662,9 @@
 										<MessageCirclePlus class="mr-2 size-4" />
 										{startingChat ? 'Starting chat…' : 'Start chat'}
 									</Button>
-									{#if startChatError}
+									{#if coordinatorError}
+										<p class="text-sm text-destructive">{coordinatorError}</p>
+									{:else if startChatError}
 										<p class="text-sm text-destructive">{startChatError}</p>
 									{:else if availableKeyPackagesError}
 										<p class="text-sm text-destructive">{availableKeyPackagesError}</p>
@@ -697,15 +699,12 @@
 								</div>
 
 								{#each sharedGroups as group (group.id)}
-									<a
+									<ChatGroupListItem
+										{group}
 										href={getGroupHref(group.id)}
-										class="block rounded-2xl border border-border px-4 py-4 transition-colors hover:bg-muted/40"
-									>
-										<p class="font-medium">{getSharedGroupTitle(group)}</p>
-										<p class="mt-1 text-sm text-muted-foreground">
-											{group.metadata?.description || 'Coordinator-assisted messaging'}
-										</p>
-									</a>
+										preview={group.metadata?.description || 'Coordinator-assisted messaging'}
+										profileHints={sharedGroupProfileHints}
+									/>
 								{/each}
 							</div>
 						</Card.Content>

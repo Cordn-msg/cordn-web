@@ -13,7 +13,9 @@
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
+	import CoordinatorPurgeDialog from '$lib/components/chat/CoordinatorPurgeDialog.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
@@ -35,7 +37,9 @@
 	import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import X from '@lucide/svelte/icons/x';
 	import {
 		getSearchKeywords,
@@ -59,6 +63,8 @@
 	let keywordQuery = $state('');
 	let highlightedKeywordIndex = $state(0);
 	let profileNames: string[] = $state([]);
+	let purgeDialogOpen = $state(false);
+	let purgeTarget = $state<{ pubkey: string; label: string } | null>(null);
 	const groupProfileHints = useProfileHints(
 		() => {
 			const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
@@ -525,28 +531,66 @@
 					class={`space-y-2 border-l-4 pl-2 ${collapsed ? 'py-1' : 'rounded-r-xl border-y border-r border-border/60 bg-background/40 p-2 pl-2'}`}
 					style={`border-left-color: ${coordinatorGroup.color};`}
 				>
-					<a
-						href={getCoordinatorHref(coordinatorGroup.pubkey)}
-						onclick={closeMobileSidebar}
-						class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-						aria-label={`Open ${coordinatorGroup.label}`}
-						title={coordinatorGroup.label}
-					>
-						{#if collapsed}
-							<span class="sr-only">{coordinatorGroup.label}</span>
-							<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"
-							></span>
-						{:else}
-							<div class="flex min-w-0 items-center gap-2">
-								<span
-									class={`h-2 w-2 shrink-0 rounded-full ${getCoordinatorStatusClass(coordinatorGroup.pubkey)}`}
+					<div class={collapsed ? '' : 'flex items-center gap-1'}>
+						<a
+							href={getCoordinatorHref(coordinatorGroup.pubkey)}
+							onclick={closeMobileSidebar}
+							class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'min-w-0 flex-1 hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+							aria-label={`Open ${coordinatorGroup.label}`}
+							title={coordinatorGroup.label}
+						>
+							{#if collapsed}
+								<span class="sr-only">{coordinatorGroup.label}</span>
+								<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"
 								></span>
-								<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
-									{coordinatorGroup.label}
-								</p>
-							</div>
+							{:else}
+								<div class="flex min-w-0 items-center gap-2">
+									<span
+										class={`h-2 w-2 shrink-0 rounded-full ${getCoordinatorStatusClass(coordinatorGroup.pubkey)}`}
+									></span>
+									<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
+										{coordinatorGroup.label}
+									</p>
+								</div>
+							{/if}
+						</a>
+
+						{#if !collapsed}
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger>
+									{#snippet child({ props })}
+										<Button
+											{...props}
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											class="shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
+											aria-label="Coordinator actions"
+											title="Coordinator actions"
+											onclick={closeMobileSidebar}
+										>
+											<EllipsisVertical class="size-3.5" />
+										</Button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="end" class="w-44">
+									<DropdownMenu.Item
+										onclick={() => {
+											purgeTarget = {
+												pubkey: coordinatorGroup.pubkey,
+												label: coordinatorGroup.label
+											};
+											purgeDialogOpen = true;
+										}}
+										class="gap-2 text-destructive data-[highlighted]:text-destructive"
+									>
+										<Trash2 class="size-4" />
+										<span>Remove</span>
+									</DropdownMenu.Item>
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
 						{/if}
-					</a>
+					</div>
 
 					<div class="space-y-1">
 						{#each coordinatorGroup.chats as chat (chat.id)}
@@ -605,3 +649,11 @@
 		{/if}
 	</div>
 </aside>
+
+{#if purgeTarget}
+	<CoordinatorPurgeDialog
+		bind:open={purgeDialogOpen}
+		pubkey={purgeTarget.pubkey}
+		label={purgeTarget.label}
+	/>
+{/if}

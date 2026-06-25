@@ -799,3 +799,21 @@ describe('loadGroups snapshot baseline', () => {
 		await storage.deleteGroup(groupId);
 	});
 });
+
+describe('deleteChatGroupsForCoordinator()', () => {
+	test('removes only groups for the given coordinator', async () => {
+		const { chatGroupsStore, deleteChatGroupsForCoordinator } = await import('./chatGroups.svelte');
+
+		const coordinatorA = 'aa'.repeat(32);
+		const coordinatorB = 'bb'.repeat(32);
+		chatGroupsStore.groups = [
+			{ id: 'a1', coordinatorKey: coordinatorA } as unknown as StoredChatGroup,
+			{ id: 'a2', coordinatorKey: coordinatorA } as unknown as StoredChatGroup,
+			{ id: 'b1', coordinatorKey: coordinatorB } as unknown as StoredChatGroup
+		];
+
+		await deleteChatGroupsForCoordinator(coordinatorA);
+
+		expect(chatGroupsStore.groups.map((g) => g.id)).toEqual(['b1']);
+	});
+});

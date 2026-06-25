@@ -15,7 +15,11 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
-	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+	import {
+		createChatKeyPackage,
+		listChatKeyPackages,
+		publishChatKeyPackage
+	} from '$lib/services/chatKeyPackages.svelte';
 	import {
 		hasJoinRequestBeenSent,
 		markJoinRequestSent,
@@ -45,13 +49,21 @@
 
 	const group = $derived.by(() => getChatGroup(params.id));
 	const groupId = $derived.by(() => params.id);
-	const coordinatorQuery = $derived.by(() => {
-		const value = page.url.searchParams.get('c')?.trim();
-		if (!value) return null;
-		return decodeCoordinatorQueryParam(value);
-	});
-	const coordinatorKey = $derived.by(
-		() => coordinatorQuery?.coordinatorKey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+	// Coordinator is read from the `c=` query param. Default to the public
+	// coordinator ONLY when no `c=` is present at all, so groups on the default
+	// coordinator can keep short links. A present-but-malformed `c=` must NOT
+	// silently default — that would route the join request to the wrong place.
+	const coordinatorParam = $derived(page.url.searchParams.get('c')?.trim() ?? '');
+	const coordinatorQuery = $derived(
+		coordinatorParam ? decodeCoordinatorQueryParam(coordinatorParam) : null
+	);
+	const coordinatorKey = $derived(
+		!coordinatorParam ? DEFAULT_CHAT_COORDINATOR_PUBKEY : (coordinatorQuery?.coordinatorKey ?? '')
+	);
+	const coordinatorError = $derived(
+		coordinatorParam && !coordinatorQuery
+			? 'This invite link has a malformed coordinator. Ask for a new link.'
+			: ''
 	);
 	const shareMetadata = $derived.by(() => {
 		const value = page.url.searchParams.get('m')?.trim();
@@ -140,19 +152,42 @@
 		requesting = true;
 		requestError = '';
 
-		try {
-			// Prefer existing last-resort key package, otherwise create a new one
-			let keyPackageRef: string;
-			const existingKeyPackages = listChatKeyPackages($activeAccount.pubkey);
-			const lastResort = existingKeyPackages.find((kp) => kp.isLastResort);
+		if (!coordinatorKey) {
+			// ponytail: coordinatorError already gates the UI button; this guard
+			// keeps handleRequestJoin safe if ever called with a malformed link.
+			requestError = 'Cannot request to join: this link has no valid coordinator.';
+			requesting = false;
+			return;
+		}
 
-			if (lastResort) {
-				keyPackageRef = lastResort.keyPackageRef;
+		try {
+			// A key package ref is only consumable on the coordinator it was
+			// published to: the ref is global but its existence is per-coordinator.
+			// So reuse a last-resort already published to THIS coordinator, else
+			// reuse + publish a last-resort held elsewhere, else mint a new
+			// last-resort here. Last-resort is mandatory so a concurrent consume
+			// by another group/admin can't strand the join before a welcome lands.
+			const normalizedCoordinator = normalizePubKey(coordinatorKey);
+			const existingKeyPackages = listChatKeyPackages($activeAccount.pubkey);
+			const alreadyHere = existingKeyPackages.find(
+				(kp) => kp.isLastResort && kp.publishedCoordinatorKeys.includes(normalizedCoordinator)
+			);
+
+			let keyPackageRef: string;
+			if (alreadyHere) {
+				keyPackageRef = alreadyHere.keyPackageRef;
 			} else {
-				const created = await createChatKeyPackage({
-					publishCoordinatorKey: coordinatorKey
-				});
-				keyPackageRef = created.record.keyPackageRef;
+				const reusable = existingKeyPackages.find((kp) => kp.isLastResort);
+				if (reusable) {
+					await publishChatKeyPackage(reusable.keyPackageRef, normalizedCoordinator);
+					keyPackageRef = reusable.keyPackageRef;
+				} else {
+					const created = await createChatKeyPackage({
+						isLastResort: true,
+						publishCoordinatorKey: normalizedCoordinator
+					});
+					keyPackageRef = created.record.keyPackageRef;
+				}
 			}
 
 			await storeJoinRequest(coordinatorKey, groupId, keyPackageRef);
@@ -195,6 +230,12 @@
 					<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
 						<p class="font-mono text-xs break-all">{groupId}</p>
 					</div>
+
+					{#if coordinatorError}
+						<div class="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+							{coordinatorError}
+						</div>
+					{/if}
 
 					{#if relatedWelcomes.length > 0 && !requestSent}
 						<div class="space-y-2">
@@ -250,7 +291,7 @@
 						</div>
 					{/if}
 
-					{#if !requestSent && relatedWelcomes.length === 0}
+					{#if !coordinatorError && !requestSent && relatedWelcomes.length === 0}
 						<Button type="button" onclick={handleRequestJoin} disabled={requesting} class="w-full">
 							{#if requesting}
 								<Spinner class="mr-2 size-4" />

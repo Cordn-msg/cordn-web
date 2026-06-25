@@ -1322,6 +1322,18 @@ export function deleteChatGroup(groupId: string): void {
 	void getChatStorage().then((storage) => storage.deleteGroup(groupId));
 }
 
+export async function deleteChatGroupsForCoordinator(coordinatorKey: string): Promise<void> {
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	const groupIds = chatGroupsStore.groups
+		.filter((group) => group.coordinatorKey === normalizedCoordinator)
+		.map((group) => group.id);
+	chatGroupsStore.groups = chatGroupsStore.groups.filter(
+		(group) => group.coordinatorKey !== normalizedCoordinator
+	);
+	const storage = await getChatStorage();
+	await Promise.all(groupIds.map((id) => storage.deleteGroup(id)));
+}
+
 export async function deleteChatGroupsForOwner(ownerPubkey: string): Promise<void> {
 	const normalizedOwner = normalizePubKey(ownerPubkey);
 	chatGroupsStore.groups = chatGroupsStore.groups.filter(

@@ -26,7 +26,8 @@
 		badge,
 		compact = false,
 		details,
-		class: className = ''
+		class: className = '',
+		style: style = ''
 	}: {
 		entry: StoredKeyPackageRecord | AvailableKeyPackage | CoordinatorAvailableKeyPackage;
 		actionLabel?: string;
@@ -36,6 +37,7 @@
 		compact?: boolean;
 		details?: Snippet;
 		class?: string;
+		style?: string;
 	} = $props();
 
 	const normalized = $derived.by<KeyPackageCardData>(() => {
@@ -80,6 +82,7 @@
 		compact ? 'space-y-2' : 'space-y-3',
 		className
 	)}
+	{style}
 >
 	<div class="flex items-start justify-between gap-3">
 		<div class="min-w-0 flex-1 space-y-2">

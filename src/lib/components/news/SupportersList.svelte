@@ -14,6 +14,14 @@
 	// mounts when expanded, so profiles are lazy-loaded on demand.
 	let expanded = $state(false);
 
+	// Per-supporter comment expansion: long donation messages are truncated
+	// by default; clicking the message toggles it to full (wrapped) text.
+	let expandedComments = $state<Record<string, boolean>>({});
+
+	function toggleComment(pubkey: string) {
+		expandedComments[pubkey] = !expandedComments[pubkey];
+	}
+
 	// Idempotent: a repeat call for the same recipient is a no-op, so reopening
 	// the page renders from the persistent store with no network calls. The
 	// subscription is kept warm for the app lifetime — do not tear it down here.
@@ -35,7 +43,7 @@
 </script>
 
 <div class="border-t border-border bg-background">
-	<div class="mx-auto w-full max-w-2xl px-3 sm:px-4">
+	<div class="mx-auto w-full max-w-2xl px-4 sm:px-6">
 		<button
 			type="button"
 			class="flex w-full items-center gap-3 py-3 text-left"
@@ -76,9 +84,18 @@
 								<div class="min-w-0 flex-1">
 									<ProfileCard pubkey={supporter.pubkey} mode="compact" showLogout={false} />
 									{#if supporter.comment}
-										<p class="mt-0.5 truncate text-xs text-muted-foreground italic">
+										<button
+											type="button"
+											onclick={() => toggleComment(supporter.pubkey)}
+											aria-expanded={expandedComments[supporter.pubkey] ?? false}
+											class={`mt-0.5 block w-full cursor-pointer appearance-none border-0 bg-transparent p-0 text-left text-xs text-muted-foreground italic ${
+												expandedComments[supporter.pubkey]
+													? 'break-words whitespace-pre-wrap'
+													: 'truncate'
+											}`}
+										>
 											&ldquo;{supporter.comment}&rdquo;
-										</p>
+										</button>
 									{/if}
 								</div>
 								<div class="shrink-0 text-right">
