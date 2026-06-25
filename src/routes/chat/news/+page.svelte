@@ -17,6 +17,7 @@
 
 	let donateOpen = $state(false);
 	let donateConfig = $state<DonationConfig | undefined>(undefined);
+	let scrollContainer: HTMLDivElement;
 
 	// Hydrate before first paint so the "New" badges reflect stored read state.
 	loadNewsReadState();
@@ -30,7 +31,18 @@
 	}
 
 	onMount(() => {
+		// Feed sorts ascending (newest at the bottom, like chat). Land on the
+		// newest unread release, or the bottom when everything is already read.
+		const unreadItems = items.filter(isNewsItemUnread);
+		const targetId = unreadItems.length ? unreadItems[unreadItems.length - 1].id : null;
+
 		markNewsRead();
+
+		if (targetId) {
+			document.querySelector(`[data-news-id="${targetId}"]`)?.scrollIntoView({ block: 'start' });
+		} else {
+			scrollContainer.scrollTop = scrollContainer.scrollHeight;
+		}
 	});
 </script>
 
@@ -57,7 +69,7 @@
 		</div>
 	</header>
 
-	<div class="min-h-0 flex-1 overflow-y-auto">
+	<div bind:this={scrollContainer} class="min-h-0 flex-1 overflow-y-auto">
 		<div class="mx-auto w-full max-w-2xl px-3 py-6 sm:px-4 md:py-10">
 			<div class="flex flex-col gap-4">
 				{#each items as item, index (item.id)}
@@ -67,14 +79,16 @@
 							{formatDayLabel(item.createdAt)}
 						</p>
 					{/if}
-					<NewsFeedItem
-						{item}
-						unread={isNewsItemUnread(item)}
-						onDonate={(config) => {
-							donateConfig = config;
-							donateOpen = true;
-						}}
-					/>
+					<div data-news-id={item.id}>
+						<NewsFeedItem
+							{item}
+							unread={isNewsItemUnread(item)}
+							onDonate={(config) => {
+								donateConfig = config;
+								donateOpen = true;
+							}}
+						/>
+					</div>
 				{/each}
 			</div>
 		</div>

@@ -22,6 +22,7 @@ import {
 import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
 import {
 	getChatStorage,
 	type StoredChatKeyPackageRecord as StoredBinaryChatKeyPackageRecord
@@ -134,20 +135,41 @@ export async function purgeCoordinatorKeyPackages(
 	deleteRefs: string[] = []
 ): Promise<void> {
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
-	// Remove every key package still published to this coordinator (remote RPC
-	// + local prune of publishedCoordinatorKeys).
-	for (const entry of chatKeyPackagesStore.keyPackages.filter((entry) =>
+	const publishedEntries = chatKeyPackagesStore.keyPackages.filter((entry) =>
 		entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
-	)) {
-		try {
-			await removeChatKeyPackage(entry.keyPackageRef, {
-				coordinatorKey: normalizedCoordinator
-			});
-		} catch (error) {
-			console.warn(
-				`Failed to remove key package ${entry.keyPackageRef} from coordinator ${normalizedCoordinator}:`,
-				error instanceof Error ? error.message : error
-			);
+	);
+
+	if (publishedEntries.length === 0) {
+		// Fall through to the deleteRefs sweep + reconcile below.
+	} else if (getCoordinatorHealthTone(normalizedCoordinator) !== 'healthy') {
+		// Coordinator not connected — the remote RemoveKeyPackages RPC would hang
+		// until the SDK timeout, stalling the whole delete. Prune
+		// publishedCoordinatorKeys locally instead; records with no remaining use
+		// are dropped by the deleteRefs sweep below.
+		await setKeyPackages(
+			chatKeyPackagesStore.keyPackages.map((entry) =>
+				entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
+					? {
+							...entry,
+							publishedCoordinatorKeys: entry.publishedCoordinatorKeys.filter(
+								(key) => key !== normalizedCoordinator
+							)
+						}
+					: entry
+			)
+		);
+	} else {
+		for (const entry of publishedEntries) {
+			try {
+				await removeChatKeyPackage(entry.keyPackageRef, {
+					coordinatorKey: normalizedCoordinator
+				});
+			} catch (error) {
+				console.warn(
+					`Failed to remove key package ${entry.keyPackageRef} from coordinator ${normalizedCoordinator}:`,
+					error instanceof Error ? error.message : error
+				);
+			}
 		}
 	}
 	// Drop only the consumed records the caller resolved for THIS coordinator.
