@@ -3,20 +3,19 @@
 	import { goto } from '$app/navigation';
 	import { SvelteSet } from 'svelte/reactivity';
 	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
+	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
 	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import {
-		coordinatorDetailsActionsStore,
-		loadCoordinatorRemoteKeyPackagesAction,
-		startChatWithKeyPackageAction
-	} from '$lib/services/chatUiActions.svelte';
+	import { useAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import { startChatWithKeyPackageAction } from '$lib/services/chatUiActions.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { areStringArraysEqual } from '$lib/utils';
 	import Users from '@lucide/svelte/icons/users';
+	import LogIn from '@lucide/svelte/icons/log-in';
 
 	let {
 		open = $bindable(false),
@@ -30,10 +29,13 @@
 	let startingRef = $state('');
 	let error = $state('');
 
+	// Query-managed remote read, matching welcome/join-request lifecycle:
+	// auto-fetches when enabled, polls on an interval, deduped/cached by Query.
+	// Pubkey is passed as a getter so the query re-evaluates on login/logout.
+	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
+
 	const remoteKeyPackages = $derived.by(() =>
-		coordinatorDetailsActionsStore.remoteKeyPackages.filter(
-			(entry) => entry.pk !== $activeAccount?.pubkey
-		)
+		(availableKeyPackagesQuery.data ?? []).filter((entry) => entry.pk !== $activeAccount?.pubkey)
 	);
 
 	let visibleKeyPackageIds = $state<string[]>([]);
@@ -81,11 +83,10 @@
 	);
 
 	$effect(() => {
-		if (open && $activeAccount) {
+		if (open) {
 			search = '';
 			error = '';
 			visibleKeyPackageIds = [];
-			loadCoordinatorRemoteKeyPackagesAction();
 		}
 	});
 
@@ -143,6 +144,30 @@
 				</div>
 			</a>
 
+			<div class="rounded-xl border border-border p-4">
+				<div class="flex items-center gap-3">
+					<div
+						class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+					>
+						<LogIn class="size-4" />
+					</div>
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Join group</p>
+						<p class="text-xs text-muted-foreground">
+							Paste a link or group ID someone shared to open it here
+						</p>
+					</div>
+				</div>
+				<div class="mt-3">
+					<GroupLinkInput
+						onNavigate={() => {
+							open = false;
+							onNavigate();
+						}}
+					/>
+				</div>
+			</div>
+
 			{#if error}
 				<p class="text-sm text-destructive">{error}</p>
 			{/if}
@@ -159,13 +184,15 @@
 				>
 					Log in to browse coordinator key packages.
 				</div>
-			{:else if coordinatorDetailsActionsStore.loadingKeyPackages && remoteKeyPackages.length === 0}
+			{:else if availableKeyPackagesQuery.isFetching && remoteKeyPackages.length === 0}
 				<div class="flex justify-center py-8">
 					<Spinner class="size-6" />
 				</div>
-			{:else if coordinatorDetailsActionsStore.keyPackageError}
+			{:else if availableKeyPackagesQuery.error}
 				<p class="text-sm text-destructive">
-					{coordinatorDetailsActionsStore.keyPackageError}
+					{availableKeyPackagesQuery.error instanceof Error
+						? availableKeyPackagesQuery.error.message
+						: 'Failed to load remote key packages'}
 				</p>
 			{:else if filteredRemoteKeyPackages.length > 0}
 				<VirtualKeyPackageList

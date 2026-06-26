@@ -412,6 +412,20 @@ export function markJoinRequestSent(groupId: string): void {
 	}
 }
 
+// Mirror of markJoinRequestSent: clears the advisory "sent" marker so the
+// user can re-request if a welcome never arrives or they leave the group.
+// Both writes (here + requestSent flip in the route) always travel as a pair.
+export function removeSentJoinRequest(groupId: string): void {
+	if (!browser) return;
+	const ownerPubkey = manager.getActive()?.pubkey;
+	if (!ownerPubkey) return;
+	const sent = loadSentJoinRequestIds(ownerPubkey);
+	const next = sent.filter((id) => id !== groupId);
+	if (next.length !== sent.length) {
+		localStorage.setItem(getSentStorageKey(ownerPubkey), JSON.stringify(next));
+	}
+}
+
 export function deleteSentJoinRequestsForOwner(ownerPubkey: string): void {
 	if (!browser) return;
 	localStorage.removeItem(getSentStorageKey(ownerPubkey));

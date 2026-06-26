@@ -3,10 +3,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import {
-		setDefaultChatCoordinator,
-		upsertChatCoordinator
-	} from '$lib/services/chatCoordinators.svelte';
+	import { setDefaultChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import CoordinatorPurgeDialog from './CoordinatorPurgeDialog.svelte';
@@ -20,7 +17,6 @@
 		color: string;
 		relays: string[];
 		isDefault: boolean;
-		isSaved: boolean;
 		lastUsedAt?: number;
 	}
 
@@ -36,10 +32,6 @@
 			entry.publishedCoordinatorKeys.includes(coordinator.pubkey)
 		).length
 	);
-
-	function saveCoordinator() {
-		upsertChatCoordinator({ pubkey: coordinator.pubkey });
-	}
 </script>
 
 <Card.Root>
@@ -53,12 +45,6 @@
 						aria-hidden="true"
 					></span>
 					<p class="truncate font-medium">{coordinator.label}</p>
-					{#if !coordinator.isSaved}
-						<span
-							class="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
-							>Unsaved</span
-						>
-					{/if}
 					{#if coordinator.isDefault}
 						<span
 							class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
@@ -91,7 +77,7 @@
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-52">
-						{#if coordinator.isSaved && !coordinator.isDefault}
+						{#if !coordinator.isDefault}
 							<DropdownMenu.Item
 								onclick={() => setDefaultChatCoordinator(coordinator.pubkey)}
 								class="gap-2"
@@ -135,9 +121,9 @@
 					coordinatorKey: coordinator.pubkey
 				})}>Open detail</Button
 			>
-			{#if !coordinator.isSaved}
-				<Button type="button" variant="outline" onclick={saveCoordinator}>Save locally</Button>
-			{/if}
+			<Button href={`${resolve('/chat/coordinators')}?c=${coordinator.pubkey}`} variant="outline"
+				>Edit</Button
+			>
 			<Button
 				href={`${resolve('/chat/create-group')}?coordinator=${coordinator.pubkey}`}
 				variant="outline">Create group</Button

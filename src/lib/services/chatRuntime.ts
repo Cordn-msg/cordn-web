@@ -7,9 +7,7 @@ import {
 } from '$lib/services/coordinatorHealth.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { defaultRelays } from '$lib/services/relay-pool';
-import { relayActions } from '$lib/stores/relay-store.svelte';
 import { normalizePubKey } from '$lib/utils';
-import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import type { NostrSigner } from '@contextvm/sdk';
 import type { IAccount } from 'applesauce-accounts';
 
@@ -18,21 +16,17 @@ type CoordinatorTarget = {
 	relays: string[];
 };
 
-function resolveCoordinatorRelays(
-	coordinatorKey: string,
-	coordinator: ReturnType<typeof getChatCoordinator>
-): string[] {
-	if (!coordinator) {
-		return normalizePubKey(coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY)
-			? defaultRelays
-			: relayActions.getSelectedRelays();
-	}
-
-	if (coordinator.relays.length > 0) {
+function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordinator>): string[] {
+	// Explicit saved relays win; otherwise defaultRelays. Same rule as the
+	// guest path (resolveGuestCoordinatorRelays). Never fall back to the user's
+	// globally selected Nostr relays — those are a publish/subscribe concern,
+	// not a coordinator-connection concern, and in dev they default to the
+	// localhost test relay (ws://localhost:10547), which is not a usable
+	// coordinator endpoint for a freshly stored coordinator.
+	if (coordinator?.relays.length) {
 		return coordinator.relays;
 	}
-
-	return coordinator.isDefault ? defaultRelays : relayActions.getSelectedRelays();
+	return defaultRelays;
 }
 
 function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
@@ -40,7 +34,7 @@ function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 	const coordinator = getChatCoordinator(normalizedCoordinatorKey);
 	return {
 		serverPubkey: normalizedCoordinatorKey,
-		relays: resolveCoordinatorRelays(normalizedCoordinatorKey, coordinator)
+		relays: resolveCoordinatorRelays(coordinator)
 	};
 }
 

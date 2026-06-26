@@ -14,16 +14,28 @@
 	// ponytail: seed from URL once at mount (c/r/label/color/default). The `c`
 	// convention matches group-share links; reactively seeding a textarea would
 	// clobber manual edits, so a one-shot read is the correct minimal model.
+	// When `c=` resolves to an already-saved coordinator (edit mode, reached via
+	// a card's Edit button), prefer the stored label/color/relays/default so the
+	// user edits current values rather than blanks.
 	let identifier = $state(page.url.searchParams.get('c') ?? '');
-	let label = $state(page.url.searchParams.get('label') ?? '');
-	let color = $state(page.url.searchParams.get('color') ?? '');
-	let isDefault = $state(page.url.searchParams.get('default') === 'true');
+	const mountCoordinatorParam = page.url.searchParams.get('c') ?? '';
+	const mountParsed = mountCoordinatorParam.trim()
+		? decodeCoordinatorQueryParam(mountCoordinatorParam.trim())
+		: null;
+	const mountExisting = mountParsed ? getChatCoordinator(mountParsed.coordinatorKey) : undefined;
+	let label = $state(mountExisting?.label ?? page.url.searchParams.get('label') ?? '');
+	let color = $state(mountExisting?.color ?? page.url.searchParams.get('color') ?? '');
+	let isDefault = $state(
+		mountExisting?.isDefault ?? page.url.searchParams.get('default') === 'true'
+	);
 	let relays = $state(
-		(page.url.searchParams.get('r') ?? '')
-			.split(',')
-			.map((entry) => entry.trim())
-			.filter(Boolean)
-			.join('\n')
+		mountExisting?.relays?.length
+			? mountExisting.relays.join('\n')
+			: (page.url.searchParams.get('r') ?? '')
+					.split(',')
+					.map((entry) => entry.trim())
+					.filter(Boolean)
+					.join('\n')
 	);
 	let advancedOpen = $state(false);
 	let error = $state('');
@@ -98,7 +110,7 @@
 
 <Card.Root>
 	<Card.Header>
-		<Card.Title>Add coordinator</Card.Title>
+		<Card.Title>{existing ? 'Edit coordinator' : 'Add coordinator'}</Card.Title>
 		<Card.Description>
 			Paste a hex pubkey, npub, or nprofile. nprofile carries relay hints automatically.
 		</Card.Description>
@@ -193,7 +205,9 @@
 				{/if}
 
 				<div class="flex justify-end">
-					<Button type="submit" disabled={!parsedIdentifier}>Save coordinator</Button>
+					<Button type="submit" disabled={!parsedIdentifier}>
+						{existing ? 'Update coordinator' : 'Save coordinator'}
+					</Button>
 				</div>
 			</form>
 		{/if}

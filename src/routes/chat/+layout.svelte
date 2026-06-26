@@ -19,7 +19,7 @@
 		shouldReconcilePublishedKeyPackages
 	} from '$lib/services/chatKeyPackages.svelte';
 	import {
-		loadCoordinatorRemoteKeyPackagesAction,
+		loadAvailableKeyPackagesAction,
 		loadWelcomeNotificationsAction,
 		loadJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
@@ -104,7 +104,7 @@
 		if (!pubkey || chatGroupWatchStore.startup !== 'ready' || startupSyncedFor === pubkey) return;
 		startupSyncedFor = pubkey;
 		void untrack(async () => {
-			await loadCoordinatorRemoteKeyPackagesAction(undefined);
+			await loadAvailableKeyPackagesAction();
 			if (shouldReconcilePublishedKeyPackages(pubkey)) {
 				await reconcileKeyPackages();
 			}

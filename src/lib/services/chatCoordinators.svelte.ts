@@ -1,4 +1,8 @@
 import { browser } from '$app/environment';
+import { SvelteSet } from 'svelte/reactivity';
+import { manager } from '$lib/services/accountManager.svelte';
+import { listChatGroups } from '$lib/services/chatGroups.svelte';
+import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
@@ -61,14 +65,18 @@ function ensureSingleDefault(targetPubkey?: string) {
 		return;
 	}
 
+	// Resolve which pubkey should hold the default flag: an explicit target, or
+	// the existing default. Never auto-promote — zero defaults is valid, so an
+	// auto-stored coordinator (share link, group join, key-package publish) can't
+	// steal the default slot. Default is set only deliberately (onboarding
+	// bootstrap, manual checkbox, "Set as default").
 	const defaultPubkey = targetPubkey
 		? normalizePubKey(targetPubkey)
-		: (chatCoordinatorsStore.coordinators.find((entry) => entry.isDefault)?.pubkey ??
-			sortCoordinators(chatCoordinatorsStore.coordinators)[0]?.pubkey);
+		: (chatCoordinatorsStore.coordinators.find((entry) => entry.isDefault)?.pubkey ?? null);
 
 	chatCoordinatorsStore.coordinators = chatCoordinatorsStore.coordinators.map((entry) => ({
 		...entry,
-		isDefault: entry.pubkey === defaultPubkey
+		isDefault: defaultPubkey !== null && entry.pubkey === defaultPubkey
 	}));
 }
 
@@ -108,6 +116,23 @@ export function listChatCoordinators(): StoredCoordinator[] {
 	return sortCoordinators(chatCoordinatorsStore.coordinators);
 }
 
+/**
+ * Union of every coordinator pubkey the client has a relationship with:
+ * saved profiles, group records, and key-package publish targets. This is the
+ * self-healing source for operational queries (available key packages, welcome
+ * notifications): correct even if a write path forgets to upsert, since groups
+ * and published key packages carry the coordinatorKey directly.
+ */
+export function listKnownCoordinatorKeys(): string[] {
+	const keys = new SvelteSet<string>();
+	for (const coordinator of listChatCoordinators()) keys.add(coordinator.pubkey);
+	for (const group of listChatGroups()) keys.add(group.coordinatorKey);
+	for (const keyPackage of listChatKeyPackages(manager.getActive()?.pubkey)) {
+		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
+	}
+	return [...keys];
+}
+
 export function getCoordinatorLabel(pubkey: string): string {
 	return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
 }
@@ -137,8 +162,7 @@ export function upsertChatCoordinator(input: {
 	const pubkey = normalizePubKey(input.pubkey);
 	const existing = getChatCoordinator(pubkey);
 	const nextLabel = input.label?.trim() || `Coordinator ${pubkey.slice(0, 8)}`;
-	const nextIsDefault =
-		input.isDefault ?? existing?.isDefault ?? chatCoordinatorsStore.coordinators.length === 0;
+	const nextIsDefault = input.isDefault ?? existing?.isDefault ?? false;
 	const nextRelays = normalizeRelays(input.relays ?? existing?.relays);
 	const nextColor = normalizeColor(input.color ?? existing?.color, pubkey);
 
@@ -195,8 +219,19 @@ export function setDefaultChatCoordinator(pubkey: string) {
 	saveCoordinators();
 }
 
+/**
+ * Mark a coordinator as recently used, ensuring it is stored first. This is
+ * the single relationship-establishment seam: called from group create/join
+ * and key-package publish, so any coordinator the user actually interacts with
+ * is auto-curated — no manual "save" step. No relay info is available here, so
+ * stored relays stay empty and resolveCoordinatorRelays falls back to client
+ * defaults (behavior-preserving vs. unsaved). Never grabs the default flag.
+ */
 export function markCoordinatorUsed(pubkey: string) {
 	const normalized = normalizePubKey(pubkey);
+	if (!getChatCoordinator(normalized)) {
+		upsertChatCoordinator({ pubkey: normalized });
+	}
 	chatCoordinatorsStore.coordinators = chatCoordinatorsStore.coordinators.map((entry) =>
 		entry.pubkey === normalized ? { ...entry, lastUsedAt: Date.now() } : entry
 	);

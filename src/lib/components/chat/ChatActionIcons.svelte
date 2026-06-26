@@ -13,7 +13,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
+	import {
+		getChatCoordinator,
+		getCoordinatorColor,
+		getCoordinatorLabel
+	} from '$lib/services/chatCoordinators.svelte';
+	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
 		getUnreadWelcomeNotificationCount,
@@ -71,16 +77,65 @@
 	const unreadNotificationTotal = $derived.by(
 		() => unreadWelcomeNotifications + unreadJoinRequests
 	);
-	useWelcomeNotifications($activeAccount?.pubkey);
+	useWelcomeNotifications(() => $activeAccount?.pubkey);
 	// Join requests are now loaded via layout effect when app is ready
 
-	const profileSharePath = $derived.by(() => {
-		if (!$activeAccount) return '';
-		return resolve('/p/[identifier]', { identifier: nip19.npubEncode($activeAccount.pubkey) });
+	// Profile share link for a given coordinator. The default coordinator omits
+	// `c=` (short link, matching group-share links); any other coordinator is
+	// encoded as an nprofile in `c=` so the receiver's client registers it.
+	function profileSharePathForCoordinator(coordinatorKey: string, relays: string[]): string {
+		const base = resolve('/p/[identifier]', {
+			identifier: nip19.npubEncode($activeAccount!.pubkey)
+		});
+		if (normalizePubKey(coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY)) {
+			return base;
+		}
+		return `${base}?c=${nip19.nprofileEncode({ pubkey: coordinatorKey, relays })}`;
+	}
+
+	function toAbsoluteProfileUrl(path: string): string {
+		return browser ? new URL(path, page.url).toString() : path;
+	}
+
+	// Coordinators the active account can actually be reached on: those with a
+	// published (and reconciled-available) key package. Derived from local
+	// key-package records so it stays reactive without extra remote reads.
+	const profileShareOptions = $derived.by<{ label: string; value: string }[]>(() => {
+		if (!$activeAccount) return [];
+		const owner = normalizePubKey($activeAccount.pubkey);
+		const defaultKey = normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY);
+		const allKeys = listChatKeyPackages(owner).flatMap((kp) =>
+			kp.publishedCoordinatorKeys.map(normalizePubKey)
+		);
+		// ponytail: O(n²) dedupe, n is coordinator count (single digits) — fine here;
+		// default coordinator first so its tab yields the short (no `c=`) link.
+		const coordinatorKeys = allKeys
+			.filter((key, index) => allKeys.indexOf(key) === index)
+			.sort((a, b) => {
+				const aDefault = a === defaultKey ? 0 : 1;
+				const bDefault = b === defaultKey ? 0 : 1;
+				return aDefault - bDefault;
+			});
+		return coordinatorKeys.map((coordinatorKey) => ({
+			label: getCoordinatorLabel(coordinatorKey),
+			color: getCoordinatorColor({ pubkey: coordinatorKey, color: undefined }),
+			value: toAbsoluteProfileUrl(
+				profileSharePathForCoordinator(
+					coordinatorKey,
+					getChatCoordinator(coordinatorKey)?.relays ?? []
+				)
+			)
+		}));
 	});
+
 	const profileShareUrl = $derived.by(() => {
-		if (!profileSharePath) return '';
-		return browser ? new URL(profileSharePath, page.url).toString() : profileSharePath;
+		if (!$activeAccount) return '';
+		// Prefer the first shareable coordinator (default → short link); fall back
+		// to the plain npub link before any key package is published.
+		if (profileShareOptions.length > 0) return profileShareOptions[0].value;
+		return toAbsoluteProfileUrl(
+			resolve('/p/[identifier]', { identifier: nip19.npubEncode($activeAccount.pubkey) })
+		);
 	});
 
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
@@ -424,6 +479,7 @@
 		title="Share your profile"
 		description="Share your public Cordn profile link as a QR code, or scan someone else's."
 		data={profileShareUrl}
+		shareOptions={profileShareOptions}
 		copyLabel="Copy profile link"
 		copiedLabel="Copied profile link"
 		{onNavigate}

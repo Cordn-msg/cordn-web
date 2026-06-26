@@ -32,14 +32,10 @@ import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { getChatGroupResumePromise } from '$lib/services/chatGroupWatchStatus.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import {
-	fetchCoordinatorAvailableKeyPackages,
-	type AvailableKeyPackageWithCoordinator
-} from '$lib/queries/chatKeyPackageQueries';
+import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 import { fetchCoordinatorJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 import { requireActiveAccount } from '$lib/services/chatRuntime';
-import { SvelteMap } from 'svelte/reactivity';
 import type {
 	ChatMessageDeleteTarget,
 	ChatMessageEditTarget,
@@ -178,33 +174,25 @@ export const chatComposerActionsStore = $state<{ error: string }>({
 	error: ''
 });
 
-export const coordinatorDetailsActionsStore = $state<{
-	coordinatorKey: string;
-	loadingKeyPackages: boolean;
-	keyPackageError: string;
-	remoteKeyPackages: AvailableKeyPackageWithCoordinator[];
-}>({
-	coordinatorKey: '',
-	loadingKeyPackages: false,
-	keyPackageError: '',
-	remoteKeyPackages: []
-});
-
-export function hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey: string) {
-	return (
-		coordinatorDetailsActionsStore.coordinatorKey === coordinatorKey &&
-		coordinatorDetailsActionsStore.remoteKeyPackages.length > 0
-	);
+export async function loadAvailableKeyPackagesAction() {
+	const account = requireActiveAccount('You must be logged in to inspect coordinators');
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(undefined),
+		staleTime: 60 * 1000
+	});
 }
 
-const remoteKeyPackagesInFlight = new SvelteMap<string, Promise<void>>();
-
-function getRemoteKeyPackagesLoadKey(coordinatorKey?: string) {
-	return coordinatorKey ?? 'all-coordinators';
-}
-
-function hasLoadedRemoteKeyPackagesForCoordinator(coordinatorKey?: string) {
-	return hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey ?? '');
+export async function refreshAvailableKeyPackagesAction(coordinatorKey?: string) {
+	const account = requireActiveAccount('You must be logged in to inspect coordinators');
+	await queryClient.invalidateQueries({
+		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
+	});
+	await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey, { force: true }),
+		staleTime: 0
+	});
 }
 
 export async function sendGroupMessageAction(
@@ -244,52 +232,6 @@ export async function sendGroupMessageAction(
 			error instanceof Error ? error.message : 'Failed to send message';
 		return false;
 	}
-}
-
-export async function loadCoordinatorRemoteKeyPackagesAction(
-	coordinatorKey?: string,
-	options: { force?: boolean } = {}
-) {
-	const loadKey = getRemoteKeyPackagesLoadKey(coordinatorKey);
-	if (
-		!options.force &&
-		hasLoadedRemoteKeyPackagesForCoordinator(coordinatorKey) &&
-		!coordinatorDetailsActionsStore.keyPackageError
-	) {
-		return;
-	}
-
-	const inFlight = remoteKeyPackagesInFlight.get(loadKey);
-	if (!options.force && inFlight) return inFlight;
-
-	const request = (async () => {
-		coordinatorDetailsActionsStore.loadingKeyPackages = true;
-		coordinatorDetailsActionsStore.keyPackageError = '';
-		try {
-			const account = requireActiveAccount('You must be logged in to inspect coordinators');
-			if (options.force) {
-				await queryClient.invalidateQueries({
-					queryKey: chatQueryKeys.coordinators(account.pubkey)
-				});
-			}
-			const result = await queryClient.fetchQuery({
-				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
-				queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey, options),
-				staleTime: options.force ? 0 : 30 * 1000
-			});
-			coordinatorDetailsActionsStore.coordinatorKey = coordinatorKey ?? '';
-			coordinatorDetailsActionsStore.remoteKeyPackages = result;
-		} catch (error) {
-			coordinatorDetailsActionsStore.keyPackageError =
-				error instanceof Error ? error.message : 'Failed to load remote key packages';
-		} finally {
-			coordinatorDetailsActionsStore.loadingKeyPackages = false;
-			remoteKeyPackagesInFlight.delete(loadKey);
-		}
-	})();
-
-	remoteKeyPackagesInFlight.set(loadKey, request);
-	return request;
 }
 
 export async function startChatWithKeyPackageAction(keyPackage: {

@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
+	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
 	import Copy from '@lucide/svelte/icons/copy';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import ScanLine from '@lucide/svelte/icons/scan-line';
@@ -17,6 +18,7 @@
 		data,
 		copyLabel = 'Copy link',
 		copiedLabel = 'Copied link',
+		shareOptions = [],
 		onNavigate = () => {}
 	}: {
 		open?: boolean;
@@ -25,6 +27,9 @@
 		data: string;
 		copyLabel?: string;
 		copiedLabel?: string;
+		/** Alternative `data` values the user can switch between (e.g. per-coordinator
+		 * profile links). Tabs render only when more than one is offered. */
+		shareOptions?: { label: string; value: string; color?: string }[];
 		onNavigate?: () => void;
 	} = $props();
 
@@ -32,20 +37,37 @@
 	let tab = $state<Tab>('share');
 	let copied = $state(false);
 	let resolving = $state(false);
+	let selectedShareIndex = $state(0);
+
+	const showShareOptions = $derived(shareOptions.length > 1);
+	const selectedShareIndexSafe = $derived(
+		selectedShareIndex < shareOptions.length ? selectedShareIndex : 0
+	);
+	const effectiveData = $derived(
+		showShareOptions ? (shareOptions[selectedShareIndexSafe]?.value ?? data) : data
+	);
 
 	// Reset to the Share tab whenever the dialog closes so reopening it never
 	// surprises the user by immediately requesting camera access.
 	let wasOpen = false;
 	$effect(() => {
-		if (!open && wasOpen) tab = 'share';
+		if (!open && wasOpen) {
+			tab = 'share';
+			selectedShareIndex = 0;
+		}
 		wasOpen = open;
 	});
 
 	async function copyLink() {
-		if (!data || !browser) return;
-		await navigator.clipboard.writeText(data);
+		if (!effectiveData || !browser) return;
+		await navigator.clipboard.writeText(effectiveData);
 		copied = true;
 		setTimeout(() => (copied = false), 1500);
+	}
+
+	function closeAfterNavigate() {
+		open = false;
+		onNavigate();
 	}
 
 	async function handleScanResult(value: string) {
@@ -64,8 +86,7 @@
 
 			if (target.origin === window.location.origin) {
 				const path = target.pathname + target.search + target.hash;
-				open = false;
-				onNavigate();
+				closeAfterNavigate();
 				// Path comes from a scanned QR code at runtime, so resolve() cannot apply.
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto(path);
@@ -112,11 +133,39 @@
 
 		{#if tab === 'share'}
 			<div class="flex flex-col items-center gap-4 py-2">
-				<QrCode {data} size={220} />
+				{#if showShareOptions}
+					<div
+						role="tablist"
+						class="flex w-full flex-wrap justify-center gap-1 rounded-lg bg-muted p-1"
+					>
+						{#each shareOptions as option, i (option.value)}
+							<button
+								type="button"
+								role="tab"
+								aria-selected={selectedShareIndexSafe === i}
+								class="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedShareIndexSafe ===
+								i
+									? 'bg-background shadow-sm'
+									: 'hover:bg-muted-foreground/10'}"
+								onclick={() => (selectedShareIndex = i)}
+							>
+								{#if option.color}
+									<span
+										class="size-2.5 shrink-0 rounded-full border border-border"
+										style={`background-color: ${option.color};`}
+										aria-hidden="true"
+									></span>
+								{/if}
+								<span class="truncate">{option.label}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+				<QrCode data={effectiveData} size={220} />
 				<p
 					class="w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs break-all text-muted-foreground"
 				>
-					{data}
+					{effectiveData}
 				</p>
 				<Button type="button" variant="outline" class="w-full" onclick={copyLink}>
 					<Copy class="mr-2 size-4" />
@@ -129,6 +178,10 @@
 				<p class="text-center text-xs text-muted-foreground">
 					Point your camera at a Cordn share code to open it here.
 				</p>
+				<div class="w-full">
+					<p class="mb-1.5 text-center text-xs text-muted-foreground">Or paste a link or ID</p>
+					<GroupLinkInput onNavigate={closeAfterNavigate} />
+				</div>
 			</div>
 		{/if}
 	</Dialog.Content>

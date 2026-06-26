@@ -19,11 +19,7 @@
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import {
-		getChatCoordinator,
-		getCoordinatorColor,
-		upsertChatCoordinator
-	} from '$lib/services/chatCoordinators.svelte';
+	import { getChatCoordinator, getCoordinatorColor } from '$lib/services/chatCoordinators.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import {
 		getCoordinatorHealthLabel,
@@ -39,13 +35,13 @@
 		isWelcomeSubmitting,
 		listWelcomeNotificationsForCoordinator
 	} from '$lib/services/chatWelcomeNotifications.svelte';
+	import { createQuery } from '@tanstack/svelte-query';
 	import {
 		acceptWelcomeAction,
-		coordinatorDetailsActionsStore,
-		hasLoadedCoordinatorRemoteKeyPackages,
-		loadCoordinatorRemoteKeyPackagesAction,
+		refreshAvailableKeyPackagesAction,
 		refreshCoordinatorWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { availableKeyPackagesQueryOptions } from '$lib/queries/chatKeyPackageQueries';
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
@@ -73,14 +69,15 @@
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
 	);
-	const remoteKeyPackages = $derived.by(() =>
-		coordinatorDetailsActionsStore.coordinatorKey === coordinatorKey
-			? coordinatorDetailsActionsStore.remoteKeyPackages
-			: []
+	// Inline createQuery (not useAvailableKeyPackages) because the key depends on
+	// the route param coordinatorKey, which updates reactively without remounting
+	// this page. Reading it inside the createQuery closure keeps the query key in
+	// sync when navigating between coordinators. The account-scoped hook stays
+	// for the directory/dialog, matching welcome/join-request usage.
+	const availableKeyPackagesQuery = createQuery(() =>
+		availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', coordinatorKey)
 	);
-	const hasCachedRemoteKeyPackages = $derived.by(() =>
-		hasLoadedCoordinatorRemoteKeyPackages(coordinatorKey)
-	);
+	const remoteKeyPackages = $derived.by(() => availableKeyPackagesQuery.data ?? []);
 	const ownedRemoteKeyPackages = $derived.by(() =>
 		remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
 	);
@@ -181,17 +178,11 @@
 	});
 
 	async function loadRemoteKeyPackages() {
-		await loadCoordinatorRemoteKeyPackagesAction(coordinatorKey, {
-			force: hasCachedRemoteKeyPackages
-		});
+		await refreshAvailableKeyPackagesAction(coordinatorKey);
 	}
 
 	async function loadPendingWelcomes() {
 		await refreshCoordinatorWelcomeNotificationsAction(coordinatorKey);
-	}
-
-	function storeCoordinator() {
-		upsertChatCoordinator({ pubkey: coordinatorKey });
 	}
 
 	function handleCoordinatorPurged() {
@@ -362,11 +353,6 @@
 						</div>
 					</Card.Content>
 					<Card.Footer class="flex-wrap justify-end gap-2">
-						{#if !coordinator}
-							<Button type="button" variant="outline" onclick={storeCoordinator}
-								>Save locally</Button
-							>
-						{/if}
 						<Button href={resolve('/chat/coordinators')} variant="outline"
 							>Back to coordinators</Button
 						>
@@ -421,18 +407,14 @@
 								variant="outline"
 								size="sm"
 								onclick={loadRemoteKeyPackages}
-								disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
+								disabled={availableKeyPackagesQuery.isFetching}
 							>
-								{#if coordinatorDetailsActionsStore.loadingKeyPackages}
+								{#if availableKeyPackagesQuery.isFetching}
 									<Spinner class="mr-2 size-4" />
 								{:else}
 									<Boxes class="mr-2 size-4" />
 								{/if}
-								{coordinatorDetailsActionsStore.loadingKeyPackages
-									? 'Loading…'
-									: hasCachedRemoteKeyPackages
-										? 'Refresh remote'
-										: 'Load remote'}
+								{availableKeyPackagesQuery.isFetching ? 'Loading…' : 'Refresh remote'}
 							</Button>
 						{/if}
 					</div>
@@ -447,9 +429,11 @@
 						</div>
 					{:else}
 						<div class="space-y-3">
-							{#if coordinatorDetailsActionsStore.keyPackageError}
+							{#if availableKeyPackagesQuery.error}
 								<p class="text-sm text-destructive">
-									{coordinatorDetailsActionsStore.keyPackageError}
+									{availableKeyPackagesQuery.error instanceof Error
+										? availableKeyPackagesQuery.error.message
+										: 'Failed to load remote key packages'}
 								</p>
 							{/if}
 							{#if removeError}

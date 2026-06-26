@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-06-26',
+		createdAt: Date.UTC(2026, 5, 26),
+		version: 4,
+		title: 'Smoother coordinators and joining',
+		body: '- You can now join a group by pasting its link or ID straight from the New conversation dialog — no need to edit the URL by hand. The same paste field lives in the Scan tab of any share or QR dialog.\n- Group share links are more robust: names and icons survive every chat app and email without getting mangled, and one corrupted field no longer breaks the whole link.\n- The key packages settings page now makes clear that removing a key package only affects new invitations — it does not affect groups you have already joined.\n- Group chats now show a scroll-to-bottom button when you have scrolled up, so you can jump back to the latest message in one click.\n- Removing a coordinator that is offline is now instant — a leftover step was still checking every known coordinator and hanging on any that were offline.\n- Coordinators are now saved automatically when you join a group or publish a key package — no separate "Save locally" step, and joining a group can no longer change your default coordinator.\n- The New conversation dialog and the key-package directory now show packages from coordinators you have joined without needing a manual save or a page refresh.\n- If a join request goes unanswered, you can now request again from the group page; sent requests clear automatically once you are added.\n- Fixed coordinators you just joined sometimes connecting through a wrong local relay.'
+	},
+	{
 		id: 'cordn-news-2026-06-25',
 		createdAt: Date.UTC(2026, 5, 25),
 		version: 2,

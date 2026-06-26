@@ -2,6 +2,9 @@
 	import { browser } from '$app/environment';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import { onMount, tick, untrack } from 'svelte';
+	import { scale } from 'svelte/transition';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { Button } from '$lib/components/ui/button';
 	import ChatMessageItem from './ChatMessageItem.svelte';
 	import type { ChatMessage } from './chat.types';
 
@@ -25,6 +28,7 @@
 	let highlightTimeout: number | null = null;
 	let unreadReferenceFrame: number | null = null;
 	let wasAtBottom = true;
+	let showScrollToBottom = $state(false);
 	let suppressNextAutoScroll = false;
 
 	const ESTIMATED_MESSAGE_HEIGHT = 128;
@@ -124,8 +128,13 @@
 		});
 	}
 
-	function handleScroll() {
+	function updateBottomState() {
 		wasAtBottom = isAtBottom();
+		showScrollToBottom = !wasAtBottom;
+	}
+
+	function handleScroll() {
+		updateBottomState();
 		scheduleVisibleUnreadReferenceCheck();
 	}
 
@@ -182,7 +191,7 @@
 			} else if (shouldScroll) {
 				void scrollToLatestMessage();
 			}
-			wasAtBottom = isAtBottom();
+			updateBottomState();
 			markVisibleUnreadReferences();
 		});
 	});
@@ -214,7 +223,7 @@
 		centerMessage(element);
 		await tick();
 		centerMessage(element);
-		wasAtBottom = isAtBottom();
+		updateBottomState();
 		markVisibleUnreadReferences();
 	}
 
@@ -235,38 +244,58 @@
 	});
 </script>
 
-<div
-	bind:this={container}
-	class="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
-	onscroll={handleScroll}
->
-	<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
-		<div class="relative w-full" style={`height: ${totalSize}px;`}>
-			{#each virtualItems as virtualItem (virtualItem.key)}
-				{@const entry = groupedMessages[virtualItem.index]}
-				{#if entry}
-					<div
-						data-index={virtualItem.index}
-						data-virtual-item
-						data-message-id={entry.message.id}
-						class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
-						style={`transform: translateY(${virtualItem.start}px);`}
-					>
-						<ChatMessageItem
-							message={entry.message}
-							showAuthor={entry.showAuthor}
-							showAvatar={entry.showAvatar}
-							showDayLabel={entry.showDayLabel}
-							{onReply}
-							{onReact}
-							{onEdit}
-							{onDelete}
-							onNavigateToMessage={navigateToMessage}
-							highlighted={highlightedMessageId === entry.message.id}
-						/>
-					</div>
-				{/if}
-			{/each}
+<div class="relative h-full">
+	<div
+		bind:this={container}
+		class="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
+		onscroll={handleScroll}
+	>
+		<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
+			<div class="relative w-full" style={`height: ${totalSize}px;`}>
+				{#each virtualItems as virtualItem (virtualItem.key)}
+					{@const entry = groupedMessages[virtualItem.index]}
+					{#if entry}
+						<div
+							data-index={virtualItem.index}
+							data-virtual-item
+							data-message-id={entry.message.id}
+							class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
+							style={`transform: translateY(${virtualItem.start}px);`}
+						>
+							<ChatMessageItem
+								message={entry.message}
+								showAuthor={entry.showAuthor}
+								showAvatar={entry.showAvatar}
+								showDayLabel={entry.showDayLabel}
+								{onReply}
+								{onReact}
+								{onEdit}
+								{onDelete}
+								onNavigateToMessage={navigateToMessage}
+								highlighted={highlightedMessageId === entry.message.id}
+							/>
+						</div>
+					{/if}
+				{/each}
+			</div>
 		</div>
 	</div>
+
+	{#if showScrollToBottom}
+		<div
+			class="absolute right-4 bottom-4 z-10 md:right-6"
+			transition:scale={{ start: 0.8, duration: 150 }}
+		>
+			<Button
+				type="button"
+				size="icon"
+				variant="secondary"
+				class="h-10 w-10 rounded-full shadow-lg"
+				onclick={scrollToBottom}
+				aria-label="Scroll to bottom"
+			>
+				<ChevronDown class="size-5" />
+			</Button>
+		</div>
+	{/if}
 </div>

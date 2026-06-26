@@ -28,9 +28,9 @@
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+	import { useAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 	import {
-		coordinatorDetailsActionsStore,
-		loadCoordinatorRemoteKeyPackagesAction,
+		refreshAvailableKeyPackagesAction,
 		startChatWithKeyPackageAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
@@ -58,9 +58,10 @@
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
 	const newsHasUnread = $derived.by(() => hasUnreadNews());
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
+	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
 	// Include our own key packages so the directory doubles as a presence
 	// check and so the "Yours" count reflects what is actually shown.
-	const remoteKeyPackages = $derived.by(() => coordinatorDetailsActionsStore.remoteKeyPackages);
+	const remoteKeyPackages = $derived.by(() => availableKeyPackagesQuery.data ?? []);
 	const coordinatorFilteredKeyPackages = $derived.by(() =>
 		keyPackageCoordinatorFilter === 'all'
 			? remoteKeyPackages
@@ -85,7 +86,7 @@
 	// only lists coordinators that currently expose key packages.
 	const coordinatorFilterOptions = $derived.by(() => {
 		const options: { pubkey: string; label: string; color: string }[] = [];
-		for (const entry of coordinatorDetailsActionsStore.remoteKeyPackages) {
+		for (const entry of remoteKeyPackages) {
 			if (options.some((o) => o.pubkey === entry.coordinatorKey)) continue;
 			const stored = getChatCoordinator(entry.coordinatorKey);
 			options.push({
@@ -269,7 +270,7 @@
 	}
 
 	async function refreshKeyPackageDirectory() {
-		await loadCoordinatorRemoteKeyPackagesAction(undefined, { force: true });
+		await refreshAvailableKeyPackagesAction();
 	}
 
 	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
@@ -590,13 +591,13 @@
 							</div>
 							<Button
 								onclick={refreshKeyPackageDirectory}
-								disabled={coordinatorDetailsActionsStore.loadingKeyPackages}
+								disabled={availableKeyPackagesQuery.isFetching}
 								variant="outline"
 							>
-								{#if coordinatorDetailsActionsStore.loadingKeyPackages}
+								{#if availableKeyPackagesQuery.isFetching}
 									<Spinner class="mr-2 size-4" />
 								{/if}
-								{coordinatorDetailsActionsStore.loadingKeyPackages ? 'Refreshing…' : 'Refresh'}
+								{availableKeyPackagesQuery.isFetching ? 'Refreshing…' : 'Refresh'}
 							</Button>
 						</div>
 					</Card.Header>
@@ -607,9 +608,11 @@
 						{#if quickChatError}
 							<p class="text-sm text-destructive">{quickChatError}</p>
 						{/if}
-						{#if coordinatorDetailsActionsStore.keyPackageError}
+						{#if availableKeyPackagesQuery.error}
 							<p class="text-sm text-destructive">
-								{coordinatorDetailsActionsStore.keyPackageError}
+								{availableKeyPackagesQuery.error instanceof Error
+									? availableKeyPackagesQuery.error.message
+									: 'Failed to load remote key packages'}
 							</p>
 						{/if}
 						{#if $activeAccount}

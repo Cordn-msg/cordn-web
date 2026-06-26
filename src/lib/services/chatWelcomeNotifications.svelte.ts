@@ -1,14 +1,9 @@
 import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import { manager } from '$lib/services/accountManager.svelte';
 import type { PendingWelcome } from '$lib/contracts';
-import { listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
-import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
-import {
-	decodeStoredKeyPackage,
-	getChatKeyPackage,
-	listChatKeyPackages
-} from '$lib/services/chatKeyPackages.svelte';
+import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
+import { ensureGroupsLoaded } from '$lib/services/chatGroups.svelte';
+import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
 import {
@@ -118,19 +113,6 @@ export function deleteWelcomeNotificationsForCoordinator(coordinatorKey: string)
 		)
 	);
 	saveNotifications();
-}
-
-export function listKnownCoordinatorKeys(): string[] {
-	const keys = new SvelteSet<string>();
-	const fromCoordinators = listChatCoordinators();
-	const fromGroups = listChatGroups();
-	const fromKeyPackages = listChatKeyPackages(manager.getActive()?.pubkey);
-	for (const coordinator of fromCoordinators) keys.add(coordinator.pubkey);
-	for (const group of fromGroups) keys.add(group.coordinatorKey);
-	for (const keyPackage of fromKeyPackages) {
-		for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
-	}
-	return [...keys];
 }
 
 function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]) {

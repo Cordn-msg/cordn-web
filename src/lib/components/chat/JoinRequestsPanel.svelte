@@ -31,7 +31,7 @@
 
 	const joinRequests = $derived.by(() => listJoinRequests());
 	const useScrollableList = $derived.by(() => joinRequests.length > 2);
-	const joinRequestsQuery = useJoinRequests($activeAccount?.pubkey);
+	const joinRequestsQuery = useJoinRequests(() => $activeAccount?.pubkey);
 
 	const requesterProfileHints = useProfileHints(
 		() => {
@@ -86,7 +86,7 @@
 
 	{#if chatJoinRequestsStore.error}
 		<p class="text-sm text-destructive">{chatJoinRequestsStore.error}</p>
-	{:else if joinRequestsQuery?.error}
+	{:else if joinRequestsQuery.error}
 		<p class="text-sm text-destructive">
 			{joinRequestsQuery.error instanceof Error
 				? joinRequestsQuery.error.message

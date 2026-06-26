@@ -3,10 +3,17 @@ import { browser } from '$app/environment';
 import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { getChatCoordinator, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
+import {
+	getChatCoordinator,
+	listKnownCoordinatorKeys
+} from '$lib/services/chatCoordinators.svelte';
 import { cordnClient } from '$lib/services/coordinatorClient';
 import { defaultRelays } from '$lib/services/relay-pool';
-import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import {
+	isCoordinatorClientRefreshInProgress,
+	requireActiveAccount,
+	withCoordinatorClient
+} from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 async function fetchSingleCoordinatorAvailableKeyPackages(
@@ -60,7 +67,7 @@ export async function fetchCoordinatorAvailableKeyPackages(
 	}
 
 	const coordinatorKeys = [
-		...new Set(listChatCoordinators().map((entry) => normalizePubKey(entry.pubkey)))
+		...new Set(listKnownCoordinatorKeys().map((entry) => normalizePubKey(entry)))
 	];
 
 	const results = await Promise.allSettled(
@@ -84,15 +91,30 @@ export async function fetchCoordinatorAvailableKeyPackages(
 		.sort((a, b) => b.at - a.at);
 }
 
+// Available key packages are a Query-managed remote read (AGENTS.md). The
+// pubkey is read via a getter (see useAvailableKeyPackages) so the query
+// re-evaluates on login/logout — a plain arg is captured once at mount, which
+// leaves always-mounted consumers (the sidebar's NewConversationDialog) stuck
+// pre-login. Disabled until an account is present.
 export function availableKeyPackagesQueryOptions(stablePubkey: string, coordinatorKey?: string) {
+	const hasStablePubkey = Boolean(stablePubkey?.trim());
 	return {
-		queryKey: chatQueryKeys.availableKeyPackages(stablePubkey, coordinatorKey),
+		queryKey: hasStablePubkey
+			? chatQueryKeys.availableKeyPackages(stablePubkey, coordinatorKey)
+			: ([...chatQueryKeys.all, 'available-key-packages', 'no-account'] as const),
 		queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
-		enabled: browser && Boolean(stablePubkey),
-		staleTime: 30 * 1000
+		enabled: browser && hasStablePubkey && !isCoordinatorClientRefreshInProgress(),
+		staleTime: 60 * 1000,
+		refetchInterval: 5 * 60 * 1000,
+		refetchIntervalInBackground: false
 	};
 }
 
-export function useAvailableKeyPackages(stablePubkey: string, coordinatorKey?: string) {
-	return createQuery(() => availableKeyPackagesQueryOptions(stablePubkey, coordinatorKey));
+export function useAvailableKeyPackages(
+	getStablePubkey: () => string | undefined,
+	coordinatorKey?: string
+) {
+	return createQuery(() =>
+		availableKeyPackagesQueryOptions(getStablePubkey() ?? '', coordinatorKey)
+	);
 }

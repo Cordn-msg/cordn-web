@@ -32,7 +32,7 @@
 
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const useScrollableList = $derived.by(() => welcomeNotifications.length > 2);
-	const welcomeNotificationsQuery = useWelcomeNotifications($activeAccount?.pubkey);
+	const welcomeNotificationsQuery = useWelcomeNotifications(() => $activeAccount?.pubkey);
 
 	const groupProfileHints = useProfileHints(
 		() => {
@@ -91,7 +91,7 @@
 
 	{#if chatWelcomeNotificationsStore.error}
 		<p class="text-sm text-destructive">{chatWelcomeNotificationsStore.error}</p>
-	{:else if welcomeNotificationsQuery?.error}
+	{:else if welcomeNotificationsQuery.error}
 		<p class="text-sm text-destructive">
 			{welcomeNotificationsQuery.error instanceof Error
 				? welcomeNotificationsQuery.error.message

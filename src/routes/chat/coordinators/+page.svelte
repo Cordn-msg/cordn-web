@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { SvelteSet } from 'svelte/reactivity';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -7,34 +6,21 @@
 	import CoordinatorCard, {
 		type CoordinatorCardEntry
 	} from '$lib/components/chat/CoordinatorCard.svelte';
-	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		getChatCoordinator,
 		getCoordinatorColor,
-		listChatCoordinators,
+		listKnownCoordinatorKeys,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import { listChatGroups } from '$lib/services/chatGroups.svelte';
-	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Server from '@lucide/svelte/icons/server';
 
-	const coordinators = $derived.by(() => listChatCoordinators());
-	const groups = $derived.by(() => listChatGroups());
-	const localKeyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
-	const knownCoordinatorKeys = $derived.by(() => {
-		const keys = new SvelteSet<string>();
-		for (const coordinator of coordinators) keys.add(coordinator.pubkey);
-		for (const group of groups) keys.add(group.coordinatorKey);
-		for (const keyPackage of localKeyPackages) {
-			for (const coordinatorKey of keyPackage.publishedCoordinatorKeys) keys.add(coordinatorKey);
-		}
-		return [...keys];
-	});
+	const knownCoordinatorKeys = $derived.by(() => listKnownCoordinatorKeys());
 	const coordinatorEntries = $derived.by<CoordinatorCardEntry[]>(() =>
 		knownCoordinatorKeys.map((pubkey) => {
 			const saved = getChatCoordinator(pubkey);
@@ -44,7 +30,6 @@
 				color: getCoordinatorColor(saved ?? { pubkey, color: undefined }),
 				relays: saved?.relays ?? [],
 				isDefault: saved?.isDefault ?? false,
-				isSaved: Boolean(saved),
 				lastUsedAt: saved?.lastUsedAt
 			};
 		})
@@ -85,7 +70,9 @@
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
 		<div class="mx-auto max-w-6xl space-y-6">
 			<div class="mx-auto w-full max-w-2xl">
-				<CoordinatorAddForm />
+				{#key page.url.searchParams.get('c')}
+					<CoordinatorAddForm />
+				{/key}
 			</div>
 
 			<Card.Root>

@@ -23,6 +23,7 @@
 	import {
 		hasJoinRequestBeenSent,
 		markJoinRequestSent,
+		removeSentJoinRequest,
 		storeJoinRequest
 	} from '$lib/services/chatJoinRequests.svelte';
 	import {
@@ -200,6 +201,13 @@
 			requesting = false;
 		}
 	}
+
+	// Manual escape hatch for stuck requests (welcome dismissed/expired,
+	// admin never answered). Mirrors markJoinRequestSent's pair in reverse.
+	function handleRequestAgain() {
+		removeSentJoinRequest(groupId);
+		requestSent = false;
+	}
 </script>
 
 <svelte:head>
@@ -258,6 +266,13 @@
 						>
 							Join request sent. A group admin will review your request.
 						</div>
+						<button
+							type="button"
+							class="w-full text-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+							onclick={handleRequestAgain}
+						>
+							Didn't hear back? Request again
+						</button>
 						<div class="space-y-2">
 							<div class="flex items-center justify-between">
 								<p class="text-xs font-medium text-muted-foreground">Check for invitations</p>

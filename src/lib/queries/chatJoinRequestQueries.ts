@@ -1,7 +1,6 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { browser } from '$app/environment';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { manager } from '$lib/services/accountManager.svelte';
 import { isCoordinatorClientRefreshInProgress } from '$lib/services/chatRuntime';
 import {
 	fetchJoinRequestsForAdminGroups,
@@ -24,21 +23,28 @@ export async function fetchCoordinatorJoinRequests(_stablePubkey: string, coordi
 	return listJoinRequests();
 }
 
+// Join requests are a Query-managed remote read (AGENTS.md). The pubkey is
+// read via a getter (see useJoinRequests) so the query re-evaluates on
+// login/logout — a plain arg is captured once at mount, which leaves
+// always-mounted consumers (ChatActionIcons, the panels) stuck pre-login.
+// Disabled until an account is present.
 export function joinRequestsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
 	const hasStablePubkey = Boolean(stablePubkey?.trim());
-	const hasActiveAccount = Boolean(manager.getActive());
-	const canFetch = !isCoordinatorClientRefreshInProgress();
 	return {
-		queryKey: chatQueryKeys.joinRequests(stablePubkey, coordinatorKey),
+		queryKey: hasStablePubkey
+			? chatQueryKeys.joinRequests(stablePubkey, coordinatorKey)
+			: ([...chatQueryKeys.all, 'join-requests', 'no-account'] as const),
 		queryFn: () => fetchCoordinatorJoinRequests(stablePubkey, coordinatorKey),
-		enabled: browser && hasStablePubkey && hasActiveAccount && canFetch,
+		enabled: browser && hasStablePubkey && !isCoordinatorClientRefreshInProgress(),
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
 		refetchIntervalInBackground: false
 	};
 }
 
-export function useJoinRequests(stablePubkey?: string, coordinatorKey?: string) {
-	if (!stablePubkey) return undefined;
-	return createQuery(() => joinRequestsQueryOptions(stablePubkey, coordinatorKey));
+export function useJoinRequests(
+	getStablePubkey: () => string | undefined,
+	coordinatorKey?: string
+) {
+	return createQuery(() => joinRequestsQueryOptions(getStablePubkey() ?? '', coordinatorKey));
 }

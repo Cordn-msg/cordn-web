@@ -316,9 +316,10 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>Stored key packages</Card.Title>
-					<Card.Description
-						>Local records for the active account, ordered newest first.</Card.Description
-					>
+					<Card.Description>
+						Local records for the active account, ordered newest first. Key packages only let others
+						invite you in — removing one does not affect groups you have already joined.
+					</Card.Description>
 				</Card.Header>
 				<Card.Content>
 					<div class="space-y-3">

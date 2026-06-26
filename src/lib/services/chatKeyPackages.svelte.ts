@@ -19,7 +19,7 @@ import {
 	isLastResortKeyPackage,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
-import { listKnownCoordinatorKeys } from '$lib/services/chatWelcomeNotifications.svelte';
+import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
@@ -180,7 +180,12 @@ export async function purgeCoordinatorKeyPackages(
 			chatKeyPackagesStore.keyPackages.filter((entry) => !deleteRefs.includes(entry.keyPackageRef))
 		);
 	}
-	await reconcilePublishedKeyPackagesForActiveAccount().catch(() => {});
+	// ponytail: no reconcile here. It fetches ListAvailableKeyPackages from every
+	// known coordinator serially and hangs on offline ones until the SDK timeout,
+	// blocking the whole purge (and the dialog spinner). Local state is already
+	// correct via the prune + deleteRefs sweep above; drift-repair for *other*
+	// coordinators runs in the chat layout on account startup
+	// (shouldReconcilePublishedKeyPackages).
 }
 
 export async function deleteChatKeyPackagesForOwner(ownerPubkey: string): Promise<void> {
