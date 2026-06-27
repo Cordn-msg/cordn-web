@@ -8,6 +8,7 @@ const buildPersistedChatGroupMock = vi.fn();
 const enqueuePendingEpochOperationMock = vi.fn();
 const removeMemberFromGroupMock = vi.fn();
 const getCoordinatorClientMock = vi.fn();
+const pruneZombieKeyPackagesMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
@@ -35,7 +36,8 @@ vi.mock('$lib/services/chatCoordinators.svelte', () => ({
 }));
 
 vi.mock('$lib/services/chatKeyPackages.svelte', () => ({
-	createChatKeyPackage: vi.fn()
+	createChatKeyPackage: vi.fn(),
+	pruneZombieKeyPackages: pruneZombieKeyPackagesMock
 }));
 
 vi.mock('$lib/services/chatGroupLifecycle.svelte', () => ({
@@ -815,5 +817,33 @@ describe('deleteChatGroupsForCoordinator()', () => {
 		await deleteChatGroupsForCoordinator(coordinatorA);
 
 		expect(chatGroupsStore.groups.map((g) => g.id)).toEqual(['b1']);
+	});
+});
+
+describe('pruneConsumedKeyPackagesForActiveGroups()', () => {
+	beforeEach(() => {
+		pruneZombieKeyPackagesMock.mockReset();
+		pruneZombieKeyPackagesMock.mockResolvedValue(undefined);
+	});
+
+	test('delegates only the consumed refs of existing groups', async () => {
+		const { chatGroupsStore, pruneConsumedKeyPackagesForActiveGroups } =
+			await import('./chatGroups.svelte');
+
+		chatGroupsStore.groups = [
+			{ id: 'g1', joinedWithKeyPackageRef: 'kp-a' } as StoredChatGroup,
+			{ id: 'g2', joinedWithKeyPackageRef: undefined } as StoredChatGroup,
+			{ id: 'g3', joinedWithKeyPackageRef: 'kp-b' } as StoredChatGroup
+		];
+
+		await pruneConsumedKeyPackagesForActiveGroups();
+
+		expect(pruneZombieKeyPackagesMock).toHaveBeenCalledTimes(1);
+		expect(pruneZombieKeyPackagesMock).toHaveBeenCalledWith(
+			expect.arrayContaining(['kp-a', 'kp-b'])
+		);
+		const arg = pruneZombieKeyPackagesMock.mock.calls[0][0] as string[];
+		expect(arg).toHaveLength(2);
+		expect(arg).not.toContain(undefined);
 	});
 });

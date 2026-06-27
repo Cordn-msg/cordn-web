@@ -54,7 +54,7 @@
 		<div
 			class="mx-auto flex w-full max-w-xl items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2"
 		>
-			<Heart class="size-3.5 shrink-0 text-muted-foreground" />
+			<Heart class="size-3.5 shrink-0 text-rose-500" />
 			<span class="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
 				{item.donation.eyebrow}
 			</span>
@@ -67,7 +67,7 @@
 			class="mx-auto flex w-full max-w-xl flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-muted/30 px-5 py-4 text-center"
 		>
 			<div class="flex items-center gap-2 text-muted-foreground">
-				<Heart class="size-4" />
+				<Heart class="size-4 text-rose-500" />
 				<span class="text-[11px] font-semibold tracking-[0.18em] uppercase">
 					{item.donation.eyebrow}
 				</span>

@@ -51,7 +51,7 @@
 			aria-expanded={expanded}
 			aria-label={expanded ? 'Collapse supporters' : 'Expand supporters'}
 		>
-			<Heart class="size-4 shrink-0 text-muted-foreground" />
+			<Heart class="size-4 shrink-0 text-rose-500" />
 			<span class="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
 				Supporters
 			</span>

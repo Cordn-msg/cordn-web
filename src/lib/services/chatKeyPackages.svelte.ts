@@ -201,6 +201,35 @@ export function getChatKeyPackage(keyPackageRef: string): StoredKeyPackageRecord
 	return chatKeyPackagesStore.keyPackages.find((entry) => entry.keyPackageRef === keyPackageRef);
 }
 
+/**
+ * Refs of local key packages that are provably dead: already consumed to join
+ * an existing group (`consumedRefs`, i.e. some `joinedWithKeyPackageRef`) AND
+ * not published to any coordinator. A consumed KP's private bytes are
+ * cryptographically spent (the group state is self-contained), and an
+ * unpublished KP can never receive a new welcome — so the local record serves
+ * no future action. Published KPs (incl. last-resort, which can back multiple
+ * welcomes) are always kept. Single source of truth for both the prune and
+ * the config-page zombie count.
+ */
+export function listZombieKeyPackageRefs(consumedRefs: string[]): string[] {
+	if (consumedRefs.length === 0) return [];
+	return chatKeyPackagesStore.keyPackages
+		.filter(
+			(entry) =>
+				entry.publishedCoordinatorKeys.length === 0 && consumedRefs.includes(entry.keyPackageRef)
+		)
+		.map((entry) => entry.keyPackageRef);
+}
+
+/** Drop the zombie key packages identified by {@link listZombieKeyPackageRefs}. */
+export async function pruneZombieKeyPackages(consumedRefs: string[]): Promise<void> {
+	const refs = listZombieKeyPackageRefs(consumedRefs);
+	if (refs.length === 0) return;
+	await setKeyPackages(
+		chatKeyPackagesStore.keyPackages.filter((entry) => !refs.includes(entry.keyPackageRef))
+	);
+}
+
 async function setKeyPackages(keyPackages: StoredKeyPackageRecord[]) {
 	chatKeyPackagesStore.keyPackages = keyPackages;
 	await persistKeyPackages(keyPackages);

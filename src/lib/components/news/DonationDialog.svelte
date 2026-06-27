@@ -197,7 +197,7 @@
 		{:else}
 			<Dialog.Header>
 				<Dialog.Title class="flex items-center gap-2">
-					<Heart class="size-4" />
+					<Heart class="size-4 text-rose-500" />
 					{config.dialogTitle}
 				</Dialog.Title>
 				<Dialog.Description>{config.dialogDescription}</Dialog.Description>

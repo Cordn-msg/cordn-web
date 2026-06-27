@@ -237,3 +237,25 @@ export function markCoordinatorUsed(pubkey: string) {
 	);
 	saveCoordinators();
 }
+
+/**
+ * Merge coordinators from a backup into the local store (backup import).
+ * Existing local entries win by pubkey (non-destructive); backup entries fill
+ * gaps. Each imported entry is normalized/migrated the same way a manually
+ * added one is.
+ */
+export function importChatCoordinators(entries: StoredCoordinator[]): void {
+	if (!browser) return;
+	const existingByPubkey = new Map(
+		chatCoordinatorsStore.coordinators.map((entry) => [entry.pubkey, entry])
+	);
+	for (const raw of entries) {
+		const migrated = migrateCoordinator(raw);
+		if (!existingByPubkey.has(migrated.pubkey)) {
+			existingByPubkey.set(migrated.pubkey, migrated);
+		}
+	}
+	chatCoordinatorsStore.coordinators = [...existingByPubkey.values()];
+	ensureSingleDefault();
+	saveCoordinators();
+}

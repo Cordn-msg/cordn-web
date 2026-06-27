@@ -12,6 +12,8 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		getDefaultChatCoordinator,
+		getChatCoordinator,
+		getCoordinatorColor,
 		listChatCoordinators,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
@@ -23,12 +25,15 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Info from '@lucide/svelte/icons/info';
 	import { nip19 } from 'nostr-tools';
+	import { isHexKey } from 'applesauce-core/helpers';
 
 	let name = $state('');
 	let description = $state('');
 	let icon = $state('');
 	let imageUrl = $state('');
-	let coordinatorKey = $state(getDefaultChatCoordinator()?.pubkey ?? '');
+	let coordinatorKey = $state(
+		getDefaultChatCoordinator()?.pubkey ?? listChatCoordinators()[0]?.pubkey ?? ''
+	);
 	let selectedKeyPackageRef = $state('');
 	let selectedMemberPubkeys = $state<string[]>([]);
 	let selectedAdminPubkeys = $state<string[]>([]);
@@ -37,6 +42,16 @@
 	let remoteAvailableKeyPackages = $state<AvailableKeyPackage[]>([]);
 	let error = $state('');
 	const coordinators = $derived.by(() => listChatCoordinators());
+	// Match the selected pubkey against stored coordinators so the field can show
+	// the friendly label + color dot (like the sidebar) instead of the raw hex.
+	const selectedCoordinator = $derived(
+		isHexKey(coordinatorKey.trim()) ? getChatCoordinator(coordinatorKey) : undefined
+	);
+	const coordinatorDisplay = $derived(selectedCoordinator?.label ?? coordinatorKey);
+
+	function onCoordinatorInput(event: Event) {
+		coordinatorKey = (event.currentTarget as HTMLInputElement).value;
+	}
 	const availableKeyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const querySafeCoordinatorKey = $derived.by(() => {
 		const pubkey = coordinatorKey.trim();
@@ -195,13 +210,24 @@
 
 					<InputGroup.Root>
 						<InputGroup.Input
-							bind:value={coordinatorKey}
+							value={coordinatorDisplay}
+							oninput={onCoordinatorInput}
+							readonly={!!selectedCoordinator}
 							placeholder="64-char coordinator pubkey"
-							class="font-mono"
+							class={selectedCoordinator ? '' : 'font-mono'}
 						/>
 						<InputGroup.Addon>
 							<InputGroup.Text>Coordinator</InputGroup.Text>
 						</InputGroup.Addon>
+						{#if selectedCoordinator}
+							<InputGroup.Addon class="px-1">
+								<span
+									class="size-2.5 shrink-0 rounded-full border border-border"
+									style={`background-color: ${getCoordinatorColor(selectedCoordinator)};`}
+									aria-hidden="true"
+								></span>
+							</InputGroup.Addon>
+						{/if}
 						<InputGroup.Addon align="inline-end">
 							<DropdownMenu.Root>
 								<DropdownMenu.Trigger>
@@ -217,11 +243,16 @@
 									{:else}
 										{#each coordinators as coordinator (coordinator.pubkey)}
 											<DropdownMenu.Item onSelect={() => selectCoordinator(coordinator.pubkey)}>
+												<span
+													class="size-2.5 shrink-0 rounded-full border border-border"
+													style={`background-color: ${getCoordinatorColor(coordinator)};`}
+													aria-hidden="true"
+												></span>
 												{coordinator.label}
 											</DropdownMenu.Item>
 										{/each}
 									{/if}
-									{#if coordinatorKey.trim()}
+									{#if coordinatorKey.trim() && !selectedCoordinator}
 										<DropdownMenu.Item onSelect={saveTypedCoordinator}
 											>Save current value</DropdownMenu.Item
 										>

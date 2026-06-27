@@ -8,7 +8,7 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { createChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
+import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
 	encodeWelcomeBase64,
@@ -298,6 +298,19 @@ export function reloadChatGroupsForOwner(ownerPubkey?: string) {
 	return groupsReady;
 }
 
+/**
+ * Restore raw group objects to durable storage (backup import). Bypasses the
+ * group operation chains: this is a state restore, not a protocol operation.
+ * The in-memory store is repopulated by the caller via the active-account
+ * reload, or directly via reloadChatGroupsForOwner for the active owner.
+ */
+export async function importChatGroups(groups: StoredChatGroup[]): Promise<void> {
+	const storage = await getChatStorage();
+	for (const group of groups) {
+		await storage.putGroup(toStoredGroupData(group));
+	}
+}
+
 function encodeState(state: ClientState): string {
 	return bytesToBase64(encode(clientStateEncoder, state));
 }
@@ -449,6 +462,18 @@ export function listChatGroups(): StoredChatGroup[] {
 	return [...chatGroupsStore.groups].sort((a, b) => a.createdAt - b.createdAt);
 }
 
+/**
+ * Drop local key package records whose private bytes are spent: consumed to
+ * join an existing group and not published anywhere. Safe to call any time —
+ * published and still-pending KPs are never touched.
+ */
+export async function pruneConsumedKeyPackagesForActiveGroups(): Promise<void> {
+	const consumedRefs = listChatGroups()
+		.map((group) => group.joinedWithKeyPackageRef)
+		.filter((ref): ref is string => Boolean(ref));
+	await pruneZombieKeyPackages(consumedRefs);
+}
+
 export function areChatGroupsLoaded(): boolean {
 	return groupsLoaded;
 }
@@ -568,6 +593,7 @@ export async function createChatGroup(input: {
 	group.snapshots = [initialSnapshot];
 
 	persistGroup(group);
+	void pruneConsumedKeyPackagesForActiveGroups();
 	return group;
 }
 
@@ -617,6 +643,7 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 		markWelcomeAccepted(welcome.id, existingGroup.id);
 		removeSentJoinRequest(existingGroup.id);
 		markCoordinatorUsed(existingGroup.coordinatorKey);
+		void pruneConsumedKeyPackagesForActiveGroups();
 		return getChatGroup(group.id) ?? group;
 	}
 
@@ -624,6 +651,7 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	markCoordinatorUsed(group.coordinatorKey);
 	markWelcomeAccepted(welcome.id, group.id);
 	removeSentJoinRequest(group.id);
+	void pruneConsumedKeyPackagesForActiveGroups();
 
 	return group;
 }

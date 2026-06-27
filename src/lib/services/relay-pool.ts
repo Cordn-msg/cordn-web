@@ -18,7 +18,6 @@ export const commonRelays = [
 ];
 
 export const metadataRelays = [
-	'wss://purplepag.es/',
 	'wss://nos.lol',
 	'wss://relay.damus.io',
 	'wss://relay.primal.net',
