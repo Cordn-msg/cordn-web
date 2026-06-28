@@ -3,6 +3,7 @@ import {
 	bytesToBase64,
 	createApplicationMessage,
 	encode,
+	mlsExporter,
 	mlsMessageDecoder,
 	mlsMessageEncoder,
 	processMessage,
@@ -10,6 +11,8 @@ import {
 	type ClientState,
 	type IncomingMessageCallback
 } from 'ts-mls';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { concatBytes, randomBytes } from '@noble/ciphers/utils.js';
 import { SvelteSet } from 'svelte/reactivity';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
@@ -34,6 +37,10 @@ export interface StoredChatMessage {
 	kind: UnsignedEvent['kind'];
 	tags: UnsignedEvent['tags'];
 	content: string;
+	/** True when this message arrived (inbound) or was sent (outbound) as a
+	 *  sealed spec/03 payload. Carried through to the message-info dialog so
+	 *  the rollout can be inspected per-message. */
+	encrypted?: boolean;
 }
 
 export interface ChatMessageReplyTarget {
@@ -128,6 +135,10 @@ export interface RawChatGroupMessage {
 	cursor: number;
 	createdAt: number;
 	opaqueMessageBase64: string;
+	/** Opaque sealed payload (spec/03). The ingest funnel decrypts before
+	 *  MLS processing; pending own-commits and already-seen cursors short-circuit
+	 *  before the decrypt branch, so this flag only gates genuine new inbound. */
+	encrypted?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -398,6 +409,57 @@ export async function processMessageBase64(params: {
 	});
 }
 
+/** spec/03 §4 — exporter parameters for the per-epoch content-protection key. */
+const GROUP_PAYLOAD_EXPORTER_LABEL = 'cordn';
+const GROUP_PAYLOAD_EXPORTER_CONTEXT = 'group-payload';
+const GROUP_PAYLOAD_KEY_BYTES = 32;
+const GROUP_PAYLOAD_NONCE_BYTES = 12;
+const GROUP_PAYLOAD_TAG_BYTES = 16;
+
+async function deriveGroupPayloadKey(state: ClientState): Promise<Uint8Array> {
+	const cipherSuite = await getCordnCipherSuite();
+	return mlsExporter(
+		state.keySchedule.exporterSecret,
+		GROUP_PAYLOAD_EXPORTER_LABEL,
+		encoder.encode(GROUP_PAYLOAD_EXPORTER_CONTEXT),
+		GROUP_PAYLOAD_KEY_BYTES,
+		cipherSuite
+	);
+}
+
+/** Seal a serialized MLS message (base64) under the current epoch's exporter
+ *  secret using ChaCha20-Poly1305 with empty AAD (spec/03 §4-§5). Wire format:
+ *  base64(12-byte nonce || ciphertext-with-16-byte tag). */
+export async function encryptGroupPayloadBase64(params: {
+	state: ClientState;
+	opaqueMessageBase64: string;
+}): Promise<{ encryptedBase64: string }> {
+	const key = await deriveGroupPayloadKey(params.state);
+	const nonce = randomBytes(GROUP_PAYLOAD_NONCE_BYTES);
+	const ciphertext = chacha20poly1305(key, nonce, new Uint8Array(0)).encrypt(
+		base64ToBytes(params.opaqueMessageBase64)
+	);
+	return { encryptedBase64: bytesToBase64(concatBytes(nonce, ciphertext)) };
+}
+
+/** Unseal a spec/03 payload back to the serialized MLS message (base64) for
+ *  downstream MLS processing. Throws on payloads shorter than the
+ *  nonce+tag minimum or on AEAD verification failure (spec/03 §7). */
+export async function decryptGroupPayloadBase64(params: {
+	state: ClientState;
+	encryptedBase64: string;
+}): Promise<{ opaqueMessageBase64: string }> {
+	const payload = base64ToBytes(params.encryptedBase64);
+	if (payload.length < GROUP_PAYLOAD_NONCE_BYTES + GROUP_PAYLOAD_TAG_BYTES) {
+		throw new Error('Sealed payload too short');
+	}
+	const key = await deriveGroupPayloadKey(params.state);
+	const nonce = payload.subarray(0, GROUP_PAYLOAD_NONCE_BYTES);
+	const ciphertext = payload.subarray(GROUP_PAYLOAD_NONCE_BYTES);
+	const serialized = chacha20poly1305(key, nonce, new Uint8Array(0)).decrypt(ciphertext);
+	return { opaqueMessageBase64: bytesToBase64(serialized) };
+}
+
 /**
  * Extract unprotected MLS envelope metadata for diagnostic logging.
  * Returns epoch, contentType, and wireformat without requiring decryption.
@@ -519,6 +581,7 @@ export function createSystemMessagesFromStateChange(input: {
 	oldMetadata?: CordnGroupMetadata;
 	newMetadata?: CordnGroupMetadata;
 	committerPubkey?: string;
+	encrypted?: boolean;
 }): StoredChatMessage[] {
 	const messages: StoredChatMessage[] = [];
 	const committer = input.committerPubkey ? normalizePubKey(input.committerPubkey) : undefined;
@@ -586,6 +649,10 @@ export function createSystemMessagesFromStateChange(input: {
 		});
 	}
 
+	if (input.encrypted) {
+		for (const message of messages) message.encrypted = true;
+	}
+
 	return messages;
 }
 
@@ -630,6 +697,35 @@ export async function ingestChatGroupMessages(params: {
 			continue;
 		}
 
+		// Sealed spec/03 payloads: decrypt to recover the serialized MLS
+		// message before processing. Pending own-commits and already-seen
+		// cursors short-circuit above, so we only reach here for genuine
+		// inbound sealed traffic. A decrypt failure (wrong epoch / corruption)
+		// advances the cursor and records an issue rather than poisoning.
+		let processableBase64 = message.opaqueMessageBase64;
+		if (message.encrypted) {
+			try {
+				processableBase64 = (
+					await decryptGroupPayloadBase64({
+						state: group.state,
+						encryptedBase64: message.opaqueMessageBase64
+					})
+				).opaqueMessageBase64;
+			} catch (error) {
+				const detail = error instanceof Error ? error.message : String(error);
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				const issue = {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `Sealed payload decrypt failed: ${detail}`
+				};
+				group.syncIssues.push(issue);
+				issues.push(issue);
+				continue;
+			}
+		}
+
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
 		let commitSenderPubkey: string | undefined;
 
@@ -640,7 +736,7 @@ export async function ingestChatGroupMessages(params: {
 			});
 			processed = await processMessageBase64({
 				state: group.state,
-				opaqueMessageBase64: message.opaqueMessageBase64,
+				opaqueMessageBase64: processableBase64,
 				callback: (incoming) => {
 					if (incoming.kind === 'commit' && incoming.senderLeafIndex !== undefined) {
 						const sender = listGroupMembers(group.state).find(
@@ -653,7 +749,7 @@ export async function ingestChatGroupMessages(params: {
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
-			const envelope = extractMlsEnvelopeMetadata(message.opaqueMessageBase64);
+			const envelope = extractMlsEnvelopeMetadata(processableBase64);
 			const localEpoch = group.state.groupContext.epoch;
 
 			console.warn('[MLS] processMessageBase64 error', {
@@ -756,7 +852,8 @@ export async function ingestChatGroupMessages(params: {
 				id: event.id,
 				kind: event.kind,
 				tags: event.tags,
-				content: event.content
+				content: event.content,
+				encrypted: message.encrypted
 			};
 
 			seenCursors.add(message.cursor);
@@ -792,7 +889,8 @@ export async function ingestChatGroupMessages(params: {
 				newState: processed.newState,
 				oldMetadata,
 				newMetadata: group.metadata,
-				committerPubkey: commitSenderPubkey
+				committerPubkey: commitSenderPubkey,
+				encrypted: message.encrypted
 			});
 
 			if (systemMessages.length > 0) {

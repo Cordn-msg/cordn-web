@@ -66,6 +66,10 @@
 			return;
 		}
 		exporting = true;
+		// Yield one paint frame so the spinner renders before the (now off-thread)
+		// crypto kicks off. Without this the worker postMessage would still let the
+		// spinner paint, but the explicit yield removes any doubt on slow devices.
+		await new Promise((resolve) => setTimeout(resolve));
 		try {
 			const blob = await exportClientData({
 				includeMessages: exportMessages,
@@ -95,6 +99,8 @@
 			return;
 		}
 		importing = true;
+		// See handleExport: yield a paint frame so the spinner renders first.
+		await new Promise((resolve) => setTimeout(resolve));
 		try {
 			importResult = await importClientData(importFile, {
 				passphrase: importEncrypted ? importPassphrase : null,
@@ -367,7 +373,7 @@
 			</Dialog.Header>
 			<div class="flex justify-end gap-2 pt-4">
 				<Button variant="outline" onclick={() => (confirmOpen = false)}>Cancel</Button>
-				<Button variant="destructive" onclick={() => runImport(true)}>
+				<Button variant="destructive" disabled={importing} onclick={() => runImport(true)}>
 					Switch account &amp; restore
 				</Button>
 			</div>
@@ -382,7 +388,7 @@
 			</Dialog.Header>
 			<div class="flex justify-end gap-2 pt-4">
 				<Button variant="outline" onclick={() => (confirmOpen = false)}>Cancel</Button>
-				<Button onclick={() => runImport(false)}>Restore</Button>
+				<Button disabled={importing} onclick={() => runImport(false)}>Restore</Button>
 			</div>
 		{/if}
 	</Dialog.Content>

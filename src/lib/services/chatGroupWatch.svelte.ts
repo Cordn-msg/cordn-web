@@ -87,6 +87,7 @@ type WatchIncomingMessage = {
 	cursor: number;
 	createdAt: number;
 	opaqueMessageBase64: string;
+	encrypted?: boolean;
 };
 
 type WatchFetchedMessage = WatchIncomingMessage & {
@@ -498,7 +499,8 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 		groupMessages.push({
 			cursor: message.cursor,
 			createdAt: message.createdAt,
-			opaqueMessageBase64: message.opaqueMessageBase64
+			opaqueMessageBase64: message.opaqueMessageBase64,
+			encrypted: message.encrypted
 		});
 		messagesByGroupId.set(group.id, groupMessages);
 	}
@@ -547,7 +549,8 @@ async function fetchCoordinatorGroupBacklog(input: {
 			gid: message.gid,
 			cursor: message.cursor,
 			createdAt: message.at,
-			opaqueMessageBase64: message.msg_64
+			opaqueMessageBase64: message.msg_64,
+			encrypted: message.encrypted
 		}))
 	);
 }
@@ -686,7 +689,8 @@ async function startWatchingCoordinatorGroups(
 							await buffer.push({
 								cursor: message.cursor,
 								createdAt: message.at,
-								opaqueMessageBase64: message.msg_64
+								opaqueMessageBase64: message.msg_64,
+								encrypted: message.encrypted
 							})
 						) {
 							return;

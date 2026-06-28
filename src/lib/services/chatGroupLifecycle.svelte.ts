@@ -93,6 +93,7 @@ export function buildStoredChatGroup(params: {
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: bigint;
+	encrypted?: boolean;
 }): StoredChatGroup {
 	return {
 		id: params.id,
@@ -107,6 +108,7 @@ export function buildStoredChatGroup(params: {
 		snapshots: [],
 		metadata: params.metadata,
 		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef,
+		encrypted: params.encrypted,
 		joinEpoch: params.joinEpoch ?? 0n
 	};
 }
@@ -137,5 +139,22 @@ export async function acceptWelcomeToGroup(params: {
 		joinedWithKeyPackageRef: params.welcome.kpRef,
 		joinEpoch: epoch
 	});
+	// spec/03 welcome cursor hint: if the inviter recorded the Commit cursor,
+	// start fetching from there to skip pre-join traffic (replaces reliance on
+	// joinEpoch/since_epoch for new joins).
+	if (params.welcome.after) {
+		group.fetchCursor = params.welcome.after;
+		group.lastCursor = params.welcome.after;
+		console.info('[cordn/after] invitee applying welcome cursor hint', {
+			after: params.welcome.after,
+			fetchCursor: group.fetchCursor,
+			joinEpoch: epoch.toString()
+		});
+	} else {
+		console.info('[cordn/after] invitee joined without cursor hint (will rely on since_epoch)', {
+			after: params.welcome.after,
+			joinEpoch: epoch.toString()
+		});
+	}
 	return group;
 }

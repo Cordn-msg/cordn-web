@@ -245,9 +245,10 @@ export async function startChatWithKeyPackageAction(keyPackage: {
 
 export async function refreshWelcomeNotificationsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
-	await queryClient.invalidateQueries({
-		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey)
-	});
+	// A forced fetchQuery fans out to every coordinator and repopulates the
+	// cache; mounted observers re-render from the cache write. invalidateQueries
+	// here would trigger a SECOND parallel fan-out (the active observer's
+	// refetch), doubling welcome_take calls per refresh.
 	await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
 		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey, undefined, { force: true }),
@@ -325,9 +326,8 @@ export async function loadJoinRequestsAction() {
 
 export async function refreshJoinRequestsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch join requests');
-	await queryClient.invalidateQueries({
-		queryKey: chatQueryKeys.joinRequests(account.pubkey)
-	});
+	// See refreshWelcomeNotificationsAction: invalidateQueries would double the
+	// per-coordinator fan-out. The forced fetchQuery alone repopulates the cache.
 	await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.joinRequests(account.pubkey),
 		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey, undefined),

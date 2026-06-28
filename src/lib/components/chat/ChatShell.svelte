@@ -135,6 +135,7 @@
 			text: message.content,
 			createdAt: message.createdAt,
 			cursor: message.cursor,
+			encrypted: message.encrypted === true,
 			timeLabel: formatUnixTimestamp(message.createdAt, true, false),
 			dayLabel: formatUnixTimestamp(message.createdAt, false, true),
 			isOwn: normalizePubKey(message.sender) === activePubkey,

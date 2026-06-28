@@ -79,10 +79,18 @@ export const listAvailableKeyPackagesOutputSchema = z.object({
 export const pendingWelcomeSchema = z.object({
 	kp_ref: z.string(),
 	welcome_64: z.string(),
-	at: z.number()
+	at: z.number(),
+	after: z.number().int().positive().optional()
 });
 
-export const fetchPendingWelcomesInputSchema = emptyInputSchema;
+export const consumedWelcomeRefSchema = z.object({
+	kp_ref: z.string().min(1),
+	at: z.number().int()
+});
+
+export const fetchPendingWelcomesInputSchema = z.object({
+	consumed: z.array(consumedWelcomeRefSchema).optional()
+});
 
 export const fetchPendingWelcomesOutputSchema = z.object({
 	welcomes: z.array(pendingWelcomeSchema)
@@ -91,7 +99,8 @@ export const fetchPendingWelcomesOutputSchema = z.object({
 export const storeWelcomeInputSchema = z.object({
 	target_pk: z.string().min(1),
 	kp_ref: z.string().min(1),
-	welcome_64: z.string().min(1)
+	welcome_64: z.string().min(1),
+	after: z.number().int().positive().optional()
 });
 
 export const storeWelcomeOutputSchema = z.object({
@@ -121,8 +130,15 @@ export const fetchManyPendingJoinRequestsGroupInputSchema = z.object({
 	gid: z.string().min(1)
 });
 
+export const consumedJoinRequestWithGroupRefSchema = z.object({
+	gid: z.string().min(1),
+	pk: z.string().min(1),
+	at: z.number().int()
+});
+
 export const fetchManyPendingJoinRequestsInputSchema = z.object({
-	groups: z.array(fetchManyPendingJoinRequestsGroupInputSchema).min(1)
+	groups: z.array(fetchManyPendingJoinRequestsGroupInputSchema).min(1),
+	consumed: z.array(consumedJoinRequestWithGroupRefSchema).optional()
 });
 
 export const fetchManyPendingJoinRequestsOutputSchema = z.object({
@@ -130,7 +146,9 @@ export const fetchManyPendingJoinRequestsOutputSchema = z.object({
 });
 
 export const postGroupMessageInputSchema = z.object({
-	msg_64: z.string().min(1)
+	msg_64: z.string().min(1),
+	gid: z.string().min(1).optional(),
+	encrypted: z.boolean().optional()
 });
 
 export const postGroupMessageOutputSchema = z.object({
@@ -149,7 +167,8 @@ export const groupMessageSchema = z.object({
 	cursor: z.number(),
 	gid: z.string(),
 	msg_64: z.string(),
-	at: z.number()
+	at: z.number(),
+	encrypted: z.boolean().optional()
 });
 
 export const fetchGroupMessagesOutputSchema = z.object({
@@ -216,3 +235,5 @@ export type SubscribeManyGroupMessagesOutput = z.infer<
 export type AvailableKeyPackage = z.infer<typeof availableKeyPackageSchema>;
 export type PendingWelcome = z.infer<typeof pendingWelcomeSchema>;
 export type GroupMessage = z.infer<typeof groupMessageSchema>;
+export type ConsumedWelcomeRef = z.infer<typeof consumedWelcomeRefSchema>;
+export type ConsumedJoinRequestWithGroupRef = z.infer<typeof consumedJoinRequestWithGroupRefSchema>;

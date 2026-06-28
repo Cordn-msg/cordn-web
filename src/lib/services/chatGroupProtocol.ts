@@ -8,6 +8,9 @@ export type PendingEpochOperation =
 			targetStablePubkey: string;
 			keyPackageReference: string;
 			welcomeBase64: string;
+			/** Coordinator cursor of the posted Commit, passed to the invitee as
+			 *  the Welcome `after` hint so they can skip pre-join traffic. */
+			postedCursor?: number;
 	  }
 	| {
 			kind: 'remove-member';
@@ -70,10 +73,15 @@ export async function finalizePendingEpochOperations(
 		}
 
 		if (operation.kind === 'add-member') {
+			console.info('[cordn/after] inviter storing welcome with hint', {
+				target: operation.targetStablePubkey,
+				after: operation.postedCursor
+			});
 			await client.StoreWelcome({
 				target_pk: operation.targetStablePubkey,
 				kp_ref: operation.keyPackageReference,
-				welcome_64: operation.welcomeBase64
+				welcome_64: operation.welcomeBase64,
+				after: operation.postedCursor
 			});
 		}
 	}

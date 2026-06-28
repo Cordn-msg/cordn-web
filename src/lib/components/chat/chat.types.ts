@@ -24,6 +24,7 @@ export interface ChatMessage {
 		text: string;
 	};
 	cursor?: number;
+	encrypted?: boolean;
 	unreadReference?: boolean;
 	unreadReferenceCursor?: number;
 	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed';

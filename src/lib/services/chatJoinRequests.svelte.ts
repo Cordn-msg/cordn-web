@@ -214,8 +214,24 @@ export async function fetchJoinRequestsForAdminGroups() {
 		const outcomes = await Promise.all(
 			[...groupsByCoordinator].map(async ([coordinatorKey, groups]) => {
 				try {
+					// Retire accepted/dismissed join requests on the coordinator via the
+					// `consumed` ack (atomic-before-fetch, idempotent). mergeFetchedJoinRequests
+					// then drops them locally since the response no longer echoes them.
+					const consumed = chatJoinRequestsStore.entries
+						.filter(
+							(entry) =>
+								normalizePubKey(entry.coordinatorKey) === normalizePubKey(coordinatorKey) &&
+								(entry.status === 'accepted' || entry.status === 'dismissed')
+						)
+						.map((entry) => ({
+							gid: entry.groupId,
+							pk: entry.requesterStablePubkey,
+							at: entry.at
+						}));
 					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
-						client.FetchManyPendingJoinRequests({ groups })
+						client.FetchManyPendingJoinRequests(
+							consumed.length > 0 ? { groups, consumed } : { groups }
+						)
 					);
 					const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
 					for (const request of result.requests) {

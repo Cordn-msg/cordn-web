@@ -26,27 +26,39 @@ export function profileQueryOptions(pubkey: string) {
 		queryKey: chatQueryKeys.profile(pubkey),
 		queryFn: () =>
 			new Promise<boolean>((resolve) => {
+				// Cleanup handles live on a single const holder so `done` (which closes
+				// over them) can be declared before the assignments without a TDZ
+				// hazard: eventStore.model().subscribe(cb) can invoke cb synchronously
+				// when the profile is already cached, calling done() before later
+				// declarations are initialized. A const object lets the fields be
+				// filled after `done` while keeping the binding const for prefer-const.
+				const handles: {
+					loader?: { unsubscribe: () => void };
+					store?: { unsubscribe: () => void };
+					timer?: ReturnType<typeof setTimeout>;
+				} = {};
 				let settled = false;
+
 				const done = () => {
 					if (settled) return;
 					settled = true;
-					clearTimeout(timer);
-					storeSub.unsubscribe();
-					loaderSub.unsubscribe();
+					if (handles.timer) clearTimeout(handles.timer);
+					handles.loader?.unsubscribe();
+					handles.store?.unsubscribe();
 					resolve(true);
 				};
 
-				const loaderSub = addressLoader({
+				handles.loader = addressLoader({
 					kind: Metadata,
 					pubkey: normalizedPubkey,
 					relays: metadataRelays
 				}).subscribe();
 
-				const storeSub = eventStore.model(ProfileModel, normalizedPubkey).subscribe((profile) => {
+				handles.store = eventStore.model(ProfileModel, normalizedPubkey).subscribe((profile) => {
 					if (profile) done();
 				});
 
-				const timer = setTimeout(done, PROFILE_FETCH_TIMEOUT_MS);
+				handles.timer = setTimeout(done, PROFILE_FETCH_TIMEOUT_MS);
 			}),
 		staleTime: PROFILE_STALE_TIME
 	};

@@ -924,6 +924,12 @@
 							</p>
 							<p>{getDeliveryStateLabel() || 'Received'}</p>
 						</div>
+						<div class="space-y-1">
+							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+								Encryption
+							</p>
+							<p>{message.encrypted ? 'Sealed (spec/03)' : 'Plaintext'}</p>
+						</div>
 					</div>
 
 					<div class="space-y-3">

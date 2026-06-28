@@ -91,11 +91,11 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
-		id: 'cordn-news-2026-06-27',
-		createdAt: Date.UTC(2026, 6, 27),
+		id: 'cordn-news-2026-06-28',
+		createdAt: Date.UTC(2026, 5, 28),
 		version: 1,
 		title: 'Back up and recover your account',
-		body: '- ✨ Back up and recover your account — export your private keys, group secrets, and coordinators from the new Backup & recovery page under Config, and restore them on a fresh device.\n- 🔄 Key packages already used to join a group are now cleaned up automatically — group secrets are self-contained, so a used key package has no further purpose. Unused and still-published ones are never touched.\n- 🔄 The New conversation dialog now shows each coordinator by its saved label and color dot instead of the raw pubkey, and pre-fills the default coordinator for you.'
+		body: '- ✨ Back up and recover your account — export your private keys, group secrets, and coordinators from the new Backup & recovery page under Config, and restore them on a fresh device.\n- 🐛 Creating or restoring a large encrypted backup no longer freezes the app — the encryption now runs in the background, which is especially noticeable on mobile.\n- 🔄 Welcomes and join requests you have already accepted or dismissed no longer reappear on their next refresh.\n- 🐛 Fixed a crash on a coordinator’s page when the same key package showed up more than once.\n- 🔄 Key packages already used to join a group are now cleaned up automatically — group secrets are self-contained, so a used key package has no further purpose. Unused and still-published ones are never touched.\n- 🔄 The New conversation dialog now shows each coordinator by its saved label and color dot instead of the raw pubkey, and pre-fills the default coordinator for you.\n- ✨ Encrypted group payloads (experimental) — opt in from a group’s info page to seal your messages so the relaying coordinator only ever sees opaque bytes. Each participant turns it on for themselves; sealed and plaintext messages mix transparently while everyone catches up.\n- 🔄 A message’s info dialog now shows whether it was sent sealed or in plaintext, so you can confirm encrypted payloads are active in a group.'
 	},
 	{
 		id: 'cordn-news-2026-06-26',

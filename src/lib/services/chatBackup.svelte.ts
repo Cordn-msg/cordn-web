@@ -13,15 +13,26 @@
  * reconcile, the rest re-fetched on re-stream).
  *
  * Security: the document carries nsec private keys and group secrets, so the
- * passphrase-encrypted envelope (WebCrypto PBKDF2 + AES-GCM) is the default.
+ * passphrase-encrypted envelope (PBKDF2 + AES-GCM) is the default. The crypto
+ * runs off-thread in chatBackupWorker.ts: @noble/hashes + @noble/ciphers are
+ * pure-JS, so on a phone the 600k-iteration PBKDF2 would otherwise freeze the
+ * UI for seconds. @noble is used instead of WebCrypto specifically because it
+ * works on http:// self-host (crypto.subtle needs a secure context).
  * Unencrypted export/import is exposed as an explicit opt-in for dev/inspection.
  */
 import { browser } from '$app/environment';
-import { bytesToBase64, base64ToBytes } from 'ts-mls';
-import { gcm } from '@noble/ciphers/aes.js';
-import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
-import { sha256 } from '@noble/hashes/sha2.js';
 import type { SerializedAccount } from 'applesauce-accounts';
+import {
+	PBKDF2_HASH,
+	PBKDF2_ITERATIONS,
+	type BackupWorkerRequest,
+	type BackupWorkerResponse,
+	type DecryptRequest,
+	type DecryptResponse,
+	type EncryptRequest,
+	type EncryptResponse,
+	type ErrorResponse
+} from '$lib/services/chatBackupCrypto';
 
 import { manager } from '$lib/services/accountManager.svelte';
 import {
@@ -44,20 +55,6 @@ export const BACKUP_MAGIC = 'cordn-web-backup';
 export const BACKUP_SCHEMA_VERSION = 1;
 
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
-
-// ponytail: OWASP 2023 floor for PBKDF2-SHA256. @noble/hashes is sync pure-JS,
-// so ~0.3s once per export/import — not worth tuning lower.
-const PBKDF2_ITERATIONS = 600_000;
-const PBKDF2_HASH = 'SHA-256';
-const SALT_BYTES = 16;
-const IV_BYTES = 12;
-const KEY_BYTES = 32;
-
-function randomBytes(len: number): Uint8Array {
-	// ponytail: getRandomValues works in non-secure contexts too (only
-	// crypto.subtle needs HTTPS), so restore just works on http:// self-host.
-	return crypto.getRandomValues(new Uint8Array(len));
-}
 
 /**
  * StoredChatGroup with `joinEpoch` as string — the only bigint field, and
@@ -149,19 +146,44 @@ function groupFromBackup(group: BackupGroup): StoredChatGroup {
 	return { ...group, joinEpoch: BigInt(group.joinEpoch) };
 }
 
-function deriveAesKey(passphrase: string, salt: Uint8Array): Uint8Array {
-	return pbkdf2(sha256, new TextEncoder().encode(passphrase), salt, {
-		c: PBKDF2_ITERATIONS,
-		dkLen: KEY_BYTES
+/**
+ * Run one crypto op in the backup worker and resolve its reply. Creates a
+ * throwaway worker per call — backup/restore is rare, so no pool, and terminate
+ * on the first reply or startup error to avoid leaks. Encrypt can't fail at
+ * the crypto layer (only noble calls on valid inputs), so its failures surface
+ * as a promise rejection via onerror; decrypt can fail (wrong passphrase /
+ * corruption), so its return includes the error variant.
+ *
+ * `new Worker(new URL(..., import.meta.url), { type: 'module' })` is the
+ * standard Vite module-worker pattern: Vite bundles chatBackupWorker.ts as a
+ * separate chunk, so @noble never lands in the main bundle.
+ */
+function runBackupWorker(req: EncryptRequest): Promise<EncryptResponse>;
+function runBackupWorker(req: DecryptRequest): Promise<DecryptResponse | ErrorResponse>;
+function runBackupWorker(req: BackupWorkerRequest): Promise<BackupWorkerResponse> {
+	return new Promise((resolve, reject) => {
+		const worker = new Worker(new URL('./chatBackupWorker.ts', import.meta.url), {
+			type: 'module'
+		});
+		const finish = (result: BackupWorkerResponse) => {
+			worker.terminate();
+			resolve(result);
+		};
+		worker.onmessage = (event: MessageEvent<BackupWorkerResponse>) => finish(event.data);
+		worker.onerror = (event) => {
+			worker.terminate();
+			reject(new BackupError(event.message || 'Backup worker failed to start'));
+		};
+		worker.postMessage(req);
 	});
 }
 
 async function encryptDocument(doc: BackupDocument, passphrase: string): Promise<string> {
-	const salt = randomBytes(SALT_BYTES);
-	const iv = randomBytes(IV_BYTES);
-	const key = deriveAesKey(passphrase, salt);
-	const plaintext = new TextEncoder().encode(JSON.stringify(doc));
-	const ciphertext = gcm(key, iv).encrypt(plaintext);
+	const res = await runBackupWorker({
+		op: 'encrypt',
+		passphrase,
+		plaintext: JSON.stringify(doc)
+	});
 	const envelope: EncryptedEnvelope = {
 		magic: BACKUP_MAGIC,
 		encrypted: true,
@@ -169,10 +191,10 @@ async function encryptDocument(doc: BackupDocument, passphrase: string): Promise
 			algorithm: 'PBKDF2',
 			hash: PBKDF2_HASH,
 			iterations: PBKDF2_ITERATIONS,
-			salt: bytesToBase64(salt)
+			salt: res.salt
 		},
-		cipher: { algorithm: 'AES-GCM', iv: bytesToBase64(iv) },
-		ciphertext: bytesToBase64(ciphertext)
+		cipher: { algorithm: 'AES-GCM', iv: res.iv },
+		ciphertext: res.ciphertext
 	};
 	return JSON.stringify(envelope, null, 2);
 }
@@ -184,17 +206,27 @@ async function decryptEnvelope(
 	if (envelope.kdf?.algorithm !== 'PBKDF2' || envelope.cipher?.algorithm !== 'AES-GCM') {
 		throw new BackupError('Unsupported encryption parameters in backup');
 	}
-	const salt = base64ToBytes(envelope.kdf.salt);
-	const iv = base64ToBytes(envelope.cipher.iv);
-	const key = deriveAesKey(passphrase, salt);
-	let plaintext: Uint8Array;
+	let plaintext: string;
 	try {
-		plaintext = gcm(key, iv).decrypt(base64ToBytes(envelope.ciphertext));
-	} catch {
-		throw new BackupError('Wrong passphrase or corrupted backup');
+		const res = await runBackupWorker({
+			op: 'decrypt',
+			passphrase,
+			salt: envelope.kdf.salt,
+			iv: envelope.cipher.iv,
+			ciphertext: envelope.ciphertext
+		});
+		if (!res.ok) {
+			// gcm.decrypt tag mismatch in the worker; keep the cause opaque.
+			throw new BackupError('Wrong passphrase or corrupted backup');
+		}
+		plaintext = res.plaintext;
+	} catch (error) {
+		throw error instanceof BackupError
+			? error
+			: new BackupError('Wrong passphrase or corrupted backup');
 	}
 	try {
-		return JSON.parse(new TextDecoder().decode(plaintext)) as BackupDocument;
+		return JSON.parse(plaintext) as BackupDocument;
 	} catch {
 		throw new BackupError('Decrypted backup is not valid JSON');
 	}

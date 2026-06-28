@@ -20,6 +20,7 @@ export interface WelcomeNotificationEntry {
 	coordinatorKey: string;
 	kpRef: string;
 	at: number;
+	after?: number;
 	welcomeBase64: string;
 	preview?: CordnGroupMetadataPreview;
 	readAt?: number;
@@ -132,6 +133,7 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 			coordinatorKey: normalizedCoordinatorKey,
 			kpRef: welcome.kp_ref,
 			at: welcome.at,
+			after: welcome.after,
 			welcomeBase64: welcome.welcome_64,
 			fetchedAt,
 			readAt: previous?.readAt,
@@ -213,9 +215,28 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 		const outcomes = await Promise.all(
 			keys.map(async (coordinatorKey) => {
 				try {
+					// Retire accepted/dismissed welcomes on the coordinator via the
+					// `consumed` ack. The ack is atomic-before-fetch and idempotent;
+					// mergeFetchedWelcomes then drops them locally since the response
+					// no longer echoes them.
+					const consumed = chatWelcomeNotificationsStore.entries
+						.filter(
+							(entry) =>
+								entry.coordinatorKey === coordinatorKey &&
+								(entry.status === 'accepted' || entry.status === 'dismissed')
+						)
+						.map((entry) => ({ kp_ref: entry.kpRef, at: entry.at }));
 					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
-						client.FetchPendingWelcomes({})
+						client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {})
 					);
+					const withAfter = result.welcomes.filter((w) => w.after !== undefined);
+					if (withAfter.length > 0) {
+						console.info('[cordn/after] coordinator returned welcomes with hint', {
+							coordinatorKey,
+							count: withAfter.length,
+							afters: withAfter.map((w) => ({ kp_ref: w.kp_ref, after: w.after }))
+						});
+					}
 					return {
 						coordinatorKey,
 						welcomes: result.welcomes,

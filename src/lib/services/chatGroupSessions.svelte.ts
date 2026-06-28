@@ -63,6 +63,7 @@ export async function syncChatGroupMessages(params: {
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
+		encrypted?: boolean;
 	}>;
 	pendingEpochOperations: GroupPendingEpochStore;
 	coordinatorClient: Pick<cordnClient, 'StoreWelcome'>;

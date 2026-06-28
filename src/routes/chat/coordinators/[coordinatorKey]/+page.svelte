@@ -125,16 +125,21 @@
 	// Unified, deduped key-package list for the single card. Merges three former
 	// sources — remote-owned (with local-copy state), local-published-not-on-
 	// remote (drift, surfaced as “Local only”), and other-identities remote —
-	// keyed by kp_ref so a package never appears twice.
+	// keyed by kp_ref so a package never appears twice. The same package can
+	// legitimately land in more than one source (e.g. a local copy of someone
+	// else's published package is both related-published and other-remote),
+	// so every source checks-and-adds to one shared `seen` set in priority order.
 	const keyPackageItems = $derived.by<VirtualKeyPackageListItem[]>(() => {
 		const items: VirtualKeyPackageListItem[] = [];
-		const seen: string[] = [];
+		const seen = new Set<string>();
 		for (const item of ownedRemoteKeyPackageItems) {
-			seen.push(item.id);
+			if (seen.has(item.id)) continue;
+			seen.add(item.id);
 			items.push(item);
 		}
 		for (const kp of relatedPublishedKeyPackages) {
-			if (seen.includes(kp.keyPackageRef)) continue;
+			if (seen.has(kp.keyPackageRef)) continue;
+			seen.add(kp.keyPackageRef);
 			items.push({
 				id: kp.keyPackageRef,
 				entry: kp,
@@ -142,6 +147,8 @@
 			});
 		}
 		for (const entry of otherRemoteKeyPackages) {
+			if (seen.has(entry.kp_ref)) continue;
+			seen.add(entry.kp_ref);
 			items.push({ id: entry.kp_ref, entry });
 		}
 		return items;
@@ -261,7 +268,7 @@
 					<DropdownMenu.Content align="end" class="w-48">
 						<DropdownMenu.Item
 							onclick={() => (showPurgeDialog = true)}
-							class="gap-2 text-destructive data-[highlighted]:text-destructive"
+							class="gap-2 text-destructive data-highlighted:text-destructive"
 						>
 							<Trash2 class="size-4" />
 							<span>Remove coordinator</span>

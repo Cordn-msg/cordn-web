@@ -11,6 +11,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
+	import { Switch } from '$lib/components/ui/switch';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import { getNewestHealthySnapshot } from '$lib/services/chatGroupSnapshots';
@@ -22,7 +23,8 @@
 		isChatGroupRemoved,
 		listChatGroupMembers,
 		listChatGroupSyncIssues,
-		listChatGroups
+		listChatGroups,
+		setGroupEncrypted
 	} from '$lib/services/chatGroups.svelte';
 	import {
 		chatGroupInfoActionsStore,
@@ -43,6 +45,7 @@
 	import Shield from '@lucide/svelte/icons/shield';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserRoundX from '@lucide/svelte/icons/user-round-x';
+	import Lock from '@lucide/svelte/icons/lock';
 
 	let { params } = $props();
 
@@ -615,6 +618,38 @@
 											<p class="mt-2 font-mono text-sm">{messageCount} stored</p>
 										</div>
 									</div>
+								</Card.Content>
+							</Card.Root>
+
+							<Card.Root>
+								<Card.Header>
+									<Card.Title class="flex items-center gap-2">
+										<Lock class="size-4" />
+										Encrypted payloads
+									</Card.Title>
+									<Card.Description>
+										Experimental spec/03 opt-in: seal outbound group payloads with ChaCha20-Poly1305
+										under the MLS exporter secret so the coordinator stores opaque bytes. Inbound
+										sealed traffic is decrypted regardless of this toggle.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content>
+									<label
+										class="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-border p-3"
+									>
+										<span class="text-sm font-medium">
+											{group.encrypted ? 'Sealing enabled' : 'Sealing disabled'}
+										</span>
+										<Switch
+											checked={group.encrypted === true}
+											onCheckedChange={(checked) => setGroupEncrypted(group.id, checked)}
+										/>
+									</label>
+									<p class="mt-2 text-xs text-muted-foreground">
+										Only enables it for this device. Every participant who turns it on must run a
+										compatible client, otherwise their messages stay plaintext and mix with sealed
+										ones transparently.
+									</p>
 								</Card.Content>
 							</Card.Root>
 
