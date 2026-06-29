@@ -19,7 +19,12 @@
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getChatCoordinator, getCoordinatorColor } from '$lib/services/chatCoordinators.svelte';
+	import {
+		getChatCoordinator,
+		getCoordinatorColor,
+		getCoordinatorLabel
+	} from '$lib/services/chatCoordinators.svelte';
+	import { getCoordinatorServerInfo } from '$lib/services/coordinatorServerInfo.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import {
 		getCoordinatorHealthLabel,
@@ -56,6 +61,8 @@
 
 	const coordinatorKey = $derived.by(() => normalizePubKey(params.coordinatorKey));
 	const coordinator = $derived.by(() => getChatCoordinator(coordinatorKey));
+	const serverInfo = $derived.by(() => getCoordinatorServerInfo(coordinatorKey));
+	const coordinatorDisplayLabel = $derived.by(() => getCoordinatorLabel(coordinatorKey));
 	const relatedGroups = $derived.by(() =>
 		listChatGroups().filter((group) => group.coordinatorKey === coordinatorKey)
 	);
@@ -229,7 +236,7 @@
 </script>
 
 <svelte:head>
-	<title>{coordinator?.label || 'Coordinator'} | Cordn</title>
+	<title>{coordinatorDisplayLabel} | Cordn</title>
 	<meta name="description" content="Coordinator detail workspace for Cordn." />
 </svelte:head>
 
@@ -244,7 +251,7 @@
 			</div>
 			<div class="min-w-0 space-y-2">
 				<h1 class="text-lg font-semibold tracking-tight">
-					{coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
+					{coordinatorDisplayLabel}
 				</h1>
 				<ProfileCard pubkey={coordinatorKey} />
 			</div>
@@ -299,7 +306,7 @@
 								></span>
 								<div>
 									<p class="font-medium">
-										{coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
+										{coordinatorDisplayLabel}
 									</p>
 									<p class="text-sm text-muted-foreground">
 										{coordinator?.isDefault ? 'Default coordinator' : 'Saved coordinator profile'}
@@ -326,6 +333,39 @@
 										{coordinator?.relays?.join(' · ') || 'Use client defaults'}
 									</p>
 								</div>
+								{#if serverInfo.name || serverInfo.about || serverInfo.website || serverInfo.picture}
+									<div>
+										<p class="text-xs tracking-wide text-muted-foreground uppercase">
+											Server metadata
+										</p>
+										<div class="mt-2 space-y-2">
+											{#if serverInfo.name && serverInfo.name !== coordinatorDisplayLabel}
+												<p class="text-sm font-medium wrap-break-word">{serverInfo.name}</p>
+											{/if}
+											{#if serverInfo.about}
+												<p class="text-sm wrap-break-word text-muted-foreground">{serverInfo.about}</p>
+											{/if}
+											{#if serverInfo.website}
+												<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+												<a
+													href={serverInfo.website}
+													target="_blank"
+													rel="noopener noreferrer"
+													class="inline-block text-sm break-all text-primary hover:underline"
+												>
+													{serverInfo.website}
+												</a>
+											{/if}
+											{#if serverInfo.picture}
+												<img
+													src={serverInfo.picture}
+													alt=""
+													class="h-12 w-12 rounded-lg border border-border object-cover"
+												/>
+											{/if}
+										</div>
+									</div>
+								{/if}
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Connection</p>
 									<div class={`mt-2 rounded-2xl border p-4 ${coordinatorConnectionCardClass}`}>
@@ -515,7 +555,7 @@
 		<CoordinatorPurgeDialog
 			bind:open={showPurgeDialog}
 			pubkey={coordinatorKey}
-			label={coordinator?.label || `Coordinator ${coordinatorKey.slice(0, 8)}`}
+			label={coordinatorDisplayLabel}
 			onpurged={handleCoordinatorPurged}
 		/>
 	</div>

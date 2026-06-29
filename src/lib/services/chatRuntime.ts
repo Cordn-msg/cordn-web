@@ -5,6 +5,10 @@ import {
 	markCoordinatorHealthy,
 	resetCoordinatorHealth
 } from '$lib/services/coordinatorHealth.svelte';
+import {
+	resetCoordinatorServerInfo,
+	setCoordinatorServerInfo
+} from '$lib/services/coordinatorServerInfo.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { defaultRelays } from '$lib/services/relay-pool';
 import { normalizePubKey } from '$lib/utils';
@@ -53,7 +57,8 @@ class AccountCoordinatorClientRegistry {
 			onHealth: (signal) => {
 				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
 				else markCoordinatorDegraded(serverPubkey, signal.error);
-			}
+			},
+			onServerInfo: (info) => setCoordinatorServerInfo(serverPubkey, info)
 		} as ConstructorParameters<typeof cordnClient>[0]);
 	}
 
@@ -79,6 +84,7 @@ class AccountCoordinatorClientRegistry {
 		const target = resolveCoordinatorTarget(coordinatorKey);
 		const oldClient = this.clients.get(target.serverPubkey);
 		resetCoordinatorHealth(target.serverPubkey);
+		resetCoordinatorServerInfo(target.serverPubkey);
 		const client = this.createClient(coordinatorKey);
 		this.clients.set(target.serverPubkey, client);
 		return oldClient;
@@ -87,6 +93,7 @@ class AccountCoordinatorClientRegistry {
 	async disconnect(): Promise<void> {
 		for (const serverPubkey of this.clients.keys()) {
 			resetCoordinatorHealth(serverPubkey);
+			resetCoordinatorServerInfo(serverPubkey);
 		}
 		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
 		this.clients.clear();
@@ -98,6 +105,7 @@ class AccountCoordinatorClientRegistry {
 		if (!client) return;
 		this.clients.delete(normalized);
 		resetCoordinatorHealth(normalized);
+		resetCoordinatorServerInfo(normalized);
 		await client.disconnect();
 	}
 }

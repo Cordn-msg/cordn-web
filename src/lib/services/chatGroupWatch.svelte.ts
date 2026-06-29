@@ -369,7 +369,7 @@ export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordina
 			setChatGroupResumePromise(null);
 		}
 	});
-	setChatGroupResumePromise(resumePromise);
+	setChatGroupResumePromise(resumePromise, coordinatorKey);
 
 	return resumePromise;
 }

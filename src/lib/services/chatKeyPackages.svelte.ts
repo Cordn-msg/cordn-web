@@ -21,7 +21,11 @@ import {
 } from '$lib/services/chatMlsUtils';
 import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import {
+	requireActiveAccount,
+	withCoordinatorClient,
+	withCoordinatorClientRetry
+} from '$lib/services/chatRuntime';
 import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
 import {
 	getChatStorage,
@@ -350,7 +354,7 @@ export async function publishChatKeyPackage(keyPackageRef: string, coordinatorKe
 	}
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
 	const account = requireActiveAccount('You must be logged in to manage key packages');
-	const result = await withCoordinatorClient(account, normalizedCoordinator, (client) =>
+	const result = await withCoordinatorClientRetry(account, normalizedCoordinator, (client) =>
 		client.PublishKeyPackage({
 			kp_ref: record.keyPackageRef,
 			kp_64: record.keyPackageBase64
@@ -394,6 +398,12 @@ export async function removeChatKeyPackage(
 				}
 			}
 		}
+
+		// Mirror publishChatKeyPackage: cascade-invalidate so the shared
+		// available-key-packages query (directory, dialog, coordinator page) refreshes.
+		void queryClient.invalidateQueries({
+			queryKey: chatQueryKeys.coordinators(account.pubkey)
+		});
 	}
 
 	if (record) {

@@ -145,11 +145,6 @@ export async function acceptWelcomeToGroup(params: {
 	if (params.welcome.after) {
 		group.fetchCursor = params.welcome.after;
 		group.lastCursor = params.welcome.after;
-		console.info('[cordn/after] invitee applying welcome cursor hint', {
-			after: params.welcome.after,
-			fetchCursor: group.fetchCursor,
-			joinEpoch: epoch.toString()
-		});
 	} else {
 		console.info('[cordn/after] invitee joined without cursor hint (will rely on since_epoch)', {
 			after: params.welcome.after,

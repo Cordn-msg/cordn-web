@@ -17,8 +17,8 @@ importers:
         specifier: ^1.30
         version: 1.30.0(zod@4.4.3)
       '@contextvm/sdk':
-        specifier: ^0.12.5
-        version: 0.12.5(typescript@6.0.3)
+        specifier: ^0.13.3
+        version: 0.13.3(typescript@6.0.3)
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -32,22 +32,22 @@ importers:
         specifier: ^3.13.25
         version: 3.13.25(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       applesauce-accounts:
-        specifier: ^6.0.0
+        specifier: ^6
         version: 6.0.0(@capacitor/core@7.6.5)(typescript@6.0.3)
       applesauce-common:
-        specifier: ^6.0.2
+        specifier: ^6
         version: 6.0.2(typescript@6.0.3)
       applesauce-core:
-        specifier: ^6.0.3
-        version: 6.0.3(typescript@6.0.3)
+        specifier: ^6
+        version: 6.2.0(typescript@6.0.3)
       applesauce-loaders:
-        specifier: ^6.0.0
+        specifier: ^6
         version: 6.0.0(typescript@6.0.3)
       applesauce-relay:
-        specifier: ^6.0.3
-        version: 6.0.3(typescript@6.0.3)
+        specifier: ^6
+        version: 6.2.0(typescript@6.0.3)
       applesauce-signers:
-        specifier: ^6.0.1
+        specifier: ^6
         version: 6.0.1(@capacitor/core@7.6.5)(typescript@6.0.3)
       lean-qr:
         specifier: ^2.7.1
@@ -191,8 +191,8 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4.0
 
-  '@contextvm/sdk@0.12.5':
-    resolution: {integrity: sha512-csX9vqjSaMDuPBsgYAK3gk60tV+2n02UZ4A2anl2aByTSRrCLcYkX7+XCi0JQ7lNjpXR9JPlNFlSz9LcvbQNCA==}
+  '@contextvm/sdk@0.13.3':
+    resolution: {integrity: sha512-uDJUo9AQXCuDW8Uz7CyniyP0ekGUU2BUN8/LXoQuyCHYD8mHESXZI8dpxuBiQ+wlsUAd8NXJ+FP5AGDoF+RhdA==}
     engines: {bun: '>=1.2.0'}
     peerDependencies:
       typescript: ^5.9.3
@@ -508,10 +508,6 @@ packages:
   '@noble/hashes@1.3.2':
     resolution: {integrity: sha512-MVC8EAQp7MvEcm30KWENFjgR+Mkmf+D189XJTkFIlwohU5hcBbn1ZkKq7KVTi2Hme3PMGF390DaL52beVrIihQ==}
     engines: {node: '>= 16'}
-
-  '@noble/hashes@1.8.0':
-    resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
-    engines: {node: ^14.21.3 || >=16}
 
   '@noble/hashes@2.0.1':
     resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
@@ -976,14 +972,14 @@ packages:
   applesauce-common@6.0.2:
     resolution: {integrity: sha512-zTQGZkYdsCqGeG8qmt81Fgcqv+VhrUvKps65+xBTyc5Z+OiT/p/T83z+qMuDiZqd9+eeH2Yeflc8ZINWgvh0Iw==}
 
-  applesauce-core@6.0.3:
-    resolution: {integrity: sha512-unvACqBYRd9GcPicWUndV8zyR1ZbIpFot5H0Vw++5teys4eU4Tv0bEiG4gE9XOM/6NQ72R6EuWWgA5JW116hKw==}
+  applesauce-core@6.2.0:
+    resolution: {integrity: sha512-O6AlVyzqcuIhTOIuexm6UWmx7mRIa2D98gJP7K7vFGf90YdtvSH78AsKQWZXJ0Pk/K14at+9zkwfCkFr7ghgNw==}
 
   applesauce-loaders@6.0.0:
     resolution: {integrity: sha512-1GQ1EXxHJKqNUW87D/NSnsVcjNRETsRwUXptqu+bZFV+UOPkAEBo7qkgJTtmkkGs0efkyJAcFu94ZOtVQMwo3A==}
 
-  applesauce-relay@6.0.3:
-    resolution: {integrity: sha512-AqJMKaCwxljwRCr3cR3iaB8r+adl1+DNzeLpoXX9+locBENQaIdDbV5Kk2D0o1gcI1rGpvx9bGVUyUs32Z4rog==}
+  applesauce-relay@6.2.0:
+    resolution: {integrity: sha512-aalduNw3YcEiOOnyYFTVvSxg683sOPrjFMe2h7tRK0/xFTGPbAslHlFSisY2cw43EEEvQMr2HVHvXT5ahLI3tA==}
 
   applesauce-signers@6.0.1:
     resolution: {integrity: sha512-SV60zT7+kMdASEOUfOvNGSFQFjfXdGbhyAQvCMaN3S5JIMzbO8YMmf9BzyGJF+HoWZRi888xscXCgkAea6mUJw==}
@@ -2065,11 +2061,11 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
 
-  '@contextvm/sdk@0.12.5(typescript@6.0.3)':
+  '@contextvm/sdk@0.13.3(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.4.3)
       '@noble/hashes': 2.2.0
-      applesauce-relay: 6.0.3(typescript@6.0.3)
+      applesauce-relay: 6.2.0(typescript@6.0.3)
       canonicalize: 2.1.0
       nostr-tools: 2.18.2(typescript@6.0.3)
       pino: 10.3.1
@@ -2306,8 +2302,6 @@ snapshots:
   '@noble/hashes@1.3.1': {}
 
   '@noble/hashes@1.3.2': {}
-
-  '@noble/hashes@1.8.0': {}
 
   '@noble/hashes@2.0.1': {}
 
@@ -2754,7 +2748,7 @@ snapshots:
 
   applesauce-accounts@6.0.0(@capacitor/core@7.6.5)(typescript@6.0.3):
     dependencies:
-      applesauce-core: 6.0.3(typescript@6.0.3)
+      applesauce-core: 6.2.0(typescript@6.0.3)
       applesauce-signers: 6.0.1(@capacitor/core@7.6.5)(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
@@ -2768,7 +2762,7 @@ snapshots:
   applesauce-common@6.0.2(typescript@6.0.3):
     dependencies:
       '@scure/base': 1.2.6
-      applesauce-core: 6.0.3(typescript@6.0.3)
+      applesauce-core: 6.2.0(typescript@6.0.3)
       hash-sum: 2.0.0
       light-bolt11-decoder: 3.2.0
       nanoid: 5.1.11
@@ -2777,7 +2771,7 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-core@6.0.3(typescript@6.0.3):
+  applesauce-core@6.2.0(typescript@6.0.3):
     dependencies:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
@@ -2791,17 +2785,17 @@ snapshots:
 
   applesauce-loaders@6.0.0(typescript@6.0.3):
     dependencies:
-      applesauce-core: 6.0.3(typescript@6.0.3)
+      applesauce-core: 6.2.0(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color
       - typescript
 
-  applesauce-relay@6.0.3(typescript@6.0.3):
+  applesauce-relay@6.2.0(typescript@6.0.3):
     dependencies:
-      '@noble/hashes': 1.8.0
-      applesauce-core: 6.0.3(typescript@6.0.3)
+      '@noble/hashes': 2.2.0
+      applesauce-core: 6.2.0(typescript@6.0.3)
       nanoid: 5.1.11
       nostr-tools: 2.19.4(typescript@6.0.3)
       rxjs: 7.8.2
@@ -2812,7 +2806,7 @@ snapshots:
   applesauce-signers@6.0.1(@capacitor/core@7.6.5)(typescript@6.0.3):
     dependencies:
       '@noble/secp256k1': 1.7.2
-      applesauce-core: 6.0.3(typescript@6.0.3)
+      applesauce-core: 6.2.0(typescript@6.0.3)
       debug: 4.4.3
       nanoid: 5.1.11
       rxjs: 7.8.2

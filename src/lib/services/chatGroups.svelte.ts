@@ -795,11 +795,6 @@ export async function inviteChatGroupMember(input: {
 		// Stamp the Commit cursor on the pending op so the Welcome we store
 		// carries an `after` hint; the invitee uses it to skip pre-join traffic.
 		addMemberOp.postedCursor = posted.cursor;
-		console.info('[cordn/after] inviter captured commit cursor for welcome hint', {
-			groupId: group.id,
-			target: targetStablePubkey,
-			after: posted.cursor
-		});
 
 		const syncBaseGroup: StoredChatGroup = {
 			...group,
@@ -1441,6 +1436,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 
 export function deleteChatGroup(groupId: string): void {
 	chatGroupsStore.groups = chatGroupsStore.groups.filter((group) => group.id !== groupId);
+	removeSentJoinRequest(groupId);
 	void getChatStorage().then((storage) => storage.deleteGroup(groupId));
 }
 

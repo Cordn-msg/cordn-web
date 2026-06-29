@@ -14,6 +14,7 @@
 		getDefaultChatCoordinator,
 		getChatCoordinator,
 		getCoordinatorColor,
+		getCoordinatorLabel,
 		listChatCoordinators,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
@@ -47,7 +48,12 @@
 	const selectedCoordinator = $derived(
 		isHexKey(coordinatorKey.trim()) ? getChatCoordinator(coordinatorKey) : undefined
 	);
-	const coordinatorDisplay = $derived(selectedCoordinator?.label ?? coordinatorKey);
+	// Resolve through getCoordinatorLabel so a saved coordinator with the
+	// auto-default label falls back to the server-announced name, matching the
+	// sidebar/detail pages. While typing an unsaved pubkey, keep the raw value.
+	const coordinatorDisplay = $derived(
+		selectedCoordinator ? getCoordinatorLabel(coordinatorKey) : coordinatorKey
+	);
 
 	function onCoordinatorInput(event: Event) {
 		coordinatorKey = (event.currentTarget as HTMLInputElement).value;
@@ -248,7 +254,7 @@
 													style={`background-color: ${getCoordinatorColor(coordinator)};`}
 													aria-hidden="true"
 												></span>
-												{coordinator.label}
+												{getCoordinatorLabel(coordinator.pubkey)}
 											</DropdownMenu.Item>
 										{/each}
 									{/if}

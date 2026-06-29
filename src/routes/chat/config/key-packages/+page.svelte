@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { AvailableKeyPackage } from '$lib/contracts';
 	import * as Card from '$lib/components/ui/card';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -9,12 +8,16 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import {
+		useAvailableKeyPackages,
+		type AvailableKeyPackageWithCoordinator
+	} from '$lib/queries/chatKeyPackageQueries';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		listChatGroups,
 		pruneConsumedKeyPackagesForActiveGroups
 	} from '$lib/services/chatGroups.svelte';
+	import { refreshAvailableKeyPackagesAction } from '$lib/services/chatUiActions.svelte';
 	import {
 		createChatKeyPackage,
 		listChatKeyPackages,
@@ -29,8 +32,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { SvelteMap } from 'svelte/reactivity';
 
-	type OwnedRemoteKeyPackage = AvailableKeyPackage & {
-		coordinatorKey: string;
+	type OwnedRemoteKeyPackage = AvailableKeyPackageWithCoordinator & {
 		localCopy: ReturnType<typeof listChatKeyPackages>[number] | undefined;
 	};
 
@@ -45,17 +47,27 @@
 	let isLastResort = $state(false);
 	let publishingKeyPackageRef = $state('');
 	let removingKeyPackageRef = $state('');
-	let loadingRemoteKeyPackages = $state(false);
-	let remoteKeyPackagesLoaded = $state(false);
 	let remoteKeyPackageError = $state('');
 	let removingRemoteKey = $state('');
-	let ownedRemoteKeyPackages = $state<OwnedRemoteKeyPackage[]>([]);
 
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const chatGroups = $derived.by(() => listChatGroups());
 	const coordinators = $derived.by(() => listChatCoordinators());
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
+	);
+	// Query-managed remote read (AGENTS.md): shares the same cache as the
+	// directory/dialog/coordinator page instead of an imperative snapshot, so
+	// this card can no longer drift out of sync with the other surfaces.
+	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
+	const ownedRemoteKeyPackages = $derived.by<OwnedRemoteKeyPackage[]>(() =>
+		(availableKeyPackagesQuery.data ?? [])
+			.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
+			.map((entry) => ({
+				...entry,
+				localCopy: keyPackages.find((record) => record.keyPackageRef === entry.kp_ref)
+			}))
+			.sort((a, b) => b.at - a.at)
 	);
 	const remoteKeyPackagesByCoordinator = $derived.by(() => {
 		const groups = new SvelteMap<string, OwnedRemoteKeyPackage[]>();
@@ -139,44 +151,13 @@
 		}
 	}
 
-	async function loadRemoteKeyPackages() {
-		if (!$activeAccount) return;
-
-		try {
-			loadingRemoteKeyPackages = true;
-			remoteKeyPackageError = '';
-
-			const remoteResults = await Promise.all(
-				coordinators.map(async (coordinator) => {
-					const entries = await fetchCoordinatorAvailableKeyPackages(coordinator.pubkey, {
-						force: remoteKeyPackagesLoaded
-					});
-					return entries
-						.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
-						.map((entry) => ({
-							...entry,
-							coordinatorKey: normalizePubKey(coordinator.pubkey),
-							localCopy: keyPackages.find((record) => record.keyPackageRef === entry.kp_ref)
-						}));
-				})
-			);
-
-			ownedRemoteKeyPackages = remoteResults.flat().sort((a, b) => b.at - a.at);
-			remoteKeyPackagesLoaded = true;
-		} catch (err) {
-			remoteKeyPackageError =
-				err instanceof Error ? err.message : 'Failed to load remote key packages';
-		} finally {
-			loadingRemoteKeyPackages = false;
-		}
-	}
-
 	async function handleRemoveRemote(keyPackageRef: string, coordinatorKey: string) {
 		try {
 			removingRemoteKey = `${coordinatorKey}:${keyPackageRef}`;
 			remoteKeyPackageError = '';
+			// removeChatKeyPackage invalidates the shared query, so the list
+			// refreshes without an explicit reload.
 			await removeChatKeyPackage(keyPackageRef, { coordinatorKey });
-			await loadRemoteKeyPackages();
 		} catch (err) {
 			remoteKeyPackageError =
 				err instanceof Error ? err.message : 'Failed to remove remote key package';
@@ -427,7 +408,7 @@
 						<div class="space-y-4">
 							<div class="flex flex-wrap items-center justify-between gap-3">
 								<div class="text-sm text-muted-foreground">
-									{#if remoteKeyPackagesLoaded}
+									{#if ownedRemoteKeyPackages.length > 0}
 										Found {ownedRemoteKeyPackages.length} remote key package{ownedRemoteKeyPackages.length ===
 										1
 											? ''
@@ -440,38 +421,42 @@
 												{orphanedRemoteKeyPackageCount} orphaned
 											</span>
 										{/if}
+									{:else if availableKeyPackagesQuery.isFetching}
+										Loading remote key packages…
 									{:else}
-										Load remote state to compare local storage with coordinator directories.
+										No remote key packages owned by the active identity on saved coordinators.
 									{/if}
 								</div>
 								<Button
 									type="button"
-									onclick={loadRemoteKeyPackages}
-									disabled={loadingRemoteKeyPackages}
+									onclick={() => refreshAvailableKeyPackagesAction()}
+									disabled={availableKeyPackagesQuery.isFetching}
 								>
-									{#if loadingRemoteKeyPackages}
+									{#if availableKeyPackagesQuery.isFetching}
 										<Spinner class="mr-2 size-4" />
 									{:else}
 										<Boxes class="mr-2 size-4" />
 									{/if}
-									{loadingRemoteKeyPackages
-										? 'Loading remote key packages…'
-										: remoteKeyPackagesLoaded
-											? 'Refresh remote key packages'
-											: 'Load remote key packages'}
+									{availableKeyPackagesQuery.isFetching
+										? 'Loading…'
+										: 'Refresh remote key packages'}
 								</Button>
 							</div>
 
+							{#if availableKeyPackagesQuery.error}
+								<p class="text-sm text-destructive">
+									{availableKeyPackagesQuery.error instanceof Error
+										? availableKeyPackagesQuery.error.message
+										: 'Failed to load remote key packages'}
+								</p>
+							{/if}
 							{#if remoteKeyPackageError}
 								<p class="text-sm text-destructive">{remoteKeyPackageError}</p>
 							{/if}
 
-							{#if !remoteKeyPackagesLoaded}
-								<div
-									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-								>
-									Load remote key packages to inspect coordinator-side state and remove orphaned
-									entries.
+							{#if availableKeyPackagesQuery.isFetching && ownedRemoteKeyPackages.length === 0}
+								<div class="flex justify-center py-8">
+									<Spinner class="size-6" />
 								</div>
 							{:else if ownedRemoteKeyPackages.length === 0}
 								<div

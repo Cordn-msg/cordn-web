@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-06-29',
+		createdAt: Date.UTC(2026, 5, 29),
+		version: 1,
+		title: 'Coordinator names, straight from the source',
+		body: '- ✨ Coordinators now display the name their server advertises when available, with your custom label still taking priority. A coordinator’s page also shows its about text, website, and picture when the server provides them.\n- 🔄 Sending a message no longer waits on an unrelated coordinator that is having trouble — only the group you are messaging waits for its own coordinator, so healthy groups stay snappy when another one is slow to reconnect.\n- 🔄 The sidebar finishes loading sooner after sign-in: join requests and key packages no longer wait for every group subscription to finish opening.\n- 🐛 The New conversation dialog and chat home now show exactly the same key-package list — same coordinator filter, counts, and color coding — so the two can no longer drift apart after a refresh.\n- 🐛 The key packages settings page now stays in sync with the rest of the app — creating or removing a key package updates every list immediately instead of holding a stale snapshot.\n- 🐛 If you leave a group and request to join again, admins now see your request on the first send — previously you had to send it twice (or reset your request state) before it would appear.\n- 🐛 You no longer see your own join request in your notifications after being re-added to a group where every member is an admin.\n- 🐛 Stale join-request notifications for groups you no longer administer are cleaned up automatically.\n- 🐛 An admin can now accept a join request from someone who is still technically in the group — they are cleanly removed and re-added instead of the accept failing.'
+	},
+	{
 		id: 'cordn-news-2026-06-28',
 		createdAt: Date.UTC(2026, 5, 28),
 		version: 1,

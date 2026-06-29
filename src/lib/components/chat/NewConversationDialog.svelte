@@ -1,19 +1,11 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
-	import { SvelteSet } from 'svelte/reactivity';
-	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
-	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
-	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Input } from '$lib/components/ui/input';
-	import { Spinner } from '$lib/components/ui/spinner';
-	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { useAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
+	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
+	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import { startChatWithKeyPackageAction } from '$lib/services/chatUiActions.svelte';
-	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
-	import { areStringArraysEqual } from '$lib/utils';
 	import Users from '@lucide/svelte/icons/users';
 	import LogIn from '@lucide/svelte/icons/log-in';
 
@@ -25,69 +17,13 @@
 		onNavigate?: () => void;
 	} = $props();
 
-	let search = $state('');
 	let startingRef = $state('');
 	let error = $state('');
 
-	// Query-managed remote read, matching welcome/join-request lifecycle:
-	// auto-fetches when enabled, polls on an interval, deduped/cached by Query.
-	// Pubkey is passed as a getter so the query re-evaluates on login/logout.
-	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
-
-	const remoteKeyPackages = $derived.by(() =>
-		(availableKeyPackagesQuery.data ?? []).filter((entry) => entry.pk !== $activeAccount?.pubkey)
-	);
-
-	let visibleKeyPackageIds = $state<string[]>([]);
-
-	const visibleKeyPackagePubkeys = $derived.by(() => {
-		const ids = new SvelteSet(visibleKeyPackageIds);
-		const pubkeys = new SvelteSet<string>();
-		for (const entry of filteredRemoteKeyPackages) {
-			if (ids.has(entry.kp_ref)) pubkeys.add(entry.pk);
-		}
-		return [...pubkeys];
-	});
-
-	const keyPackageProfileHints = useProfileHints(
-		() => {
-			if (search) return remoteKeyPackages.map((kp) => kp.pk);
-			return [...new Set(visibleKeyPackagePubkeys)];
-		},
-		{
-			relays: metadataRelays
-		}
-	);
-
-	const filteredRemoteKeyPackages = $derived.by(() =>
-		remoteKeyPackages.filter((entry) =>
-			matchesKeyPackageSearch({
-				pubkey: entry.pk,
-				keyPackageRef: entry.kp_ref,
-				isLastResort: entry.last_resort,
-				profileHints: keyPackageProfileHints,
-				search
-			})
-		)
-	);
-
-	const visibleKeyPackageItems = $derived.by(() =>
-		filteredRemoteKeyPackages.map((kp) => ({
-			id: kp.kp_ref,
-			entry: kp,
-			actionLabel: startingRef === kp.kp_ref ? 'Starting…' : 'Start chat',
-			actionDisabled: startingRef === kp.kp_ref,
-			onAction: () => startChat(kp),
-			className: 'bg-muted/20'
-		}))
-	);
-
+	// bits-ui dialog content unmounts after the close animation, so the directory
+	// (and its search state) remounts fresh each time the dialog opens.
 	$effect(() => {
-		if (open) {
-			search = '';
-			error = '';
-			visibleKeyPackageIds = [];
-		}
+		if (open) error = '';
 	});
 
 	function handleCreateGroupClick() {
@@ -95,7 +31,7 @@
 		onNavigate();
 	}
 
-	async function startChat(kp: (typeof remoteKeyPackages)[number]) {
+	async function startChat(kp: AvailableKeyPackageWithCoordinator) {
 		if (!kp.coordinatorKey) {
 			error = 'Add a coordinator before starting a chat';
 			return;
@@ -172,52 +108,15 @@
 				<p class="text-sm text-destructive">{error}</p>
 			{/if}
 
-			<Input
-				bind:value={search}
-				placeholder="Search by pubkey, package reference, or last resort"
-				aria-label="Search available key packages"
+			<AvailableKeyPackageDirectory
+				onStartChat={startChat}
+				{startingRef}
+				includeSelf
+				showCount
+				showCoordinatorFilter
+				maxHeightClass="max-h-[32rem]"
+				emptyMessage="No public key packages found yet. Add coordinators and publish a key package first."
 			/>
-
-			{#if !$activeAccount}
-				<div
-					class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-				>
-					Log in to browse coordinator key packages.
-				</div>
-			{:else if availableKeyPackagesQuery.isFetching && remoteKeyPackages.length === 0}
-				<div class="flex justify-center py-8">
-					<Spinner class="size-6" />
-				</div>
-			{:else if availableKeyPackagesQuery.error}
-				<p class="text-sm text-destructive">
-					{availableKeyPackagesQuery.error instanceof Error
-						? availableKeyPackagesQuery.error.message
-						: 'Failed to load remote key packages'}
-				</p>
-			{:else if filteredRemoteKeyPackages.length > 0}
-				<VirtualKeyPackageList
-					items={visibleKeyPackageItems}
-					maxHeightClass="max-h-[24rem]"
-					contentClass="rounded-xl border border-border p-3"
-					itemHeight={126}
-					onVisibleItemsChange={(itemIds) => {
-						if (areStringArraysEqual(itemIds, visibleKeyPackageIds)) return;
-						visibleKeyPackageIds = itemIds;
-					}}
-				/>
-			{:else if remoteKeyPackages.length > 0}
-				<div
-					class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-				>
-					No key packages match your search.
-				</div>
-			{:else}
-				<div
-					class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
-				>
-					No public key packages found yet. Add coordinators and publish a key package first.
-				</div>
-			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

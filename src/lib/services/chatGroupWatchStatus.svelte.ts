@@ -1,4 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
+import { normalizePubKey } from '$lib/utils';
 
 /**
  * Tiny, cycle-free registry of which group ids currently have an active live
@@ -34,20 +35,37 @@ export function isGroupActivelyWatched(groupId: string): boolean {
 }
 
 /**
- * Mirror of the in-flight resume promise from `chatGroupWatch.svelte`.
+ * Mirror of the in-flight resume promise from `chatGroupWatch.svelte`, tagged
+ * with the coordinator it is scoped to (if any).
  *
- * Outbound message sends read `getChatGroupResumePromise()` so they can wait
- * for an in-progress rebuild (the "Updating chats…" window) to settle before
- * touching group state, instead of racing the teardown/backlog fetch and
- * failing. Lives here for the same cycle-avoidance reason as `watchedGroupIds`:
- * `chatGroups.svelte` can read it without importing `chatGroupWatch.svelte`.
+ * Outbound message sends read `getChatGroupResumePromise(coordinatorKey)` so
+ * they can wait for an in-progress rebuild (the "Updating chats…" window) to
+ * settle before touching group state, instead of racing the teardown/backlog
+ * fetch and failing. A scoped resume only tears down one coordinator's
+ * watches, so a send on a different (healthy) coordinator is not blocked by
+ * it; a global resume can affect any coordinator and blocks all. Lives here
+ * for the same cycle-avoidance reason as `watchedGroupIds`: `chatGroups.svelte`
+ * can read it without importing `chatGroupWatch.svelte`.
  */
 let currentResumePromise: Promise<void> | null = null;
+let currentResumeCoordinatorKey: string | undefined = undefined;
 
-export function setChatGroupResumePromise(promise: Promise<void> | null): void {
+export function setChatGroupResumePromise(
+	promise: Promise<void> | null,
+	coordinatorKey?: string
+): void {
 	currentResumePromise = promise;
+	currentResumeCoordinatorKey =
+		promise && coordinatorKey ? normalizePubKey(coordinatorKey) : undefined;
 }
 
-export function getChatGroupResumePromise(): Promise<void> | null {
-	return currentResumePromise;
+export function getChatGroupResumePromise(coordinatorKey?: string): Promise<void> | null {
+	if (!currentResumePromise) return null;
+	// A global resume (no scope) can restart any coordinator's watches.
+	if (currentResumeCoordinatorKey === undefined) return currentResumePromise;
+	// A scoped resume only affects the coordinator it is scoped to.
+	if (coordinatorKey && normalizePubKey(coordinatorKey) === currentResumeCoordinatorKey) {
+		return currentResumePromise;
+	}
+	return null;
 }

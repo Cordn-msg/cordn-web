@@ -13,7 +13,7 @@
 	import { loadNewsReadState } from '$lib/news/newsReadState.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
-	import { chatGroupWatchStore, startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
+	import { startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
 	import {
 		reconcilePublishedKeyPackagesForActiveAccount as reconcileKeyPackages,
 		shouldReconcilePublishedKeyPackages
@@ -73,7 +73,6 @@
 		const pubkey = $activeAccount?.pubkey;
 		if (
 			!pubkey ||
-			chatGroupWatchStore.startup !== 'ready' ||
 			startupJoinRequestsSyncedFor === pubkey ||
 			startupJoinRequestsLoadingFor === pubkey
 		)
@@ -101,7 +100,7 @@
 
 	$effect(() => {
 		const pubkey = $activeAccount?.pubkey;
-		if (!pubkey || chatGroupWatchStore.startup !== 'ready' || startupSyncedFor === pubkey) return;
+		if (!pubkey || startupSyncedFor === pubkey) return;
 		startupSyncedFor = pubkey;
 		void untrack(async () => {
 			await loadAvailableKeyPackagesAction();

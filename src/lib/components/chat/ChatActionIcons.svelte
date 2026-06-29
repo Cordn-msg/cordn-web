@@ -46,6 +46,7 @@
 		refreshJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { useWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
+	import { useJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -78,7 +79,13 @@
 		() => unreadWelcomeNotifications + unreadJoinRequests
 	);
 	useWelcomeNotifications(() => $activeAccount?.pubkey);
-	// Join requests are now loaded via layout effect when app is ready
+	// Observe the join-requests query so invalidation (e.g. after accepting a
+	// request) triggers a refetch and the `consumed` ack retires the accepted
+	// row on the coordinator promptly. Without a persistent observer the ack
+	// is deferred, the original row lingers, and a re-request from a user who
+	// left/re-deleted the group is silently deduped against it — so admins
+	// never see the re-request until the user sends twice. Mirrors welcomes.
+	useJoinRequests(() => $activeAccount?.pubkey);
 
 	// Profile share link for a given coordinator. The default coordinator omits
 	// `c=` (short link, matching group-share links); any other coordinator is

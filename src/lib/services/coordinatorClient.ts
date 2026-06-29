@@ -61,6 +61,17 @@ import {
  */
 export type CoordinatorHealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
 
+/**
+ * Server-announced metadata learned from coordinator responses (CEP discovery
+ * tags). All fields optional; present only once the server has replied.
+ */
+export type CoordinatorServerInfo = {
+	name?: string;
+	about?: string;
+	website?: string;
+	picture?: string;
+};
+
 export type coordinatorClient = {
 	PublishKeyPackage: (input: PublishKeyPackageInput) => Promise<PublishKeyPackageOutput>;
 	ListAvailableKeyPackages: (
@@ -99,6 +110,7 @@ export class cordnClient implements coordinatorClient {
 	private readonly ephemeralTransport: NostrClientTransport;
 	private readonly ephemeralConnected: Promise<void>;
 	private readonly onHealth?: (signal: CoordinatorHealthSignal) => void;
+	private readonly onServerInfo?: (info: CoordinatorServerInfo) => void;
 	/** Stored for lazy stable transport construction (see connectStable). */
 	private readonly stableSigner: NostrTransportOptions['signer'];
 	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
@@ -109,6 +121,7 @@ export class cordnClient implements coordinatorClient {
 			ephemeralPrivateKey?: string;
 			relays?: string[];
 			onHealth?: (signal: CoordinatorHealthSignal) => void;
+			onServerInfo?: (info: CoordinatorServerInfo) => void;
 		} = {}
 	) {
 		this.ephemeralClient = new Client({
@@ -127,8 +140,9 @@ export class cordnClient implements coordinatorClient {
 				'Missing coordinator server pubkey. Pass serverPubkey explicitly or configure the CLI entrypoint to provide one.'
 			);
 		}
-		const { signer: providedSigner, onHealth, ...rest } = options;
+		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
 		this.onHealth = onHealth;
+		this.onServerInfo = onServerInfo;
 		delete (rest as Partial<typeof options>).privateKey;
 		delete (rest as Partial<typeof options>).ephemeralPrivateKey;
 		delete (rest as Partial<typeof options>).serverPubkey;
@@ -241,12 +255,46 @@ export class cordnClient implements coordinatorClient {
 				? schema.parse(result.structuredContent)
 				: (result.structuredContent as T);
 			this.onHealth?.({ status: 'healthy' });
+			const serverInfo = this.getServerInfo();
+			if (serverInfo.name || serverInfo.about || serverInfo.website || serverInfo.picture) {
+				this.onServerInfo?.(serverInfo);
+			}
 			return parsed;
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			this.onHealth?.({ status: 'degraded', error: detail });
 			throw error;
 		}
+	}
+
+	/**
+	 * Reads metadata tags from one transport's discovery store.
+	 */
+	private readTransportServerInfo(transport: NostrClientTransport | null): CoordinatorServerInfo {
+		if (!transport) return {};
+		const info: CoordinatorServerInfo = {};
+		const name = transport.getServerInitializeName();
+		const about = transport.getServerInitializeAbout();
+		const website = transport.getServerInitializeWebsite();
+		const picture = transport.getServerInitializePicture();
+		if (name) info.name = name;
+		if (about) info.about = about;
+		if (website) info.website = website;
+		if (picture) info.picture = picture;
+		return info;
+	}
+
+	/**
+	 * Merge server-announced metadata from both transports. The stable (write)
+	 * and ephemeral (read) transports hold separate discovery stores; whichever
+	 * responded first populates the gaps. No extra round-trip — this is whatever
+	 * was already learned from routine coordinator calls.
+	 */
+	getServerInfo(): CoordinatorServerInfo {
+		return {
+			...this.readTransportServerInfo(this.stableTransport),
+			...this.readTransportServerInfo(this.ephemeralTransport)
+		};
 	}
 
 	/**

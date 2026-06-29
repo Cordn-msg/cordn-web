@@ -4,21 +4,16 @@
 	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
-	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
+	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import { Input } from '$lib/components/ui/input';
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import {
-		getChatCoordinator,
-		getCoordinatorColor,
 		getCoordinatorLabel,
 		getDefaultChatCoordinator,
 		listChatCoordinators,
@@ -28,21 +23,19 @@
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
 	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-	import { useAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+	import {
+		useAvailableKeyPackages,
+		type AvailableKeyPackageWithCoordinator
+	} from '$lib/queries/chatKeyPackageQueries';
 	import {
 		refreshAvailableKeyPackagesAction,
 		startChatWithKeyPackageAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
 	import { goto } from '$app/navigation';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
-	import { areStringArraysEqual, cn } from '$lib/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
-	import Filter from '@lucide/svelte/icons/filter';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
 	import CircleDashed from '@lucide/svelte/icons/circle-dashed';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
@@ -58,45 +51,9 @@
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
 	const newsHasUnread = $derived.by(() => hasUnreadNews());
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
+	// Read for the header Refresh button's loading state; the directory itself
+	// reads the same shared query inside AvailableKeyPackageDirectory.
 	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
-	// Include our own key packages so the directory doubles as a presence
-	// check and so the "Yours" count reflects what is actually shown.
-	const remoteKeyPackages = $derived.by(() => availableKeyPackagesQuery.data ?? []);
-	const coordinatorFilteredKeyPackages = $derived.by(() =>
-		keyPackageCoordinatorFilter === 'all'
-			? remoteKeyPackages
-			: remoteKeyPackages.filter((entry) => entry.coordinatorKey === keyPackageCoordinatorFilter)
-	);
-	const filteredRemoteKeyPackages = $derived.by(() =>
-		coordinatorFilteredKeyPackages.filter((entry) =>
-			matchesKeyPackageSearch({
-				pubkey: entry.pk,
-				keyPackageRef: entry.kp_ref,
-				isLastResort: entry.last_resort,
-				profileHints: keyPackageProfileHints,
-				search: keyPackageDirectorySearch
-			})
-		)
-	);
-	const shownKeyPackageCount = $derived(filteredRemoteKeyPackages.length);
-	const ownShownKeyPackageCount = $derived(
-		filteredRemoteKeyPackages.filter((entry) => entry.pk === $activeAccount?.pubkey).length
-	);
-	// ponytail: coordinators are derived from the actual data so the filter
-	// only lists coordinators that currently expose key packages.
-	const coordinatorFilterOptions = $derived.by(() => {
-		const options: { pubkey: string; label: string; color: string }[] = [];
-		for (const entry of remoteKeyPackages) {
-			if (options.some((o) => o.pubkey === entry.coordinatorKey)) continue;
-			const stored = getChatCoordinator(entry.coordinatorKey);
-			options.push({
-				pubkey: entry.coordinatorKey,
-				label: getCoordinatorLabel(entry.coordinatorKey),
-				color: getCoordinatorColor(stored ?? { pubkey: entry.coordinatorKey, color: undefined })
-			});
-		}
-		return options;
-	});
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const hasAccount = $derived.by(() => Boolean($activeAccount));
 	const hasCoordinator = $derived.by(() => coordinators.length > 0);
@@ -140,53 +97,6 @@
 	let bootstrapAdvancedOpen = $state(false);
 	let quickChatError = $state('');
 	let quickChatStartingRef = $state('');
-	let keyPackageDirectorySearch = $state('');
-	let keyPackageCoordinatorFilter = $state<string>('all');
-	let keyPackageFilterOpen = $state(false);
-	const keyPackageProfileHints = useProfileHints(
-		() => {
-			if (keyPackageDirectorySearch) return remoteKeyPackages.map((kp) => kp.pk);
-			return [...new Set(visibleDirectoryKeyPackagePubkeys)];
-		},
-		{ relays: metadataRelays }
-	);
-	let visibleDirectoryKeyPackageIds = $state<string[]>([]);
-
-	const visibleDirectoryKeyPackagePubkeys = $derived.by(() => {
-		const visibleIds = new SvelteSet(visibleDirectoryKeyPackageIds);
-		const pubkeys = new SvelteSet<string>();
-		for (const entry of filteredRemoteKeyPackages) {
-			if (visibleIds.has(entry.kp_ref)) {
-				pubkeys.add(entry.pk);
-			}
-		}
-		return [...pubkeys];
-	});
-
-	const visibleDirectoryKeyPackageItems = $derived.by(() =>
-		filteredRemoteKeyPackages.map((keyPackage) => {
-			const isOwn = keyPackage.pk === $activeAccount?.pubkey;
-			const isStarting = quickChatStartingRef === keyPackage.kp_ref;
-			const showCoordinatorBorder = keyPackageCoordinatorFilter === 'all';
-			const coordinatorColor = getCoordinatorColor(
-				getChatCoordinator(keyPackage.coordinatorKey) ?? {
-					pubkey: keyPackage.coordinatorKey,
-					color: undefined
-				}
-			);
-			return {
-				id: keyPackage.kp_ref,
-				entry: keyPackage,
-				pubkey: keyPackage.pk,
-				badge: isOwn ? 'You' : undefined,
-				actionLabel: isOwn ? undefined : isStarting ? 'Starting…' : 'Start chat',
-				actionDisabled: isStarting,
-				onAction: isOwn ? undefined : () => startChatWithKeyPackage(keyPackage),
-				className: showCoordinatorBorder ? 'border-l-4 bg-muted/20' : 'bg-muted/20',
-				style: showCoordinatorBorder ? `border-left-color: ${coordinatorColor};` : undefined
-			};
-		})
-	);
 
 	async function addDefaultCoordinator() {
 		try {
@@ -273,7 +183,7 @@
 		await refreshAvailableKeyPackagesAction();
 	}
 
-	async function startChatWithKeyPackage(keyPackage: (typeof remoteKeyPackages)[number]) {
+	async function startChatWithKeyPackage(keyPackage: AvailableKeyPackageWithCoordinator) {
 		if (!keyPackage.coordinatorKey) {
 			quickChatError = 'Add a coordinator before starting a chat';
 			return;
@@ -300,15 +210,6 @@
 
 	function toggleCompletedSteps() {
 		completedStepsExpanded = !completedStepsExpanded;
-	}
-
-	function coordinatorPillClass(active: boolean) {
-		return cn(
-			'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors',
-			active
-				? 'border-primary bg-primary/10 text-foreground'
-				: 'border-border text-muted-foreground hover:text-foreground'
-		);
 	}
 </script>
 
@@ -608,108 +509,15 @@
 						{#if quickChatError}
 							<p class="text-sm text-destructive">{quickChatError}</p>
 						{/if}
-						{#if availableKeyPackagesQuery.error}
-							<p class="text-sm text-destructive">
-								{availableKeyPackagesQuery.error instanceof Error
-									? availableKeyPackagesQuery.error.message
-									: 'Failed to load remote key packages'}
-							</p>
-						{/if}
-						{#if $activeAccount}
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<p class="text-xs text-muted-foreground">
-									Showing {shownKeyPackageCount} key package{shownKeyPackageCount === 1 ? '' : 's'}
-									{#if ownShownKeyPackageCount > 0}
-										<span class="ml-1">· {ownShownKeyPackageCount} yours</span>
-									{/if}
-								</p>
-								<Collapsible.Root bind:open={keyPackageFilterOpen}>
-									<Collapsible.Trigger>
-										{#snippet child({ props })}
-											<Button
-												{...props}
-												variant="ghost"
-												size="sm"
-												class="gap-1.5 text-muted-foreground"
-											>
-												<Filter class="size-4" />
-												{keyPackageFilterOpen ? 'Hide filters' : 'Filter by coordinator'}
-												<ChevronDown
-													class={`size-4 transition-transform ${keyPackageFilterOpen ? 'rotate-180' : ''}`}
-												/>
-											</Button>
-										{/snippet}
-									</Collapsible.Trigger>
-									<Collapsible.Content>
-										{#if coordinatorFilterOptions.length > 0}
-											<div class="flex flex-wrap gap-2 pt-2">
-												<button
-													type="button"
-													onclick={() => (keyPackageCoordinatorFilter = 'all')}
-													class={coordinatorPillClass(keyPackageCoordinatorFilter === 'all')}
-												>
-													All coordinators
-												</button>
-												{#each coordinatorFilterOptions as option (option.pubkey)}
-													<button
-														type="button"
-														onclick={() => (keyPackageCoordinatorFilter = option.pubkey)}
-														class={coordinatorPillClass(
-															keyPackageCoordinatorFilter === option.pubkey
-														)}
-													>
-														<span
-															class="size-2 rounded-full"
-															style={`background-color: ${option.color};`}
-														></span>
-														{option.label}
-													</button>
-												{/each}
-											</div>
-										{:else}
-											<p class="pt-2 text-xs text-muted-foreground">
-												No coordinators with key packages yet.
-											</p>
-										{/if}
-									</Collapsible.Content>
-								</Collapsible.Root>
-							</div>
-						{/if}
-						<Input
-							bind:value={keyPackageDirectorySearch}
-							placeholder="Search by pubkey, package reference, or last resort"
-							aria-label="Search available key packages"
+						<AvailableKeyPackageDirectory
+							onStartChat={startChatWithKeyPackage}
+							startingRef={quickChatStartingRef}
+							includeSelf
+							showCount
+							showCoordinatorFilter
+							maxHeightClass="max-h-[32rem]"
+							emptyMessage="No public key packages found yet. Refresh after adding coordinators."
 						/>
-						{#if !$activeAccount}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								Log in to browse coordinator key packages.
-							</div>
-						{:else if filteredRemoteKeyPackages.length > 0}
-							<VirtualKeyPackageList
-								items={visibleDirectoryKeyPackageItems}
-								maxHeightClass="max-h-[32rem]"
-								contentClass="rounded-xl border border-border p-3"
-								itemHeight={126}
-								onVisibleItemsChange={(itemIds) => {
-									if (areStringArraysEqual(itemIds, visibleDirectoryKeyPackageIds)) return;
-									visibleDirectoryKeyPackageIds = itemIds;
-								}}
-							/>
-						{:else if remoteKeyPackages.length > 0}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								No key packages match your search.
-							</div>
-						{:else}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								No public key packages found yet. Refresh after adding coordinators.
-							</div>
-						{/if}
 					</Card.Content>
 				</Card.Root>
 

@@ -3,6 +3,7 @@ import { SvelteSet } from 'svelte/reactivity';
 import { manager } from '$lib/services/accountManager.svelte';
 import { listChatGroups } from '$lib/services/chatGroups.svelte';
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+import { getCoordinatorServerName } from '$lib/services/coordinatorServerInfo.svelte';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
@@ -133,8 +134,22 @@ export function listKnownCoordinatorKeys(): string[] {
 	return [...keys];
 }
 
+function defaultCoordinatorLabel(pubkey: string): string {
+	return `Coordinator ${normalizePubKey(pubkey).slice(0, 8)}`;
+}
+
+/**
+ * Resolve a display label for a coordinator. Precedence:
+ *   1. User-defined stored label (anything other than the auto default)
+ *   2. Server-announced name learned from coordinator responses
+ *   3. Auto-derived `Coordinator <short-pubkey>` fallback
+ */
 export function getCoordinatorLabel(pubkey: string): string {
-	return getChatCoordinator(pubkey)?.label ?? `Coordinator ${pubkey.slice(0, 8)}`;
+	const stored = getChatCoordinator(pubkey);
+	if (stored && stored.label !== defaultCoordinatorLabel(pubkey)) {
+		return stored.label;
+	}
+	return getCoordinatorServerName(pubkey) ?? stored?.label ?? defaultCoordinatorLabel(pubkey);
 }
 
 export function getChatCoordinator(pubkey: string): StoredCoordinator | undefined {

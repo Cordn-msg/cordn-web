@@ -2,17 +2,16 @@ import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { JoinRequest } from '$lib/contracts';
 import {
-	decodeStoredGroupState,
 	ensureGroupsLoaded,
-	getChatGroup,
 	inviteChatGroupMember,
-	listChatGroups
+	listChatGroupMembers,
+	listChatGroups,
+	removeChatGroupMember
 } from '$lib/services/chatGroups.svelte';
-import { isGroupAdmin, listGroupMembers } from '$lib/services/chatAdminPolicy';
+import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 import {
 	isSignerUnavailableError,
 	requireActiveAccount,
-	withCoordinatorClient,
 	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
 import { manager } from '$lib/services/accountManager.svelte';
@@ -124,24 +123,7 @@ function mergeFetchedJoinRequests(
 		const id = makeNotificationId(normalizedCoordinatorKey, groupId, request);
 		responseIds.add(id);
 		const previous = existingById.get(id);
-		let status = previous?.status ?? 'pending';
-		if (status === 'pending') {
-			const group = getChatGroup(groupId);
-			if (group) {
-				try {
-					const state = decodeStoredGroupState(group);
-					if (
-						listGroupMembers(state).some(
-							(m) => normalizePubKey(m.stablePubkey) === normalizePubKey(request.pk)
-						)
-					) {
-						status = 'accepted';
-					}
-				} catch {
-					// State decoding may fail; leave status as-is.
-				}
-			}
-		}
+		const status = previous?.status ?? 'pending';
 		existingById.set(id, {
 			id,
 			coordinatorKey: normalizedCoordinatorKey,
@@ -189,6 +171,19 @@ export async function fetchJoinRequestsForAdminGroups() {
 	const adminGroups = listChatGroups().filter((group) =>
 		isGroupAdmin({ metadata: group.metadata, stablePubkey: pubkey })
 	);
+
+	// Self-heal entries for groups the user no longer admins (lost admin status,
+	// left the group, group removed locally). These groups are never in the
+	// fetch set, so merge's drop logic can't reach them — without this they'd
+	// linger in localStorage forever. Welcomes have no analog: they're
+	// per-target and fetched only by the recipient, so ownership never shifts.
+	const adminGroupIds = new SvelteSet(adminGroups.map((group) => group.id));
+	if (chatJoinRequestsStore.entries.some((entry) => !adminGroupIds.has(entry.groupId))) {
+		chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.filter((entry) =>
+			adminGroupIds.has(entry.groupId)
+		);
+		saveJoinRequests();
+	}
 
 	if (adminGroups.length === 0) {
 		chatJoinRequestsStore.error = '';
@@ -270,7 +265,16 @@ export async function fetchJoinRequestsForAdminGroups() {
 				continue;
 			}
 			for (const group of outcome.groups) {
-				const requests = outcome.requestsByGroup.get(group.gid) ?? [];
+				// Never surface a user's own join request back to themselves.
+				// Egalitarian groups make every member an admin, so a (re-)added
+				// member would otherwise fetch their own still-pending request —
+				// including ones another admin already accepted, since cross-client
+				// consume is deferred to the accepter's next poll. Filtering here is
+				// also the merge choke point: merge's drop logic retires any
+				// own-request entry that slipped in from a prior fetch.
+				const requests = (outcome.requestsByGroup.get(group.gid) ?? []).filter(
+					(request) => normalizePubKey(request.pk) !== pubkey
+				);
 				mergeFetchedJoinRequests(outcome.coordinatorKey, group.gid, requests);
 			}
 		}
@@ -289,7 +293,13 @@ export async function storeJoinRequest(
 ) {
 	const account = requireActiveAccount('You must be logged in to request to join a group');
 
-	return withCoordinatorClient(account, coordinatorKey, (client) =>
+	// Retry on cold-signer: StoreJoinRequest is often the first stable-transport
+	// call of a session (stable transport is lazy-constructed on first use, and
+	// the extension/NIP-46 signer may not be ready yet). Without retry the first
+	// join request after login throws, never reaches the coordinator, and admins
+	// see nothing until the user re-sends — by which point the signer is warm.
+	// The fetch sibling uses Retry for the same reason.
+	return withCoordinatorClientRetry(account, coordinatorKey, (client) =>
 		client.StoreJoinRequest({
 			gid: groupId,
 			kp_ref: keyPackageRef
@@ -303,6 +313,26 @@ export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string
 	setJoinRequestSubmitting(entry.id);
 
 	try {
+		// Reinvite path: a requester can already occupy a leaf in the ratchet
+		// tree (joined another way, or lost local state) without an admin ever
+		// seeing this request. inviteChatGroupMember refuses existing members,
+		// so blank their stale leaf first, then re-add from their published key
+		// package. ts-mls recycles the blanked leaf (addLeafNodeMutable ->
+		// findBlankLeafNodeIndex) and runGroupOperation serializes the two ops
+		// per group, so this is the same remove-then-readd flow used elsewhere.
+		// If the re-add fails after the remove, the member is cleanly removed
+		// (recoverable) rather than left in a broken state.
+		const requesterPubkey = normalizePubKey(entry.requesterStablePubkey);
+		const isExistingMember = listChatGroupMembers(entry.groupId).some(
+			(member) => normalizePubKey(member.stablePubkey) === requesterPubkey
+		);
+		if (isExistingMember) {
+			await removeChatGroupMember({
+				groupId: entry.groupId,
+				targetStablePubkey: requesterPubkey
+			});
+		}
+
 		const group = await inviteChatGroupMember({
 			groupId: entry.groupId,
 			identifier: entry.kpRef

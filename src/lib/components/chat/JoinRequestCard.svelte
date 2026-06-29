@@ -42,6 +42,15 @@
 			: []
 	);
 
+	// A requester can already occupy a stale leaf in the tree (joined another
+	// way, or lost local state). Accept then runs the remove-then-readd
+	// reinvite path, so label it honestly and explain the churn.
+	const isExistingMember = $derived(
+		groupMemberPubkeys.includes(normalizePubKey(entry.requesterStablePubkey))
+	);
+	const acceptLabel = $derived(isExistingMember ? 'Re-add' : 'Accept');
+	const acceptingLabel = $derived(isExistingMember ? 'Re-adding…' : 'Accepting…');
+
 	const groupDisplayName = $derived.by(() => {
 		if (!group) return 'group';
 		return getChatGroupDisplayTitle({
@@ -79,6 +88,11 @@
 				<p class="line-clamp-2 text-xs wrap-break-word text-muted-foreground">
 					Wants to join {groupDisplayName}
 				</p>
+				{#if isExistingMember}
+					<p class="text-[11px] text-amber-600 dark:text-amber-400">
+						Already in group — re-add refreshes their access
+					</p>
+				{/if}
 				{#if showCoordinatorLabel && coordinatorLabel}
 					<p class="truncate text-[11px] text-muted-foreground">
 						{coordinatorLabel}
@@ -98,7 +112,7 @@
 					{#if submitting}
 						<Spinner class="mr-1 size-3" />
 					{/if}
-					{submitting ? 'Accepting…' : 'Accept'}
+					{submitting ? acceptingLabel : acceptLabel}
 				</Button>
 				{#if showReject && onReject}
 					<Button

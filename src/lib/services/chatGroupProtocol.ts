@@ -73,10 +73,6 @@ export async function finalizePendingEpochOperations(
 		}
 
 		if (operation.kind === 'add-member') {
-			console.info('[cordn/after] inviter storing welcome with hint', {
-				target: operation.targetStablePubkey,
-				after: operation.postedCursor
-			});
 			await client.StoreWelcome({
 				target_pk: operation.targetStablePubkey,
 				kp_ref: operation.keyPackageReference,

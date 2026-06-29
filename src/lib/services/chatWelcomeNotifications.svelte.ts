@@ -229,14 +229,6 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
 						client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {})
 					);
-					const withAfter = result.welcomes.filter((w) => w.after !== undefined);
-					if (withAfter.length > 0) {
-						console.info('[cordn/after] coordinator returned welcomes with hint', {
-							coordinatorKey,
-							count: withAfter.length,
-							afters: withAfter.map((w) => ({ kp_ref: w.kp_ref, after: w.after }))
-						});
-					}
 					return {
 						coordinatorKey,
 						welcomes: result.welcomes,
