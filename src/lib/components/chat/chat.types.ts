@@ -4,6 +4,7 @@ export interface ChatMessage {
 	author: string;
 	authorLabel?: string;
 	text: string;
+	kind: number;
 	createdAt: number;
 	timeLabel: string;
 	dayLabel: string;
@@ -22,6 +23,7 @@ export interface ChatMessage {
 		author: string;
 		authorLabel?: string;
 		text: string;
+		deleted?: boolean;
 	};
 	cursor?: number;
 	encrypted?: boolean;

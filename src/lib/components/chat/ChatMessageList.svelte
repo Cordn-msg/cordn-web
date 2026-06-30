@@ -14,7 +14,8 @@
 		onReact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
-		onVisibleUnreadReference = () => {}
+		onVisibleUnreadReference = () => {},
+		onOpenRich = () => {}
 	}: {
 		messages: ChatMessage[];
 		onReply?: (message: ChatMessage) => void;
@@ -22,6 +23,7 @@
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onVisibleUnreadReference?: (message: ChatMessage) => void;
+		onOpenRich?: (eventId: string) => void;
 	} = $props();
 	let container: HTMLDivElement | null = $state(null);
 	let highlightedMessageId = $state('');
@@ -272,6 +274,7 @@
 								{onEdit}
 								{onDelete}
 								onNavigateToMessage={navigateToMessage}
+								{onOpenRich}
 								highlighted={highlightedMessageId === entry.message.id}
 							/>
 						</div>

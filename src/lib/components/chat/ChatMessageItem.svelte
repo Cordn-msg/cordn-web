@@ -12,8 +12,6 @@
 		DropdownMenuTrigger
 	} from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 	import {
 		Tooltip,
 		TooltipContent,
@@ -35,9 +33,14 @@
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import { cn, pubkeyToHexColor, copyToClipboard } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
+	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
+	import {
+		MESSAGE_LINK_WRAP_CLASS,
+		MESSAGE_PART_CONTAINER_CLASS,
+		MESSAGE_TEXT_WRAP_CLASS
+	} from '$lib/chat/messageTextClasses';
 	import {
 		getCachedChatMessageParts,
 		loadCustomChatReactions,
@@ -45,16 +48,6 @@
 	} from './chatMessageRenderCache';
 
 	const REACTIONS = ['👍', '❤️', '😂', '😮', '🎉', '🔥'] as const;
-	const MESSAGE_TEXT_WRAP_CLASS =
-		'min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]';
-	const MESSAGE_LINK_WRAP_CLASS =
-		'inline max-w-full whitespace-normal break-words text-left align-baseline underline underline-offset-2 [overflow-wrap:anywhere] [word-break:break-word]';
-	const MESSAGE_PART_CONTAINER_CLASS =
-		'min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word]';
-
-	function openExternalLink(href: string) {
-		window.open(href, '_blank', 'noopener,noreferrer');
-	}
 
 	let {
 		message,
@@ -66,6 +59,7 @@
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onNavigateToMessage = () => {},
+		onOpenRich = () => {},
 		highlighted = false
 	}: {
 		message: ChatMessage;
@@ -77,6 +71,7 @@
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onNavigateToMessage?: (messageId: string) => void;
+		onOpenRich?: (eventId: string) => void;
 		highlighted?: boolean;
 	} = $props();
 	let reactionMenuOpen = $state(false);
@@ -85,8 +80,6 @@
 	let customReaction = $state('');
 	let customReactionInput: HTMLInputElement | null = $state(null);
 	let interactionControlsActive = $state(false);
-	let messageInfoOpen = $state(false);
-	let rawEnvelopeOpen = $state(false);
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -117,11 +110,6 @@
 	const replySwipeActive = $derived(Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD);
 	const swipeTransform = $derived(swipeOffset ? `translateX(${swipeOffset}px)` : 'translateX(0px)');
 	const replyIndicatorSideClass = $derived(isOwn ? 'right-full mr-2' : 'left-full ml-2');
-	const messageTimestamp = $derived(new Date(message.createdAt).toLocaleString());
-	const rawMessageEnvelope = $derived(JSON.stringify(message, null, 2));
-	const reactionTotal = $derived(
-		message.reactions?.reduce((total, reaction) => total + reaction.count, 0) ?? 0
-	);
 	const isSystemMessage = $derived(Boolean(message.systemKind));
 	const systemMessageIcon = $derived.by(() => {
 		switch (message.systemKind) {
@@ -157,7 +145,6 @@
 		() =>
 			$profile?.name || $profile?.display_name || $profile?.nip05 || `${authorNpub.slice(0, 12)}…`
 	);
-	const messageParts = $derived(getCachedChatMessageParts(message.id, message.text));
 	const replyParts = $derived.by(() =>
 		message.replyTo ? getCachedChatMessageParts(message.replyTo.id, message.replyTo.text) : []
 	);
@@ -261,10 +248,10 @@
 		}
 	}
 
-	function openMessageInfo() {
+	function openRich() {
 		actionsMenuOpen = false;
-		messageInfoOpen = true;
 		clearTouchActions();
+		onOpenRich(message.eventId);
 	}
 
 	async function handleCopyMessage() {
@@ -594,6 +581,25 @@
 									</DropdownMenuRoot>
 								{/if}
 
+								<Tooltip>
+									<TooltipTrigger>
+										{#snippet child({ props })}
+											<Button
+												{...props}
+												type="button"
+												variant="ghost"
+												size="icon-sm"
+												class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+												onclick={() => openRich()}
+												aria-label="Message info"
+											>
+												<Info class="size-4" />
+											</Button>
+										{/snippet}
+									</TooltipTrigger>
+									<TooltipContent side="top" sideOffset={8}>Info</TooltipContent>
+								</Tooltip>
+
 								<DropdownMenuRoot
 									bind:open={actionsMenuOpen}
 									onOpenChange={handleActionsMenuOpenChange}
@@ -627,11 +633,6 @@
 										sideOffset={8}
 										class="w-44 rounded-xl"
 									>
-										<DropdownMenuItem onSelect={openMessageInfo} class="gap-2">
-											<Info class="size-4" />
-											<span>Info</span>
-										</DropdownMenuItem>
-
 										<DropdownMenuItem onSelect={handleCopyMessage} class="gap-2">
 											<Copy class="size-4" />
 											<span>Copy</span>
@@ -741,76 +742,57 @@
 											/>
 										</span>
 									</div>
-									<p
-										class={cn(
-											`line-clamp-2 max-w-full min-w-0 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
-											isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
-										)}
-									>
-										{#each replyParts as part, index (`${message.id}:reply-part:${index}`)}
-											{#if part.type === 'profile'}
-												<span
-													class={cn(
-														'inline-flex max-w-full min-w-0 rounded-full font-semibold',
-														MESSAGE_PART_CONTAINER_CLASS
-													)}
-												>
-													@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
-												</span>
-											{:else if part.type === 'link'}
-												<a
-													href={part.href}
-													target="_blank"
-													rel="external noreferrer noopener"
-													class={cn(
-														MESSAGE_LINK_WRAP_CLASS,
-														isOwn
-															? 'text-primary-foreground hover:text-primary-foreground/80'
-															: 'text-foreground hover:text-foreground/80'
-													)}
-												>
-													{part.text}
-												</a>
-											{:else}
-												<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
-											{/if}
-										{/each}
-									</p>
+									{#if message.replyTo.deleted}
+										<p
+											class={cn(
+												'line-clamp-2 max-w-full min-w-0 text-sm italic',
+												isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'
+											)}
+										>
+											This message was deleted
+										</p>
+									{:else}
+										<p
+											class={cn(
+												`line-clamp-2 max-w-full min-w-0 text-sm ${MESSAGE_TEXT_WRAP_CLASS}`,
+												isOwn ? 'text-primary-foreground/90' : 'text-foreground/80'
+											)}
+										>
+											{#each replyParts as part, index (`${message.id}:reply-part:${index}`)}
+												{#if part.type === 'profile'}
+													<span
+														class={cn(
+															'inline-flex max-w-full min-w-0 rounded-full font-semibold',
+															MESSAGE_PART_CONTAINER_CLASS
+														)}
+													>
+														@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
+													</span>
+												{:else if part.type === 'link'}
+													<a
+														href={part.href}
+														target="_blank"
+														rel="external noreferrer noopener"
+														class={cn(
+															MESSAGE_LINK_WRAP_CLASS,
+															isOwn
+																? 'text-primary-foreground hover:text-primary-foreground/80'
+																: 'text-foreground hover:text-foreground/80'
+														)}
+													>
+														{part.text}
+													</a>
+												{:else}
+													<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
+												{/if}
+											{/each}
+										</p>
+									{/if}
 								</button>
 							{/if}
 
 							{#if !message.deleted}
-								<p class={cn('max-w-full min-w-0', MESSAGE_TEXT_WRAP_CLASS)}>
-									{#each messageParts as part, index (`${message.id}:part:${index}`)}
-										{#if part.type === 'profile'}
-											<span
-												class={cn(
-													'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
-													MESSAGE_PART_CONTAINER_CLASS,
-													isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
-												)}
-											>
-												@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
-											</span>
-										{:else if part.type === 'link'}
-											<button
-												type="button"
-												onclick={() => openExternalLink(part.href)}
-												class={cn(
-													'max-w-full min-w-0 whitespace-normal',
-													MESSAGE_LINK_WRAP_CLASS,
-													isOwn
-														? 'text-primary-foreground hover:text-primary-foreground/80'
-														: 'text-foreground hover:text-foreground/80'
-												)}
-											>
-												{part.text}
-											</button>
-										{:else}
-											<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
-										{/if}
-									{/each}
-								</p>
+								<ChatInlineBody {message} {onOpenRich} />
 							{/if}
 						</div>
 					</div>
@@ -827,7 +809,7 @@
 												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
 												aria-label={`${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
 												title={getReactionLabel(reaction)}
-												onclick={() => openMessageInfo()}
+												onclick={() => openRich()}
 												onpointerenter={activateInteractionControls}
 												onfocus={activateInteractionControls}
 											>
@@ -885,112 +867,5 @@
 				</div>
 			</div>
 		</article>
-	{/if}
-
-	{#if !isSystemMessage}
-		<Dialog.Root bind:open={messageInfoOpen}>
-			<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-xl">
-				<Dialog.Header>
-					<Dialog.Title>Message info</Dialog.Title>
-					<Dialog.Description>Details for this message and its reactions.</Dialog.Description>
-				</Dialog.Header>
-
-				<div class="space-y-5 text-sm">
-					<div class="grid gap-3 rounded-2xl border bg-muted/30 p-4 sm:grid-cols-2">
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-								Author
-							</p>
-							<ProfileCard
-								pubkey={message.author}
-								mode="inline"
-								showInlineAvatar={true}
-								profileLink={false}
-							/>
-						</div>
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Time</p>
-							<p>{messageTimestamp}</p>
-						</div>
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-								Status
-							</p>
-							<p>{message.deleted ? 'Deleted' : message.edited ? 'Edited' : 'Original'}</p>
-						</div>
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-								Delivery
-							</p>
-							<p>{getDeliveryStateLabel() || 'Received'}</p>
-						</div>
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-								Encryption
-							</p>
-							<p>{message.encrypted ? 'Sealed (spec/03)' : 'Plaintext'}</p>
-						</div>
-					</div>
-
-					<div class="space-y-3">
-						<div class="flex items-center justify-between gap-3">
-							<h3 class="font-semibold">Reactions</h3>
-							<span class="text-xs text-muted-foreground">
-								{reactionTotal} total
-							</span>
-						</div>
-
-						{#if message.reactions?.length}
-							<div class="space-y-3">
-								{#each message.reactions as reaction (`${message.id}:info:${reaction.emoji}`)}
-									<div class="rounded-2xl border p-3">
-										<div class="mb-3 flex items-center gap-2">
-											<span class="text-lg">{reaction.emoji}</span>
-											<span class="font-medium">
-												{reaction.count} reaction{reaction.count === 1 ? '' : 's'}
-											</span>
-										</div>
-										<div class="flex flex-col gap-2">
-											{#each reaction.reactors as reactor (`${message.id}:info:${reaction.emoji}:${reactor}`)}
-												<ProfileCard
-													pubkey={reactor}
-													mode="inline"
-													showInlineAvatar={true}
-													profileLink={false}
-												/>
-											{/each}
-										</div>
-									</div>
-								{/each}
-							</div>
-						{:else}
-							<p class="rounded-2xl border border-dashed p-4 text-muted-foreground">
-								No reactions yet.
-							</p>
-						{/if}
-					</div>
-
-					<Collapsible.Root bind:open={rawEnvelopeOpen}>
-						<Collapsible.Trigger
-							class="flex w-full min-w-0 items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left font-medium"
-						>
-							<span class="min-w-0 flex-1">Raw message envelope</span>
-							<ChevronDown
-								class={cn(
-									'size-4 shrink-0 transition-transform',
-									rawEnvelopeOpen ? 'rotate-180' : ''
-								)}
-							/>
-						</Collapsible.Trigger>
-						<Collapsible.Content>
-							<pre
-								class="mt-3 max-w-full overflow-x-auto overflow-y-auto rounded-2xl bg-muted p-4 text-xs leading-relaxed"><code
-									class="block min-w-0 break-all whitespace-pre-wrap">{rawMessageEnvelope}</code
-								></pre>
-						</Collapsible.Content>
-					</Collapsible.Root>
-				</div>
-			</Dialog.Content>
-		</Dialog.Root>
 	{/if}
 </div>

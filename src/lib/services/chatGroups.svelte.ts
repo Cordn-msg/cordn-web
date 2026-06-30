@@ -23,21 +23,18 @@ import {
 import { assertCanAdministerGroup, listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
 	createApplicationMessageBase64,
-	createDeleteMessageTags,
-	createEditMessageTags,
-	createReactionMessageTags,
-	createReplyMessageTags,
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
 	encryptGroupPayloadBase64,
-	type ChatMessageDeleteTarget,
-	type ChatMessageEditTarget,
-	type ChatMessageReactionTarget,
-	type ChatMessageReplyTarget,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import {
+	resolveOutboundMessage,
+	type ChatMessageReplyTarget,
+	type MessageTarget
+} from '$lib/chat/references';
 import {
 	createGroupPendingEpochStore,
 	enqueuePendingEpochOperation,
@@ -1250,41 +1247,27 @@ export async function sendChatGroupMessage(input: {
 	content: string;
 	tags?: string[][];
 	replyTo?: ChatMessageReplyTarget;
-	reactionTo?: ChatMessageReactionTarget;
-	editTo?: ChatMessageEditTarget;
-	deleteTo?: ChatMessageDeleteTarget;
+	reactionTo?: MessageTarget;
+	editTo?: MessageTarget;
+	deleteTo?: MessageTarget;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
 		const group = await prepareGroupForApplicationMessage(input.groupId);
 
-		const isReaction = Boolean(input.reactionTo);
-		const isEdit = Boolean(input.editTo);
-		const isDelete = Boolean(input.deleteTo);
-		const content = isReaction ? input.content : input.content.trim();
-		if (!content && !isDelete) {
+		const outboundShape = resolveOutboundMessage(input);
+		if (!outboundShape.content && !input.deleteTo) {
 			throw new Error('Message content is required');
 		}
 
 		const state = decodeStoredGroupState(group);
-		const tags = input.reactionTo
-			? createReactionMessageTags(input.reactionTo)
-			: input.deleteTo
-				? createDeleteMessageTags(input.deleteTo)
-				: input.editTo
-					? createEditMessageTags(input.editTo, input.tags)
-					: [
-							...(input.replyTo ? createReplyMessageTags(input.replyTo) : []),
-							...(input.tags ?? [])
-						];
-
 		const outbound = await createApplicationMessageBase64({
 			state,
 			event: createUnsignedCordnMessageEvent({
 				pubkey: normalizePubKey(account.pubkey),
-				content,
-				kind: input.reactionTo ? 7 : isEdit ? 1010 : isDelete ? 5 : input.replyTo ? 1111 : 9,
-				tags
+				content: outboundShape.content,
+				kind: outboundShape.kind,
+				tags: outboundShape.tags
 			}),
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
 		});

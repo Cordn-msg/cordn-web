@@ -37,13 +37,8 @@ import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackag
 import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 import { fetchCoordinatorJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 import { requireActiveAccount } from '$lib/services/chatRuntime';
-import type {
-	ChatMessageDeleteTarget,
-	ChatMessageEditTarget,
-	ChatMessageReactionTarget,
-	ChatMessageReplyTarget,
-	StoredChatMessage
-} from '$lib/services/chatGroupMessages.svelte';
+import type { ChatMessageReplyTarget, MessageTarget } from '$lib/chat/references';
+import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
 	inviteOpen: boolean;
@@ -200,10 +195,10 @@ export async function sendGroupMessageAction(
 	groupId: string | undefined,
 	content: string,
 	replyTo?: ChatMessageReplyTarget,
-	reactionTo?: ChatMessageReactionTarget,
+	reactionTo?: MessageTarget,
 	tags: string[][] = [],
-	editTo?: ChatMessageEditTarget,
-	deleteTo?: ChatMessageDeleteTarget
+	editTo?: MessageTarget,
+	deleteTo?: MessageTarget
 ): Promise<StoredChatMessage | false> {
 	const text = content.trim();
 	if ((!text && !reactionTo && !deleteTo) || !groupId) return false;

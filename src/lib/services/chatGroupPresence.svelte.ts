@@ -6,10 +6,8 @@ import {
 	listChatGroupMessages,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
-import {
-	SYSTEM_MESSAGE_KIND,
-	type StoredChatMessage
-} from '$lib/services/chatGroupMessages.svelte';
+import { SYSTEM_MESSAGE_KIND, ChatKinds } from '$lib/chat/kinds';
+import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
@@ -136,7 +134,7 @@ export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: str
 				chatMessageReferencesPubkey(message.tags, pubkey)
 		)
 		.map((message) => {
-			if (message.kind !== 7) {
+			if (message.kind !== ChatKinds.Reaction) {
 				return { reference: message, target: message };
 			}
 

@@ -2,12 +2,9 @@ import {
 	getChatGroupDisplayTitle,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
-import {
-	getMessageDeleteReference,
-	getMessageEditReference,
-	getMessageReactionReference,
-	type StoredChatMessage
-} from '$lib/services/chatGroupMessages.svelte';
+import { buildAnnotationIndex, getMessageReactionReference } from '$lib/chat/references';
+import { ChatKinds } from '$lib/chat/kinds';
+import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 
 export interface ChatMessageSearchResult {
@@ -108,40 +105,10 @@ export function searchChatMessages(
 }
 
 function getSearchableMessages(messages: StoredChatMessage[]): StoredChatMessage[] {
-	const byId = new Map(messages.map((message) => [message.id, message]));
-	const deletedMessageIds = new Set<string>();
-	const editMap = new Map<string, StoredChatMessage>();
-
-	for (const message of messages) {
-		const deleteReference = getMessageDeleteReference(message.kind, message.tags);
-		if (!deleteReference) continue;
-
-		const original = byId.get(deleteReference.targetId);
-		if (!original) continue;
-		if (deleteReference.targetKind !== original.kind) continue;
-		if (message.sender !== original.sender) continue;
-
-		deletedMessageIds.add(deleteReference.targetId);
-	}
-
-	for (const message of messages) {
-		const editReference = getMessageEditReference(message.kind, message.content, message.tags);
-		if (!editReference) continue;
-		if (deletedMessageIds.has(editReference.targetId)) continue;
-
-		const original = byId.get(editReference.targetId);
-		if (!original) continue;
-		if (message.sender !== original.sender) continue;
-
-		const current = editMap.get(editReference.targetId);
-		if (!current || message.createdAt > current.createdAt) {
-			editMap.set(editReference.targetId, message);
-		}
-	}
-
+	const { editMap, deletedIds } = buildAnnotationIndex(messages);
 	return messages
-		.filter((message) => message.kind !== 5 && message.kind !== 1010)
-		.filter((message) => !deletedMessageIds.has(message.id))
+		.filter((message) => message.kind !== ChatKinds.Deletion && message.kind !== ChatKinds.Edit)
+		.filter((message) => !deletedIds.has(message.id))
 		.map((message) => editMap.get(message.id) ?? message);
 }
 

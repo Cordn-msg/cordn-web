@@ -13,7 +13,7 @@ import {
 	getUnreadChatGroupMessageCount,
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
-import { SYSTEM_MESSAGE_KIND } from '$lib/services/chatGroupMessages.svelte';
+import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';

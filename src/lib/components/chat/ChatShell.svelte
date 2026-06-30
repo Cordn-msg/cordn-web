@@ -2,6 +2,10 @@
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
+	import ChatDetailSidebar from './ChatDetailSidebar.svelte';
+	import * as Sheet from '$lib/components/ui/sheet';
+	import * as Resizable from '$lib/components/ui/resizable';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { page } from '$app/state';
 	import { getChatGroupDisplayTitle } from './chatGroupDisplay';
 	import type { ChatMentionCandidate, ChatMentionReference, ChatMessage } from './chat.types';
@@ -16,17 +20,13 @@
 	} from '$lib/services/chatUiActions.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
-		getMessageDeleteReference,
-		getMessageEditReference,
-		getMessageReactionReference,
+		buildAnnotationIndex,
 		getMessageThreadReference,
-		SYSTEM_MESSAGE_KIND,
-		type ChatMessageDeleteTarget,
-		type ChatMessageEditTarget,
-		type ChatMessageReactionTarget,
 		type ChatMessageReplyTarget,
-		type StoredChatSystemMessageData
-	} from '$lib/services/chatGroupMessages.svelte';
+		type MessageTarget
+	} from '$lib/chat/references';
+	import { ChatKinds, SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
+	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 	import {
 		getChatGroup,
@@ -38,7 +38,7 @@
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 	import { serializeChatProfileMentions } from '$lib/services/chatMentions';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getChatDraft, setChatDraft } from '$lib/services/chatDrafts.svelte';
 
@@ -68,7 +68,7 @@
 	let sendError = $state('');
 	let replyTarget = $state<ChatMessageReplyTarget | null>(null);
 	let replyTargetAuthor = $state('');
-	let editTarget = $state<ChatMessageEditTarget | null>(null);
+	let editTarget = $state<MessageTarget | null>(null);
 	let editPreview = $state('');
 	let optimisticEdits = $state<Record<string, string>>({});
 	let optimisticDeletes = $state<Record<string, boolean>>({});
@@ -133,6 +133,7 @@
 			eventId: message.id,
 			author: message.sender,
 			text: message.content,
+			kind: message.kind,
 			createdAt: message.createdAt,
 			cursor: message.cursor,
 			encrypted: message.encrypted === true,
@@ -203,66 +204,14 @@
 	// Splitting them into their own $derived means Svelte only rebuilds them when
 	// messages actually change — not on every optimistic edit/delete/reply which
 	// only affects the `messages` derived below.
-	const messageMaps = $derived.by(() => {
-		const byEventId = new SvelteMap(storedMessages.map((message) => [message.id, message]));
-		const reactionMap = new SvelteMap<
-			string,
-			SvelteMap<string, { emoji: string; authors: SvelteSet<string> }>
-		>();
-		const editMap = new SvelteMap<string, StoredChatMessage>();
-		const deletedMessageIds = new SvelteSet<string>();
-
-		for (const message of storedMessages) {
-			const reactionReference = getMessageReactionReference(
-				message.kind,
-				message.content,
-				message.tags
-			);
-			if (!reactionReference) continue;
-
-			const byEmoji = reactionMap.get(reactionReference.targetId) ?? new SvelteMap();
-			const entry = byEmoji.get(reactionReference.reaction) ?? {
-				emoji: reactionReference.reaction,
-				authors: new SvelteSet<string>()
-			};
-
-			entry.authors.add(normalizePubKey(message.sender));
-			byEmoji.set(reactionReference.reaction, entry);
-			reactionMap.set(reactionReference.targetId, byEmoji);
-		}
-
-		for (const message of storedMessages) {
-			const deleteReference = getMessageDeleteReference(message.kind, message.tags);
-			if (!deleteReference) continue;
-
-			const original = byEventId.get(deleteReference.targetId);
-			if (!original) continue;
-			if (deleteReference.targetKind !== original.kind) continue;
-			if (normalizePubKey(original.sender) !== normalizePubKey(message.sender)) continue;
-
-			deletedMessageIds.add(deleteReference.targetId);
-		}
-
-		for (const message of storedMessages) {
-			const editReference = getMessageEditReference(message.kind, message.content, message.tags);
-			if (!editReference) continue;
-			if (deletedMessageIds.has(editReference.targetId)) continue;
-
-			const original = byEventId.get(editReference.targetId);
-			if (!original) continue;
-			if (normalizePubKey(original.sender) !== normalizePubKey(message.sender)) continue;
-
-			const current = editMap.get(editReference.targetId);
-			if (!current || message.createdAt > current.createdAt) {
-				editMap.set(editReference.targetId, message);
-			}
-		}
-
-		return { byEventId, reactionMap, editMap, deletedMessageIds };
-	});
+	// Reaction/edit/delete index, shared with search via buildAnnotationIndex.
+	// Splitting this into its own $derived means Svelte only rebuilds it when
+	// messages actually change — not on every optimistic edit/delete/reply which
+	// only affects the `messages` derived below.
+	const messageMaps = $derived.by(() => buildAnnotationIndex(storedMessages));
 
 	const messages = $derived.by<ChatMessage[]>(() => {
-		const { byEventId, reactionMap, editMap, deletedMessageIds } = messageMaps;
+		const { byEventId, reactionMap, editMap, deletedIds } = messageMaps;
 
 		function parseSystemMessageData(content: string): StoredChatSystemMessageData | null {
 			try {
@@ -275,7 +224,7 @@
 		}
 
 		const confirmedMessages = storedMessages
-			.filter((message) => message.kind !== 5 && message.kind !== 7 && message.kind !== 1010)
+			.filter((message) => !isAnnotationKind(message.kind))
 			.map((message) => {
 				if (message.kind === SYSTEM_MESSAGE_KIND) {
 					const data = parseSystemMessageData(message.content);
@@ -294,7 +243,7 @@
 				const reactions = reactionMap.get(message.id);
 				const optimisticEdit = optimisticEdits[message.id];
 				const edit = editMap.get(message.id);
-				const deleted = Boolean(deletedMessageIds.has(message.id) || optimisticDeletes[message.id]);
+				const deleted = Boolean(deletedIds.has(message.id) || optimisticDeletes[message.id]);
 
 				return {
 					...toChatMessage(message),
@@ -314,7 +263,10 @@
 						? {
 								id: `${replySource.id}:${replySource.cursor}`,
 								author: replySource.sender,
-								text: replySource.content
+								text: deletedIds.has(replySource.id)
+									? ''
+									: (editMap.get(replySource.id)?.content ?? replySource.content),
+								deleted: deletedIds.has(replySource.id)
 							}
 						: undefined
 				};
@@ -383,6 +335,7 @@
 			eventId: optimisticId,
 			author: activePubkey,
 			text: messageText,
+			kind: ChatKinds.Text,
 			createdAt: optimisticCreatedAt,
 			timeLabel: formatUnixTimestamp(optimisticCreatedAt, true, false),
 			dayLabel: formatUnixTimestamp(optimisticCreatedAt, false, true),
@@ -452,7 +405,7 @@
 		);
 		if (!storedMessage) return;
 
-		const reactionTarget: ChatMessageReactionTarget = {
+		const reactionTarget: MessageTarget = {
 			id: storedMessage.id,
 			pubkey: storedMessage.sender,
 			kind: storedMessage.kind
@@ -490,7 +443,7 @@
 		);
 		if (!storedMessage || normalizePubKey(storedMessage.sender) !== activePubkey) return;
 
-		const deleteTarget: ChatMessageDeleteTarget = {
+		const deleteTarget: MessageTarget = {
 			id: storedMessage.id,
 			pubkey: storedMessage.sender,
 			kind: storedMessage.kind
@@ -517,6 +470,28 @@
 		markChatGroupMentionsRead(groupId, message.unreadReferenceCursor);
 	}
 
+	let selectedDetailEventId = $state<string | null>(null);
+	const isMobile = new IsMobile();
+	// ponytail: object ref, not $state. PaneForge's defaultSize is reactive, so
+	// feeding a $state back creates a drag loop that snaps the pane back. A
+	// plain object isn't tracked by Svelte, so onResize records silently and the
+	// prop doesn't re-render mid-drag; remount re-reads it so the last dragged
+	// size still restores across close/open in the session.
+	const detailSizeRef = { current: 40 };
+
+	function handleOpenRich(eventId: string) {
+		selectedDetailEventId = eventId;
+	}
+
+	function handleJumpToMessage(targetEventId: string) {
+		const target = messages.find((m) => m.eventId === targetEventId);
+		if (target) void messageListRef?.scrollToMessage(target.id);
+	}
+
+	function handleCloseRich() {
+		selectedDetailEventId = null;
+	}
+
 	$effect(() => {
 		if (!groupId || !group) return;
 		markChatGroupRead(groupId, group.lastCursor);
@@ -525,59 +500,113 @@
 	$effect(() => {
 		const targetMessage = page.url.searchParams.get('message') ?? '';
 		if (!targetMessage || targetMessage === handledMessageTarget || messages.length === 0) return;
-
+		if (!messageListRef) return; // wait for the list to mount before claiming handled
 		handledMessageTarget = targetMessage;
-		void messageListRef?.scrollToMessage(targetMessage);
+		void messageListRef.scrollToMessage(targetMessage);
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<ChatHeader {groupId} title={displayTitle} />
+{#snippet chatColumn()}
+	<div class="flex h-full min-h-0 min-w-0 flex-col">
+		<ChatHeader {groupId} title={displayTitle} />
 
-	<div class="min-h-0 flex-1">
-		<ChatMessageList
-			bind:this={messageListRef}
-			{messages}
-			onReply={handleReply}
-			onReact={handleReact}
-			onEdit={handleEdit}
-			onDelete={handleDelete}
-			onVisibleUnreadReference={handleVisibleUnreadReference}
+		<div class="min-h-0 flex-1">
+			<ChatMessageList
+				bind:this={messageListRef}
+				{messages}
+				onReply={handleReply}
+				onReact={handleReact}
+				onEdit={handleEdit}
+				onDelete={handleDelete}
+				onVisibleUnreadReference={handleVisibleUnreadReference}
+				onOpenRich={handleOpenRich}
+			/>
+		</div>
+
+		{#if isRemoved}
+			<p
+				class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+			>
+				You were removed from this group. This local copy is now read-only. Open the info page to
+				delete it from this device.
+			</p>
+		{:else if isPoisoned}
+			<p
+				class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+			>
+				This group's local state is corrupted and cannot decrypt new messages. Contact a group admin
+				to request a fresh invite.
+			</p>
+		{/if}
+
+		{#if sendError || chatComposerActionsStore.error}
+			<p class="px-3 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
+		{/if}
+
+		<ChatComposer
+			bind:value={draft}
+			onSubmit={handleSubmit}
+			disabled={isRemoved || isPoisoned}
+			replyTo={composerReplyPreview}
+			editTo={editTarget ? { text: editPreview } : null}
+			onCancelReply={clearReplyTarget}
+			onCancelEdit={clearEditTarget}
+			focusKey={composerFocusKey}
+			{mentionCandidates}
+			bind:selectedMentions
+			unreadReferenceCount={unreadReferenceTargets.length}
+			onNavigateToReference={navigateToNextReference}
 		/>
 	</div>
+{/snippet}
 
-	{#if isRemoved}
-		<p
-			class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
+{#if isMobile.current}
+	<div class="h-full bg-background text-foreground">
+		{@render chatColumn()}
+	</div>
+
+	{#if selectedDetailEventId}
+		<Sheet.Root
+			bind:open={
+				() => selectedDetailEventId !== null,
+				(open) => {
+					if (!open) handleCloseRich();
+				}
+			}
 		>
-			You were removed from this group. This local copy is now read-only. Open the info page to
-			delete it from this device.
-		</p>
-	{:else if isPoisoned}
-		<p
-			class="mx-3 mb-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive md:mx-6"
-		>
-			This group's local state is corrupted and cannot decrypt new messages. Contact a group admin
-			to request a fresh invite.
-		</p>
+			<Sheet.Content side="right" showCloseButton={false} class="p-0 data-[side=right]:w-full">
+				<ChatDetailSidebar
+					{groupId}
+					eventId={selectedDetailEventId}
+					onClose={handleCloseRich}
+					onNavigate={handleOpenRich}
+					onJumpToMessage={handleJumpToMessage}
+				/>
+			</Sheet.Content>
+		</Sheet.Root>
 	{/if}
-
-	{#if sendError || chatComposerActionsStore.error}
-		<p class="px-3 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
-	{/if}
-
-	<ChatComposer
-		bind:value={draft}
-		onSubmit={handleSubmit}
-		disabled={isRemoved || isPoisoned}
-		replyTo={composerReplyPreview}
-		editTo={editTarget ? { text: editPreview } : null}
-		onCancelReply={clearReplyTarget}
-		onCancelEdit={clearEditTarget}
-		focusKey={composerFocusKey}
-		{mentionCandidates}
-		bind:selectedMentions
-		unreadReferenceCount={unreadReferenceTargets.length}
-		onNavigateToReference={navigateToNextReference}
-	/>
-</div>
+{:else}
+	<Resizable.PaneGroup direction="horizontal" class="h-full w-full bg-background text-foreground">
+		<Resizable.Pane order={1} defaultSize={60} minSize={30} class="min-w-0 overflow-hidden">
+			{@render chatColumn()}
+		</Resizable.Pane>
+		{#if selectedDetailEventId}
+			<Resizable.Handle withHandle />
+			<Resizable.Pane
+				order={2}
+				defaultSize={detailSizeRef.current}
+				minSize={20}
+				maxSize={70}
+				onResize={(size) => (detailSizeRef.current = size)}
+			>
+				<ChatDetailSidebar
+					{groupId}
+					eventId={selectedDetailEventId}
+					onClose={handleCloseRich}
+					onNavigate={handleOpenRich}
+					onJumpToMessage={handleJumpToMessage}
+				/>
+			</Resizable.Pane>
+		{/if}
+	</Resizable.PaneGroup>
+{/if}
