@@ -17,8 +17,8 @@ importers:
         specifier: ^1.30
         version: 1.30.0(zod@4.4.3)
       '@contextvm/sdk':
-        specifier: ^0.13.3
-        version: 0.13.3(typescript@6.0.3)
+        specifier: ^0.13.5
+        version: 0.13.5(typescript@6.0.3)
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -194,8 +194,8 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4.0
 
-  '@contextvm/sdk@0.13.3':
-    resolution: {integrity: sha512-uDJUo9AQXCuDW8Uz7CyniyP0ekGUU2BUN8/LXoQuyCHYD8mHESXZI8dpxuBiQ+wlsUAd8NXJ+FP5AGDoF+RhdA==}
+  '@contextvm/sdk@0.13.5':
+    resolution: {integrity: sha512-dFSYBs5ReR/ZqwsHwW6N5l/iS85cgoium1iKH7fJv7P7Lxa2PONRaYgWxiA08oMmlTWkYHvBvjFwjWPhOWTjWg==}
     engines: {bun: '>=1.2.0'}
     peerDependencies:
       typescript: ^5.9.3
@@ -983,6 +983,9 @@ packages:
 
   applesauce-relay@6.2.0:
     resolution: {integrity: sha512-aalduNw3YcEiOOnyYFTVvSxg683sOPrjFMe2h7tRK0/xFTGPbAslHlFSisY2cw43EEEvQMr2HVHvXT5ahLI3tA==}
+
+  applesauce-relay@6.2.1:
+    resolution: {integrity: sha512-YIUHEtL2Fl5FZjeKYe/IuwL3OnMUNP2j4ydSr3iZDeHEZSEda4d1PoChefiNhtjE/U/F5OBHEbAX1zCHRZoxpg==}
 
   applesauce-signers@6.0.1:
     resolution: {integrity: sha512-SV60zT7+kMdASEOUfOvNGSFQFjfXdGbhyAQvCMaN3S5JIMzbO8YMmf9BzyGJF+HoWZRi888xscXCgkAea6mUJw==}
@@ -2080,11 +2083,11 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
 
-  '@contextvm/sdk@0.13.3(typescript@6.0.3)':
+  '@contextvm/sdk@0.13.5(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.4.3)
       '@noble/hashes': 2.2.0
-      applesauce-relay: 6.2.0(typescript@6.0.3)
+      applesauce-relay: 6.2.1(typescript@6.0.3)
       canonicalize: 2.1.0
       nostr-tools: 2.18.2(typescript@6.0.3)
       pino: 10.3.1
@@ -2812,6 +2815,17 @@ snapshots:
       - typescript
 
   applesauce-relay@6.2.0(typescript@6.0.3):
+    dependencies:
+      '@noble/hashes': 2.2.0
+      applesauce-core: 6.2.0(typescript@6.0.3)
+      nanoid: 5.1.11
+      nostr-tools: 2.19.4(typescript@6.0.3)
+      rxjs: 7.8.2
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
+  applesauce-relay@6.2.1(typescript@6.0.3):
     dependencies:
       '@noble/hashes': 2.2.0
       applesauce-core: 6.2.0(typescript@6.0.3)

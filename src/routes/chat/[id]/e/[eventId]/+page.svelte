@@ -4,7 +4,7 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatRichBody from '$lib/chat/ChatRichBody.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { getChatGroup, listChatGroupMessages } from '$lib/services/chatGroups.svelte';
+	import { getChatGroup } from '$lib/services/chatGroups.svelte';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 
 	let { params } = $props();
@@ -16,12 +16,6 @@
 
 	function navigateToEvent(id: string) {
 		void goto(resolve('/chat/[id]/e/[eventId]', { id: groupId, eventId: id }));
-	}
-
-	function jumpToMessage(id: string) {
-		const msg = listChatGroupMessages(groupId).find((m) => m.id === id);
-		const key = msg ? `${msg.id}:${msg.cursor}` : id;
-		void goto(`${backHref}?message=${encodeURIComponent(key)}`);
 	}
 </script>
 
@@ -41,12 +35,7 @@
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		<div class="mx-auto w-full max-w-3xl">
-			<ChatRichBody
-				{groupId}
-				{eventId}
-				onNavigate={navigateToEvent}
-				onJumpToMessage={jumpToMessage}
-			/>
+			<ChatRichBody {groupId} {eventId} onNavigate={navigateToEvent} />
 		</div>
 	</div>
 </div>

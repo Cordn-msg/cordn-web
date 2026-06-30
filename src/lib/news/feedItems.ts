@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-06-30',
+		createdAt: Date.UTC(2026, 5, 30),
+		version: 1,
+		title: 'See more about any message',
+		body: '- ✨ A redesigned info panel for any message: it lays out the full conversation thread around it, who reacted and with what, and the message’s delivery and editing status — all in one place.\n- ✨ The info button now lives next to Reply and React on every message, so you no longer have to dig into the menu.\n- ✨ From the info panel, jump straight back to a message in the chat. On desktop the panel stays open beside the conversation; on mobile it closes so you land right on the message.\n- 🐛 When a message you replied to gets deleted or edited, its reply preview now shows the current state instead of the original text.'
+	},
+	{
 		id: 'cordn-news-2026-06-29',
 		createdAt: Date.UTC(2026, 5, 29),
 		version: 1,

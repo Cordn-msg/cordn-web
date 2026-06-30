@@ -486,6 +486,9 @@
 	function handleJumpToMessage(targetEventId: string) {
 		const target = messages.find((m) => m.eventId === targetEventId);
 		if (target) void messageListRef?.scrollToMessage(target.id);
+		// On mobile the sidebar overlays the chat, so the scrolled message isn't
+		// visible behind it — close so the user sees the jump. Desktop keeps it open.
+		if (isMobile.current) selectedDetailEventId = null;
 	}
 
 	function handleCloseRich() {

@@ -343,7 +343,9 @@
 												<p class="text-sm font-medium wrap-break-word">{serverInfo.name}</p>
 											{/if}
 											{#if serverInfo.about}
-												<p class="text-sm wrap-break-word text-muted-foreground">{serverInfo.about}</p>
+												<p class="text-sm wrap-break-word text-muted-foreground">
+													{serverInfo.about}
+												</p>
 											{/if}
 											{#if serverInfo.website}
 												<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
