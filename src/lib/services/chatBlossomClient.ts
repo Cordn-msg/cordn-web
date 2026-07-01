@@ -1,13 +1,20 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToBase64, toBufferSource } from 'ts-mls';
+import { toBufferSource } from 'ts-mls';
 import { bytesToHex } from 'applesauce-core/helpers';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import type { EventTemplate, NostrEvent } from 'nostr-tools';
 
 /**
- * Minimal Blossom client (BUD-01/02/11). Encrypted-media blobs are uploaded
- * with `PUT /upload` and fetched with `GET /<sha256>`; uploads carry a signed
- * kind-24242 authorization token in `Authorization: Nostr <base64url(event)>`.
+ * Minimal Blossom client (BUD-01/02/11) following the same request shape as
+ * the `blossom-client-sdk` reference: `PUT /upload` with an `X-SHA-256` header
+ * and a signed kind-24242 token in `Authorization: Nostr <base64(event)>`, then
+ * `GET /<sha256>` to fetch.
+ *
+ * The auth header is plain `btoa()` standard base64 — NOT base64url — because
+ * that is what the SDK's `encodeAuthorizationHeader` and BUD-11's own worked
+ * example ship, and what every server accepts. blossom.primal.net actively
+ * rejects the base64url alphabet as "invalid base64 for auth event", so the
+ * URL-safe variant is wrong despite BUD-11's prose saying "without padding".
  *
  * No SDK dependency: blossom is HTTP + one signed nostr event. The signer is a
  * structural type so the client is testable without an applesauce account, and
@@ -16,8 +23,6 @@ import type { EventTemplate, NostrEvent } from 'nostr-tools';
  * `ephemeralBlossomSigner()`, NOT the active identity — the same unlinkable
  * pattern as anonymous zaps in donations/nip57.
  */
-
-const encoder = new TextEncoder();
 
 /** BUD-11: short-lived auth keeps the replay window small. */
 const AUTH_TTL_SECONDS = 5 * 60;
@@ -45,20 +50,14 @@ export function ephemeralBlossomSigner(): BlossomSigner {
 export type BlossomAuthAction = 'upload' | 'get' | 'list' | 'delete';
 
 /**
- * base64url WITH padding. BUD-11 §HTTP Authorization Header says base64url
- * *without* padding, but blossom.primal.net (our default store) rejects unpadded
- * auth as "invalid base64 for auth event" — and every other server accepts
- * padded input too. So the padding is kept; only the no-pad rule is dropped.
- * URL-safe alphabet (-/_) per spec.
+ * `Authorization: Nostr <base64(JSON event)>` (BUD-11 §HTTP Authorization
+ * Header). Plain `btoa()` standard base64 — matching the `blossom-client-sdk`
+ * reference and BUD-11's worked example — NOT base64url:
+ * blossom.primal.net's decoder rejects the URL-safe alphabet as "invalid base64
+ * for auth event", while it (and every other store) accepts standard base64.
  */
-function bytesToBase64Url(bytes: Uint8Array): string {
-	return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_');
-}
-
-/** `Authorization: Nostr <base64url(JSON event)>` (BUD-11 §HTTP Authorization Header). */
 export function blossomAuthHeader(event: NostrEvent): string {
-	const json = JSON.stringify(event);
-	return `Nostr ${bytesToBase64Url(encoder.encode(json))}`;
+	return `Nostr ${btoa(JSON.stringify(event))}`;
 }
 
 /**
@@ -94,8 +93,7 @@ export async function buildBlossomAuth(params: {
 
 /**
  * Upload failure carrying the HTTP status, or `undefined` when the request got
- * no response (network/CORS block). Lets the fallback decide whether retrying
- * with the real MIME could help.
+ * no response (network/CORS block).
  */
 export class BlossomUploadError extends Error {
 	constructor(
@@ -107,20 +105,6 @@ export class BlossomUploadError extends Error {
 	}
 }
 
-/**
- * Did an octet-stream upload fail in a way a real MIME might fix? True for 415
- * (Unsupported Media Type), 400 (Blossom servers often surface type rejection
- * here), and network/CORS blocks (a type-triggered CORS failure can look like
- * this). False for auth/size/policy/hash failures, which won't change with the
- * content type — those skip straight to the next server.
- */
-export function shouldRetryWithRealMime(error: unknown): boolean {
-	return (
-		error instanceof BlossomUploadError &&
-		(error.status === undefined || error.status === 400 || error.status === 415)
-	);
-}
-
 export interface UploadedBlob {
 	/** GET URL of the stored blob (descriptor `url`). Carried in the `imeta`. */
 	readonly url: string;
@@ -130,33 +114,21 @@ export interface UploadedBlob {
 }
 
 /**
- * Upload an encrypted blob via `PUT /upload` (BUD-02).
- *
- * `contentType` defaults to `application/octet-stream` for privacy — the body
- * is AEAD ciphertext and the real MIME should stay sealed in the `imeta` `m`
- * field. But many public stores reject opaque octet-stream (415/400), so the
- * caller (`uploadBlobWithFallback`) first tries octet-stream and degrades to
- * the real MIME only when a server refuses the opaque type. BUD-02 forbids the
- * server from modifying `/upload` bodies, so a declared image/pdf type never
- * triggers transcoding — and we never trust the descriptor's `type`, only the
- * sealed `m`.
+ * Upload an encrypted blob via `PUT /upload` (BUD-02), mirroring the
+ * `blossom-client-sdk` request: `X-SHA-256` + `Authorization` headers and the
+ * raw bytes as the body. No `Content-Type` is set — the body is AEAD ciphertext
+ * (opaque bytes), so fetch's default `application/octet-stream` is the truthful
+ * type and the real MIME stays sealed in the `imeta` `m` field. BUD-02 forbids
+ * the server from modifying `/upload` bodies, so the declared type never
+ * triggers transcoding.
  *
  * Failures throw `BlossomUploadError` carrying the HTTP `status` (or
- * `undefined` for a network/CORS block) so the caller can decide whether a
- * different content type would help.
- *
- * No `X-SHA-256` header: it is optional (BUD-02) and, for us, useless — we
- * always send a hash-correct body, so the server's `409 Conflict` path never
- * fires. Dropping it also shrinks the CORS preflight's required
- * `Access-Control-Allow-Headers`, which is what unblocks servers whose CORS
- * config allows `Authorization`/`Content-Type` but not arbitrary `X-*` headers.
+ * `undefined` for a network/CORS block).
  */
 export async function uploadBlob(params: {
 	serverUrl: string;
 	blob: Uint8Array;
 	signer: BlossomSigner;
-	/** MIME sent as `Content-Type`; defaults to opaque octet-stream. */
-	contentType?: string;
 }): Promise<UploadedBlob> {
 	const server = params.serverUrl.replace(/\/+$/, '');
 	const sha256Hex = bytesToHex(sha256(params.blob));
@@ -173,7 +145,7 @@ export async function uploadBlob(params: {
 		res = await fetch(`${server}/upload`, {
 			method: 'PUT',
 			headers: {
-				'Content-Type': params.contentType ?? 'application/octet-stream',
+				'X-SHA-256': sha256Hex,
 				Authorization: blossomAuthHeader(event)
 			},
 			// ponytail: toBufferSource (ts-mls) is a no-op for ArrayBuffer-backed bytes;

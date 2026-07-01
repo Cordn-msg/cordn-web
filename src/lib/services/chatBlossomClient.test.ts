@@ -10,7 +10,6 @@ import {
 	BlossomUploadError,
 	ephemeralBlossomSigner,
 	fetchBlob,
-	shouldRetryWithRealMime,
 	uploadBlob,
 	type BlossomSigner
 } from '$lib/services/chatBlossomClient';
@@ -18,8 +17,9 @@ import {
 /**
  * BUD-11/02 self-check with a stub signer and a mocked global fetch. Asserts
  * the auth-event shape (kind 24242, scoped `t`/`expiration`/`server`/`x` tags),
- * the `Nostr <base64url>` header encoding, and the upload/fetch call shapes —
- * without network or a real account.
+ * the `Nostr <base64>` header encoding, and the upload/fetch call shapes —
+ * without network or a real account. End-to-end network coverage lives in
+ * chatBlossomSmoke.test.ts, gated behind BLOSSOM_SMOKE=1.
  */
 const SERVER = 'https://blossom.primal.net/';
 
@@ -88,8 +88,8 @@ describe('BUD-11 auth token', () => {
 	});
 });
 
-	describe('auth header', () => {
-	test('is Nostr <base64url> of the JSON event (padding kept for primal)', () => {
+describe('auth header', () => {
+	test('is Nostr <base64> of the JSON event — standard btoa, not base64url', () => {
 		const event = {
 			kind: 24242,
 			pubkey: '00'.repeat(32),
@@ -102,15 +102,12 @@ describe('BUD-11 auth token', () => {
 		const json = JSON.stringify(event);
 		const header = blossomAuthHeader(event);
 
-		// `Nostr ` scheme, URL-safe alphabet, padding KEPT: blossom.primal.net
-		// rejects unpadded auth as "invalid base64"; every other store accepts it.
-		expect(header).toBe(`Nostr ${btoa(json).replace(/\+/g, '-').replace(/\//g, '_')}`);
-		const b64url = header.slice('Nostr '.length);
-		expect(b64url).not.toContain('+');
-		expect(b64url).not.toContain('/');
+		// `Nostr ` scheme + plain standard base64 — this is what the SDK's
+		// encodeAuthorizationHeader and BUD-11's worked example ship, and what
+		// blossom.primal.net's decoder accepts (it rejects the base64url alphabet).
+		expect(header).toBe(`Nostr ${btoa(json)}`);
 		// Round-trips back to the same event JSON.
-		const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-		expect(JSON.parse(atob(b64))).toEqual(event);
+		expect(JSON.parse(atob(header.slice('Nostr '.length)))).toEqual(event);
 	});
 });
 
@@ -138,7 +135,7 @@ describe('ephemeralBlossomSigner', () => {
 });
 
 describe('uploadBlob (BUD-02)', () => {
-	test('PUTs the raw blob with X-SHA-256 and returns the descriptor url', async () => {
+	test('PUTs the raw blob with X-SHA-256 + Nostr auth and returns the descriptor url', async () => {
 		const blob = new Uint8Array([1, 2, 3, 4, 5]);
 		const expectedSha = bytesToHex(sha256(blob));
 
@@ -172,12 +169,11 @@ describe('uploadBlob (BUD-02)', () => {
 		expect(result.sha256).toBe(expectedSha);
 		expect(captured!.url).toBe(`${SERVER}upload`);
 		expect(captured!.method).toBe('PUT');
-		// Headers normalizes keys to lowercase. X-SHA-256 is intentionally NOT sent
-		// (optional, dead for our always-correct hashes, and a CORS preflight burden).
-		expect(captured!.headers['x-sha-256']).toBeUndefined();
-		// Default content-type is opaque octet-stream (privacy); the caller can pass
-		// the real MIME to retry servers that reject octet-stream.
-		expect(captured!.headers['content-type']).toBe('application/octet-stream');
+		// X-SHA-256 carries the blob hash (BUD-02). Content-Type is NOT set by us —
+		// the body is ciphertext, so fetch's default octet-stream is the truthful
+		// type and the real MIME stays sealed in the imeta.
+		expect(captured!.headers['x-sha-256']).toBe(expectedSha);
+		expect(captured!.headers['content-type']).toBeUndefined();
 		expect(captured!.headers['authorization'].startsWith('Nostr ')).toBe(true);
 		expect(Array.from(captured!.body)).toEqual([1, 2, 3, 4, 5]);
 	});
@@ -192,36 +188,7 @@ describe('uploadBlob (BUD-02)', () => {
 		).rejects.toThrow('unexpected descriptor');
 	});
 
-	test('throws on a non-ok status', async () => {
-		globalThis.fetch = (async () => new Response('nope', { status: 413 })) as typeof fetch;
-		await expect(
-			uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() })
-		).rejects.toThrow('413');
-	});
-});
-
-describe('uploadBlob content type', () => {
-	test('sends the provided contentType instead of the octet-stream default', async () => {
-		const blob = new Uint8Array([1]);
-		const expectedSha = bytesToHex(sha256(blob));
-		let captured: Record<string, string> = {};
-		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-			captured = Object.fromEntries(new Headers(init?.headers)) as Record<string, string>;
-			return new Response(JSON.stringify({ url: `${SERVER}abc`, sha256: expectedSha }), {
-				status: 201
-			});
-		}) as typeof fetch;
-
-		await uploadBlob({
-			serverUrl: SERVER,
-			blob,
-			signer: stubSigner(),
-			contentType: 'image/jpeg'
-		});
-		expect(captured['content-type']).toBe('image/jpeg');
-	});
-
-	test('throws BlossomUploadError carrying the HTTP status', async () => {
+	test('throws BlossomUploadError carrying the HTTP status on a non-ok response', async () => {
 		globalThis.fetch = (async () => new Response('too big', { status: 413 })) as typeof fetch;
 		try {
 			await uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() });
@@ -229,26 +196,8 @@ describe('uploadBlob content type', () => {
 		} catch (error) {
 			expect(error).toBeInstanceOf(BlossomUploadError);
 			expect((error as BlossomUploadError).status).toBe(413);
+			expect((error as BlossomUploadError).message).toContain('413');
 		}
-	});
-});
-
-describe('shouldRetryWithRealMime', () => {
-	test('retries on content-type-shaped failures (415, 400, network)', () => {
-		expect(shouldRetryWithRealMime(new BlossomUploadError('x', 415))).toBe(true);
-		expect(shouldRetryWithRealMime(new BlossomUploadError('x', 400))).toBe(true);
-		expect(shouldRetryWithRealMime(new BlossomUploadError('x'))).toBe(true);
-	});
-
-	test('does not retry on auth/size/policy failures', () => {
-		for (const status of [401, 402, 403, 409, 413, 500]) {
-			expect(shouldRetryWithRealMime(new BlossomUploadError('x', status))).toBe(false);
-		}
-	});
-
-	test('returns false for non-Blossom errors', () => {
-		expect(shouldRetryWithRealMime(new Error('anything'))).toBe(false);
-		expect(shouldRetryWithRealMime(null)).toBe(false);
 	});
 });
 

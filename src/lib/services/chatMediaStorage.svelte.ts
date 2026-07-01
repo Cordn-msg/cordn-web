@@ -7,7 +7,6 @@ import { DEFAULT_BLOSSOM_SERVER, BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
 	ephemeralBlossomSigner,
 	fetchBlob,
-	shouldRetryWithRealMime,
 	uploadBlob,
 	type BlossomSigner
 } from '$lib/services/chatBlossomClient';
@@ -90,60 +89,33 @@ export interface PendingMediaAttachment {
 
 /**
  * Upload to the configured Blossom server, falling back through the preset
- * list on failure. Privacy-first: each server is tried with opaque
- * `application/octet-stream` first so the real MIME stays sealed in the
- * `imeta`; only if that server rejects the opaque type (415/400) or throws a
- * possibly-type-triggered CORS/network block does the same server get a second
- * attempt with the real MIME. Auth/size/policy failures aren't content-type
- * fixable, so they skip straight to the next server.
- *
- * Several public stores reject octet-stream outright, so one server is
- * unreliable; trying several — configured first, then the rest — finds one
- * that accepts the blob. We don't mirror (one copy is enough; the `imeta` URL
- * resolves wherever it lives); add mirroring when redundancy against store
- * churn-out is wanted.
+ * list on failure. The blob is AEAD ciphertext, so its Content-Type is the
+ * truthful `application/octet-stream` (fetch's default for a byte body) and the
+ * real MIME stays sealed in the `imeta`. A single, server-agnostic request is
+ * sent to each store — no per-server content-type logic. We don't mirror (one
+ * copy is enough; the `imeta` URL resolves wherever it lives); add mirroring
+ * when redundancy against store churn-out is wanted.
  */
 async function uploadBlobWithFallback(
 	blob: Uint8Array,
-	signer: BlossomSigner,
-	/** Real file MIME; when empty/unknown the octet-stream attempt is the only one. */
-	realMime: string
+	signer: BlossomSigner
 ): Promise<{ url: string }> {
 	const configured = getBlossomServer();
 	// Configured server first, then the remaining presets — deduped by normalized URL
 	// (indexOf keeps the first occurrence, so `configured` stays first). Tiny list
-	// (~5 servers), so the O(n²) dedupe is irrelevant; avoids a mutable Set, which
+	// (~4 servers), so the O(n²) dedupe is irrelevant; avoids a mutable Set, which
 	// the svelte/reactivity rule flags in .svelte.ts files.
 	const order = [configured, ...BLOSSOM_SERVERS.map((s) => normalizeServerUrl(s))].filter(
 		(s, i, arr) => arr.indexOf(s) === i
 	);
-	// octet-stream first (privacy); the real MIME is the fallback only when we
-	// actually have a different type to degrade to.
-	const contentTypes =
-		realMime && realMime !== 'application/octet-stream'
-			? ['application/octet-stream', realMime]
-			: ['application/octet-stream'];
 
 	let lastError: unknown;
 	for (const server of order) {
-		for (let i = 0; i < contentTypes.length; i++) {
-			try {
-				return await uploadBlob({
-					serverUrl: server,
-					blob,
-					signer,
-					contentType: contentTypes[i]
-				});
-			} catch (error) {
-				lastError = error;
-				console.warn(`Blossom upload to ${server} as ${contentTypes[i]} failed:`, error);
-				// ponytail: an octet-stream failure may already have streamed the body,
-				// so degrading re-uploads it. A BUD-06 `HEAD /upload` probe would avoid
-				// the re-upload; deferred until a server makes that worthwhile. Only
-				// retry this server with the real MIME if the failure was plausibly the
-				// content type; otherwise break to the next server.
-				if (i === 0 && !shouldRetryWithRealMime(error)) break;
-			}
+		try {
+			return await uploadBlob({ serverUrl: server, blob, signer });
+		} catch (error) {
+			lastError = error;
+			console.warn(`Blossom upload to ${server} failed:`, error);
 		}
 	}
 	throw lastError instanceof Error
@@ -185,7 +157,7 @@ export async function sendChatMediaMessage(params: {
 	const key = await deriveMediaKey(state);
 	const enc = encryptMedia({ key, plaintext, metadata });
 	// Ephemeral signer: auth tokens must not tie uploads to the active identity.
-	const { url } = await uploadBlobWithFallback(enc.blob, ephemeralBlossomSigner(), mime);
+	const { url } = await uploadBlobWithFallback(enc.blob, ephemeralBlossomSigner());
 
 	const imeta = buildImetaTag({
 		url,
