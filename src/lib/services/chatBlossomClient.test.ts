@@ -88,8 +88,8 @@ describe('BUD-11 auth token', () => {
 	});
 });
 
-describe('auth header', () => {
-	test('is Nostr <base64url-without-padding> of the JSON event', () => {
+	describe('auth header', () => {
+	test('is Nostr <base64url> of the JSON event (padding kept for primal)', () => {
 		const event = {
 			kind: 24242,
 			pubkey: '00'.repeat(32),
@@ -99,11 +99,13 @@ describe('auth header', () => {
 			created_at: 1,
 			tags: [['t', 'upload']]
 		} as NostrEvent;
+		const json = JSON.stringify(event);
 		const header = blossomAuthHeader(event);
-		expect(header.startsWith('Nostr ')).toBe(true);
+
+		// `Nostr ` scheme, URL-safe alphabet, padding KEPT: blossom.primal.net
+		// rejects unpadded auth as "invalid base64"; every other store accepts it.
+		expect(header).toBe(`Nostr ${btoa(json).replace(/\+/g, '-').replace(/\//g, '_')}`);
 		const b64url = header.slice('Nostr '.length);
-		// No padding, URL-safe alphabet.
-		expect(b64url).not.toContain('=');
 		expect(b64url).not.toContain('+');
 		expect(b64url).not.toContain('/');
 		// Round-trips back to the same event JSON.

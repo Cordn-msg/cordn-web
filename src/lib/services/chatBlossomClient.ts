@@ -44,9 +44,15 @@ export function ephemeralBlossomSigner(): BlossomSigner {
 
 export type BlossomAuthAction = 'upload' | 'get' | 'list' | 'delete';
 
-/** base64url without padding (JWT-style), per BUD-11 §HTTP Authorization Header. */
+/**
+ * base64url WITH padding. BUD-11 §HTTP Authorization Header says base64url
+ * *without* padding, but blossom.primal.net (our default store) rejects unpadded
+ * auth as "invalid base64 for auth event" — and every other server accepts
+ * padded input too. So the padding is kept; only the no-pad rule is dropped.
+ * URL-safe alphabet (-/_) per spec.
+ */
 function bytesToBase64Url(bytes: Uint8Array): string {
-	return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+	return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 /** `Authorization: Nostr <base64url(JSON event)>` (BUD-11 §HTTP Authorization Header). */
