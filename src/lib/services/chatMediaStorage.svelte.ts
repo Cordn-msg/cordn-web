@@ -4,7 +4,13 @@ import { bytesToHex, hexToBytes } from 'applesauce-core/helpers';
 import { base64ToBytes } from 'ts-mls';
 
 import { DEFAULT_BLOSSOM_SERVER, BLOSSOM_SERVERS } from '$lib/constants/chat';
-import { fetchBlob, uploadBlob, type BlossomSigner } from '$lib/services/chatBlossomClient';
+import {
+	ephemeralBlossomSigner,
+	fetchBlob,
+	shouldRetryWithRealMime,
+	uploadBlob,
+	type BlossomSigner
+} from '$lib/services/chatBlossomClient';
 import {
 	buildImetaTag,
 	deriveMediaKey,
@@ -84,20 +90,24 @@ export interface PendingMediaAttachment {
 
 /**
  * Upload to the configured Blossom server, falling back through the preset
- * list on failure. Privacy-preserving: every attempt sends the ciphertext as
- * `application/octet-stream` — the real MIME never reaches any server (it
- * travels only inside the sealed `imeta`).
+ * list on failure. Privacy-first: each server is tried with opaque
+ * `application/octet-stream` first so the real MIME stays sealed in the
+ * `imeta`; only if that server rejects the opaque type (415/400) or throws a
+ * possibly-type-triggered CORS/network block does the same server get a second
+ * attempt with the real MIME. Auth/size/policy failures aren't content-type
+ * fixable, so they skip straight to the next server.
  *
- * Individual Blossom servers reject
- * generic octet-stream (415) or block browser CORS, so one configured server
- * is unreliable. Trying several — configured first, then the rest — finds one
- * that accepts opaque blobs. We don't mirror (one copy is enough; the `imeta`
- * URL resolves wherever it lives); add mirroring when redundancy against store
+ * Several public stores reject octet-stream outright, so one server is
+ * unreliable; trying several — configured first, then the rest — finds one
+ * that accepts the blob. We don't mirror (one copy is enough; the `imeta` URL
+ * resolves wherever it lives); add mirroring when redundancy against store
  * churn-out is wanted.
  */
 async function uploadBlobWithFallback(
 	blob: Uint8Array,
-	signer: BlossomSigner
+	signer: BlossomSigner,
+	/** Real file MIME; when empty/unknown the octet-stream attempt is the only one. */
+	realMime: string
 ): Promise<{ url: string }> {
 	const configured = getBlossomServer();
 	// Configured server first, then the remaining presets — deduped by normalized URL
@@ -107,14 +117,33 @@ async function uploadBlobWithFallback(
 	const order = [configured, ...BLOSSOM_SERVERS.map((s) => normalizeServerUrl(s))].filter(
 		(s, i, arr) => arr.indexOf(s) === i
 	);
+	// octet-stream first (privacy); the real MIME is the fallback only when we
+	// actually have a different type to degrade to.
+	const contentTypes =
+		realMime && realMime !== 'application/octet-stream'
+			? ['application/octet-stream', realMime]
+			: ['application/octet-stream'];
 
 	let lastError: unknown;
 	for (const server of order) {
-		try {
-			return await uploadBlob({ serverUrl: server, blob, signer });
-		} catch (error) {
-			lastError = error;
-			console.warn(`Blossom upload to ${server} failed, trying next:`, error);
+		for (let i = 0; i < contentTypes.length; i++) {
+			try {
+				return await uploadBlob({
+					serverUrl: server,
+					blob,
+					signer,
+					contentType: contentTypes[i]
+				});
+			} catch (error) {
+				lastError = error;
+				console.warn(`Blossom upload to ${server} as ${contentTypes[i]} failed:`, error);
+				// ponytail: an octet-stream failure may already have streamed the body,
+				// so degrading re-uploads it. A BUD-06 `HEAD /upload` probe would avoid
+				// the re-upload; deferred until a server makes that worthwhile. Only
+				// retry this server with the real MIME if the failure was plausibly the
+				// content type; otherwise break to the next server.
+				if (i === 0 && !shouldRetryWithRealMime(error)) break;
+			}
 		}
 	}
 	throw lastError instanceof Error
@@ -136,7 +165,9 @@ export async function sendChatMediaMessage(params: {
 	replyTo?: ChatMessageReplyTarget;
 }): Promise<void> {
 	const { groupId, file, text, replyTo } = params;
-	const account = requireActiveAccount('You must be logged in to send media');
+	// Fail fast before the upload: the final MLS send needs an account, and
+	// surfacing it here beats encrypting + uploading first.
+	requireActiveAccount('You must be logged in to send media');
 	const plaintext = new Uint8Array(await file.arrayBuffer());
 	const mime = file.type || 'application/octet-stream';
 	const metadata: MediaMetadata = { mime, filename: file.name };
@@ -153,7 +184,8 @@ export async function sendChatMediaMessage(params: {
 	const state = decodeStoredGroupState(group);
 	const key = await deriveMediaKey(state);
 	const enc = encryptMedia({ key, plaintext, metadata });
-	const { url } = await uploadBlobWithFallback(enc.blob, account.signer);
+	// Ephemeral signer: auth tokens must not tie uploads to the active identity.
+	const { url } = await uploadBlobWithFallback(enc.blob, ephemeralBlossomSigner(), mime);
 
 	const imeta = buildImetaTag({
 		url,

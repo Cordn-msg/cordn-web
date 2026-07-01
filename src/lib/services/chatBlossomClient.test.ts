@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { bytesToHex } from 'applesauce-core/helpers';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { verifyEvent } from 'nostr-tools/pure';
 import type { EventTemplate, NostrEvent } from 'nostr-tools';
 
 import {
 	blossomAuthHeader,
 	buildBlossomAuth,
+	BlossomUploadError,
+	ephemeralBlossomSigner,
 	fetchBlob,
+	shouldRetryWithRealMime,
 	uploadBlob,
 	type BlossomSigner
 } from '$lib/services/chatBlossomClient';
@@ -108,6 +112,29 @@ describe('auth header', () => {
 	});
 });
 
+describe('ephemeralBlossomSigner', () => {
+	test('signs with a fresh, verifiable key per call (unlinkable)', async () => {
+		const signer = ephemeralBlossomSigner();
+		// Fresh template per call: finalizeEvent mutates+returns its input, so a
+		// shared object would alias a===b and hide a key-reuse regression.
+		const template = (): EventTemplate => ({
+			kind: 24242,
+			content: '',
+			created_at: 1,
+			tags: [['t', 'upload']]
+		});
+
+		// ponytail: one check for the security intent — two calls must NOT share an
+		// identity (or uploads become correlatable), and the sig must verify.
+		const a = await signer.signEvent(template());
+		const b = await ephemeralBlossomSigner().signEvent(template());
+		expect(verifyEvent(a)).toBe(true);
+		expect(verifyEvent(b)).toBe(true);
+		expect(a.pubkey).not.toBe(b.pubkey);
+		expect(a.sig).not.toBe(b.sig);
+	});
+});
+
 describe('uploadBlob (BUD-02)', () => {
 	test('PUTs the raw blob with X-SHA-256 and returns the descriptor url', async () => {
 		const blob = new Uint8Array([1, 2, 3, 4, 5]);
@@ -146,7 +173,8 @@ describe('uploadBlob (BUD-02)', () => {
 		// Headers normalizes keys to lowercase. X-SHA-256 is intentionally NOT sent
 		// (optional, dead for our always-correct hashes, and a CORS preflight burden).
 		expect(captured!.headers['x-sha-256']).toBeUndefined();
-		// octet-stream always — the real MIME never reaches the store (privacy).
+		// Default content-type is opaque octet-stream (privacy); the caller can pass
+		// the real MIME to retry servers that reject octet-stream.
 		expect(captured!.headers['content-type']).toBe('application/octet-stream');
 		expect(captured!.headers['authorization'].startsWith('Nostr ')).toBe(true);
 		expect(Array.from(captured!.body)).toEqual([1, 2, 3, 4, 5]);
@@ -167,6 +195,58 @@ describe('uploadBlob (BUD-02)', () => {
 		await expect(
 			uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() })
 		).rejects.toThrow('413');
+	});
+});
+
+describe('uploadBlob content type', () => {
+	test('sends the provided contentType instead of the octet-stream default', async () => {
+		const blob = new Uint8Array([1]);
+		const expectedSha = bytesToHex(sha256(blob));
+		let captured: Record<string, string> = {};
+		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			captured = Object.fromEntries(new Headers(init?.headers)) as Record<string, string>;
+			return new Response(JSON.stringify({ url: `${SERVER}abc`, sha256: expectedSha }), {
+				status: 201
+			});
+		}) as typeof fetch;
+
+		await uploadBlob({
+			serverUrl: SERVER,
+			blob,
+			signer: stubSigner(),
+			contentType: 'image/jpeg'
+		});
+		expect(captured['content-type']).toBe('image/jpeg');
+	});
+
+	test('throws BlossomUploadError carrying the HTTP status', async () => {
+		globalThis.fetch = (async () => new Response('too big', { status: 413 })) as typeof fetch;
+		try {
+			await uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() });
+			expect.fail('should have thrown');
+		} catch (error) {
+			expect(error).toBeInstanceOf(BlossomUploadError);
+			expect((error as BlossomUploadError).status).toBe(413);
+		}
+	});
+});
+
+describe('shouldRetryWithRealMime', () => {
+	test('retries on content-type-shaped failures (415, 400, network)', () => {
+		expect(shouldRetryWithRealMime(new BlossomUploadError('x', 415))).toBe(true);
+		expect(shouldRetryWithRealMime(new BlossomUploadError('x', 400))).toBe(true);
+		expect(shouldRetryWithRealMime(new BlossomUploadError('x'))).toBe(true);
+	});
+
+	test('does not retry on auth/size/policy failures', () => {
+		for (const status of [401, 402, 403, 409, 413, 500]) {
+			expect(shouldRetryWithRealMime(new BlossomUploadError('x', status))).toBe(false);
+		}
+	});
+
+	test('returns false for non-Blossom errors', () => {
+		expect(shouldRetryWithRealMime(new Error('anything'))).toBe(false);
+		expect(shouldRetryWithRealMime(null)).toBe(false);
 	});
 });
 
