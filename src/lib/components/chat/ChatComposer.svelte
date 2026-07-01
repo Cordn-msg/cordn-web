@@ -9,6 +9,8 @@
 	import Reply from '@lucide/svelte/icons/reply';
 	import SendHorizontal from '@lucide/svelte/icons/send-horizontal';
 	import X from '@lucide/svelte/icons/x';
+	import Paperclip from '@lucide/svelte/icons/paperclip';
+	import ChatComposerActions from './ChatComposerActions.svelte';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
 	import ProfileCard from '../ProfileCard.svelte';
@@ -32,7 +34,8 @@
 		mentionCandidates = [],
 		selectedMentions = $bindable([]),
 		unreadReferenceCount = 0,
-		onNavigateToReference = () => {}
+		onNavigateToReference = () => {},
+		onSendMedia = () => {}
 	}: {
 		value?: string;
 		onSubmit: () => void;
@@ -46,10 +49,20 @@
 		selectedMentions?: ChatMentionReference[];
 		unreadReferenceCount?: number;
 		onNavigateToReference?: () => void | Promise<void>;
+		/** Send a media file (with the current draft as caption). */
+		onSendMedia?: (file: File, caption: string) => void;
 	} = $props();
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
 	let expanded = $state(false);
+
+	// Staged media attachment: picked via the `+` menu, sent on submit (with the
+	// current draft as caption). Stored as a File; a preview URL is derived for
+	// the in-composer chip and revoked on send/remove.
+	let pendingAttachment = $state<File | null>(null);
+	let attachmentPreviewUrl = $state('');
+	let imageInputRef: HTMLInputElement | null = $state(null);
+	let documentInputRef: HTMLInputElement | null = $state(null);
 	let mentionQuery = $state('');
 	let mentionStart = $state(-1);
 	let highlightedMentionIndex = $state(0);
@@ -105,6 +118,20 @@
 	function handleSubmit(event: Event) {
 		event.preventDefault();
 		if (disabled) return;
+		dispatchSubmit();
+	}
+
+	// Shared by the form submit (button) and the Enter-key shortcut so a pending
+	// attachment is honored by BOTH paths — otherwise Enter with text + an image
+	// would silently send only the text.
+	function dispatchSubmit() {
+		if (pendingAttachment) {
+			const file = pendingAttachment;
+			const caption = value;
+			clearAttachment();
+			onSendMedia(file, caption);
+			return;
+		}
 		onSubmit();
 	}
 
@@ -135,7 +162,7 @@
 		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
-			onSubmit();
+			dispatchSubmit();
 		}
 	}
 
@@ -183,6 +210,30 @@
 			textareaRef.setSelectionRange(nextCaret, nextCaret);
 			resizeTextarea();
 		});
+	}
+
+	function pickImage() {
+		imageInputRef?.click();
+	}
+
+	function pickDocument() {
+		documentInputRef?.click();
+	}
+
+	function handleFileSelected(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
+		pendingAttachment = file;
+		attachmentPreviewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
+	}
+
+	function clearAttachment() {
+		if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
+		pendingAttachment = null;
+		attachmentPreviewUrl = '';
 	}
 
 	function resizeTextarea() {
@@ -285,7 +336,51 @@
 			</div>
 		{/if}
 
+		<input
+			bind:this={imageInputRef}
+			type="file"
+			accept="image/*"
+			class="hidden"
+			onchange={handleFileSelected}
+		/>
+		<input bind:this={documentInputRef} type="file" class="hidden" onchange={handleFileSelected} />
+
+		{#if pendingAttachment}
+			<div
+				class="mb-3 flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2"
+			>
+				<div class="flex min-w-0 items-center gap-3">
+					{#if attachmentPreviewUrl}
+						<img
+							src={attachmentPreviewUrl}
+							alt={pendingAttachment.name}
+							class="size-12 shrink-0 rounded-lg object-cover"
+						/>
+					{:else}
+						<Paperclip class="size-5 shrink-0 text-muted-foreground" />
+					{/if}
+					<div class="min-w-0">
+						<p class="truncate text-sm font-medium">{pendingAttachment.name}</p>
+						<p class="text-xs text-muted-foreground">
+							{Math.round(pendingAttachment.size / 1024)} KB · add a caption or send
+						</p>
+					</div>
+				</div>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					class="h-8 w-8 shrink-0 rounded-lg"
+					onclick={clearAttachment}
+					aria-label="Remove attachment"
+				>
+					<X class="size-4" />
+				</Button>
+			</div>
+		{/if}
+
 		<div class="flex min-w-0 items-end gap-3">
+			<ChatComposerActions onPickImage={pickImage} onPickDocument={pickDocument} />
 			<div class="flex min-w-0 flex-1 flex-col gap-2">
 				{#if unreadReferenceCount > 0}
 					<div class="flex justify-center">
@@ -348,7 +443,7 @@
 			<Button
 				type="submit"
 				class="h-11 shrink-0 rounded-xl px-4"
-				disabled={disabled || !value.trim()}
+				disabled={disabled || (!value.trim() && !pendingAttachment)}
 			>
 				<SendHorizontal class="size-4" />
 			</Button>

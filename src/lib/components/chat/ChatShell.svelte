@@ -2,6 +2,7 @@
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
+	import ChatPinnedRibbon from './ChatPinnedRibbon.svelte';
 	import ChatDetailSidebar from './ChatDetailSidebar.svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import * as Resizable from '$lib/components/ui/resizable';
@@ -18,6 +19,7 @@
 		chatComposerActionsStore,
 		sendGroupMessageAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { sendChatMediaMessage } from '$lib/services/chatMediaStorage.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
 		buildAnnotationIndex,
@@ -142,7 +144,9 @@
 			isOwn: normalizePubKey(message.sender) === activePubkey,
 			deliveryState: normalizePubKey(message.sender) === activePubkey ? 'sent' : undefined,
 			unreadReference: Boolean(unreadReferenceCursor),
-			unreadReferenceCursor
+			unreadReferenceCursor,
+			tags: message.tags,
+			mediaKeyBase64: message.mediaKeyBase64
 		};
 	}
 
@@ -211,7 +215,7 @@
 	const messageMaps = $derived.by(() => buildAnnotationIndex(storedMessages));
 
 	const messages = $derived.by<ChatMessage[]>(() => {
-		const { byEventId, reactionMap, editMap, deletedIds } = messageMaps;
+		const { byEventId, reactionMap, editMap, deletedIds, pinSet } = messageMaps;
 
 		function parseSystemMessageData(content: string): StoredChatSystemMessageData | null {
 			try {
@@ -244,11 +248,15 @@
 				const optimisticEdit = optimisticEdits[message.id];
 				const edit = editMap.get(message.id);
 				const deleted = Boolean(deletedIds.has(message.id) || optimisticDeletes[message.id]);
+				const pinEntry = !deleted ? pinSet.get(message.id) : undefined;
+				const pinned = Boolean(pinEntry && pinEntry.op === 'add');
 
 				return {
 					...toChatMessage(message),
 					text: deleted ? '' : (optimisticEdit ?? edit?.content ?? message.content),
 					deleted,
+					pinned,
+					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
 					edited: !deleted && Boolean(optimisticEdit || edit),
 					reactions:
 						!deleted && reactions
@@ -273,6 +281,26 @@
 			});
 
 		return [...confirmedMessages, ...optimisticMessages].sort(compareChatMessages);
+	});
+
+	// Ordered pin list for the top ribbon. Newest-pinned-first; resolves the
+	// derived pin set against the rendered view models so previews reuse the
+	// edit-resolved text. O(messages) once per message change, O(pins) to resolve.
+	const pinnedMessages = $derived.by<ChatMessage[]>(() => {
+		const { pinSet } = messageMaps;
+		const byEventId = new SvelteMap<string, ChatMessage>();
+		for (const message of messages) byEventId.set(message.eventId, message);
+
+		const entries = [...pinSet.values()]
+			.filter((entry) => entry.op === 'add')
+			.sort((a, b) => b.pinnedAt - a.pinnedAt || b.cursor - a.cursor);
+
+		const result: ChatMessage[] = [];
+		for (const entry of entries) {
+			const message = byEventId.get(entry.targetId);
+			if (message && !message.deleted) result.push(message);
+		}
+		return result;
 	});
 
 	const composerReplyPreview = $derived.by(() =>
@@ -368,6 +396,63 @@
 		updateOptimisticMessage(optimisticId, (message) => ({ ...message, deliveryState: 'error' }));
 	}
 
+	function handleSendMedia(file: File, caption: string) {
+		if (!group) return;
+		const trimmed = caption.trim();
+		const isImage = file.type.startsWith('image/');
+		const createdAt = Date.now();
+		const optimisticId = `optimistic:${groupId}:${optimisticMessageSequence++}`;
+		const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+
+		appendOptimisticMessage({
+			id: optimisticId,
+			eventId: optimisticId,
+			author: activePubkey,
+			text: trimmed,
+			kind: ChatKinds.Text,
+			createdAt,
+			timeLabel: formatUnixTimestamp(createdAt, true, false),
+			dayLabel: formatUnixTimestamp(createdAt, false, true),
+			isOwn: true,
+			deliveryState: 'sending',
+			media: {
+				kind: isImage ? 'image' : 'file',
+				mime: file.type || 'application/octet-stream',
+				filename: file.name,
+				sizeBytes: file.size,
+				previewUrl,
+				uploading: true
+			}
+		});
+
+		void messageListRef?.scrollToBottom();
+
+		// Consume the caption: the optimistic message now owns the text, and the
+		// background send carries it. Mirror the text-send draft reset so the
+		// composer is immediately free for the next message.
+		draft = '';
+		selectedMentions = [];
+
+		// Fire-and-forget: the upload + sealed send runs in the background so the
+		// composer stays free. The optimistic item shows the local preview + a
+		// spinner (deliveryState 'sending'); on success it's replaced by the
+		// confirmed message, on failure it flips to 'error' (preview retained).
+		sendChatMediaMessage({ groupId, file, text: trimmed, replyTo: undefined })
+			.then(() => {
+				removeOptimisticMessage(optimisticId);
+				if (previewUrl) URL.revokeObjectURL(previewUrl);
+			})
+			.catch((error) => {
+				chatComposerActionsStore.error =
+					error instanceof Error ? error.message : 'Failed to send media';
+				updateOptimisticMessage(optimisticId, (message) => ({
+					...message,
+					deliveryState: 'error',
+					media: message.media ? { ...message.media, uploading: false } : message.media
+				}));
+			});
+	}
+
 	function handleReply(message: ChatMessage) {
 		if (message.deleted) return;
 
@@ -455,6 +540,32 @@
 		clearOptimisticDelete(deleteTarget.id);
 	}
 
+	async function handlePin(message: ChatMessage) {
+		if (message.deleted) return;
+
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
+		if (!storedMessage) return;
+
+		const target: MessageTarget = {
+			id: storedMessage.id,
+			pubkey: storedMessage.sender,
+			kind: storedMessage.kind
+		};
+
+		await sendGroupMessageAction(
+			groupId,
+			'',
+			undefined,
+			undefined,
+			[],
+			undefined,
+			undefined,
+			target,
+			message.pinned ? 'remove' : 'add'
+		);
+		sendError = chatComposerActionsStore.error;
+	}
+
 	async function navigateToNextReference() {
 		const [nextReference] = unreadReferenceTargets;
 		if (!nextReference) return;
@@ -513,6 +624,14 @@
 	<div class="flex h-full min-h-0 min-w-0 flex-col">
 		<ChatHeader {groupId} title={displayTitle} />
 
+		{#if pinnedMessages.length > 0}
+			<ChatPinnedRibbon
+				messages={pinnedMessages}
+				onJumpToMessage={(id) => messageListRef?.scrollToMessage(id)}
+				onUnpin={handlePin}
+			/>
+		{/if}
+
 		<div class="min-h-0 flex-1">
 			<ChatMessageList
 				bind:this={messageListRef}
@@ -523,6 +642,7 @@
 				onDelete={handleDelete}
 				onVisibleUnreadReference={handleVisibleUnreadReference}
 				onOpenRich={handleOpenRich}
+				onPin={handlePin}
 			/>
 		</div>
 
@@ -549,6 +669,7 @@
 		<ChatComposer
 			bind:value={draft}
 			onSubmit={handleSubmit}
+			onSendMedia={handleSendMedia}
 			disabled={isRemoved || isPoisoned}
 			replyTo={composerReplyPreview}
 			editTo={editTarget ? { text: editPreview } : null}

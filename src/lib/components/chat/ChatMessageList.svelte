@@ -15,7 +15,8 @@
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onVisibleUnreadReference = () => {},
-		onOpenRich = () => {}
+		onOpenRich = () => {},
+		onPin = () => {}
 	}: {
 		messages: ChatMessage[];
 		onReply?: (message: ChatMessage) => void;
@@ -24,6 +25,7 @@
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onVisibleUnreadReference?: (message: ChatMessage) => void;
 		onOpenRich?: (eventId: string) => void;
+		onPin?: (message: ChatMessage) => void;
 	} = $props();
 	let container: HTMLDivElement | null = $state(null);
 	let highlightedMessageId = $state('');
@@ -275,6 +277,7 @@
 								{onDelete}
 								onNavigateToMessage={navigateToMessage}
 								{onOpenRich}
+								{onPin}
 								highlighted={highlightedMessageId === entry.message.id}
 							/>
 						</div>

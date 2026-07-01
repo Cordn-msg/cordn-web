@@ -37,7 +37,7 @@ import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackag
 import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 import { fetchCoordinatorJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 import { requireActiveAccount } from '$lib/services/chatRuntime';
-import type { ChatMessageReplyTarget, MessageTarget } from '$lib/chat/references';
+import type { ChatMessageReplyTarget, MessageTarget, PinOp } from '$lib/chat/references';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
@@ -198,10 +198,12 @@ export async function sendGroupMessageAction(
 	reactionTo?: MessageTarget,
 	tags: string[][] = [],
 	editTo?: MessageTarget,
-	deleteTo?: MessageTarget
+	deleteTo?: MessageTarget,
+	pinTo?: MessageTarget,
+	pinOp?: PinOp
 ): Promise<StoredChatMessage | false> {
 	const text = content.trim();
-	if ((!text && !reactionTo && !deleteTo) || !groupId) return false;
+	if ((!text && !reactionTo && !deleteTo && !pinTo) || !groupId) return false;
 	chatComposerActionsStore.error = '';
 	// If a chat rebuild (the "Updating chats…" resume flow) is in flight, wait
 	// for it to settle before sending. This is awaited OUTSIDE the per-group
@@ -221,7 +223,9 @@ export async function sendGroupMessageAction(
 			reactionTo,
 			tags,
 			editTo,
-			deleteTo
+			deleteTo,
+			pinTo,
+			pinOp
 		});
 	} catch (error) {
 		chatComposerActionsStore.error =

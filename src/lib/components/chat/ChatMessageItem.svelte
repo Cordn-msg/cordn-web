@@ -19,8 +19,7 @@
 		TooltipTrigger
 	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { eventStore } from '$lib/services/eventStore';
-	import { ProfileModel } from 'applesauce-core/models';
+	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
 	import Copy from '@lucide/svelte/icons/copy';
@@ -31,11 +30,13 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
+	import Pin from '@lucide/svelte/icons/pin';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { cn, pubkeyToHexColor, copyToClipboard } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
+	import ChatMessageMedia from './ChatMessageMedia.svelte';
 	import {
 		MESSAGE_LINK_WRAP_CLASS,
 		MESSAGE_PART_CONTAINER_CLASS,
@@ -60,6 +61,7 @@
 		onDelete = () => Promise.resolve(),
 		onNavigateToMessage = () => {},
 		onOpenRich = () => {},
+		onPin = () => {},
 		highlighted = false
 	}: {
 		message: ChatMessage;
@@ -72,6 +74,7 @@
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onNavigateToMessage?: (messageId: string) => void;
 		onOpenRich?: (eventId: string) => void;
+		onPin?: (message: ChatMessage) => void;
 		highlighted?: boolean;
 	} = $props();
 	let reactionMenuOpen = $state(false);
@@ -139,11 +142,11 @@
 					: 'border-border bg-card'
 			} ${highlighted ? 'border-amber-400 bg-amber-50/70 ring-4 ring-amber-300/35 shadow-xl scale-[1.015] animate-pulse' : ''}`
 	);
-	const profile = $derived(eventStore.model(ProfileModel, message.author));
+	const profileState = useProfile(() => message.author);
+	const profile = $derived(profileState.current);
 	const authorNpub = $derived(nip19.npubEncode(message.author));
 	const displayName = $derived.by(
-		() =>
-			$profile?.name || $profile?.display_name || $profile?.nip05 || `${authorNpub.slice(0, 12)}…`
+		() => profile?.name || profile?.display_name || profile?.nip05 || `${authorNpub.slice(0, 12)}…`
 	);
 	const replyParts = $derived.by(() =>
 		message.replyTo ? getCachedChatMessageParts(message.replyTo.id, message.replyTo.text) : []
@@ -266,6 +269,13 @@
 		actionsMenuOpen = false;
 		clearTouchActions();
 		await onDelete(message);
+	}
+
+	function handlePinAction() {
+		if (message.deleted) return;
+		actionsMenuOpen = false;
+		clearTouchActions();
+		onPin(message);
 	}
 
 	function getReactionLabel(reaction: NonNullable<ChatMessage['reactions']>[number]) {
@@ -410,9 +420,9 @@
 		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
 			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
 				{#if showAvatar}
-					{#if $profile?.picture}
+					{#if profile?.picture}
 						<img
-							src={$profile.picture}
+							src={profile.picture}
 							alt={displayName}
 							class="h-8 w-8 rounded-full object-cover"
 						/>
@@ -639,6 +649,13 @@
 										</DropdownMenuItem>
 
 										{#if !message.deleted}
+											<DropdownMenuItem onSelect={handlePinAction} class="gap-2">
+												<Pin class="size-4" />
+												<span>{message.pinned ? 'Unpin' : 'Pin'}</span>
+											</DropdownMenuItem>
+										{/if}
+
+										{#if !message.deleted}
 											<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
 												<CornerUpLeft class="size-4" />
 												<span>Reply</span>
@@ -792,6 +809,7 @@
 							{/if}
 
 							{#if !message.deleted}
+								<ChatMessageMedia {message} />
 								<ChatInlineBody {message} {onOpenRich} />
 							{/if}
 						</div>
@@ -840,6 +858,11 @@
 					class="flex shrink-0 items-center gap-1 self-end px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
 				>
 					<p>{message.timeLabel}</p>
+					{#if message.pinned}
+						<span class="inline-flex items-center" aria-label="Pinned" title="Pinned">
+							<Pin class="size-3" />
+						</span>
+					{/if}
 					{#if message.edited}
 						<span class="inline-flex items-center" aria-label="Edited" title="Edited">
 							<Pencil class="size-3" />

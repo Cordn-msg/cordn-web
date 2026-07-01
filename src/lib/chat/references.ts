@@ -56,6 +56,13 @@ export interface ChatMessageDeleteReference {
 	targetKind: number;
 }
 
+export type PinOp = 'add' | 'remove';
+
+export interface ChatMessagePinReference {
+	targetId: string;
+	op: PinOp;
+}
+
 // ---------------------------------------------------------------------------
 // Tag helpers
 // ---------------------------------------------------------------------------
@@ -113,6 +120,15 @@ export function createDeleteMessageTags(target: MessageTarget): string[][] {
 	return [
 		['e', target.id, '', target.pubkey],
 		['k', String(target.kind)]
+	];
+}
+
+export function createPinMessageTags(target: MessageTarget, op: PinOp): string[][] {
+	return [
+		['e', target.id, '', target.pubkey],
+		['p', target.pubkey],
+		['k', String(target.kind)],
+		['op', op]
 	];
 }
 
@@ -222,6 +238,30 @@ export function getMessageDeleteReference(
 	};
 }
 
+export function getMessagePinReference(
+	kind: number,
+	tags: string[][]
+): ChatMessagePinReference | null {
+	if (kind !== ChatKinds.Pin) {
+		return null;
+	}
+
+	const eventTag = findTag(tags, 'e');
+	if (!eventTag?.[1]) {
+		return null;
+	}
+
+	const op = findTag(tags, 'op')?.[1];
+	if (op !== 'add' && op !== 'remove') {
+		return null;
+	}
+
+	return {
+		targetId: eventTag[1],
+		op
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Outbound kind + tag resolution (unified so send stays in sync with parsing)
 // ---------------------------------------------------------------------------
@@ -233,6 +273,8 @@ export interface OutboundMessageInput {
 	reactionTo?: MessageTarget;
 	editTo?: MessageTarget;
 	deleteTo?: MessageTarget;
+	pinTo?: MessageTarget;
+	pinOp?: PinOp;
 }
 
 export interface OutboundMessageShape {
@@ -248,6 +290,15 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 	const isReaction = Boolean(input.reactionTo);
 	const isEdit = Boolean(input.editTo);
 	const isDelete = Boolean(input.deleteTo);
+	const isPin = Boolean(input.pinTo);
+
+	if (isPin) {
+		return {
+			kind: ChatKinds.Pin,
+			content: '',
+			tags: createPinMessageTags(input.pinTo!, input.pinOp ?? 'add')
+		};
+	}
 
 	if (isReaction) {
 		return {
@@ -297,20 +348,32 @@ export interface AnnotationIndex {
 	editMap: Map<string, StoredChatMessage>;
 	/** ids of messages whose deletion has been validated */
 	deletedIds: Set<string>;
+	/** targetId -> winning pin op (last-write-wins). `op === 'add'` means the
+	 *  target is currently pinned; the entry carries who/when for ordering. */
+	pinSet: Map<string, PinIndexEntry>;
+}
+
+export interface PinIndexEntry {
+	targetId: string;
+	op: PinOp;
+	pinnedBy: string;
+	pinnedAt: number;
+	cursor: number;
 }
 
 /** Builds the reaction/edit/delete index over a group's messages. Both the chat
  *  shell (for the inline view-model fold) and search consume this so the
  *  resolution rules cannot drift between them.
  *
- *  `messages` is iterated three times (reactions, deletes, edits) in creation
- *  order — deletes must be known before edits resolve, so the ordering is
- *  load-bearing. */
+ *  `messages` is iterated once per annotation kind (reactions, deletes, edits,
+ *  pins) in creation order — deletes must be known before edits resolve, so
+ *  that ordering is load-bearing; pins are order-independent. */
 export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationIndex {
 	const byEventId = new Map(messages.map((message) => [message.id, message]));
 	const reactionMap = new Map<string, Map<string, ReactionIndexEntry>>();
 	const editMap = new Map<string, StoredChatMessage>();
 	const deletedIds = new Set<string>();
+	const pinSet = new Map<string, PinIndexEntry>();
 
 	for (const message of messages) {
 		const reference = getMessageReactionReference(message.kind, message.content, message.tags);
@@ -354,5 +417,27 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 		}
 	}
 
-	return { byEventId, reactionMap, editMap, deletedIds };
+	for (const message of messages) {
+		const reference = getMessagePinReference(message.kind, message.tags);
+		if (!reference) continue;
+
+		// Any member may pin/unpin (no author check, unlike edits/deletes).
+		// Last-write-wins by createdAt; ties break on cursor (monotonic).
+		const current = pinSet.get(reference.targetId);
+		if (
+			!current ||
+			message.createdAt > current.pinnedAt ||
+			(message.createdAt === current.pinnedAt && message.cursor > current.cursor)
+		) {
+			pinSet.set(reference.targetId, {
+				targetId: reference.targetId,
+				op: reference.op,
+				pinnedBy: normalizePubKey(message.sender),
+				pinnedAt: message.createdAt,
+				cursor: message.cursor
+			});
+		}
+	}
+
+	return { byEventId, reactionMap, editMap, deletedIds, pinSet };
 }

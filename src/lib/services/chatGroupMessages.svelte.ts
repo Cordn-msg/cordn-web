@@ -16,6 +16,8 @@ import { concatBytes, randomBytes } from '@noble/ciphers/utils.js';
 import { SvelteSet } from 'svelte/reactivity';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
+import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
+
 import { ChatKinds, SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import {
 	createAdminAuthorizationCallback,
@@ -42,6 +44,13 @@ export interface StoredChatMessage {
 	 *  sealed spec/03 payload. Carried through to the message-info dialog so
 	 *  the rollout can be inspected per-message. */
 	encrypted?: boolean;
+	/** For media-bearing messages (`imeta` tag): the per-epoch media key
+	 *  (base64) captured at ingest/send time, when the processing state holds
+	 *  the correct epoch's exporter secret. Stashed rather than re-derived at
+	 *  render time because the exporter secret rotates on commits, so the
+	 *  current state can't decrypt media from prior epochs. Derivable from the
+	 *  persisted group state, so storing it adds no new trust boundary. */
+	mediaKeyBase64?: string;
 }
 
 export interface StoredChatSyncIssue {
@@ -644,7 +653,10 @@ export async function ingestChatGroupMessages(params: {
 				kind: event.kind,
 				tags: event.tags,
 				content: event.content,
-				encrypted: message.encrypted
+				encrypted: message.encrypted,
+				mediaKeyBase64: findImetaTag(event.tags)
+					? bytesToBase64(await deriveMediaKey(group.state))
+					: undefined
 			};
 
 			seenCursors.add(message.cursor);

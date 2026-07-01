@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { eventStore } from '../services/eventStore';
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
-	import { ProfileModel } from 'applesauce-core/models';
+	import { useProfile } from '$lib/services/useProfile.svelte';
 	import Button, { type ButtonVariant } from './ui/button/button.svelte';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import LogOut from '@lucide/svelte/icons/log-out';
@@ -38,10 +37,11 @@
 	const isInline = $derived(mode === 'inline');
 	const canShowLogout = $derived(mode === 'compact' && showLogout);
 
-	const profile = $derived(eventStore.model(ProfileModel, pubkey));
+	const profileState = useProfile(() => pubkey);
+	const profile = $derived(profileState.current);
 	const npub = $derived(nip19.npubEncode(pubkey));
 	const displayName = $derived(
-		$profile?.name || $profile?.display_name || $profile?.nip05 || `${npub.slice(0, 12)}…`
+		profile?.name || profile?.display_name || profile?.nip05 || `${npub.slice(0, 12)}…`
 	);
 
 	async function copyPubkey() {
@@ -60,7 +60,7 @@
 		}
 	}
 	$effect(() => {
-		if ($profile) return;
+		if (profile) return;
 		ensureProfileLoaded(pubkey);
 	});
 </script>
@@ -112,13 +112,13 @@
 {/snippet}
 {#if isExtended}
 	<div class="w-full overflow-hidden rounded-lg border border-border bg-card">
-		{#if $profile?.banner}
-			<img src={$profile.banner} alt="" class="h-32 w-full object-cover" />
+		{#if profile?.banner}
+			<img src={profile.banner} alt="" class="h-32 w-full object-cover" />
 		{/if}
 
 		<div class="p-4">
 			<div class="flex items-start gap-3">
-				{@render pfp(pubkey, $profile?.picture, 'extended')}
+				{@render pfp(pubkey, profile?.picture, 'extended')}
 				<div class="min-w-0 flex-1 pt-1">
 					<button
 						type="button"
@@ -137,8 +137,8 @@
 							<span class="block truncate text-lg font-semibold">{displayName}</span>
 						{/if}
 					</button>
-					{#if $profile?.nip05}
-						<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
+					{#if profile?.nip05}
+						<p class="text-xs text-muted-foreground">{profile.nip05}</p>
 					{/if}
 				</div>
 
@@ -155,7 +155,7 @@
 			</div>
 
 			<p class="mt-4 text-sm whitespace-pre-wrap text-muted-foreground">
-				{$profile?.about || 'No profile description available.'}
+				{profile?.about || 'No profile description available.'}
 			</p>
 		</div>
 	</div>
@@ -164,7 +164,7 @@
 		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium break-words text-current"
 	>
 		{#if showInlineAvatar}
-			{@render pfp(pubkey, $profile?.picture, 'inline')}
+			{@render pfp(pubkey, profile?.picture, 'inline')}
 		{/if}
 		{#if profileLink}
 			<a href={profileHref} class="inline min-w-0 text-left hover:underline">{displayName}</a>
@@ -174,7 +174,7 @@
 	</span>
 {:else}
 	<div class="flex items-center gap-2">
-		{@render pfp(pubkey, $profile?.picture)}
+		{@render pfp(pubkey, profile?.picture)}
 		{#if showName}
 			<div class="min-w-0 flex-1">
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -186,8 +186,8 @@
 						<span class="block truncate text-lg font-semibold">{displayName}</span>
 					{/if}
 				</div>
-				{#if $profile?.nip05}
-					<p class="text-xs text-muted-foreground">{$profile.nip05}</p>
+				{#if profile?.nip05}
+					<p class="text-xs text-muted-foreground">{profile.nip05}</p>
 				{/if}
 			</div>
 		{/if}

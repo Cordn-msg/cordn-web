@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-01-media',
+		createdAt: Date.UTC(2026, 6, 1),
+		version: 1,
+		title: 'Send images and files in a group',
+		body: '- ✨ Send images and files in a group — photos preview right in the chat and documents download with one tap, all encrypted end-to-end so only group members can open them.\n- ✨ Files appear the moment you send them and finish uploading in the background, so you can keep typing your next message right away.\n- 🔄 Pick where your shared media is stored under Config → Media; if a server is unreachable, uploads fall back to another one automatically.\n- ✨ Pin any message in a group. Pinned messages collect in a carousel at the top of the chat — click one to jump straight back to it, or open the full list to see them all and unpin.\n- ✨ Anyone in a group can pin and unpin, and each pin shows who pinned it.\n- 🐛 Names in profile cards no longer bleed across people when several appear together (for example in a thread or the pinned-messages list).'
+	},
+	{
 		id: 'cordn-news-2026-06-30',
 		createdAt: Date.UTC(2026, 5, 30),
 		version: 1,

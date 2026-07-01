@@ -5,6 +5,7 @@ import {
 	buildAnnotationIndex,
 	getMessageDeleteReference,
 	getMessageEditReference,
+	getMessagePinReference,
 	getMessageReactionReference,
 	getMessageThreadReference,
 	resolveOutboundMessage
@@ -30,6 +31,7 @@ describe('kind catalog', () => {
 		expect(isAnnotationKind(ChatKinds.Reaction)).toBe(true);
 		expect(isAnnotationKind(ChatKinds.Edit)).toBe(true);
 		expect(isAnnotationKind(ChatKinds.Deletion)).toBe(true);
+		expect(isAnnotationKind(ChatKinds.Pin)).toBe(true);
 		expect(isSystemKind(SYSTEM_MESSAGE_KIND)).toBe(true);
 		// unknown future kinds are not annotations — they render
 		expect(isAnnotationKind(30023)).toBe(false);
@@ -97,6 +99,34 @@ describe('reference parsers', () => {
 		});
 		expect(getMessageDeleteReference(5, [['e', 't1']])).toBeNull();
 	});
+
+	test('pin reference needs kind 1011, an e tag, and an op tag of add/remove', () => {
+		expect(
+			getMessagePinReference(1011, [
+				['e', 't1'],
+				['op', 'add']
+			])
+		).toEqual({ targetId: 't1', op: 'add' });
+		expect(
+			getMessagePinReference(1011, [
+				['e', 't1'],
+				['op', 'remove']
+			])
+		).toEqual({ targetId: 't1', op: 'remove' });
+		expect(
+			getMessagePinReference(9, [
+				['e', 't1'],
+				['op', 'add']
+			])
+		).toBeNull();
+		expect(getMessagePinReference(1011, [['op', 'add']])).toBeNull();
+		expect(
+			getMessagePinReference(1011, [
+				['e', 't1'],
+				['op', 'toggle']
+			])
+		).toBeNull();
+	});
 });
 
 describe('resolveOutboundMessage', () => {
@@ -135,6 +165,15 @@ describe('resolveOutboundMessage', () => {
 		const out = resolveOutboundMessage({ content: '', deleteTo: target });
 		expect(out.kind).toBe(5);
 		expect(out.content).toBe('');
+	});
+
+	test('pin → kind 1011, empty content, op tag defaults to add', () => {
+		const add = resolveOutboundMessage({ content: '', pinTo: target });
+		expect(add.kind).toBe(1011);
+		expect(add.content).toBe('');
+		expect(add.tags.find((t) => t[0] === 'op')?.[1]).toBe('add');
+		const remove = resolveOutboundMessage({ content: '', pinTo: target, pinOp: 'remove' });
+		expect(remove.tags.find((t) => t[0] === 'op')?.[1]).toBe('remove');
 	});
 });
 
@@ -194,5 +233,39 @@ describe('buildAnnotationIndex', () => {
 		});
 		const index = buildAnnotationIndex([original, forgedDelete]);
 		expect(index.deletedIds.has('orig')).toBe(false);
+	});
+
+	test('pin set is last-write-wins, any-member, and tracks who/when', () => {
+		const original = msg({ id: 'orig', kind: 9, content: 'hi', sender: 'aaaa' });
+		const pinByB = msg({
+			id: 'p1',
+			kind: 1011,
+			createdAt: 1,
+			cursor: 1,
+			sender: 'bbbb', // any member, not the author
+			tags: [
+				['e', 'orig', '', 'aaaa'],
+				['op', 'add']
+			]
+		});
+		const unpinByC = msg({
+			id: 'p2',
+			kind: 1011,
+			createdAt: 2,
+			cursor: 2,
+			sender: 'cccc',
+			tags: [
+				['e', 'orig', '', 'aaaa'],
+				['op', 'remove']
+			]
+		});
+
+		const afterPin = buildAnnotationIndex([original, pinByB]);
+		expect(afterPin.pinSet.get('orig')?.op).toBe('add');
+		expect(afterPin.pinSet.get('orig')?.pinnedBy).toBe('bbbb');
+
+		// Later unpin by a different member wins (no author check).
+		const afterUnpin = buildAnnotationIndex([original, pinByB, unpinByC]);
+		expect(afterUnpin.pinSet.get('orig')?.op).toBe('remove');
 	});
 });

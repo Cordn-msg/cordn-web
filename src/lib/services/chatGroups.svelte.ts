@@ -30,10 +30,12 @@ import {
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import {
 	resolveOutboundMessage,
 	type ChatMessageReplyTarget,
-	type MessageTarget
+	type MessageTarget,
+	type PinOp
 } from '$lib/chat/references';
 import {
 	createGroupPendingEpochStore,
@@ -1250,13 +1252,15 @@ export async function sendChatGroupMessage(input: {
 	reactionTo?: MessageTarget;
 	editTo?: MessageTarget;
 	deleteTo?: MessageTarget;
+	pinTo?: MessageTarget;
+	pinOp?: PinOp;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
 		const group = await prepareGroupForApplicationMessage(input.groupId);
 
 		const outboundShape = resolveOutboundMessage(input);
-		if (!outboundShape.content && !input.deleteTo) {
+		if (!outboundShape.content && !input.deleteTo && !input.pinTo) {
 			throw new Error('Message content is required');
 		}
 
@@ -1295,7 +1299,12 @@ export async function sendChatGroupMessage(input: {
 			kind: outbound.event.kind,
 			tags: outbound.event.tags,
 			content: outbound.event.content,
-			encrypted: group.encrypted === true
+			encrypted: group.encrypted === true,
+			// Re-derive for the outgoing record; same epoch as the encryption (no
+			// commit between derive-in-sendChatMediaMessage and here), so identical key.
+			mediaKeyBase64: findImetaTag(outbound.event.tags)
+				? bytesToBase64(await deriveMediaKey(state))
+				: undefined
 		};
 
 		const workingGroup = createWorkingChatGroupSession(group, outbound.newState);

@@ -3,6 +3,7 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import BlossomServerConfig from '$lib/components/chat/BlossomServerConfig.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import DatabaseBackup from '@lucide/svelte/icons/database-backup';
@@ -120,6 +121,8 @@
 						</div>
 					</Card.Content>
 				</Card.Root>
+
+				<BlossomServerConfig />
 			</div>
 		</div>
 	</div>

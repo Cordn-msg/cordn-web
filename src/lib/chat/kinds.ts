@@ -15,7 +15,10 @@ export const ChatKinds = {
 	ThreadReply: 1111,
 	Reaction: 7,
 	Edit: 1010,
-	Deletion: 5
+	Deletion: 5,
+	/** Group-scoped pin/unpin of an existing message. Carries an `op` tag
+	 *  (`add` | `remove`); the active pin set is derived last-write-wins. */
+	Pin: 1011
 } as const;
 
 /** Annotation kinds never render as a row — they mutate a primary message
@@ -23,7 +26,8 @@ export const ChatKinds = {
 export const ANNOTATION_KINDS = new Set<number>([
 	ChatKinds.Reaction,
 	ChatKinds.Edit,
-	ChatKinds.Deletion
+	ChatKinds.Deletion,
+	ChatKinds.Pin
 ]);
 
 export function isAnnotationKind(kind: number): boolean {
