@@ -3,13 +3,13 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import BlossomServerConfig from '$lib/components/chat/BlossomServerConfig.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import DatabaseBackup from '@lucide/svelte/icons/database-backup';
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Server from '@lucide/svelte/icons/server';
+	import Images from '@lucide/svelte/icons/images';
 </script>
 
 <svelte:head>
@@ -118,11 +118,25 @@
 									</p>
 								</div>
 							</a>
+
+							<a href={resolve('/chat/config/media')} class="block">
+								<div
+									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
+								>
+									<div
+										class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
+									>
+										<Images class="size-4" />
+									</div>
+									<p class="font-medium">Media</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										Blossom server used for encrypted image and file uploads.
+									</p>
+								</div>
+							</a>
 						</div>
 					</Card.Content>
 				</Card.Root>
-
-				<BlossomServerConfig />
 			</div>
 		</div>
 	</div>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
 	import { untrack } from 'svelte';
 	import {
 		createChatLayoutContext,
@@ -133,4 +134,6 @@
 
 		{@render children()}
 	</div>
+
+	<MediaLightbox />
 </div>

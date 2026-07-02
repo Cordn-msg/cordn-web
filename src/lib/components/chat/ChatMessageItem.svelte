@@ -19,10 +19,12 @@
 		TooltipTrigger
 	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import Avatar from '$lib/components/Avatar.svelte';
 	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
 	import Copy from '@lucide/svelte/icons/copy';
+	import Download from '@lucide/svelte/icons/download';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
@@ -33,10 +35,11 @@
 	import Pin from '@lucide/svelte/icons/pin';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
-	import { cn, pubkeyToHexColor, copyToClipboard } from '$lib/utils';
+	import { cn, copyToClipboard, downloadObjectUrl } from '$lib/utils';
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
 	import ChatMessageMedia from './ChatMessageMedia.svelte';
+	import { peekMessageMedia, resolveMessageMedia } from '$lib/services/chatMediaStorage.svelte';
 	import {
 		MESSAGE_LINK_WRAP_CLASS,
 		MESSAGE_PART_CONTAINER_CLASS,
@@ -264,6 +267,28 @@
 		await copyToClipboard(message.text);
 	}
 
+	const hasDownloadableMedia = $derived(
+		Boolean(message.media || (message.tags && peekMessageMedia(message.tags)))
+	);
+
+	async function handleDownloadMedia() {
+		actionsMenuOpen = false;
+		clearTouchActions();
+		// Optimistic (still uploading): fall back to the local preview if present.
+		if (message.media) {
+			if (message.media.previewUrl)
+				downloadObjectUrl(message.media.previewUrl, message.media.filename);
+			return;
+		}
+		if (!message.tags || !message.mediaKeyBase64) return;
+		const resolved = await resolveMessageMedia({
+			messageId: message.eventId,
+			tags: message.tags,
+			mediaKeyBase64: message.mediaKeyBase64
+		});
+		if (resolved) downloadObjectUrl(resolved.url, resolved.filename);
+	}
+
 	async function deleteMessage() {
 		if (!isOwn || message.deleted) return;
 		actionsMenuOpen = false;
@@ -420,18 +445,12 @@
 		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
 			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
 				{#if showAvatar}
-					{#if profile?.picture}
-						<img
-							src={profile.picture}
-							alt={displayName}
-							class="h-8 w-8 rounded-full object-cover"
-						/>
-					{:else}
-						<div
-							class="h-8 w-8 rounded-full"
-							style={`background-color: ${pubkeyToHexColor(message.author)}`}
-						></div>
-					{/if}
+					<Avatar
+						pubkey={message.author}
+						picture={profile?.picture}
+						size="h-8 w-8"
+						alt={displayName}
+					/>
 				{:else}
 					<div class="h-8 w-8" aria-hidden="true"></div>
 				{/if}
@@ -647,6 +666,13 @@
 											<Copy class="size-4" />
 											<span>Copy</span>
 										</DropdownMenuItem>
+
+										{#if hasDownloadableMedia}
+											<DropdownMenuItem onSelect={handleDownloadMedia} class="gap-2">
+												<Download class="size-4" />
+												<span>Download</span>
+											</DropdownMenuItem>
+										{/if}
 
 										{#if !message.deleted}
 											<DropdownMenuItem onSelect={handlePinAction} class="gap-2">

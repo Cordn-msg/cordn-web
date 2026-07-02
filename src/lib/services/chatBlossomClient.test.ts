@@ -11,6 +11,7 @@ import {
 	ephemeralBlossomSigner,
 	fetchBlob,
 	uploadBlob,
+	verifyBlobRoundtrip,
 	type BlossomSigner
 } from '$lib/services/chatBlossomClient';
 
@@ -18,8 +19,7 @@ import {
  * BUD-11/02 self-check with a stub signer and a mocked global fetch. Asserts
  * the auth-event shape (kind 24242, scoped `t`/`expiration`/`server`/`x` tags),
  * the `Nostr <base64>` header encoding, and the upload/fetch call shapes —
- * without network or a real account. End-to-end network coverage lives in
- * chatBlossomSmoke.test.ts, gated behind BLOSSOM_SMOKE=1.
+ * without network or a real account.
  */
 const SERVER = 'https://blossom.primal.net/';
 
@@ -169,11 +169,11 @@ describe('uploadBlob (BUD-02)', () => {
 		expect(result.sha256).toBe(expectedSha);
 		expect(captured!.url).toBe(`${SERVER}upload`);
 		expect(captured!.method).toBe('PUT');
-		// X-SHA-256 carries the blob hash (BUD-02). Content-Type is NOT set by us —
-		// the body is ciphertext, so fetch's default octet-stream is the truthful
-		// type and the real MIME stays sealed in the imeta.
+		// X-SHA-256 carries the blob hash (BUD-02). Content-Type is the truthful
+		// application/octet-stream for AEAD ciphertext; the real MIME stays sealed
+		// in the imeta.
 		expect(captured!.headers['x-sha-256']).toBe(expectedSha);
-		expect(captured!.headers['content-type']).toBeUndefined();
+		expect(captured!.headers['content-type']).toBe('application/octet-stream');
 		expect(captured!.headers['authorization'].startsWith('Nostr ')).toBe(true);
 		expect(Array.from(captured!.body)).toEqual([1, 2, 3, 4, 5]);
 	});
@@ -216,5 +216,23 @@ describe('fetchBlob (BUD-01 GET)', () => {
 	test('throws on a non-ok status', async () => {
 		globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch;
 		await expect(fetchBlob(`${SERVER}abc`)).rejects.toThrow('404');
+	});
+});
+
+describe('verifyBlobRoundtrip', () => {
+	test('passes when the served bytes hash to the expected sha256', async () => {
+		const blob = new Uint8Array([10, 20, 30]);
+		globalThis.fetch = (async () => new Response(blob, { status: 200 })) as typeof fetch;
+		await expect(
+			verifyBlobRoundtrip('https://x/abc', bytesToHex(sha256(blob)))
+		).resolves.toBeUndefined();
+	});
+
+	test('throws BlossomUploadError when the server serves different bytes (transform trap)', async () => {
+		globalThis.fetch = (async () =>
+			new Response(new Uint8Array([99, 99, 99]), { status: 200 })) as typeof fetch;
+		await expect(verifyBlobRoundtrip('https://x/abc', '0'.repeat(64))).rejects.toThrow(
+			'round-trip sha256 mismatch'
+		);
 	});
 });

@@ -7,7 +7,10 @@
 	import MessagesSquare from '@lucide/svelte/icons/messages-square';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { listChatGroupMessages } from '$lib/services/chatGroups.svelte';
+	import ChatMessageMedia from '$lib/components/chat/ChatMessageMedia.svelte';
+	import { peekMessageMedia } from '$lib/services/chatMediaStorage.svelte';
 	import { buildAnnotationIndex, getMessageThreadReference } from '$lib/chat/references';
+	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 	import type { RichBodyProps } from '$lib/chat/registry';
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
@@ -58,6 +61,7 @@
 	const edit = $derived(subject ? index.editMap.get(subject.id) : undefined);
 	const displayContent = $derived(subject ? displayText(subject) : '');
 	const isOwn = $derived(subject ? normalizePubKey(subject.sender) === activePubkey : false);
+	const hasMedia = $derived(subject ? Boolean(peekMessageMedia(subject.tags ?? [])) : false);
 
 	// Thread context — resolved purely from local message tags via the shared
 	// parser. Ordered root → … → subject → descendants. Indentation is capped
@@ -225,12 +229,19 @@
 					</div>
 				{/each}
 			</section>
-		{:else if !isDeleted && displayContent}
+		{:else if !isDeleted && (displayContent || hasMedia)}
 			<div class="rounded-2xl border p-4">
 				{@render messageMeta(subject, true)}
-				<p class="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-					{displayContent}
-				</p>
+				{#if hasMedia}
+					<div class="mt-2">
+						<ChatMessageMedia message={subject} />
+					</div>
+				{/if}
+				{#if displayContent}
+					<p class="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+						<MessageParts messageId={subject.id} text={displayContent} {isOwn} />
+					</p>
+				{/if}
 			</div>
 		{:else if isDeleted}
 			<div class="rounded-2xl border border-dashed p-4 text-muted-foreground italic">

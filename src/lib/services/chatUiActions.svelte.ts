@@ -228,6 +228,7 @@ export async function sendGroupMessageAction(
 			pinOp
 		});
 	} catch (error) {
+		console.error('Failed to send chat message:', error);
 		chatComposerActionsStore.error =
 			error instanceof Error ? error.message : 'Failed to send message';
 		return false;

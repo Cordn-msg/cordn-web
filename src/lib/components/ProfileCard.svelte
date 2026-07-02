@@ -6,11 +6,11 @@
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import { logout } from '$lib/services/accountManager.svelte';
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
-	import { pubkeyToHexColor } from '$lib/utils';
 	import { nip19 } from 'nostr-tools';
-	import { cn } from '$lib/utils';
 	import { copyToClipboard } from '$lib/utils';
 	import { resolve } from '$app/paths';
+	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
+	import Avatar from './Avatar.svelte';
 
 	let {
 		pubkey,
@@ -43,6 +43,7 @@
 	const displayName = $derived(
 		profile?.name || profile?.display_name || profile?.nip05 || `${npub.slice(0, 12)}…`
 	);
+	const showImages = $derived(getLoadAvatars());
 
 	async function copyPubkey() {
 		await copyToClipboard(npub);
@@ -66,53 +67,21 @@
 </script>
 
 {#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' | 'inline' = 'compact')}
+	{@const sizeClass =
+		size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'}
 	{#if profileLink}
 		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
-			{#if pfp}
-				<img
-					src={pfp}
-					alt="pfp"
-					class={cn(
-						'rounded-full object-cover',
-						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-					)}
-				/>
-			{:else}
-				<div
-					class={cn(
-						'rounded-full',
-						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-					)}
-					style="background-color: {pubkeyToHexColor(pubkey)}"
-				></div>
-			{/if}
+			<Avatar {pubkey} picture={pfp} size={sizeClass} alt="pfp" />
 		</a>
 	{:else}
 		<span class="shrink-0" aria-hidden="true">
-			{#if pfp}
-				<img
-					src={pfp}
-					alt="pfp"
-					class={cn(
-						'rounded-full object-cover',
-						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-					)}
-				/>
-			{:else}
-				<div
-					class={cn(
-						'rounded-full',
-						size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'
-					)}
-					style="background-color: {pubkeyToHexColor(pubkey)}"
-				></div>
-			{/if}
+			<Avatar {pubkey} picture={pfp} size={sizeClass} alt="pfp" />
 		</span>
 	{/if}
 {/snippet}
 {#if isExtended}
 	<div class="w-full overflow-hidden rounded-lg border border-border bg-card">
-		{#if profile?.banner}
+		{#if profile?.banner && showImages}
 			<img src={profile.banner} alt="" class="h-32 w-full object-cover" />
 		{/if}
 

@@ -6,6 +6,7 @@
 	import { normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 	import { getDirectChatTargetPubkey } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
 
 	let {
 		group,
@@ -35,6 +36,10 @@
 	const hasExplicitGroupAvatar = $derived.by(() =>
 		Boolean(group.metadata?.imageUrl || group.metadata?.icon)
 	);
+	// Respect the global "load avatars" toggle — when off, skip the external image
+	// fetch and show the color+initial fallback (same gate as Avatar.svelte, so the
+	// group list can't drift from the bubble/profile avatars).
+	const showImages = $derived(getLoadAvatars());
 
 	const profileHints = useProfileHints(() => visibleMemberPubkeys, { relays: metadataRelays });
 
@@ -52,9 +57,28 @@
 	}
 </script>
 
+{#snippet memberAvatar(pubkey: string, avatarClass: string, fbClass: string)}
+	{@const profile = getProfile(pubkey)}
+	<Avatar class={avatarClass}>
+		{#if profile?.picture && showImages}
+			<AvatarImage
+				src={profile.picture}
+				alt={profile.name || profile.displayName || pubkey}
+				class="object-cover"
+			/>
+		{/if}
+		<AvatarFallback
+			class={`text-background ${fbClass}`}
+			style={`background-color: ${pubkeyToHexColor(pubkey)};`}
+		>
+			{getFallback(pubkey)}
+		</AvatarFallback>
+	</Avatar>
+{/snippet}
+
 {#if hasExplicitGroupAvatar || visibleMemberPubkeys.length === 0}
 	<Avatar class={`${className} shrink-0 border border-border bg-background`}>
-		{#if group.metadata?.imageUrl}
+		{#if group.metadata?.imageUrl && showImages}
 			<AvatarImage
 				src={group.metadata.imageUrl}
 				alt={group.metadata?.name || group.id}
@@ -64,44 +88,21 @@
 		<AvatarFallback class={`bg-background ${fallbackClass}`}>{getGroupFallback()}</AvatarFallback>
 	</Avatar>
 {:else if remainingMemberCount === 0}
-	{@const pubkey = visibleMemberPubkeys[0]}
-	{@const profile = getProfile(pubkey)}
-	<Avatar class={`${className} shrink-0 border border-border bg-background`}>
-		{#if profile?.picture}
-			<AvatarImage
-				src={profile.picture}
-				alt={profile.name || profile.displayName || pubkey}
-				class="object-cover"
-			/>
-		{/if}
-		<AvatarFallback
-			class={`text-background ${fallbackClass}`}
-			style={`background-color: ${pubkeyToHexColor(pubkey)};`}
-		>
-			{getFallback(pubkey)}
-		</AvatarFallback>
-	</Avatar>
+	{@render memberAvatar(
+		visibleMemberPubkeys[0],
+		`${className} shrink-0 border border-border bg-background`,
+		fallbackClass
+	)}
 {:else}
 	<div
 		class={`${className} flex shrink-0 items-center -space-x-1.5 *:data-[slot=avatar]:ring-2 *:data-[slot=avatar]:ring-background`}
 	>
 		{#each visibleMemberPubkeys as pubkey (pubkey)}
-			{@const profile = getProfile(pubkey)}
-			<Avatar class="h-6 w-6 border border-border bg-background">
-				{#if profile?.picture}
-					<AvatarImage
-						src={profile.picture}
-						alt={profile.name || profile.displayName || pubkey}
-						class="object-cover"
-					/>
-				{/if}
-				<AvatarFallback
-					class="text-[11px] font-medium text-background"
-					style={`background-color: ${pubkeyToHexColor(pubkey)};`}
-				>
-					{getFallback(pubkey)}
-				</AvatarFallback>
-			</Avatar>
+			{@render memberAvatar(
+				pubkey,
+				'h-6 w-6 border border-border bg-background',
+				'text-[11px] font-medium'
+			)}
 		{/each}
 		<Avatar class="h-6 w-6 border border-border bg-muted">
 			<AvatarFallback class="bg-muted text-[11px] font-medium text-muted-foreground">

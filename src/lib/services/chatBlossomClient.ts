@@ -1,5 +1,4 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { toBufferSource } from 'ts-mls';
 import { bytesToHex } from 'applesauce-core/helpers';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import type { EventTemplate, NostrEvent } from 'nostr-tools';
@@ -116,11 +115,11 @@ export interface UploadedBlob {
 /**
  * Upload an encrypted blob via `PUT /upload` (BUD-02), mirroring the
  * `blossom-client-sdk` request: `X-SHA-256` + `Authorization` headers and the
- * raw bytes as the body. No `Content-Type` is set — the body is AEAD ciphertext
- * (opaque bytes), so fetch's default `application/octet-stream` is the truthful
- * type and the real MIME stays sealed in the `imeta` `m` field. BUD-02 forbids
- * the server from modifying `/upload` bodies, so the declared type never
- * triggers transcoding.
+ * raw bytes as the body. `Content-Type` is set explicitly to
+ * `application/octet-stream` — the truthful type for AEAD ciphertext (opaque
+ * bytes); the real MIME stays sealed in the `imeta` `m` field. Every server in
+ * `BLOSSOM_SERVERS` was verified to accept octet-stream; media-optimizer stores
+ * that reject it or sniff/re-encode uploads are kept out of the list.
  *
  * Failures throw `BlossomUploadError` carrying the HTTP `status` (or
  * `undefined` for a network/CORS block).
@@ -146,12 +145,13 @@ export async function uploadBlob(params: {
 			method: 'PUT',
 			headers: {
 				'X-SHA-256': sha256Hex,
+				'Content-Type': 'application/octet-stream',
 				Authorization: blossomAuthHeader(event)
 			},
-			// ponytail: toBufferSource (ts-mls) is a no-op for ArrayBuffer-backed bytes;
-			// works around TS 6 widening Uint8Array to Uint8Array<ArrayBufferLike>, which
-			// BodyInit rejects. Same pattern as chatBackupWorker.ts.
-			body: toBufferSource(params.blob)
+			// params.blob is ArrayBuffer-backed (fresh from encryptMedia); cast to
+			// BufferSource so TS 6's Uint8Array<ArrayBufferLike> widening is accepted
+			// by BodyInit. Local cast, not an MLS-library import.
+			body: params.blob as BufferSource
 		});
 	} catch {
 		// fetch threw before any response — network failure or a CORS preflight
@@ -182,6 +182,23 @@ export async function uploadBlob(params: {
 		sha256: descriptor.sha256,
 		size: descriptor.size ?? params.blob.length
 	};
+}
+
+/**
+ * GET an uploaded blob and confirm the served bytes hash to the expected
+ * sha256. Catches media-optimizer servers (e.g. nostr.build, bostr.online) that
+ * accept a `PUT /upload` and return 2xx but silently re-encode: the bytes they
+ * serve back differ from what we stored, so AEAD decryption would fail for
+ * every recipient with no obvious cause. Used in the upload fallback loop so a
+ * transforming server is treated as a failure and the next server is tried.
+ */
+export async function verifyBlobRoundtrip(url: string, expectedSha256Hex: string): Promise<void> {
+	const bytes = await fetchBlob(url);
+	if (bytesToHex(sha256(bytes)) !== expectedSha256Hex.toLowerCase()) {
+		throw new BlossomUploadError(
+			'server served bytes that do not match the uploaded blob (round-trip sha256 mismatch)'
+		);
+	}
 }
 
 /**

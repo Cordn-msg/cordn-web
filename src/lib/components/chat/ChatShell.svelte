@@ -443,6 +443,7 @@
 				if (previewUrl) URL.revokeObjectURL(previewUrl);
 			})
 			.catch((error) => {
+				console.error('Failed to send media:', error);
 				chatComposerActionsStore.error =
 					error instanceof Error ? error.message : 'Failed to send media';
 				updateOptimisticMessage(optimisticId, (message) => ({

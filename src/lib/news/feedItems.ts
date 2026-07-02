@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-02-media-view',
+		createdAt: Date.UTC(2026, 6, 2),
+		version: 1,
+		title: 'Tap, zoom, and play shared media',
+		body: '- ✨ Tap any image to open it full-screen — zoom in or out (even past 100%), drag to pan, double-tap to fit, and save a copy. It works on images sent as attachments and on image links pasted into a message.\n- ✨ Image and video links pasted in a chat now appear inline as a preview you can open and play without leaving the conversation.\n- ✨ Config → Media now also lets you choose whether images and avatars should load automatically — handy on a metered connection — alongside where shared media is stored.\n- 🐛 Shared images and files now send reliably: a hidden failure was rejecting some uploads (photos sent with no caption were the common case), the server list was refreshed to known-good servers, and uploads now verify nothing was altered in transit so encrypted media can\'t arrive corrupted.\n- 🐛 Media you\'ve opened stays put when you scroll away and come back, and links, mentions, and previews now render in the message info panel just like in the chat.\n- 🔄 Avatars and banners now follow your "load avatars" choice everywhere — chat bubbles, profile cards, and the group and direct-message list all stay in sync.\n- ✨ Download any shared file or image straight from its message menu.'
+	},
+	{
 		id: 'cordn-news-2026-07-01-media',
 		createdAt: Date.UTC(2026, 6, 1),
 		version: 1,

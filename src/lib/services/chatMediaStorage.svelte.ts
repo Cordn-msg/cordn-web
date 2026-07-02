@@ -1,13 +1,15 @@
 import { browser } from '$app/environment';
+import { SvelteSet } from 'svelte/reactivity';
 
 import { bytesToHex, hexToBytes } from 'applesauce-core/helpers';
-import { base64ToBytes } from 'ts-mls';
+import { base64ToBytes, bytesToBase64 } from 'ts-mls';
 
 import { DEFAULT_BLOSSOM_SERVER, BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
 	ephemeralBlossomSigner,
 	fetchBlob,
 	uploadBlob,
+	verifyBlobRoundtrip,
 	type BlossomSigner
 } from '$lib/services/chatBlossomClient';
 import {
@@ -71,6 +73,58 @@ export function isCustomBlossomServer(): boolean {
 	return !BLOSSOM_SERVERS_PRESET.has(getBlossomServer());
 }
 
+// Display preferences — booleans persisted as '1'/'0'. Both default ON so media
+// just works; turning auto-load off shows a per-item "Load media" gate instead
+// of fetching/decrypting every attachment (bandwidth + privacy on metered links).
+const MEDIA_AUTOLOAD_KEY = 'cordn.mediaAutoLoad';
+const LOAD_AVATARS_KEY = 'cordn.loadAvatars';
+
+function loadBoolSetting(key: string, fallback: boolean): boolean {
+	if (!browser) return fallback;
+	const v = localStorage.getItem(key);
+	return v === null ? fallback : v === '1';
+}
+
+let mediaAutoLoad = $state(loadBoolSetting(MEDIA_AUTOLOAD_KEY, true));
+let loadAvatars = $state(loadBoolSetting(LOAD_AVATARS_KEY, true));
+
+export function getMediaAutoLoad(): boolean {
+	return mediaAutoLoad;
+}
+export function setMediaAutoLoad(value: boolean): void {
+	mediaAutoLoad = value;
+	if (browser) localStorage.setItem(MEDIA_AUTOLOAD_KEY, value ? '1' : '0');
+}
+export function getLoadAvatars(): boolean {
+	return loadAvatars;
+}
+export function setLoadAvatars(value: boolean): void {
+	loadAvatars = value;
+	if (browser) localStorage.setItem(LOAD_AVATARS_KEY, value ? '1' : '0');
+}
+
+// Per-item "Load media" overrides for when global auto-load is OFF. Hoisted to
+// module scope so they survive virtualized-row remounts — InlineMediaUrl's local
+// state was lost on a remount (the load-button flicker), and the same latent loss
+// applies to imeta attachments on scroll-away-and-back. Keyed by URL for pasted
+// inline media, by messageId for encrypted imeta attachments. Session-scoped and
+// unbounded; cap if it ever matters.
+const revealedMediaUrls = new SvelteSet<string>();
+export function isMediaUrlRevealed(href: string): boolean {
+	return revealedMediaUrls.has(href);
+}
+export function revealMediaUrl(href: string): void {
+	revealedMediaUrls.add(href);
+}
+
+const loadedMessageMedia = new SvelteSet<string>();
+export function isMessageMediaLoaded(messageId: string): boolean {
+	return loadedMessageMedia.has(messageId);
+}
+export function markMessageMediaLoaded(messageId: string): void {
+	loadedMessageMedia.add(messageId);
+}
+
 const BLOSSOM_SERVERS_PRESET = new Set<string>(
 	// Set for O(1) preset membership so the config UI can show "Custom" when the
 	// user typed a URL not in BLOSSOM_SERVERS.
@@ -112,7 +166,13 @@ async function uploadBlobWithFallback(
 	let lastError: unknown;
 	for (const server of order) {
 		try {
-			return await uploadBlob({ serverUrl: server, blob, signer });
+			const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
+			// Guard against media-optimizer servers that accept the PUT then silently
+			// re-encode: served bytes would differ from the stored blob and AEAD
+			// decryption would fail for every recipient. A mismatch throws here, so
+			// the loop falls through to the next server.
+			await verifyBlobRoundtrip(uploaded.url, uploaded.sha256);
+			return { url: uploaded.url };
 		} catch (error) {
 			lastError = error;
 			console.warn(`Blossom upload to ${server} failed:`, error);
@@ -147,17 +207,27 @@ export async function sendChatMediaMessage(params: {
 	const group = getChatGroup(groupId);
 	if (!group) throw new Error('Group not found');
 
-	// Derive the key from the current epoch, then encrypt + upload outside the
-	// group lock. ponytail: narrow race — if a Commit advances the epoch between
-	// here and the sealed send, receivers derive a mismatched key and the media
-	// is undecryptable (text still sends; the sender's local preview is intact).
-	// Upgrade path: re-check state.epoch after upload, re-derive+re-encrypt+
-	// re-upload on mismatch. Rare for small groups; deferred.
-	const state = decodeStoredGroupState(group);
-	const key = await deriveMediaKey(state);
-	const enc = encryptMedia({ key, plaintext, metadata });
-	// Ephemeral signer: auth tokens must not tie uploads to the active identity.
-	const { url } = await uploadBlobWithFallback(enc.blob, ephemeralBlossomSigner());
+	// The media key is the MLS exporter for the current epoch, so it must match
+	// the epoch the message is sealed at. We encrypt + upload outside the group
+	// lock (uploads are slow), then re-check: if a Commit advanced the epoch
+	// during the upload, re-derive + re-encrypt + re-upload once so the key
+	// matches the new epoch. This collapses the race window from "the whole
+	// upload" to the few instructions between this re-check and the sealed send
+	// inside sendChatGroupMessage. A true fix would encrypt under the send lock,
+	// but that blocks the whole group for the upload duration.
+	let state = decodeStoredGroupState(group);
+	let key = await deriveMediaKey(state);
+	let enc = encryptMedia({ key, plaintext, metadata });
+	const signer = ephemeralBlossomSigner();
+	let { url } = await uploadBlobWithFallback(enc.blob, signer);
+
+	const latest = getChatGroup(groupId);
+	if (latest && decodeStoredGroupState(latest).groupContext.epoch !== state.groupContext.epoch) {
+		state = decodeStoredGroupState(latest);
+		key = await deriveMediaKey(state);
+		enc = encryptMedia({ key, plaintext, metadata });
+		({ url } = await uploadBlobWithFallback(enc.blob, signer));
+	}
 
 	const imeta = buildImetaTag({
 		url,
@@ -168,7 +238,16 @@ export async function sendChatMediaMessage(params: {
 		version: MEDIA_VERSION
 	});
 
-	await sendChatGroupMessage({ groupId, content: text, tags: [imeta], replyTo });
+	// Thread the exact encryption key so the sender's stashed copy decrypts the
+	// media too (receivers derive their own key at the seal epoch, which the
+	// re-check above aligns to the encryption epoch).
+	await sendChatGroupMessage({
+		groupId,
+		content: text,
+		tags: [imeta],
+		replyTo,
+		mediaKeyBase64: bytesToBase64(key)
+	});
 }
 
 // ---------------------------------------------------------------------------

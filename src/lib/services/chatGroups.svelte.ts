@@ -1254,13 +1254,22 @@ export async function sendChatGroupMessage(input: {
 	deleteTo?: MessageTarget;
 	pinTo?: MessageTarget;
 	pinOp?: PinOp;
+	/** Pre-derived media key (base64) for messages carrying an imeta tag.
+	 *  sendChatMediaMessage derives once at the encryption epoch and threads it
+	 *  through so the stashed key matches the ciphertext even if the group state
+	 *  moved on. Other callers omit it and the key is derived here as before. */
+	mediaKeyBase64?: string;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
 		const group = await prepareGroupForApplicationMessage(input.groupId);
 
 		const outboundShape = resolveOutboundMessage(input);
-		if (!outboundShape.content && !input.deleteTo && !input.pinTo) {
+		// A media attachment (NIP-92 imeta) makes text optional: a media-only
+		// message is a valid sealed payload carrying the encrypted-media reference
+		// and no body, so don't reject it as "content required".
+		const hasMediaAttachment = outboundShape.tags.some((tag) => tag[0] === 'imeta');
+		if (!outboundShape.content && !hasMediaAttachment && !input.deleteTo && !input.pinTo) {
 			throw new Error('Message content is required');
 		}
 
@@ -1300,10 +1309,10 @@ export async function sendChatGroupMessage(input: {
 			tags: outbound.event.tags,
 			content: outbound.event.content,
 			encrypted: group.encrypted === true,
-			// Re-derive for the outgoing record; same epoch as the encryption (no
-			// commit between derive-in-sendChatMediaMessage and here), so identical key.
+			// Use the caller-provided key when present (media sends pin it to the
+			// encryption epoch); otherwise derive from the current send state.
 			mediaKeyBase64: findImetaTag(outbound.event.tags)
-				? bytesToBase64(await deriveMediaKey(state))
+				? (input.mediaKeyBase64 ?? bytesToBase64(await deriveMediaKey(state)))
 				: undefined
 		};
 

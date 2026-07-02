@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { toast } from 'svelte-sonner';
@@ -119,4 +120,47 @@ export function normalizePubKey(pubkey: string): string {
 		throw new Error('Coordinator pubkey must be a 64-character hex string');
 	}
 	return normalized;
+}
+
+/**
+ * Trigger a browser download of a (blob/object) URL under the given filename.
+ * Browser-only; no-op on the server. Shared by the media views (chat bubble,
+ * lightbox, message actions) so each isn't synthesizing its own <a>.
+ */
+export function downloadObjectUrl(url: string, filename: string): void {
+	if (!browser) return;
+	const anchor = document.createElement('a');
+	anchor.href = url;
+	anchor.download = filename;
+	document.body.appendChild(anchor);
+	anchor.click();
+	anchor.remove();
+}
+
+// ponytail: extension sniff on the path (query/hash stripped). Good enough for
+// pasted links; a real content-type would need a network HEAD, which defeats
+// the lazy auto-load gate. Add MIME sniffing if naive extension misses real
+// servers that serve media without an extension.
+const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+const VIDEO_URL_RE = /\.(mp4|webm|mov|m4v|ogv|mkv)$/i;
+export function mediaUrlKind(href: string): 'image' | 'video' | null {
+	const path = href.split('?')[0]?.split('#')[0] ?? href;
+	if (IMAGE_URL_RE.test(path)) return 'image';
+	if (VIDEO_URL_RE.test(path)) return 'video';
+	return null;
+}
+
+/** Short, user-facing label for a media item's type — file extension when the
+ *  name carries one, else the MIME subtype, else empty. Shown on "Load media"
+ *  buttons so the user knows what they'd fetch before committing. */
+export function mediaExtLabel(filename?: string, mime?: string): string {
+	if (filename) {
+		const dot = filename.lastIndexOf('.');
+		if (dot > 0) {
+			const ext = filename.slice(dot + 1);
+			if (ext.length > 1 && ext.length <= 5) return ext.toUpperCase();
+		}
+	}
+	if (mime && mime.includes('/')) return mime.split('/').pop()!.toUpperCase();
+	return '';
 }
