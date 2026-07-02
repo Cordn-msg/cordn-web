@@ -43,6 +43,12 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getChatDraft, setChatDraft } from '$lib/services/chatDrafts.svelte';
+	import {
+		addPendingMessage,
+		getPendingMessages,
+		removePendingMessage,
+		updatePendingMessage
+	} from '$lib/services/chatOutbox.svelte';
 
 	let {
 		groupId = 'general',
@@ -51,8 +57,6 @@
 		groupId?: string;
 		title?: string;
 	} = $props();
-
-	const MAX_OPTIMISTIC_MESSAGES = 20;
 
 	// eslint-disable-next-line svelte/prefer-writable-derived -- writable $derived.by setter form not available in this Svelte version; draft must be both derived-from-storage and user-mutable via bind:value
 	let draft = $state('');
@@ -76,7 +80,6 @@
 	let optimisticDeletes = $state<Record<string, boolean>>({});
 	let selectedMentions = $state<ChatMentionReference[]>([]);
 	let composerFocusKey = $state(0);
-	let optimisticMessages = $state<ChatMessage[]>([]);
 	let handledMessageTarget = $state('');
 	const groupProfileHints = useProfileHints(
 		() => [
@@ -88,7 +91,6 @@
 		],
 		{ relays: metadataRelays }
 	);
-	let optimisticMessageSequence = 0;
 	let messageListRef: {
 		scrollToBottom: () => Promise<void>;
 		scrollToMessage: (messageId: string) => Promise<void>;
@@ -160,20 +162,18 @@
 	}
 
 	function appendOptimisticMessage(message: ChatMessage) {
-		setOptimisticMessages([...optimisticMessages, message]);
+		addPendingMessage(groupId, message);
 	}
 
 	function removeOptimisticMessage(messageId: string) {
-		optimisticMessages = optimisticMessages.filter((message) => message.id !== messageId);
+		removePendingMessage(groupId, messageId);
 	}
 
 	function updateOptimisticMessage(
 		messageId: string,
 		updater: (message: ChatMessage) => ChatMessage
 	) {
-		setOptimisticMessages(
-			optimisticMessages.map((message) => (message.id === messageId ? updater(message) : message))
-		);
+		updatePendingMessage(groupId, messageId, updater);
 	}
 
 	function setOptimisticEdit(messageId: string, content: string) {
@@ -201,6 +201,25 @@
 		delete next[messageId];
 		optimisticDeletes = next;
 	}
+
+	// SvelteKit reuses this component across group navigation (only params.id
+	// changes), so the composer's transient state would otherwise bleed into
+	// the newly opened group (e.g. group A's reply preview or send error shown
+	// in group B). Reset it on group change, like the per-group draft effect.
+	// In-flight outgoing MESSAGES are not touched here: they live in the
+	// per-group outbox (chatOutbox.svelte) so they stay attached to their own
+	// group while you navigate and reappear when you come back.
+	$effect(() => {
+		void groupId;
+		sendError = '';
+		replyTarget = null;
+		replyTargetAuthor = '';
+		editTarget = null;
+		editPreview = '';
+		selectedMentions = [];
+		optimisticEdits = {};
+		optimisticDeletes = {};
+	});
 
 	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
 
@@ -280,7 +299,7 @@
 				};
 			});
 
-		return [...confirmedMessages, ...optimisticMessages].sort(compareChatMessages);
+		return [...confirmedMessages, ...getPendingMessages(groupId)].sort(compareChatMessages);
 	});
 
 	// Ordered pin list for the top ribbon. Newest-pinned-first; resolves the
@@ -313,10 +332,6 @@
 			: null
 	);
 
-	function setOptimisticMessages(messages: ChatMessage[]) {
-		optimisticMessages = messages.slice(-MAX_OPTIMISTIC_MESSAGES);
-	}
-
 	async function handleSubmit() {
 		if (!draft.trim() || !group) {
 			return;
@@ -348,7 +363,7 @@
 		const currentReplyTarget = replyTarget;
 		const currentReplyTargetAuthor = replyTargetAuthor;
 		const optimisticCreatedAt = Date.now();
-		const optimisticId = `optimistic:${groupId}:${optimisticMessageSequence++}`;
+		const optimisticId = `optimistic:${crypto.randomUUID()}`;
 		const optimisticReplyTarget = currentReplyTarget
 			? {
 					id: currentReplyTarget.id,
@@ -401,7 +416,7 @@
 		const trimmed = caption.trim();
 		const isImage = file.type.startsWith('image/');
 		const createdAt = Date.now();
-		const optimisticId = `optimistic:${groupId}:${optimisticMessageSequence++}`;
+		const optimisticId = `optimistic:${crypto.randomUUID()}`;
 		const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
 
 		appendOptimisticMessage({
