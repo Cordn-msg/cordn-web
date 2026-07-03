@@ -93,7 +93,6 @@ export function buildStoredChatGroup(params: {
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: bigint;
-	encrypted?: boolean;
 }): StoredChatGroup {
 	return {
 		id: params.id,
@@ -108,7 +107,6 @@ export function buildStoredChatGroup(params: {
 		snapshots: [],
 		metadata: params.metadata,
 		joinedWithKeyPackageRef: params.joinedWithKeyPackageRef,
-		encrypted: params.encrypted,
 		joinEpoch: params.joinEpoch ?? 0n
 	};
 }

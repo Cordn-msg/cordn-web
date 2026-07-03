@@ -44,7 +44,8 @@ vi.mock('$lib/services/chatGroupLifecycle.svelte', () => ({
 	acceptWelcomeToGroup: vi.fn(),
 	buildStoredChatGroup: vi.fn(),
 	createInitialGroupState: vi.fn(),
-	createMemberArtifacts: vi.fn()
+	createMemberArtifacts: vi.fn(),
+	getProtocolGroupId: vi.fn().mockReturnValue('gid')
 }));
 
 vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
@@ -56,7 +57,8 @@ vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
 	createApplicationMessageBase64: vi.fn(),
 	createSystemMessagesFromStateChange: vi.fn(() => []),
 	createUnsignedCordnMessageEvent: vi.fn(),
-	encodeAuthenticatedSender: vi.fn()
+	encodeAuthenticatedSender: vi.fn(),
+	encryptGroupPayloadBase64: vi.fn().mockResolvedValue({ encryptedBase64: 'sealed' })
 }));
 
 vi.mock('$lib/services/chatGroupProtocol', () => ({
@@ -431,7 +433,11 @@ describe('inviteChatGroupMember()', () => {
 		await removeChatGroupMember({ groupId: 'demo', targetStablePubkey: 'aa'.repeat(32) });
 
 		expect(removeMemberFromGroupMock).toHaveBeenCalled();
-		expect(postGroupMessageMock).toHaveBeenCalledWith({ msg_64: 'commit' });
+		expect(postGroupMessageMock).toHaveBeenCalledWith({
+			msg_64: 'sealed',
+			gid: 'gid',
+			encrypted: true
+		});
 		expect(enqueuePendingEpochOperationMock).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.objectContaining({ kind: 'remove-member', targetStablePubkey: 'aa'.repeat(32) })

@@ -284,6 +284,10 @@ export async function acceptWelcomeAction(welcomeId: string) {
 	setWelcomeSubmitting(welcomeId);
 	try {
 		const group = await acceptChatWelcome({ welcomeId });
+		// Ack the consumed welcome to the coordinator straight away (carried as
+		// the `consumed` array on the next fetch) so other admins stop seeing it
+		// instead of waiting for the 5-min poll. Best-effort: the poll retries.
+		void refreshWelcomeNotificationsAction().catch(() => {});
 		await goto(resolve('/chat/[id]', { id: group.id }));
 		return true;
 	} catch (error) {
@@ -345,6 +349,10 @@ export async function acceptJoinRequestAction(joinRequestId: string) {
 			throw new Error(`Join request ${joinRequestId} not found`);
 		}
 		await acceptJoinRequest(entry);
+		// Ack the consumed join request to the coordinator straight away so
+		// other admins stop seeing it instead of waiting for the 5-min poll.
+		// Best-effort: the poll retries.
+		void refreshJoinRequestsAction().catch(() => {});
 		return true;
 	} catch (error) {
 		const entry = getJoinRequest(joinRequestId);

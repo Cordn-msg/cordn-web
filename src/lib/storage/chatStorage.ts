@@ -32,9 +32,6 @@ export interface StoredChatGroupRecord {
 	poisonedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: string;
-	/** Experimental spec/03 opt-in: seal outbound payloads under the
-	 *  epoch exporter secret so the coordinator sees opaque bytes. */
-	encrypted?: boolean;
 }
 
 export interface StoredChatGroupStateRecord {

@@ -103,10 +103,6 @@ export interface StoredChatGroup {
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch: bigint;
-	/** Experimental spec/03 opt-in: seal outbound payloads (ChaCha20-Poly1305
-	 *  under the MLS exporter secret). Local-only flag; inbound sealed
-	 *  traffic is always decrypted when present. */
-	encrypted?: boolean;
 }
 
 export interface CoordinatorAvailableKeyPackage {
@@ -120,20 +116,18 @@ const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
 
 /** Seal an outbound MLS message under the current epoch's exporter secret
- *  (spec/03 §4-§5) when the group has the experimental `encrypted` opt-in.
- *  Returns the base64 to post, the `encrypted` flag for PostGroupMessage, and
- *  the delivery `gid` the coordinator needs to route an opaque payload without
- *  MLS-decoding it (the coordinator gates its opaque path on `gid` being
- *  present, NOT on the `encrypted` flag — omitting `gid` forces the legacy
- *  decode path and the sealed blob fails MLS framing).
- *  Plaintext groups pass through unchanged so the stored pending-commit and
- *  coordinator-echoed forms stay byte-identical for matching. */
+ *  (spec/03 §4-§5). Sealing is always on. Returns the base64 to post, the
+ *  `encrypted` flag for PostGroupMessage, and the delivery `gid` the
+ *  coordinator needs to route an opaque payload without MLS-decoding it (the
+ *  coordinator gates its opaque path on `gid` being present, NOT on the
+ *  `encrypted` flag — omitting `gid` forces the legacy decode path and the
+ *  sealed blob fails MLS framing). Inbound traffic is still decrypted
+ *  transparently when `encrypted` is absent (legacy plaintext from
+ *  mixed-version groups). */
 async function sealForPosting(params: {
 	state: ClientState;
 	opaqueMessageBase64: string;
-	encrypt: boolean;
-}): Promise<{ msg_64: string; encrypted?: boolean; gid?: string }> {
-	if (!params.encrypt) return { msg_64: params.opaqueMessageBase64 };
+}): Promise<{ msg_64: string; encrypted: true; gid: string }> {
 	const { encryptedBase64 } = await encryptGroupPayloadBase64(params);
 	return {
 		msg_64: encryptedBase64,
@@ -177,7 +171,6 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		poisonedAtCursor: group.poisonedAtCursor,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
-		encrypted: group.encrypted,
 		stateBytes: base64ToBytes(group.stateBase64),
 		// Shallow spread only: both storage backends deep-clone the messages they
 		// actually persist, so re-cloning every tag array here was redundant work
@@ -224,8 +217,7 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		poisonedAtCursor: group.poisonedAtCursor,
 		metadata,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
-		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : 0n,
-		encrypted: group.encrypted
+		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : 0n
 	};
 }
 
@@ -764,15 +756,14 @@ export async function inviteChatGroupMember(input: {
 
 		const sealedAddCommit = await sealForPosting({
 			state,
-			opaqueMessageBase64: commitResult.commitMessageBase64,
-			encrypt: group.encrypted === true
+			opaqueMessageBase64: commitResult.commitMessageBase64
 		});
 
 		// Hoisted to a local so the posted Commit cursor can be stamped on
 		// directly. enqueuePendingEpochOperation pushes this same reference
 		// (no clone), so mutating it here updates the stored op. Avoids a
-		// fragile re-find by commitMessageBase64, which broke for encrypted
-		// groups (the stored key is the sealed form, not the plaintext commit).
+		// fragile re-find by commitMessageBase64 (the stored key is the
+		// sealed form, not the plaintext commit).
 		const addMemberOp: Extract<PendingEpochOperation, { kind: 'add-member' }> = {
 			kind: 'add-member',
 			groupId: group.id,
@@ -784,11 +775,7 @@ export async function inviteChatGroupMember(input: {
 		enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
 
 		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage({
-				msg_64: sealedAddCommit.msg_64,
-				gid: sealedAddCommit.gid,
-				encrypted: sealedAddCommit.encrypted
-			})
+			client.PostGroupMessage(sealedAddCommit)
 		);
 
 		// Stamp the Commit cursor on the pending op so the Welcome we store
@@ -918,8 +905,7 @@ export async function removeChatGroupMember(input: {
 
 		const sealedRemoveCommit = await sealForPosting({
 			state,
-			opaqueMessageBase64: commitResult.commitMessageBase64,
-			encrypt: group.encrypted === true
+			opaqueMessageBase64: commitResult.commitMessageBase64
 		});
 
 		enqueuePendingEpochOperation(pendingEpochOperations, {
@@ -930,11 +916,7 @@ export async function removeChatGroupMember(input: {
 		});
 
 		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage({
-				msg_64: sealedRemoveCommit.msg_64,
-				gid: sealedRemoveCommit.gid,
-				encrypted: sealedRemoveCommit.encrypted
-			})
+			client.PostGroupMessage(sealedRemoveCommit)
 		);
 
 		const removeWorkingGroup = createWorkingChatGroupSession(
@@ -1016,8 +998,7 @@ export async function updateChatGroupMetadata(input: {
 
 		const sealedMetadataCommit = await sealForPosting({
 			state,
-			opaqueMessageBase64: commitResult.commitMessageBase64,
-			encrypt: group.encrypted === true
+			opaqueMessageBase64: commitResult.commitMessageBase64
 		});
 
 		enqueuePendingEpochOperation(pendingEpochOperations, {
@@ -1027,11 +1008,7 @@ export async function updateChatGroupMetadata(input: {
 		});
 
 		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage({
-				msg_64: sealedMetadataCommit.msg_64,
-				gid: sealedMetadataCommit.gid,
-				encrypted: sealedMetadataCommit.encrypted
-			})
+			client.PostGroupMessage(sealedMetadataCommit)
 		);
 
 		const metadataWorkingGroup = createWorkingChatGroupSession(
@@ -1094,15 +1071,6 @@ export function clearChatGroupSyncIssues(groupId: string): void {
 	const group = getChatGroup(groupId);
 	if (!group || group.syncIssues.length === 0) return;
 	replaceGroup(groupId, { ...group, syncIssues: [] });
-}
-
-/** Toggle the experimental spec/03 sealed-payload opt-in for a group. Local
- *  only; persisted with the group record. Inbound sealed traffic is always
- *  decrypted regardless of this flag — it controls outbound sealing only. */
-export function setGroupEncrypted(groupId: string, enabled: boolean): void {
-	const group = getChatGroup(groupId);
-	if (!group || group.encrypted === enabled) return;
-	replaceGroup(groupId, { ...group, encrypted: enabled });
 }
 
 async function applyIncomingChatGroupMessages(
@@ -1287,16 +1255,11 @@ export async function sendChatGroupMessage(input: {
 
 		const sealedOutbound = await sealForPosting({
 			state,
-			opaqueMessageBase64: outbound.opaqueMessageBase64,
-			encrypt: group.encrypted === true
+			opaqueMessageBase64: outbound.opaqueMessageBase64
 		});
 
 		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage({
-				msg_64: sealedOutbound.msg_64,
-				gid: sealedOutbound.gid,
-				encrypted: sealedOutbound.encrypted
-			})
+			client.PostGroupMessage(sealedOutbound)
 		);
 
 		const stored: StoredChatMessage = {
@@ -1308,7 +1271,7 @@ export async function sendChatGroupMessage(input: {
 			kind: outbound.event.kind,
 			tags: outbound.event.tags,
 			content: outbound.event.content,
-			encrypted: group.encrypted === true,
+			encrypted: true,
 			// Use the caller-provided key when present (media sends pin it to the
 			// encryption epoch); otherwise derive from the current send state.
 			mediaKeyBase64: findImetaTag(outbound.event.tags)

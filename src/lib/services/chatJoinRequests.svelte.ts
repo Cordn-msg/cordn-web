@@ -16,8 +16,6 @@ import {
 } from '$lib/services/chatRuntime';
 import { manager } from '$lib/services/accountManager.svelte';
 import { normalizePubKey } from '$lib/utils';
-import { queryClient } from '$lib/query-client';
-import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 
 const STORAGE_KEY = 'cordn-chat-join-requests';
 const SENT_STORAGE_KEY = 'cordn-chat-sent-join-requests';
@@ -308,7 +306,7 @@ export async function storeJoinRequest(
 }
 
 export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string | undefined> {
-	const account = requireActiveAccount('You must be logged in to accept join requests');
+	requireActiveAccount('You must be logged in to accept join requests');
 
 	setJoinRequestSubmitting(entry.id);
 
@@ -336,10 +334,6 @@ export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string
 		const group = await inviteChatGroupMember({
 			groupId: entry.groupId,
 			identifier: entry.kpRef
-		});
-
-		void queryClient.invalidateQueries({
-			queryKey: chatQueryKeys.joinRequests(account.pubkey, entry.coordinatorKey)
 		});
 
 		markJoinRequestAccepted(entry.id, group.id);
