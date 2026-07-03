@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
+	import GroupAvatarFallback from '$lib/components/chat/GroupAvatarFallback.svelte';
 	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -213,20 +214,7 @@
 							/>
 						{/if}
 						<AvatarFallback class="bg-card text-lg">
-							{#if group.metadata?.icon}
-								{group.metadata.icon}
-							{:else}
-								<img
-									src="/cordn-logo-black.svg"
-									alt="Cordn"
-									class="h-6 w-6 object-contain dark:hidden"
-								/>
-								<img
-									src="/cordn-logo.svg"
-									alt="Cordn"
-									class="hidden h-6 w-6 object-contain dark:block"
-								/>
-							{/if}
+							<GroupAvatarFallback icon={group.metadata?.icon} />
 						</AvatarFallback>
 					</Avatar>
 					<div class="min-w-0">

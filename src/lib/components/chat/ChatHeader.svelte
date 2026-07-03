@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
+	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
@@ -188,20 +189,13 @@
 			<ChatMobileSidebarButton />
 
 			{#if group}
-				<ChatGroupAvatar {group} class="h-10 w-10" />
+				{#key group.id}
+					<ChatGroupAvatar {group} class="h-10 w-10" />
+				{/key}
 			{:else}
 				<Avatar class="h-10 w-10 border border-border bg-card p-1.5">
 					<AvatarFallback class="bg-card text-base">
-						<img
-							src="/cordn-logo-black.svg"
-							alt="Cordn"
-							class="h-full w-full object-contain dark:hidden"
-						/>
-						<img
-							src="/cordn-logo.svg"
-							alt="Cordn"
-							class="hidden h-full w-full object-contain dark:block"
-						/>
+						<GroupAvatarFallback logoClass="h-full w-full" />
 					</AvatarFallback>
 				</Avatar>
 			{/if}

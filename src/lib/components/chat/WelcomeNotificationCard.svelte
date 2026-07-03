@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Avatar, AvatarFallback, AvatarImage } from '$lib/components/ui/avatar';
+	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { resolveWelcomeDisplayName } from '$lib/components/chat/chatGroupDisplay';
@@ -28,10 +29,6 @@
 		onAccept: () => void;
 		onReject?: () => void;
 	} = $props();
-
-	function getAvatarFallback() {
-		return notification.preview?.icon || notification.preview?.name?.slice(0, 1) || '#';
-	}
 </script>
 
 <div
@@ -50,7 +47,7 @@
 					/>
 				{/if}
 				<AvatarFallback class="bg-background text-xs font-medium">
-					{getAvatarFallback()}
+					<GroupAvatarFallback icon={notification.preview?.icon} />
 				</AvatarFallback>
 			</Avatar>
 			<div class="min-w-0 flex-1 space-y-0.5 overflow-hidden">

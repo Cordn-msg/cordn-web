@@ -93,9 +93,9 @@ export const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-07-03-sealed-default',
 		createdAt: Date.UTC(2026, 6, 3),
-		version: 1,
+		version: 2,
 		title: 'Sealed by default',
-		body: '- 🔄 Group messages are now sealed by default — the coordinator relaying them only ever sees opaque bytes, with no opt-in or setup. Sealed and plaintext messages still mix transparently while everyone in a group updates.\n- 🐛 When you accept a welcome or join request, the coordinator is notified right away, so other admins stop seeing a request you have already handled instead of waiting for the next refresh.'
+		body: '- 🔄 Group messages are now sealed by default — the coordinator relaying them only ever sees opaque bytes, with no opt-in or setup. Sealed and plaintext messages still mix transparently while everyone in a group updates.\n- 🐛 When you accept a welcome or join request, the coordinator is notified right away, so other admins stop seeing a request you have already handled instead of waiting for the next refresh.\n- 🐛 Group avatars no longer show as an empty disc when "autoload media" is off: they fall back to the group\'s icon, or the Cordn logo when neither an image nor an icon is set.\n- 🐛 Switching between groups now shows each group\'s icon in the chat header right away, instead of it sometimes staying hidden until you navigated in and out a few times.'
 	},
 	{
 		id: 'cordn-news-2026-07-02-media-view',

@@ -7,6 +7,7 @@
 	import { getDirectChatTargetPubkey } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
+	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 
 	let {
 		group,
@@ -51,10 +52,6 @@
 		const profile = getProfile(pubkey);
 		return (profile?.name || profile?.displayName || pubkey).slice(0, 1).toUpperCase();
 	}
-
-	function getGroupFallback() {
-		return group.metadata?.icon || group.metadata?.name?.slice(0, 1) || '#';
-	}
 </script>
 
 {#snippet memberAvatar(pubkey: string, avatarClass: string, fbClass: string)}
@@ -85,7 +82,9 @@
 				class="object-cover"
 			/>
 		{/if}
-		<AvatarFallback class={`bg-background ${fallbackClass}`}>{getGroupFallback()}</AvatarFallback>
+		<AvatarFallback class={`bg-background ${fallbackClass}`}>
+			<GroupAvatarFallback icon={group.metadata?.icon} />
+		</AvatarFallback>
 	</Avatar>
 {:else if remainingMemberCount === 0}
 	{@render memberAvatar(
