@@ -66,4 +66,58 @@ describe('ingestChatGroupMessages()', () => {
 		expect(group.fetchCursor).toBe(7);
 		expect(group.lastCursor).toBe(7);
 	});
+
+	test('skips a sibling commit (own shared leaf) instead of self-removing', async () => {
+		// spec/applications/multi-device.md §10: a Commit from our own shared leaf
+		// must be skipped, not ingested. processMessage invokes the callback with
+		// the Commit's senderLeafIndex before applying the UpdatePath; the guard
+		// throws a sentinel that the loop turns into a skip (cursor advances, a
+		// sync issue is recorded, the group stays active and is NOT poisoned).
+		const ownPubkey = 'ab'.repeat(32);
+		// MLS ratchet-tree convention (see chatAdminPolicy.test.ts): a leaf at
+		// tree index i has leafIndex i/2. Put our identity at leafIndex 1
+		// (tree index 2) and have the Commit arrive from that leaf.
+		const ratchetTree = [
+			undefined,
+			undefined,
+			{
+				nodeType: 1,
+				leaf: { credential: { identity: new TextEncoder().encode(ownPubkey) } }
+			}
+		];
+
+		processMessageMock.mockImplementationOnce(async ({ callback }) => {
+			// Authorization callback fires before the UpdatePath is applied.
+			await callback?.({ kind: 'commit', senderLeafIndex: 1 } as never);
+			return { kind: 'newState', actionTaken: 'accept' } as never;
+		});
+
+		const group = {
+			state: {
+				ratchetTree,
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [],
+			status: 'active' as const
+		};
+
+		const result = await ingestChatGroupMessages({
+			group,
+			localStablePubkey: ownPubkey,
+			messages: [{ cursor: 9, createdAt: 200, opaqueMessageBase64: 'sibling-commit' }]
+		});
+
+		expect(group.status).toBe('active');
+		expect(result.poisoned).toBe(false);
+		expect(result.removedLocalMember).toBe(false);
+		expect(group.fetchCursor).toBe(9);
+		expect(group.lastCursor).toBe(9);
+		expect(result.issues).toHaveLength(1);
+		expect(result.issues[0]?.cursor).toBe(9);
+		expect(result.issues[0]?.detail).toMatch(/sibling commit/i);
+	});
 });

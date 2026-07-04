@@ -10,6 +10,7 @@
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Server from '@lucide/svelte/icons/server';
 	import Images from '@lucide/svelte/icons/images';
+	import Smartphone from '@lucide/svelte/icons/smartphone';
 </script>
 
 <svelte:head>
@@ -115,6 +116,22 @@
 									<p class="font-medium">Backup & recovery</p>
 									<p class="mt-1 text-sm text-muted-foreground">
 										Export and import your account, group secrets, and coordinators.
+									</p>
+								</div>
+							</a>
+
+							<a href={resolve('/chat/config/multi-device')} class="block">
+								<div
+									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
+								>
+									<div
+										class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
+									>
+										<Smartphone class="size-4" />
+									</div>
+									<p class="font-medium">Multi-device sync</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										Share your groups across devices of the same identity.
 									</p>
 								</div>
 							</a>

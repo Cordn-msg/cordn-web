@@ -22,6 +22,11 @@ import {
 	setChatReconnectStatus
 } from '$lib/services/chatReconnectStatus.svelte';
 import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
+import {
+	startTipSubscription,
+	stopTipSubscription,
+	getMultiDeviceConfig
+} from '$lib/services/multiDevice.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import {
@@ -137,6 +142,12 @@ if (browser) {
 				// steady-state layout effect instead of a stop-the-world resume, so the
 				// two paths never race to open duplicate fetches/subscriptions.
 				void startWatchingAllGroups();
+				// Multi-device tip subscription follows the active account: stop the
+				// previous owner's subscription, then start this one's if enabled.
+				stopTipSubscription();
+				if (getMultiDeviceConfig(account.pubkey)?.enabled) startTipSubscription();
+			} else {
+				stopTipSubscription();
 			}
 		});
 		if (previousAccount) {

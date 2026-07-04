@@ -324,6 +324,26 @@ function isRatchetTreeInvariantIssue(detail: string): boolean {
 	return detail.includes('non-blank intermediate node must list leaf node in its unmerged_leaves');
 }
 
+/**
+ * Sentinel thrown from the ingest callback when an incoming Commit was authored
+ * by this identity's own shared leaf (a sibling device, spec/applications/
+ * multi-device.md §10). A sibling Commit refreshes the committer's leaf with
+ * new HPKE keys via an UpdatePath whose private keys only the committer holds;
+ * a device that tried to ingest it would update its leaf's public keys to the
+ * sibling's new keys without the matching private keys, which ts-mls surfaces
+ * as the member being removed from the group. Throwing this before
+ * `processMessage` applies the UpdatePath lets the loop skip the Commit
+ * (advance the cursor, await convergence via the session document) instead of
+ * self-removing. The detection is exact: in the shared-leaf model only our own
+ * identity occupies our leaf index, so sender-leaf === own-leaf === sibling.
+ */
+class SiblingCommitSkippedError extends Error {
+	constructor() {
+		super('Skipped sibling commit (own shared leaf); awaiting session-document fast-forward');
+		this.name = 'SiblingCommitSkippedError';
+	}
+}
+
 function isRemovedFromGroupState(state: ClientState): boolean {
 	return state.groupActiveState?.kind === 'removedFromGroup';
 }
@@ -543,11 +563,41 @@ export async function ingestChatGroupMessages(params: {
 							(member) => member.leafIndex === incoming.senderLeafIndex
 						);
 						commitSenderPubkey = sender?.stablePubkey;
+						// Sibling-skip (spec multi-device §10): a Commit from our own
+						// shared leaf cannot be ingested (UpdatePath private keys live
+						// only on the committer). The authorization callback fires
+						// before the UpdatePath is applied, so throwing here skips the
+						// Commit instead of self-removing. Detection is exact in the
+						// shared-leaf model: only our identity occupies our leaf index.
+						if (
+							params.localStablePubkey &&
+							sender &&
+							normalizePubKey(sender.stablePubkey) === params.localStablePubkey
+						) {
+							throw new SiblingCommitSkippedError();
+						}
 					}
 					return adminCallback(incoming);
 				}
 			});
 		} catch (error) {
+			// Sibling-skip (spec multi-device §10): the callback detected a Commit
+			// from our own shared leaf before the UpdatePath was applied. Advance
+			// the cursor past it and await convergence via the session document;
+			// do NOT process it (that self-removes) and do NOT poison the group.
+			if (error instanceof SiblingCommitSkippedError) {
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				const issue = {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: error.message
+				};
+				group.syncIssues.push(issue);
+				issues.push(issue);
+				continue;
+			}
+
 			const detail = error instanceof Error ? error.message : String(error);
 			const envelope = extractMlsEnvelopeMetadata(processableBase64);
 			const localEpoch = group.state.groupContext.epoch;

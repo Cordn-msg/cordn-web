@@ -8,6 +8,7 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import { onLocalStateAdvance } from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
@@ -618,6 +619,9 @@ export async function createChatGroup(input: {
 
 	persistGroup(group);
 	void pruneConsumedKeyPackagesForActiveGroups();
+	// spec multi-device §10: a new group must reach siblings so they can seed it.
+	// Fire-and-forget; a no-op when multi-device is disabled.
+	onLocalStateAdvance();
 	return group;
 }
 
@@ -1139,6 +1143,15 @@ async function applyIncomingChatGroupMessages(
 	nextGroup.snapshots = updatedSnapshots;
 
 	replaceGroup(group.id, nextGroup);
+
+	// spec multi-device §10: a locally-authored Commit confirmed via self-echo
+	// advanced the epoch — siblings cannot ingest it from the stream (shared-leaf
+	// UpdatePath) and need a document fast-forward. `appliedPendingCommitMessages`
+	// is exactly the self-echo-confirmed own-Commit set. Fire-and-forget; a no-op
+	// when multi-device is disabled.
+	if (epochChanged && sync.ingestion.appliedPendingCommitMessages.size > 0) {
+		onLocalStateAdvance();
+	}
 
 	// If ingestion poisoned the group, throw so the caller aborts
 	if (sync.ingestion.poisoned) {
