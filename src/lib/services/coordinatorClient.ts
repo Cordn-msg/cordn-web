@@ -86,9 +86,13 @@ export type coordinatorClient = {
 		input: FetchManyPendingJoinRequestsInput
 	) => Promise<FetchManyPendingJoinRequestsOutput>;
 	PostGroupMessage: (input: PostGroupMessageInput) => Promise<PostGroupMessageOutput>;
-	FetchGroupMessages: (input: FetchGroupMessagesInput) => Promise<FetchGroupMessagesOutput>;
+	FetchGroupMessages: (
+		input: FetchGroupMessagesInput,
+		options?: { timeout?: number }
+	) => Promise<FetchGroupMessagesOutput>;
 	FetchManyGroupMessages: (
-		input: FetchManyGroupMessagesInput
+		input: FetchManyGroupMessagesInput,
+		options?: { timeout?: number }
 	) => Promise<FetchManyGroupMessagesOutput>;
 	SubscribeGroupMessages: (input: SubscribeGroupMessagesInput) => Promise<{
 		stream: AsyncIterable<GroupMessage>;
@@ -221,7 +225,8 @@ export class cordnClient implements coordinatorClient {
 		transportKind: 'stable' | 'ephemeral',
 		name: string,
 		args: Record<string, unknown>,
-		schema?: ZodType<T>
+		schema?: ZodType<T>,
+		options: { timeout?: number } = {}
 	): Promise<T> {
 		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
@@ -236,7 +241,8 @@ export class cordnClient implements coordinatorClient {
 				undefined,
 				{
 					onprogress: () => undefined,
-					resetTimeoutOnProgress: true
+					resetTimeoutOnProgress: true,
+					...(options.timeout !== undefined ? { timeout: options.timeout } : {})
 				}
 			);
 
@@ -430,23 +436,29 @@ export class cordnClient implements coordinatorClient {
 	 * @param {number} after [optional] The after cursor parameter
 	 * @returns {Promise<FetchGroupMessagesOutput>} The result of the msg_fetch operation
 	 */
-	async FetchGroupMessages(input: FetchGroupMessagesInput): Promise<FetchGroupMessagesOutput> {
+	async FetchGroupMessages(
+		input: FetchGroupMessagesInput,
+		options: { timeout?: number } = {}
+	): Promise<FetchGroupMessagesOutput> {
 		return this.call(
 			'ephemeral',
 			COORDINATOR_METHODS.fetchGroupMessages,
 			input,
-			fetchGroupMessagesOutputSchema
+			fetchGroupMessagesOutputSchema,
+			options
 		);
 	}
 
 	async FetchManyGroupMessages(
-		input: FetchManyGroupMessagesInput
+		input: FetchManyGroupMessagesInput,
+		options: { timeout?: number } = {}
 	): Promise<FetchManyGroupMessagesOutput> {
 		return this.call(
 			'ephemeral',
 			COORDINATOR_METHODS.fetchManyGroupMessages,
 			input,
-			fetchManyGroupMessagesOutputSchema
+			fetchManyGroupMessagesOutputSchema,
+			options
 		);
 	}
 

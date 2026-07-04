@@ -177,13 +177,23 @@ export async function disconnectCoordinatorClient(
 
 export function isTransientCoordinatorError(error: unknown): boolean {
 	const detail = error instanceof Error ? error.message : String(error);
-	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected/i.test(
+	// `open stream aborted` / `keepalive` covers the CEP-41 probe failures
+	// ("Open stream aborted: Probe timeout" already matches via `timeout`, but
+	// "...Failed to send keepalive ping" only matches via `keepalive`). Without
+	// these, a dead keepalive aborts the subscription without scheduling a
+	// resume, leaving the group unwatched until the next foreground event.
+	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected|open stream aborted|keepalive/i.test(
 		detail
 	);
 }
 
-const SIGNER_READY_RETRY_ATTEMPTS = 3;
-const SIGNER_READY_RETRY_DELAY_MS = 500;
+/**
+ * Backoff schedule (ms) between signer-not-ready retries. Mobile NIP-46 /
+ * extension signers can take several seconds to wake from suspension; a tight
+ * fixed-delay window surfaces recoverable cold-start failures as flaky errors.
+ * One attempt per entry plus the initial call widens the window to ~4.5s.
+ */
+const SIGNER_READY_RETRY_DELAYS_MS = [500, 1000, 1000, 2000];
 
 export function isSignerUnavailableError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
@@ -192,27 +202,26 @@ export function isSignerUnavailableError(error: unknown): boolean {
 
 /**
  * Run a coordinator call, retrying on signer-not-ready errors. The NIP-46 /
- * extension signer can take a moment to become ready after account activation,
- * so a handful of bounded retries covers the cold-start window without
- * surfacing a spurious failure to the user.
+ * extension signer can take a moment to become ready after account activation
+ * or to wake from suspension on mobile, so bounded backoff retries cover the
+ * cold-start window without surfacing a spurious failure to the user.
  */
 export async function withCoordinatorClientRetry<T>(
 	account: IAccount,
 	coordinatorKey: string,
 	operation: (client: coordinatorClient) => Promise<T>
 ): Promise<T> {
-	for (let attempt = 0; attempt <= SIGNER_READY_RETRY_ATTEMPTS; attempt += 1) {
+	for (let attempt = 0; ; attempt += 1) {
 		try {
 			return await withCoordinatorClient(account, coordinatorKey, operation);
 		} catch (error) {
-			if (!isSignerUnavailableError(error) || attempt === SIGNER_READY_RETRY_ATTEMPTS) {
+			const delay = SIGNER_READY_RETRY_DELAYS_MS[attempt];
+			if (!isSignerUnavailableError(error) || delay === undefined) {
 				throw error;
 			}
-			await new Promise((resolve) => setTimeout(resolve, SIGNER_READY_RETRY_DELAY_MS));
+			await new Promise((resolve) => setTimeout(resolve, delay));
 		}
 	}
-	// Unreachable: the loop either returns or throws on the final attempt.
-	throw new Error('Failed to complete coordinator request');
 }
 
 /**
@@ -258,21 +267,42 @@ async function runCoordinatorOperation<T>(
 	}
 }
 
+/**
+ * Backoff (ms) between retries after the initial transient failure. The first
+ * failure rebuilds the client (the socket may be stale); these sleeps space
+ * out further retries on the rebuilt client. One reconnect per call instead
+ * of churning on a coordinator that may be genuinely down.
+ */
+const TRANSIENT_RETRY_BACKOFF_MS = [500, 1000, 2000];
+
 export async function withCoordinatorClient<T>(
 	account: IAccount,
 	coordinatorKey: string,
 	operation: (client: coordinatorClient) => Promise<T>
 ): Promise<T> {
 	return runCoordinatorOperation(account, coordinatorKey, async () => {
-		try {
-			return await operation(getCoordinatorClient(account, coordinatorKey));
-		} catch (error) {
-			if (!isTransientCoordinatorError(error)) {
-				throw error;
+		let rebuilt = false;
+		for (let attempt = 0; attempt <= TRANSIENT_RETRY_BACKOFF_MS.length; attempt += 1) {
+			try {
+				return await operation(getCoordinatorClient(account, coordinatorKey));
+			} catch (error) {
+				if (!isTransientCoordinatorError(error)) {
+					throw error;
+				}
+				if (attempt === TRANSIENT_RETRY_BACKOFF_MS.length) {
+					throw error;
+				}
+				if (!rebuilt) {
+					// First transient failure: the socket may be stale, so rebuild once.
+					// Later retries reuse the fresh client rather than paying more
+					// reconnect cycles on a coordinator that may be genuinely down.
+					rebuilt = true;
+					await replaceCoordinatorClient(coordinatorKey, account);
+				}
+				await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_BACKOFF_MS[attempt]));
 			}
-			await replaceCoordinatorClient(coordinatorKey, account);
-			return operation(getCoordinatorClient(account, coordinatorKey));
 		}
+		throw new Error('Unreachable: transient retry loop exhausted');
 	});
 }
 
