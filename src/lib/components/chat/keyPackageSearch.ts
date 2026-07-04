@@ -1,13 +1,11 @@
 import { nip19 } from 'nostr-tools';
 import type { ChatGroupProfileHints } from './chatGroupDisplay';
 
-export type KeyPackageProfileHints = ChatGroupProfileHints;
-
 export function matchesKeyPackageSearch(input: {
 	pubkey: string;
 	keyPackageRef: string;
 	isLastResort?: boolean;
-	profileHints: KeyPackageProfileHints;
+	profileHints: ChatGroupProfileHints;
 	search: string;
 }) {
 	const query = input.search.trim().toLowerCase();
