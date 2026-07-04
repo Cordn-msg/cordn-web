@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-04-reconnect-resilience',
+		createdAt: Date.UTC(2026, 6, 4),
+		version: 1,
+		title: 'Smoother catch-up and reconnections',
+		body: '- 🐛 Chats now catch up reliably when you return to the app on mobile — if the live connection went quiet while you were away, anything you missed is pulled in automatically instead of waiting for the next new message to arrive.\n- 🔄 Coordinator blips like timeouts or brief disconnects recover faster and more quietly: retries now back off and only the affected coordinator is touched, so a flaky connection no longer disrupts healthy chats.\n- 🐛 A silently dropped connection no longer leaves a group stuck unwatched until you switch away and back — it now recovers on its own.\n- 🔄 First actions after reopening the app on mobile are less likely to trip a signer error: the wake-up window is longer and gentler.'
+	},
+	{
 		id: 'cordn-news-2026-07-03-sealed-default',
 		createdAt: Date.UTC(2026, 6, 3),
 		version: 2,

@@ -74,6 +74,11 @@ const MIN_RESUME_INTERVAL_MS = 5000;
 const CLOSE_WATCH_TIMEOUT_MS = 3000;
 /** Hides the "Updating chats…" banner for rebuilds that finish quickly. */
 const RECONNECT_BANNER_DELAY_MS = 500;
+/** Per-call timeout for backlog fetches (msg_fetch_many). The default MCP
+ *  timeout is 60s, which makes gap recovery on flaky mobile links feel stuck;
+ *  a shorter timeout fails fast so `withCoordinatorClient`'s retry/backoff can
+ *  take over. The live subscription keeps the 60s default (reset-on-progress). */
+const BACKLOG_FETCH_TIMEOUT_MS = 20000;
 let resumePromise: Promise<void> | null = null;
 let resumeEpoch = 0;
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -336,12 +341,21 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 			// harmless blip.
 			await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON, { local: true });
 		}
+		// Snapshot already-watched groups before the delta restart: these had live
+		// subscriptions during the likely connectivity gap (background/online
+		// loss) and may have silently dropped messages the delta restart won't
+		// recover for them. Only the global (lifecycle) resume has a gap to close;
+		// the scoped branch above already discarded its coordinator's watches.
+		const watchedBefore = coordinatorKey ? [] : [...currentWatches.keys()];
 		// Delta restart: `startWatchingAllGroups` only opens backlog fetches and
 		// subscriptions for groups not already in `currentWatches`. Subscriptions
 		// that died while backgrounded (or were discarded by the scoped branch
 		// above) unregister themselves on stream end, so this restarts exactly
 		// those; healthy subscriptions are left untouched.
 		await startWatchingAllGroups({ skipBacklogSync: false });
+		if (watchedBefore.length > 0) {
+			await catchUpWatchedGroupBacklogs(watchedBefore);
+		}
 		lastSuccessfulResumeAt = Date.now();
 		chatGroupWatchStore.startup = 'ready';
 		clearBannerTimer();
@@ -544,13 +558,16 @@ async function fetchCoordinatorGroupBacklog(input: {
 }): Promise<Set<string>> {
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
-		client.FetchManyGroupMessages({
-			groups: input.groups.map((group) => ({
-				gid: group.gid,
-				after: group.after,
-				since_epoch: group.sinceEpoch
-			}))
-		})
+		client.FetchManyGroupMessages(
+			{
+				groups: input.groups.map((group) => ({
+					gid: group.gid,
+					after: group.after,
+					since_epoch: group.sinceEpoch
+				}))
+			},
+			{ timeout: BACKLOG_FETCH_TIMEOUT_MS }
+		)
 	);
 	if (result.messages.length === 0) return new Set<string>();
 
@@ -563,6 +580,43 @@ async function fetchCoordinatorGroupBacklog(input: {
 			opaqueMessageBase64: message.msg_64,
 			encrypted: message.encrypted
 		}))
+	);
+}
+
+/**
+ * Re-pull backlog for groups that already had a live subscription during a
+ * likely connectivity gap (the foreground/online lifecycle resume path).
+ *
+ * The delta restart above only opens watches for groups not already in
+ * `currentWatches`; an alive-but-gapped subscription is left untouched, even
+ * though Nostr does not redeliver the messages the server pushed while the
+ * client was backgrounded/disconnected (and suspended JS timers can hide that
+ * gap from the CEP-41 keepalive). This explicit catch-up closes it. The cursor
+ * dedup in `ingestChatGroupMessages` makes it idempotent, and the per-group
+ * operation lock serializes it against the live subscription's buffer flush.
+ */
+async function catchUpWatchedGroupBacklogs(groupIds: string[]) {
+	const account = manager.getActive();
+	if (!account || groupIds.length === 0) return;
+
+	const groupsByCoordinator = new SvelteMap<string, WatchableGroup[]>();
+	for (const groupId of groupIds) {
+		const watchable = toWatchableGroup(groupId);
+		if (!watchable) continue;
+		const list = groupsByCoordinator.get(watchable.coordinatorKey) ?? [];
+		list.push(watchable);
+		groupsByCoordinator.set(watchable.coordinatorKey, list);
+	}
+
+	await Promise.all(
+		[...groupsByCoordinator.entries()].map(([coordinatorKey, groups]) =>
+			fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups }).catch((error) => {
+				console.warn('[watch] foreground backlog catch-up failed', {
+					coordinatorKey,
+					detail: error instanceof Error ? error.message : String(error)
+				});
+			})
+		)
 	);
 }
 

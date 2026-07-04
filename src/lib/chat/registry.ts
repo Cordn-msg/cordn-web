@@ -4,6 +4,12 @@
  * Adding a kind's compact or rich renderer is one file + one entry here. The
  * dispatchers (`ChatInlineBody.svelte`, `ChatRichBody.svelte`) look up by kind
  * and fall back to the default when a kind has no specific renderer.
+ *
+ * ponytail: today every dispatch resolves to the default — `inlineBodies`
+ * maps both live kinds to `TextInline` (which is also `defaultInlineBody`),
+ * and `richBodies` is empty. Kept as the documented extension seam
+ * (README.md § Registry); collapse to direct `<TextInline>`/`<DefaultRich>`
+ * only if the multi-kind plan is abandoned.
  */
 import type { Component } from 'svelte';
 
