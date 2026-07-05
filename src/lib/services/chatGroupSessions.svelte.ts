@@ -5,6 +5,7 @@ import {
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { onLocalStateAdvance } from '$lib/services/multiDevice.svelte';
 import {
 	type GroupIngestionOutcome,
 	type GroupPendingEpochStore,
@@ -68,6 +69,7 @@ export async function syncChatGroupMessages(params: {
 	pendingEpochOperations: GroupPendingEpochStore;
 	coordinatorClient: Pick<cordnClient, 'StoreWelcome'>;
 	localStablePubkey?: string;
+	mdActive?: boolean;
 }): Promise<{
 	workingGroup: WorkingChatGroupSession;
 	received: StoredChatMessage[];
@@ -79,7 +81,8 @@ export async function syncChatGroupMessages(params: {
 		messages: params.messages,
 		hasPendingEpochOperation: (opaqueMessageBase64) =>
 			hasPendingEpochOperation(params.pendingEpochOperations, params.group.id, opaqueMessageBase64),
-		localStablePubkey: params.localStablePubkey
+		localStablePubkey: params.localStablePubkey,
+		mdActive: params.mdActive
 	});
 
 	await reconcilePendingEpochOperations({
@@ -88,6 +91,23 @@ export async function syncChatGroupMessages(params: {
 		client: params.coordinatorClient,
 		ingestion: sync
 	});
+
+	// Multi-device re-publish (spec/applications/multi-device.md §10): a pending
+	// own-commit just landed on the stream (self-echo). Siblings cannot ingest it
+	// (shared-leaf UpdatePath) and need a fresh document to fast-forward. This is
+	// the SINGLE trigger point — every own-commit flow (add/remove member,
+	// metadata change, plus subscription-delivered self-echoes) routes through
+	// here, so there is no per-flow wiring to drift out of sync. Fire-and-forget:
+	// `onLocalStateAdvance` queues the republish off `publishInFlight`, and the
+	// actual snapshot runs on a later microtask — after the caller has persisted
+	// the new state to the store (callers persist synchronously after this await).
+	if (sync.appliedPendingCommitMessages.size > 0) {
+		console.debug('[multi-device] own-commit self-echo confirmed, scheduling republish', {
+			groupId: params.group.id,
+			count: sync.appliedPendingCommitMessages.size
+		});
+		onLocalStateAdvance();
+	}
 
 	return {
 		workingGroup: params.workingGroup,

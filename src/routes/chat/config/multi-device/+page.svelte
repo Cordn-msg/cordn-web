@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { Switch } from '$lib/components/ui/switch';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { defaultRelays } from '$lib/services/relay-pool';
+	import { commonRelays } from '$lib/services/relay-pool';
 	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 	import {
 		enableMultiDevice,
@@ -19,21 +19,24 @@
 		rotateMultiDeviceKey,
 		setMultiDeviceRelays,
 		getMultiDeviceConfig,
-		getMultiDeviceBlossomServer,
-		setMultiDeviceBlossomServer,
-		isCustomMultiDeviceBlossomServer,
+		setMultiDeviceBlossomServers,
+		DEFAULT_BLOSSOM_SERVERS,
 		buildConnectionString,
 		linkDeviceFromConnectionString,
+		reconcileMultiDeviceNow,
 		type MultiDeviceOwnerConfig,
 		type LinkResult
 	} from '$lib/services/multiDevice.svelte';
+	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { toast } from 'svelte-sonner';
+	import { SvelteSet } from 'svelte/reactivity';
 	import Smartphone from '@lucide/svelte/icons/smartphone';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ShieldAlert from '@lucide/svelte/icons/shield-alert';
 	import Copy from '@lucide/svelte/icons/copy';
-	import Server from '@lucide/svelte/icons/server';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Download from '@lucide/svelte/icons/download';
 
 	let tab = $state<'add' | 'link'>('add');
 
@@ -41,15 +44,17 @@
 	let config = $state<MultiDeviceOwnerConfig | undefined>(undefined);
 	let connectionString = $state('');
 	let relaysDraft = $state('');
-	// Blossom server selector state (mirrors the media config page).
-	const BLOSSOM_CUSTOM = '__custom__';
-	let blossomServer = $state(DEFAULT_BLOSSOM_SERVER);
-	let blossomCustomUrl = $state('');
+	// Blossom redundancy: a checked subset of presets, ordered by BLOSSOM_SERVERS.
+	// The first checked entry is the primary (read path tries them in order).
+	// SvelteSet is self-reactive, so no $state wrap — mutate in place.
+	let blossomChecked = new SvelteSet<string>();
 	let rotating = $state(false);
+	let resyncing = $state(false);
 	let linking = $state(false);
 	let linkResult = $state<LinkResult | null>(null);
 	let linkInput = $state('');
 	let scanning = $state(false);
+	let advancedOpen = $state(false);
 
 	$effect(() => {
 		// Track the active account so config reloads on identity switch.
@@ -59,64 +64,66 @@
 		const cfg = getMultiDeviceConfig();
 		config = cfg;
 		connectionString = cfg ? buildConnectionString(cfg) : '';
-		relaysDraft = cfg ? cfg.relays.join('\n') : defaultRelays.join('\n');
-		blossomServer = getMultiDeviceBlossomServer();
-		blossomCustomUrl = isCustomMultiDeviceBlossomServer() ? blossomServer : '';
+		relaysDraft = (cfg?.relays ?? commonRelays).join('\n');
+		const servers = cfg ? cfg.blossomServers : DEFAULT_BLOSSOM_SERVERS;
+		blossomChecked.clear();
+		for (const s of servers) blossomChecked.add(s);
 	});
 
+	const hasConfig = $derived(!!config);
 	const enabled = $derived(config?.enabled === true);
+	const role = $derived(config?.role ?? 'source');
+	// Hides the "already set up elsewhere?" hint once this device has groups.
+	const hasLocalGroups = $derived(listChatGroups().length > 0);
 
-	const blossomSelectedOption = $derived(
-		BLOSSOM_SERVERS.includes(blossomServer as (typeof BLOSSOM_SERVERS)[number])
-			? blossomServer
-			: BLOSSOM_CUSTOM
+	// Status copy reflects the producer/consumer role, not just enabled state.
+	const statusLabel = $derived(
+		!hasConfig
+			? 'Not set up yet'
+			: !enabled
+				? 'Sync paused'
+				: role === 'linked'
+					? 'Linked to another device'
+					: 'Sharing from this device'
 	);
 
-	function handleBlossomSelect(event: Event) {
-		const value = (event.currentTarget as HTMLSelectElement).value;
-		if (value === BLOSSOM_CUSTOM) {
-			blossomServer = isCustomMultiDeviceBlossomServer() ? getMultiDeviceBlossomServer() : '';
-			blossomCustomUrl = blossomServer;
+	function toggleBlossom(server: string, checked: boolean) {
+		if (checked) {
+			blossomChecked.add(server);
+		} else if (blossomChecked.size > 1) {
+			// Keep at least one host so the document is always reachable.
+			blossomChecked.delete(server);
 		} else {
-			blossomServer = value;
-			setMultiDeviceBlossomServer(value);
-			config = getMultiDeviceConfig();
-			if (config) connectionString = buildConnectionString(config);
-			toast.success('Blossom server updated');
+			toast.error('Keep at least one Blossom server for redundancy');
 		}
 	}
 
-	function commitBlossomCustom() {
-		if (blossomCustomUrl.trim()) {
-			setMultiDeviceBlossomServer(blossomCustomUrl);
-			blossomServer = getMultiDeviceBlossomServer();
-			config = getMultiDeviceConfig();
-			if (config) connectionString = buildConnectionString(config);
-			toast.success('Blossom server updated');
-		}
+	function blossomServersInOrder(): string[] {
+		// Primary = first preset (in declared order) that is checked; preserves a
+		// stable priority without asking the user to order the list manually.
+		return BLOSSOM_SERVERS.filter((s) => blossomChecked.has(s));
 	}
 
-	async function handleEnable() {
-		console.debug('[multi-device][page] handleEnable', {
-			relayDraftLines: relaysDraft.split('\n').length
-		});
+	async function handleSetup() {
 		const relays = parseRelays(relaysDraft);
+		if (relays.length === 0) {
+			toast.error('Add at least one relay');
+			return;
+		}
+		const blossom = blossomServersInOrder();
 		try {
-			config = enableMultiDevice(relays);
+			config = enableMultiDevice(relays, blossom);
 			connectionString = buildConnectionString(config);
-			console.debug('[multi-device][page] enabled OK', { enabled: config.enabled });
-			toast.success('Multi-device sync enabled');
+			toast.success(hasConfig ? 'Sync resumed' : 'Multi-device sync enabled');
 		} catch (error) {
-			console.warn('[multi-device][page] enable failed', error);
 			toast.error(error instanceof Error ? error.message : 'Could not enable multi-device');
 		}
 	}
 
-	function handleDisable() {
-		console.debug('[multi-device][page] handleDisable');
+	function handlePause() {
 		disableMultiDevice();
 		config = getMultiDeviceConfig();
-		toast.success('Multi-device sync disabled');
+		toast.success('Multi-device sync paused');
 	}
 
 	async function handleRotate() {
@@ -139,16 +146,35 @@
 		}
 	}
 
-	function handleSaveRelays() {
+	async function handleResync() {
+		resyncing = true;
+		try {
+			const counts = await reconcileMultiDeviceNow();
+			if (!counts) {
+				toast.error('Sync is off, or no session document was found');
+			} else {
+				toast.success(
+					`Re-synced — ${counts.fastForwarded} caught up, ${counts.seeded} new, ${counts.skipped} already current`
+				);
+			}
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Could not re-sync');
+		} finally {
+			resyncing = false;
+		}
+	}
+
+	function handleSaveAdvanced() {
 		const relays = parseRelays(relaysDraft);
 		if (relays.length === 0) {
 			toast.error('Add at least one relay');
 			return;
 		}
 		setMultiDeviceRelays(relays);
+		setMultiDeviceBlossomServers(blossomServersInOrder());
 		config = getMultiDeviceConfig();
 		if (config) connectionString = buildConnectionString(config);
-		toast.success('Relays updated');
+		toast.success('Advanced settings saved');
 	}
 
 	async function handleCopy() {
@@ -169,6 +195,10 @@
 		linkResult = null;
 		try {
 			linkResult = await linkDeviceFromConnectionString(linkInput.trim());
+			// Refresh config so the status card + Add tab reflect the just-linked state
+			// without a page reload (the $effect only re-runs on account change).
+			config = getMultiDeviceConfig();
+			connectionString = config ? buildConnectionString(config) : '';
 			toast.success(
 				`Linked — ${linkResult.seeded} group${linkResult.seeded === 1 ? '' : 's'} seeded`
 			);
@@ -223,138 +253,85 @@
 					</Card.Content>
 				</Card.Root>
 			{:else}
-				<!-- Enable / disable -->
+				<!-- Status: reports state only. Enablement is a consequence of an action,
+				     not a prerequisite, so there is no master switch. -->
 				<Card.Root>
-					<Card.Header>
-						<Card.Title>Sync status</Card.Title>
-						<Card.Description>
-							When enabled, your groups' MLS state is sealed and published so other devices can
-							adopt it.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="flex items-center justify-between rounded-lg border border-border p-3">
-							<div>
-								<p class="text-sm font-medium">{enabled ? 'Enabled' : 'Disabled'}</p>
+					<Card.Content class="pt-6">
+						<div class="flex items-center justify-between gap-4">
+							<div class="min-w-0">
+								<p class="flex items-center gap-2 text-sm font-medium">
+									<span
+										class="size-2 shrink-0 rounded-full {enabled
+											? 'bg-emerald-500'
+											: hasConfig
+												? 'bg-red-500'
+												: 'bg-muted-foreground'}"
+									></span>
+									{statusLabel}
+								</p>
 								<p class="text-xs text-muted-foreground">
-									{enabled && config
-										? `Tip relays: ${config.relays.length} · Last published: ${config.lastPublishedAddress ? 'yes' : 'never'}`
-										: 'No sync activity.'}
+									{#if hasConfig && config}
+										{config.relays.length} relay{config.relays.length === 1 ? '' : 's'} ·
+										{config.blossomServers.length} Blossom host{config.blossomServers.length === 1
+											? ''
+											: 's'}
+									{:else}
+										Pick a tab below to share from or link this device.
+									{/if}
 								</p>
 							</div>
-							<Switch
-								checked={enabled}
-								onCheckedChange={(next) => {
-									console.debug('[multi-device][page] switch toggled', next);
-									return next ? handleEnable() : handleDisable();
-								}}
-							/>
+							{#if enabled}
+								<Button variant="ghost" size="sm" onclick={handlePause}>Pause sync</Button>
+							{:else if hasConfig}
+								<Button variant="ghost" size="sm" onclick={handleSetup}>Resume sync</Button>
+							{/if}
 						</div>
-
-						{#if enabled}
-							<div class="space-y-2">
-								<Label for="md-relays">Tip relays (one per line)</Label>
-								<textarea
-									id="md-relays"
-									class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-									bind:value={relaysDraft}
-								></textarea>
-								<p class="text-xs text-muted-foreground">
-									The replaceable tip event is published here. Newly-linked devices inherit this
-									list.
-								</p>
-								<Button variant="outline" onclick={handleSaveRelays} class="w-full"
-									>Save relays</Button
-								>
-							</div>
-						{/if}
 					</Card.Content>
 				</Card.Root>
 
-				{#if enabled}
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>Document storage</Card.Title>
-							<Card.Description>
-								The Blossom server that holds your sealed sync document. Linked devices fetch it
-								from here, falling back to the other presets if this one is unreachable.
-							</Card.Description>
-						</Card.Header>
-						<Card.Content>
-							<div class="space-y-2">
-								<Label for="md-blossom">Server</Label>
-								<div class="relative">
-									<span
-										class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
-									>
-										<Server class="size-4" />
-									</span>
-									<select
-										id="md-blossom"
-										class="h-10 w-full appearance-none rounded-md border border-input bg-background pr-3 pl-9 text-sm ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-										value={blossomSelectedOption}
-										onchange={handleBlossomSelect}
-									>
-										{#each BLOSSOM_SERVERS as server (server)}
-											<option value={server}>{server}</option>
-										{/each}
-										<option value={BLOSSOM_CUSTOM}>Custom…</option>
-									</select>
-								</div>
-							</div>
+				<!-- Tab navigation: always visible. Enablement happens on action completion. -->
+				<div class="flex space-x-1 rounded-lg bg-muted p-1">
+					<button
+						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'add'
+							? 'bg-background shadow-sm'
+							: 'hover:bg-muted-foreground/10'}"
+						onclick={() => (tab = 'add')}
+					>
+						Add a device
+					</button>
+					<button
+						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'link'
+							? 'bg-background shadow-sm'
+							: 'hover:bg-muted-foreground/10'}"
+						onclick={() => (tab = 'link')}
+					>
+						Link this device
+					</button>
+				</div>
 
-							{#if blossomSelectedOption === BLOSSOM_CUSTOM}
-								<div class="mt-3 space-y-2">
-									<Label for="md-blossom-custom">Custom server URL</Label>
-									<Input
-										id="md-blossom-custom"
-										bind:value={blossomCustomUrl}
-										placeholder="https://your-blossom-server.example/"
-										onblur={commitBlossomCustom}
-										onkeydown={(e) => e.key === 'Enter' && commitBlossomCustom()}
-									/>
-									<p class="text-xs text-muted-foreground">
-										Defaults to {DEFAULT_BLOSSOM_SERVER} when left blank.
-									</p>
-								</div>
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				{/if}
-
-				{#if enabled}
-					<!-- Tab navigation -->
-					<div class="flex space-x-1 rounded-lg bg-muted p-1">
-						<button
-							class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab ===
-							'add'
-								? 'bg-background shadow-sm'
-								: 'hover:bg-muted-foreground/10'}"
-							onclick={() => (tab = 'add')}
-						>
-							Add a device
-						</button>
-						<button
-							class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab ===
-							'link'
-								? 'bg-background shadow-sm'
-								: 'hover:bg-muted-foreground/10'}"
-							onclick={() => (tab = 'link')}
-						>
-							Link this device
-						</button>
-					</div>
-
-					{#if tab === 'add'}
+				{#if tab === 'add'}
+					<!-- "Share FROM here": this device is (or becomes) the source. -->
+					{#if enabled}
 						<Card.Root>
 							<Card.Header>
-								<Card.Title>Connection string</Card.Title>
+								<Card.Title>Your connection code</Card.Title>
 								<Card.Description>
 									Scan this on another device logged in as the same identity. It carries no private
 									keys — only a locator and a write capability for the tip.
 								</Card.Description>
 							</Card.Header>
 							<Card.Content class="space-y-4">
+								<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+									<li>Open Cordn on your other device, logged in as the same identity.</li>
+									<li>
+										Go to <span class="font-medium text-foreground">Settings → Multi-device</span>.
+									</li>
+									<li>
+										Under <span class="font-medium text-foreground">Link this device</span>, scan
+										this code.
+									</li>
+								</ol>
+
 								<div class="flex justify-center rounded-lg border border-border bg-white p-4">
 									<div class="w-full max-w-[240px]">
 										<QrCode data={connectionString} size={240} />
@@ -372,102 +349,230 @@
 									</div>
 								</div>
 
-								<div
-									class="space-y-2 rounded-lg border border-border p-3 text-xs text-muted-foreground"
-								>
-									<p>
-										<span class="font-medium text-foreground">How it works:</span>
-										Your groups' MLS state is sealed to your own npub (NIP-44) and stored on Blossom.
-										Other devices fetch it via an opaque Nostr tip pointer, decrypt it, and adopt the
-										shared leaf.
+								{#if !hasLocalGroups}
+									<p class="text-xs text-muted-foreground">
+										Already set up on another device? Use
+										<button class="underline hover:text-foreground" onclick={() => (tab = 'link')}>
+											Link this device
+										</button>
+										instead — enabling here would mint a separate sync identity.
 									</p>
-									<p>
-										<span class="font-medium text-foreground">Shared-leaf model:</span>
-										all your devices present as one member per group. Removing the user removes every
-										device; there is no per-device revocation.
-									</p>
-								</div>
-
-								<Button variant="outline" onclick={handleRotate} disabled={rotating} class="w-full">
-									{#if rotating}
-										<Spinner class="mr-2 size-4" />
-										Rotating…
-									{:else}
-										<RefreshCw class="mr-2 size-4" />
-										Rotate connection string
-									{/if}
-								</Button>
-								<p class="text-xs text-muted-foreground">
-									Use rotation if this string leaked. Every previously-linked device must be
-									re-linked.
-								</p>
+								{/if}
 							</Card.Content>
 						</Card.Root>
 					{:else}
+						<!-- No config yet, or paused. Configure (defaults pre-filled) then turn on. -->
 						<Card.Root>
 							<Card.Header>
-								<Card.Title>Link this device</Card.Title>
+								<Card.Title>{hasConfig ? 'Resume sharing' : 'Share from this device'}</Card.Title>
 								<Card.Description>
-									Paste the connection string from another device, or scan its QR code.
+									Turn on sync to seal your groups' MLS state and generate a connection code other
+									devices can adopt.
 								</Card.Description>
 							</Card.Header>
 							<Card.Content class="space-y-4">
-								<div class="space-y-2">
-									<Label for="md-link-input">Connection string</Label>
-									<Input
-										id="md-link-input"
-										bind:value={linkInput}
-										placeholder="Paste the connection string here"
-										class="font-mono text-xs"
-									/>
-								</div>
+								<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+									<li>Turn on sync here (sensible defaults are pre-filled under Advanced).</li>
+									<li>Open Cordn on your other device, logged in as the same identity.</li>
+									<li>
+										Under <span class="font-medium text-foreground">Link this device</span>, scan
+										the code.
+									</li>
+								</ol>
 
-								<Button onclick={handleLink} disabled={linking} class="w-full">
-									{#if linking}
-										<Spinner class="mr-2 size-4" />
-										Linking…
-									{:else}
-										<LinkIcon class="mr-2 size-4" />
-										Link device
-									{/if}
+								<Button onclick={handleSetup} class="w-full">
+									{hasConfig ? 'Resume sync' : 'Turn on sync & generate code'}
 								</Button>
 
-								<div class="flex items-center gap-2 text-xs text-muted-foreground">
-									<div class="h-px flex-1 bg-border"></div>
-									<span>or</span>
-									<div class="h-px flex-1 bg-border"></div>
-								</div>
-
-								{#if scanning}
-									<div class="space-y-2">
-										<QrScanner
-											onResult={(data) => {
-												linkInput = data;
-												scanning = false;
-											}}
-										/>
-										<Button variant="outline" onclick={() => (scanning = false)} class="w-full">
-											Cancel scan
-										</Button>
-									</div>
-								{:else}
-									<Button variant="outline" onclick={() => (scanning = true)} class="w-full">
-										Scan QR code
-									</Button>
-								{/if}
-
-								{#if linkResult}
-									<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-										<p class="font-medium">Linked successfully</p>
-										<p class="text-muted-foreground">
-											{linkResult.seeded} group{linkResult.seeded === 1 ? '' : 's'} seeded,
-											{linkResult.fastForwarded} fast-forwarded. New groups will sync as they're added.
-										</p>
-									</div>
+								{#if !hasConfig}
+									<p class="text-xs text-muted-foreground">
+										Already set up on another device? Use
+										<button class="underline hover:text-foreground" onclick={() => (tab = 'link')}>
+											Link this device
+										</button>
+										instead.
+									</p>
 								{/if}
 							</Card.Content>
 						</Card.Root>
 					{/if}
+
+					<!-- Advanced: relays + Blossom redundancy + (when enabled) rotate.
+						 Pre-filled with sensible defaults so most users never open it. -->
+					<Collapsible.Root bind:open={advancedOpen}>
+						<Collapsible.Trigger
+							class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+						>
+							Advanced
+							<ChevronDown
+								class={`size-3.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+							/>
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<div class="mt-3 space-y-4">
+								<div class="space-y-2">
+									<Label for="md-relays">Tip relays (one per line)</Label>
+									<textarea
+										id="md-relays"
+										class="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+										bind:value={relaysDraft}
+									></textarea>
+									<p class="text-xs text-muted-foreground">
+										The replaceable tip event is published here. Newly-linked devices inherit this
+										list.
+									</p>
+								</div>
+
+								<div class="space-y-2">
+									<Label>Document hosts (pick at least two for redundancy)</Label>
+									<div class="grid gap-2">
+										{#each BLOSSOM_SERVERS as server (server)}
+											<label
+												class="flex cursor-pointer items-center gap-2 rounded-md border border-border p-2 text-sm hover:bg-muted/30"
+											>
+												<input
+													type="checkbox"
+													class="size-4"
+													checked={blossomChecked.has(server)}
+													onchange={(e) => toggleBlossom(server, e.currentTarget.checked)}
+												/>
+												<span class="font-mono text-xs">{server}</span>
+												{#if server === DEFAULT_BLOSSOM_SERVER}
+													<span class="ml-auto text-xs text-muted-foreground">default</span>
+												{/if}
+											</label>
+										{/each}
+									</div>
+									<p class="text-xs text-muted-foreground">
+										The sealed document is uploaded to all selected hosts; linked devices try them
+										in order. More hosts = more resilience.
+									</p>
+								</div>
+
+								{#if enabled}
+									<Button variant="outline" onclick={handleSaveAdvanced} class="w-full">
+										Save advanced settings
+									</Button>
+
+									<Button
+										variant="outline"
+										onclick={handleResync}
+										disabled={resyncing}
+										class="w-full"
+									>
+										{#if resyncing}
+											<Spinner class="mr-2 size-4" />
+											Re-syncing…
+										{:else}
+											<Download class="mr-2 size-4" />
+											Re-sync from document
+										{/if}
+									</Button>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Fetch the latest session document and catch this device up. Use it if a group
+										looks stuck or out of sync.
+									</p>
+
+									<div class="border-t border-border pt-4">
+										<Button
+											variant="outline"
+											onclick={handleRotate}
+											disabled={rotating}
+											class="w-full"
+										>
+											{#if rotating}
+												<Spinner class="mr-2 size-4" />
+												Rotating…
+											{:else}
+												<RefreshCw class="mr-2 size-4" />
+												Rotate connection string
+											{/if}
+										</Button>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Use rotation if this string leaked. Every previously-linked device must be
+											re-linked.
+										</p>
+									</div>
+								{/if}
+							</div>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				{:else}
+					<!-- "Receive ONTO here": this device adopts an existing source's state.
+						 Linking enables sync itself — no prior switch to flip. -->
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Link this device</Card.Title>
+							<Card.Description>
+								Paste the connection string from another device, or scan its QR code. This adopts
+								that device's groups here.
+							</Card.Description>
+						</Card.Header>
+						<Card.Content class="space-y-4">
+							<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+								<li>
+									On your other device, open
+									<span class="font-medium text-foreground">Multi-device → Add a device</span>.
+								</li>
+								<li>Copy the connection string (or show its QR code).</li>
+								<li>Paste it here, or scan the code below.</li>
+							</ol>
+
+							<div class="space-y-2">
+								<Label for="md-link-input">Connection string</Label>
+								<Input
+									id="md-link-input"
+									bind:value={linkInput}
+									placeholder="Paste the connection string here"
+									class="font-mono text-xs"
+								/>
+							</div>
+
+							<Button onclick={handleLink} disabled={linking} class="w-full">
+								{#if linking}
+									<Spinner class="mr-2 size-4" />
+									Linking…
+								{:else}
+									<LinkIcon class="mr-2 size-4" />
+									Link device
+								{/if}
+							</Button>
+
+							<div class="flex items-center gap-2 text-xs text-muted-foreground">
+								<div class="h-px flex-1 bg-border"></div>
+								<span>or</span>
+								<div class="h-px flex-1 bg-border"></div>
+							</div>
+
+							{#if scanning}
+								<div class="space-y-2">
+									<QrScanner
+										onResult={(data) => {
+											linkInput = data;
+											scanning = false;
+										}}
+									/>
+									<Button variant="outline" onclick={() => (scanning = false)} class="w-full">
+										Cancel scan
+									</Button>
+								</div>
+							{:else}
+								<Button variant="outline" onclick={() => (scanning = true)} class="w-full">
+									Scan QR code
+								</Button>
+							{/if}
+
+							{#if linkResult}
+								<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+									<p class="font-medium">Linked successfully</p>
+									<p class="text-muted-foreground">
+										{linkResult.seeded} group{linkResult.seeded === 1 ? '' : 's'} seeded,
+										{linkResult.fastForwarded} fast-forwarded. New groups will sync as they're added.
+									</p>
+								</div>
+							{/if}
+						</Card.Content>
+					</Card.Root>
 				{/if}
 
 				<Card.Root>

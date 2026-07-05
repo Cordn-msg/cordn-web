@@ -8,7 +8,7 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { onLocalStateAdvance } from '$lib/services/multiDevice.svelte';
+import { getMultiDeviceConfig, onLocalStateAdvance } from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
@@ -66,7 +66,8 @@ import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getCoordinatorClient,
 	requireActiveAccount,
-	withCoordinatorClient
+	withCoordinatorClient,
+	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
 import {
 	getChatStorage,
@@ -677,6 +678,11 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	removeSentJoinRequest(group.id);
 	void pruneConsumedKeyPackagesForActiveGroups();
 
+	// spec multi-device §10: a freshly-joined group (via Welcome) must reach
+	// siblings so they can seed the shared leaf. Fire-and-forget; a no-op when
+	// multi-device is disabled. (Group creation fires the same hook itself.)
+	onLocalStateAdvance();
+
 	return group;
 }
 
@@ -778,7 +784,7 @@ export async function inviteChatGroupMember(input: {
 		};
 		enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedAddCommit)
 		);
 
@@ -815,7 +821,8 @@ export async function inviteChatGroupMember(input: {
 			})),
 			pendingEpochOperations,
 			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
-			localStablePubkey: normalizePubKey(account.pubkey)
+			localStablePubkey: normalizePubKey(account.pubkey),
+			mdActive: !!getMultiDeviceConfig(normalizePubKey(account.pubkey))?.enabled
 		});
 
 		const inviteSystemMessages = createSystemMessagesFromStateChange({
@@ -919,7 +926,7 @@ export async function removeChatGroupMember(input: {
 			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedRemoveCommit)
 		);
 
@@ -1011,7 +1018,7 @@ export async function updateChatGroupMetadata(input: {
 			commitMessageBase64: sealedMetadataCommit.msg_64
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedMetadataCommit)
 		);
 
@@ -1103,7 +1110,8 @@ async function applyIncomingChatGroupMessages(
 		messages,
 		pendingEpochOperations,
 		coordinatorClient,
-		localStablePubkey: normalizePubKey(account.pubkey)
+		localStablePubkey: normalizePubKey(account.pubkey),
+		mdActive: !!getMultiDeviceConfig(normalizePubKey(account.pubkey))?.enabled
 	});
 
 	const nextGroup = buildPersistedChatGroup({
@@ -1144,14 +1152,9 @@ async function applyIncomingChatGroupMessages(
 
 	replaceGroup(group.id, nextGroup);
 
-	// spec multi-device §10: a locally-authored Commit confirmed via self-echo
-	// advanced the epoch — siblings cannot ingest it from the stream (shared-leaf
-	// UpdatePath) and need a document fast-forward. `appliedPendingCommitMessages`
-	// is exactly the self-echo-confirmed own-Commit set. Fire-and-forget; a no-op
-	// when multi-device is disabled.
-	if (epochChanged && sync.ingestion.appliedPendingCommitMessages.size > 0) {
-		onLocalStateAdvance();
-	}
+	// Multi-device re-publish on own-commit confirmation lives in
+	// `syncChatGroupMessages` (the single ingestion chokepoint every own-commit
+	// self-echo routes through), not here.
 
 	// If ingestion poisoned the group, throw so the caller aborts
 	if (sync.ingestion.poisoned) {
@@ -1271,7 +1274,7 @@ export async function sendChatGroupMessage(input: {
 			opaqueMessageBase64: outbound.opaqueMessageBase64
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedOutbound)
 		);
 

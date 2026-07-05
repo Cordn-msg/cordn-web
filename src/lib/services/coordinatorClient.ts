@@ -426,7 +426,14 @@ export class cordnClient implements coordinatorClient {
 			'ephemeral',
 			COORDINATOR_METHODS.postGroupMessage,
 			input,
-			postGroupMessageOutputSchema
+			postGroupMessageOutputSchema,
+			// ponytail: explicit 8s beats the MCP 60s default. On mobile
+			// background-return a dead socket otherwise hangs the optimistic
+			// "Sending…" state for a full minute before the transient-retry +
+			// client-rebuild in withCoordinatorClient gets a chance to recover
+			// it. 8s is generous for a coordinator queue op (ms steady-state);
+			// only a stuck socket hits it, which is exactly when we bail+retry.
+			{ timeout: 8_000 }
 		);
 	}
 

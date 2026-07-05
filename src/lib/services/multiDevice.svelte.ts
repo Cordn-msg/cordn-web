@@ -28,7 +28,9 @@ import { nip19 } from 'nostr-tools';
 import type { NostrEvent } from 'nostr-tools';
 
 import { manager } from '$lib/services/accountManager.svelte';
-import { relayPool, defaultRelays } from '$lib/services/relay-pool';
+import { relayPool, commonRelays } from '$lib/services/relay-pool';
+import { eventStore } from '$lib/services/eventStore';
+import { mapEventsToStore } from 'applesauce-core/observable';
 import { uploadBlob, fetchBlob, type BlossomSigner } from '$lib/services/chatBlossomClient';
 import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 import {
@@ -36,21 +38,26 @@ import {
 	getChatGroup,
 	importChatGroups,
 	replaceGroup,
+	deleteChatGroup,
 	decodeStoredGroupState,
 	reloadChatGroupsForOwner,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
+import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { normalizePubKey } from '$lib/utils';
 import {
 	publishCurrentSession,
 	pullSessionDocument,
 	reconcileFromDocument,
+	composeTombstoneUnion,
 	entryEpoch,
 	type Nip44Seal,
 	type SessionBlobStore,
+	type SessionDocument,
 	type SessionGroupSnapshot,
 	type SessionGroupEntry,
+	type SessionTombstone,
 	type ReconcileTarget
 } from '$lib/services/multiDevice';
 
@@ -64,6 +71,15 @@ export const MULTI_DEVICE_TIP_KIND = 30078;
 export const MULTI_DEVICE_INNER_KIND = 178;
 
 const CONFIG_STORAGE_KEY = 'cordn.multiDevice';
+
+/**
+ * Default document hosts: the configured primary plus one preset fallback so a
+ * single server outage can't strand the sealed document. Editable in Advanced.
+ */
+export const DEFAULT_BLOSSOM_SERVERS = [
+	DEFAULT_BLOSSOM_SERVER,
+	BLOSSOM_SERVERS.find((s) => s !== DEFAULT_BLOSSOM_SERVER) ?? DEFAULT_BLOSSOM_SERVER
+];
 
 /**
  * Dev-phase debug log. Filter the console by `[multi-device]` to trace the
@@ -86,10 +102,19 @@ export interface MultiDeviceOwnerConfig {
 	relays: string[];
 	/** Blossom server URLs that host the sealed document (ordered, most-reliable first). */
 	blossomServers: string[];
-	/** Last published document address (sha256 of the sealed doc). Forms the `prev` chain. */
+	/** Last published document address (sha256 of the sealed doc). Forms the `prev` chain + doubles as the §10.5 tip-address check (if the fetched tip still equals this, no peer has published since). */
 	lastPublishedAddress?: string;
+	/**
+	 * This device's own soft-delete tombstones awaiting publish (spec §10.5
+	 * union). Cleared after a successful publish; refilled by `softDeleteGroup`.
+	 * Adopted peer tombstones are NOT stored here — they are re-adopted from the
+	 * tip on every reconcile-before-push and carried in the same publish.
+	 */
+	pendingTombstones?: SessionTombstone[];
 	/** Whether sync is active. When false, no publishing, no subscription. */
 	enabled: boolean;
+	/** Whether this device minted the document (source) or adopted it (linked). Defaults to 'source' for legacy configs. */
+	role?: 'source' | 'linked';
 }
 
 interface MultiDeviceConfigStore {
@@ -114,7 +139,10 @@ export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConf
 	if (!browser) return undefined;
 	const owner = ownerPubkey ?? manager.getActive()?.pubkey;
 	if (!owner) return undefined;
-	return readAllConfigs()[normalizePubKey(owner)];
+	const cfg = readAllConfigs()[normalizePubKey(owner)];
+	// ponytail: legacy configs predate the `role` field; assume source (the
+	// original minter) rather than persist a migration.
+	return cfg ? { ...cfg, role: cfg.role ?? 'source' } : undefined;
 }
 
 function saveConfig(config: MultiDeviceOwnerConfig): void {
@@ -137,7 +165,10 @@ function generateDTag(): string {
 }
 
 /** Build a fresh config (new ephemeral key + `d`), inheriting default relays. */
-function createFreshConfig(relays: string[] = defaultRelays): MultiDeviceOwnerConfig {
+function createFreshConfig(
+	relays: string[] = commonRelays,
+	blossomServers: string[] = DEFAULT_BLOSSOM_SERVERS
+): MultiDeviceOwnerConfig {
 	const sk = generateSecretKey();
 	const ephemeralPrivateKey = bytesToHex(sk);
 	const ephemeralPubkey = getPublicKey(sk);
@@ -146,13 +177,9 @@ function createFreshConfig(relays: string[] = defaultRelays): MultiDeviceOwnerCo
 		ephemeralPrivateKey,
 		ephemeralPubkey,
 		relays,
-		// ponytail: reuse the media server list as the document hosts. The first
-		// entry is the configured default; the read path tries them in order.
-		blossomServers: [
-			DEFAULT_BLOSSOM_SERVER,
-			...BLOSSOM_SERVERS.filter((s) => s !== DEFAULT_BLOSSOM_SERVER)
-		],
-		enabled: true
+		blossomServers,
+		enabled: true,
+		role: 'source'
 	};
 }
 
@@ -161,14 +188,18 @@ function createFreshConfig(relays: string[] = defaultRelays): MultiDeviceOwnerCo
  * exists. Returns the (now-active) config so the UI can render the connection
  * string. Throws if no active account or the signer can't NIP-44 seal.
  */
-export function enableMultiDevice(relays?: string[]): MultiDeviceOwnerConfig {
+export function enableMultiDevice(
+	relays?: string[],
+	blossomServers?: string[]
+): MultiDeviceOwnerConfig {
 	if (!browser) throw new Error('Multi-device can only run in the browser');
 	const account = manager.getActive();
 	if (!account) throw new Error('Log in to enable multi-device sync');
 	dbg('enableMultiDevice enter', { hadAccount: !!account, relayCount: relays?.length ?? 0 });
 	const existing = getMultiDeviceConfig(account.pubkey);
-	const config = existing ?? createFreshConfig(relays);
+	const config = existing ?? createFreshConfig(relays, blossomServers);
 	if (relays && relays.length) config.relays = relays;
+	if (blossomServers && blossomServers.length) config.blossomServers = blossomServers;
 	config.enabled = true;
 	saveConfig(config);
 	dbg('enableMultiDevice done', { dTag: config.dTag.slice(0, 8), enabled: config.enabled });
@@ -192,12 +223,18 @@ export function disableMultiDevice(): void {
 }
 
 /** Rotate the ephemeral keypair + `d` together (spec §11). All devices must re-link. */
-export function rotateMultiDeviceKey(relays?: string[]): MultiDeviceOwnerConfig {
+export function rotateMultiDeviceKey(
+	relays?: string[],
+	blossomServers?: string[]
+): MultiDeviceOwnerConfig {
 	if (!browser) throw new Error('Multi-device can only run in the browser');
 	const account = manager.getActive();
 	if (!account) throw new Error('Log in to rotate the multi-device key');
 	const existing = getMultiDeviceConfig(account.pubkey);
-	const fresh = createFreshConfig(relays ?? existing?.relays);
+	const fresh = createFreshConfig(
+		relays ?? existing?.relays,
+		blossomServers ?? existing?.blossomServers
+	);
 	saveConfig(fresh);
 	return fresh;
 }
@@ -210,30 +247,20 @@ export function setMultiDeviceRelays(relays: string[]): void {
 	saveConfig(config);
 }
 
-/** Normalize a Blossom URL to trailing-slash form (matches BLOSSOM_SERVERS). */
-function normalizeServerUrl(url: string): string {
-	const trimmed = url.trim();
-	if (!trimmed) return DEFAULT_BLOSSOM_SERVER;
-	return trimmed.replace(/\/+$/, '') + '/';
-}
-
-/** The user-selected primary Blossom server (the rest are preset fallbacks). */
-export function getMultiDeviceBlossomServer(): string {
-	return getMultiDeviceConfig()?.blossomServers[0] ?? DEFAULT_BLOSSOM_SERVER;
-}
-
-export function isCustomMultiDeviceBlossomServer(): boolean {
-	return !BLOSSOM_SERVERS.includes(
-		getMultiDeviceBlossomServer() as (typeof BLOSSOM_SERVERS)[number]
-	);
-}
-
-/** Set the primary Blossom server; presets fill the remaining fallback slots. */
-export function setMultiDeviceBlossomServer(url: string): void {
+/** Set the document host list (ordered, most-reliable first). At least one required. */
+export function setMultiDeviceBlossomServers(servers: string[]): void {
 	const config = getMultiDeviceConfig();
-	if (!config) throw new Error('Enable multi-device before setting the Blossom server');
-	const primary = normalizeServerUrl(url);
-	config.blossomServers = [primary, ...BLOSSOM_SERVERS.filter((s) => s !== primary)];
+	if (!config) throw new Error('Enable multi-device before setting the Blossom servers');
+	// ponytail: preserve priority order; dedupe via array scan (the host list is
+	// tiny, O(n²) is irrelevant) to keep plain logic free of svelte/reactivity.
+	// Caller (UI) is expected to pass ≥1 — clamp to the default rather than store
+	// an empty list.
+	const seen: string[] = [];
+	const normalized = servers
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0)
+		.filter((s) => (seen.includes(s) ? false : (seen.push(s), true)));
+	config.blossomServers = normalized.length ? normalized : DEFAULT_BLOSSOM_SERVERS;
 	saveConfig(config);
 	// The document address is stable (content-addressed), so a server change only
 	// needs the tip re-published with the new server list — but republishing also
@@ -301,13 +328,6 @@ function makeBlossomStore(signer: BlossomSigner): SessionBlobStore {
 			return fetchBlob(url);
 		}
 	};
-}
-
-/** Map a content address to the Blossom GET URL (BUD-01). */
-function addressToBlossomUrl(address: string): string {
-	const config = getMultiDeviceConfig();
-	const server = (config?.blossomServers[0] ?? DEFAULT_BLOSSOM_SERVER).replace(/\/+$/, '');
-	return `${server}/${address}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -497,35 +517,92 @@ async function republishSessionDocument(): Promise<void> {
 		return;
 	}
 	const { seal, ownerPubkey } = active;
-	const groups = collectSessionSnapshots();
-	dbg('republish snapshot', { groupCount: groups.length });
-	if (groups.length === 0) {
-		dbg('republish skip', { reason: 'no active groups to publish' });
-		return;
-	}
-	// Ephemeral Blossom signer (spec §12 — never the owner npub). Reuse the
-	// persisted ephemeral key so the same identity authorizes uploads across
-	// devices; its leak is denial-of-service only.
+	const pending = config.pendingTombstones ?? [];
+
+	// §10.5 reconcile-before-push: fetch the current tip and adopt any peer
+	// facts newer than ours BEFORE pushing. Pushing blind is the root cause of
+	// clobbering a peer's tombstone (re-adding a group a peer soft-deleted) and
+	// the stale-push resurrection race (§10.5). The tip-address check (SHOULD):
+	// if the tip still equals our last publish, no peer moved it — skip the
+	// reconcile fetch and chain straight off our own tip.
 	const signer: BlossomSigner = {
 		async signEvent(template) {
 			return finalizeEvent(template, hexToBytes(config.ephemeralPrivateKey));
 		}
 	};
-	const store = makeBlossomStore(signer);
+	const writeStore = makeBlossomStore(signer);
+
+	let prev: string | undefined;
+	let adoptedTombstones: SessionTombstone[] = [];
+	const tipEvent = await fetchLatestTipEvent(config);
+	if (tipEvent) {
+		const pointer = await parseTipEvent(tipEvent, ownerPubkey);
+		if (pointer) {
+			prev = pointer.address;
+			if (pointer.address === config.lastPublishedAddress) {
+				dbg('republish tip unchanged', { address: pointer.address.slice(0, 12) });
+			} else {
+				dbg('republish tip moved by peer', {
+					tip: pointer.address.slice(0, 12),
+					ours: config.lastPublishedAddress?.slice(0, 12)
+				});
+				// Pull + reconcile the peer doc (seeds / fast-forwards / drops locally).
+				const reconciled = await pullAndReconcile(pointer, seal, ownerPubkey, config);
+				// Carry ALL tombstones from the reconciled doc forward (§10.5 union):
+				// this is what propagates a deletion across the fleet.
+				adoptedTombstones = reconciled.doc.removed ?? [];
+				dbg('republish reconciled peer doc', { counts: reconciled.counts });
+			}
+		}
+	} else if (config.lastPublishedAddress) {
+		// §10.5 offline MUST: the tip was reachable before but isn't now → defer
+		// the push (keep pendingTombstones) until we're online and can reconcile.
+		dbg('republish deferred', {
+			reason: 'tip unreachable; cannot reconcile before push',
+			pendingTombstones: pending.length
+		});
+		return;
+	}
+	// else: first-ever publish (no lastPublishedAddress, no tip) → fresh chain.
+
+	// Collect the snapshot AFTER reconciling the peer doc so it reflects any
+	// adopted seeds / fast-forwards / tombstone drops.
+	const groups = collectSessionSnapshots();
+	if (groups.length === 0 && pending.length === 0 && adoptedTombstones.length === 0) {
+		dbg('republish skip', { reason: 'nothing to publish' });
+		return;
+	}
+	const removed = composeTombstoneUnion(
+		pending,
+		adoptedTombstones,
+		groups.map((g) => g.gid)
+	);
+	dbg('republish snapshot', {
+		groupCount: groups.length,
+		pending: pending.length,
+		adopted: adoptedTombstones.length,
+		union: removed.length
+	});
+
 	const result = await publishCurrentSession({
 		groups,
 		seal,
 		ownerPubkey,
-		store,
-		prev: config.lastPublishedAddress
+		store: writeStore,
+		prev,
+		removed
 	});
 	dbg('republish document uploaded', {
 		address: result.address.slice(0, 12),
-		storeUrl: result.url
+		prev: prev?.slice(0, 12),
+		removed: removed.length
 	});
 	await publishTip(result.address, config);
 	dbg('republish tip published', { relays: config.relays });
 	config.lastPublishedAddress = result.address;
+	// Own tombstones are now in the immutable published doc; clear the pending
+	// list. They will be re-adopted from the tip on the next reconcile-before-push.
+	config.pendingTombstones = [];
 	saveConfig(config);
 }
 
@@ -563,21 +640,37 @@ export function startTipSubscription(): void {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
 	stopTipSubscription();
-	const filter = {
-		kinds: [MULTI_DEVICE_TIP_KIND],
-		authors: [config.ephemeralPubkey],
-		'#d': [config.dTag]
-	};
 	const ownerPubkey = normalizePubKey(manager.getActive()!.pubkey);
-	tipSubscription = relayPool
-		.subscription(config.relays, filter, { reconnect: Infinity, resubscribe: true })
-		.subscribe({
-			next: (event) => {
-				void handleTipEvent(event, ownerPubkey).catch((error) => {
-					console.warn('[multi-device] tip reconcile failed', error);
-				});
-			}
+	// Relay burst → eventStore: the store keeps only the newest addressable
+	// version per (kind, pubkey, d), so this IS the replaceable-version dedup
+	// (spec §10.5). No hand-rolled created_at gate needed on the read path —
+	// mirrors the donations/profiles pattern already used elsewhere.
+	const model = eventStore
+		.addressable({
+			kind: MULTI_DEVICE_TIP_KIND,
+			pubkey: config.ephemeralPubkey,
+			identifier: config.dTag
+		})
+		.subscribe((event) => {
+			if (!event) return;
+			void handleTipEvent(event, ownerPubkey).catch((error) => {
+				console.warn('[multi-device] tip reconcile failed', error);
+			});
 		});
+	const feed = relayPool
+		.subscription(
+			config.relays,
+			{ kinds: [MULTI_DEVICE_TIP_KIND], authors: [config.ephemeralPubkey], '#d': [config.dTag] },
+			{ reconnect: Infinity, resubscribe: true }
+		)
+		.pipe(mapEventsToStore(eventStore))
+		.subscribe();
+	tipSubscription = {
+		unsubscribe() {
+			model.unsubscribe();
+			feed.unsubscribe();
+		}
+	};
 }
 
 export function stopTipSubscription(): void {
@@ -591,33 +684,62 @@ export function stopTipSubscription(): void {
 	}
 }
 
-let lastReconciledAddress: string | undefined;
-
-async function handleTipEvent(
-	outer: NostrEvent,
-	ownerPubkey: string
-): Promise<{ seeded: number; fastForwarded: number; skipped: number } | null> {
-	const pointer = await parseTipEvent(outer, ownerPubkey);
-	if (!pointer) return null;
-	// Replaceable events can replay; skip if we already reconciled this address.
-	if (pointer.address === lastReconciledAddress) return null;
-	const { seal } = getActiveNip44Seal() ?? {};
-	if (!seal) return null;
+/**
+ * Manual one-shot reconcile (diagnostic / recovery). Fetches the current tip and
+ * reconciles it against local state (spec §8), bypassing the in-session dedup
+ * so a repeat click always re-applies. Used by the config-page "Re-sync now"
+ * action when a device suspects it has fallen behind. No-op when sync is off or
+ * no account is active. Does not start the live subscription.
+ */
+export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null> {
+	if (!browser) return null;
 	const config = getMultiDeviceConfig();
-	// Fetch the document from the tip's advertised servers (ordered), falling
-	// back to the locally-configured server list.
-	const primaryUrl = pointer.blossomServers[0]
-		? `${pointer.blossomServers[0].replace(/\/+$/, '')}/${pointer.address}`
-		: addressToBlossomUrl(pointer.address);
-	const store: SessionBlobStore = {
+	if (!config?.enabled) return null;
+	const account = manager.getActive();
+	if (!account) return null;
+	const ownerPubkey = normalizePubKey(account.pubkey);
+	dbg('reconcileMultiDeviceNow enter', { dTag: config.dTag.slice(0, 8) });
+	const tipEvent = await fetchLatestTipEvent(config);
+	if (!tipEvent) {
+		dbg('reconcileMultiDeviceNow no tip found');
+		return null;
+	}
+	// Bypass the per-owner dedup: a manual trigger should always re-apply, even
+	// if the tip address matches the last auto-reconciled one.
+	delete lastReconciledByOwner[ownerPubkey];
+	const counts = await handleTipEvent(tipEvent, ownerPubkey);
+	dbg('reconcileMultiDeviceNow done', { counts });
+	return counts;
+}
+
+/** Per-owner dedup of the last reconciled tip address (spec: replaceable events replay). */
+const lastReconciledByOwner: Record<string, string> = {};
+
+/** Reconcile outcome counts surfaced to callers (UI / link flow / logs). */
+export interface ReconcileCounts {
+	seeded: number;
+	fastForwarded: number;
+	skipped: number;
+	dropped: number;
+	ignored: number;
+}
+
+/**
+ * Read-only blob store that fetches a sealed document from the tip's advertised
+ * servers (ordered, most-reliable first), falling back to the locally-configured
+ * server list. Shared by the live tip subscription and the reconcile-before-push
+ * read in `republishSessionDocument`.
+ */
+function makeTipReadStore(
+	pointer: TipPointer,
+	config: MultiDeviceOwnerConfig | undefined
+): SessionBlobStore {
+	return {
 		async publish() {
 			throw new Error('read-only store');
 		},
 		async fetch() {
-			const urls = [
-				primaryUrl,
-				...pointer.blossomServers.slice(1).map((s) => `${s.replace(/\/+$/, '')}/${pointer.address}`)
-			];
+			const urls = pointer.blossomServers.map((s) => `${s.replace(/\/+$/, '')}/${pointer.address}`);
 			let lastError: unknown;
 			for (const url of urls) {
 				try {
@@ -626,7 +748,6 @@ async function handleTipEvent(
 					lastError = error;
 				}
 			}
-			// Fall back to the locally-configured server list.
 			for (const server of config?.blossomServers ?? BLOSSOM_SERVERS) {
 				try {
 					return await fetchBlob(`${server.replace(/\/+$/, '')}/${pointer.address}`);
@@ -639,6 +760,20 @@ async function handleTipEvent(
 				: new Error('Could not fetch session document');
 		}
 	};
+}
+
+/**
+ * Pull a sealed document from a tip pointer and reconcile it against local
+ * state (spec §8). Reloads the in-memory group store when any group is seeded.
+ * Used by both the live tip subscription and the reconcile-before-push read.
+ */
+async function pullAndReconcile(
+	pointer: TipPointer,
+	seal: Nip44Seal,
+	ownerPubkey: string,
+	config: MultiDeviceOwnerConfig | undefined
+): Promise<{ doc: SessionDocument; counts: ReconcileCounts }> {
+	const store = makeTipReadStore(pointer, config);
 	const doc = await pullSessionDocument({
 		address: pointer.address,
 		store,
@@ -646,26 +781,60 @@ async function handleTipEvent(
 		seal,
 		ownerPubkey
 	});
-	const target = makeReconcileTarget(ownerPubkey);
-	const result = await reconcileFromDocument(target, doc);
-	lastReconciledAddress = pointer.address;
+	const result = await reconcileFromDocument(makeReconcileTarget(ownerPubkey), doc);
 	if (result.seeded.length > 0) {
 		// Seeding changes the group set; refresh the in-memory store.
 		await reloadChatGroupsForOwner(ownerPubkey);
 	}
+	return {
+		doc,
+		counts: {
+			seeded: result.seeded.length,
+			fastForwarded: result.fastForwarded.length,
+			skipped: result.skipped.length,
+			dropped: result.dropped.length,
+			ignored: result.ignored.length
+		}
+	};
+}
+
+async function handleTipEvent(
+	outer: NostrEvent,
+	ownerPubkey: string
+): Promise<ReconcileCounts | null> {
+	const { seal } = getActiveNip44Seal() ?? {};
+	if (!seal) return null;
+
+	const pointer = await parseTipEvent(outer, ownerPubkey);
+	if (!pointer) return null;
+	// Replaceable events can replay; skip if we already reconciled this address
+	// for this owner (per-owner so an identity switch can't starve the new owner).
+	if (pointer.address === lastReconciledByOwner[ownerPubkey]) {
+		dbg('handleTipEvent skip', {
+			reason: 'already reconciled',
+			address: pointer.address.slice(0, 12)
+		});
+		return null;
+	}
+	const config = getMultiDeviceConfig();
+	dbg('handleTipEvent reconcile', {
+		address: pointer.address.slice(0, 12),
+		servers: pointer.blossomServers.length
+	});
+	const { counts } = await pullAndReconcile(pointer, seal, ownerPubkey, config);
+	lastReconciledByOwner[ownerPubkey] = pointer.address;
+	dbg('handleTipEvent done', { counts });
 	// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
 	// advance republishes; republishing here risks a publish loop across devices.
-	return {
-		seeded: result.seeded.length,
-		fastForwarded: result.fastForwarded.length,
-		skipped: result.skipped.length
-	};
+	return counts;
 }
 
 /**
  * Build a `ReconcileTarget` over the live chat group store. Seeding installs a
  * new `StoredChatGroup` (via importChatGroups + store refresh); fast-forward
- * replaces an existing group's state+cursor only at a strictly newer epoch.
+ * replaces an existing group's state+cursor only at a strictly newer epoch;
+ * tombstones drop a local group whose epoch is ≤ the tombstone epoch (spec §8
+ * case 4, anti-downgrade on the epoch check).
  */
 function makeReconcileTarget(ownerPubkey: string): ReconcileTarget {
 	return {
@@ -688,6 +857,23 @@ function makeReconcileTarget(ownerPubkey: string): ReconcileTarget {
 			}
 			fastForwardGroup(existing, entry);
 			return 'fast-forwarded';
+		},
+		async applyTombstone(tombstone) {
+			const existing = getChatGroup(tombstone.gid);
+			if (!existing) {
+				return 'ignored'; // unknown to this device
+			}
+			const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
+			if (BigInt(tombstone.epoch) < localEpoch) {
+				return 'ignored'; // stale tombstone (spec §8 anti-downgrade)
+			}
+			deleteChatGroup(tombstone.gid);
+			dbg('applyTombstone dropped', {
+				gid: tombstone.gid,
+				tombstoneEpoch: tombstone.epoch,
+				localEpoch: String(localEpoch)
+			});
+			return 'dropped';
 		}
 	};
 }
@@ -712,6 +898,10 @@ async function seedGroup(entry: SessionGroupEntry, ownerPubkey: string): Promise
 		status: 'active'
 	};
 	await importChatGroups([seeded]);
+	// Establish the coordinator relationship so it appears in the coordinator list
+	// and operational queries (available key packages, welcomes) — mirrors the
+	// create/join seam. Idempotent if the coordinator is already known.
+	markCoordinatorUsed(entry.coordinator);
 }
 
 /** Fast-forward an existing group to a strictly newer epoch (spec §8). */
@@ -723,9 +913,54 @@ function fastForwardGroup(existing: StoredChatGroup, entry: SessionGroupEntry): 
 		coordinatorKey: entry.coordinator,
 		// Cursor advances to the entry's (the adopted state processed through it).
 		fetchCursor: Math.max(existing.fetchCursor, entry.cursor),
-		lastCursor: Math.max(existing.lastCursor, entry.cursor)
+		lastCursor: Math.max(existing.lastCursor, entry.cursor),
+		// The adopted state is authoritative (owner-signed, content-addressed), so
+		// clear any transient poisoning from the stale-state ingestion window — an
+		// ahead-of-local-epoch message the device couldn't decrypt before this
+		// fast-forward arrived. Removal is a genuine MLS event, not transient, so
+		// it is left intact (spec §8).
+		...(existing.status === 'poisoned'
+			? { status: 'active' as const, poisonedAtCursor: undefined }
+			: {})
 	};
 	replaceGroup(existing.id, next);
+	dbg('fastForwardGroup', {
+		gid: existing.id.slice(0, 8),
+		unpoisoned: existing.status === 'poisoned'
+	});
+}
+
+/**
+ * Soft-delete a group (spec §8/§10 tombstone). Drops the local group, records
+ * its `{gid, epoch}` tombstone on the owner config so the next re-publish
+ * carries it in the `removed` union (§10.5), and fires the re-publish hook so
+ * siblings converge. Soft-delete stops devices *tracking* a group; it is not an
+ * MLS Leave (§13). The tombstone is cleared from the config once published.
+ *
+ * The local group is dropped regardless of whether multi-device is enabled;
+ * the tombstone only propagates when enabled.
+ */
+export async function softDeleteGroup(groupId: string): Promise<SessionTombstone> {
+	const group = getChatGroup(groupId);
+	if (!group) throw new Error(`Cannot soft-delete: group ${groupId} not found`);
+	const state = decodeStoredGroupState(group);
+	const tombstone: SessionTombstone = {
+		gid: getProtocolGroupId(state),
+		epoch: Number(state.groupContext.epoch)
+	};
+	// Drop the local group. The watch driver reconciles its watch set against
+	// the store, so removing it here unwatches it (no parallel unwatch needed).
+	deleteChatGroup(groupId);
+	dbg('softDeleteGroup dropped local', tombstone);
+
+	const config = getMultiDeviceConfig();
+	if (config?.enabled) {
+		config.pendingTombstones = [...(config.pendingTombstones ?? []), tombstone];
+		saveConfig(config);
+		// Fire-and-forget: the next republish carries the tombstone in the union.
+		onLocalStateAdvance();
+	}
+	return tombstone;
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +971,7 @@ export interface LinkResult {
 	seeded: number;
 	fastForwarded: number;
 	skipped: number;
+	dropped: number;
 }
 
 /**
@@ -758,22 +994,29 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 		dTag: naddr.identifier,
 		ephemeralPrivateKey: payload.ephemeralPrivateKey,
 		ephemeralPubkey: naddr.pubkey,
-		relays: naddr.relays?.length ? naddr.relays : defaultRelays,
-		blossomServers: [
-			DEFAULT_BLOSSOM_SERVER,
-			...BLOSSOM_SERVERS.filter((s) => s !== DEFAULT_BLOSSOM_SERVER)
-		],
-		enabled: true
+		relays: naddr.relays?.length ? naddr.relays : commonRelays,
+		// ponytail: inherit the default 2-host redundancy rather than the source's
+		// full list — the read path tries them in order and the user can expand.
+		blossomServers: DEFAULT_BLOSSOM_SERVERS,
+		enabled: true,
+		role: 'linked'
 	};
 	saveConfig(config);
 
 	// Fetch the current tip, then the document, then reconcile.
 	const ownerPubkey = normalizePubKey(account.pubkey);
 	const tipEvent = await fetchLatestTipEvent(config);
-	let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0 };
+	let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0 };
 	if (tipEvent) {
 		const reconciled = await handleTipEvent(tipEvent, ownerPubkey);
-		if (reconciled) result = reconciled;
+		if (reconciled) {
+			result = {
+				seeded: reconciled.seeded,
+				fastForwarded: reconciled.fastForwarded,
+				skipped: reconciled.skipped,
+				dropped: reconciled.dropped
+			};
+		}
 	}
 	// Live subscription reconciles on every subsequent tip move (spec §6).
 	startTipSubscription();

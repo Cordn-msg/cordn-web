@@ -481,6 +481,10 @@ export async function ingestChatGroupMessages(params: {
 	messages: RawChatGroupMessage[];
 	hasPendingEpochOperation?: (opaqueMessageBase64: string) => boolean;
 	localStablePubkey?: string;
+	/** When true, the session document is an authority that can resolve epochs
+	 * this device can't derive locally (sibling Commits / pre-reconcile). Such
+	 * messages are skipped + awaited instead of poisoning (spec §8/§10). */
+	mdActive?: boolean;
 }): Promise<{
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
@@ -601,6 +605,7 @@ export async function ingestChatGroupMessages(params: {
 			const detail = error instanceof Error ? error.message : String(error);
 			const envelope = extractMlsEnvelopeMetadata(processableBase64);
 			const localEpoch = group.state.groupContext.epoch;
+			const epochAhead = envelope?.epoch !== undefined && envelope.epoch > localEpoch;
 
 			console.warn('[MLS] processMessageBase64 error', {
 				groupId: group.metadata?.name ?? 'unknown',
@@ -609,15 +614,35 @@ export async function ingestChatGroupMessages(params: {
 				detail,
 				envelope,
 				localEpoch: localEpoch.toString(),
-				epochComparison:
-					envelope?.epoch !== undefined
-						? envelope.epoch > localEpoch
-							? 'message-ahead'
-							: envelope.epoch < localEpoch
-								? 'message-behind'
-								: 'same-epoch'
-						: 'unknown'
+				epochComparison: epochAhead
+					? 'message-ahead'
+					: envelope?.epoch !== undefined && envelope.epoch < localEpoch
+						? 'message-behind'
+						: envelope?.epoch !== undefined
+							? 'same-epoch'
+							: 'unknown'
 			});
+
+			// Multi-device (spec/applications/multi-device.md §10): when this device
+			// is behind a sibling's Commit (skipped on the stream) or has not yet
+			// reconciled the tip, an application message at a newer epoch is
+			// undecryptable here. The session document owns that epoch — it carries
+			// the leaf private keys the stream cannot convey. Skip and await the
+			// fast-forward; never derive secrets locally or poison for an epoch the
+			// document resolves (that would silently fork the device out of the
+			// group). Only poison when MD is off, since then there is no rescue.
+			if (params.mdActive && epochAhead) {
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				const issue = {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting session-document fast-forward`
+				};
+				group.syncIssues.push(issue);
+				issues.push(issue);
+				continue;
+			}
 
 			if (
 				isFormerEpochIssue(detail) ||

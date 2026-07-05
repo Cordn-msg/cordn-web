@@ -66,11 +66,23 @@ export interface SessionGroupEntry {
 	cursor: number;
 }
 
+/**
+ * Tombstone (spec §4 `removed[]`): records that the identity stopped tracking
+ * `gid` when the group was at MLS `epoch`. `epoch` is a JSON number (MLS epochs
+ * are small); compared as `BigInt` against `groupContext.epoch`. A `gid` appears
+ * in `groups` XOR `removed`, never both in the same document.
+ */
+export interface SessionTombstone {
+	gid: string;
+	epoch: number;
+}
+
 export interface SessionDocument {
 	schemaVersion: typeof MULTI_DEVICE_SCHEMA_VERSION;
 	issuedAt: number;
 	prev?: string;
 	groups: SessionGroupEntry[];
+	removed?: SessionTombstone[];
 }
 
 export class MultiDeviceError extends Error {
@@ -94,6 +106,9 @@ export interface SessionGroupSnapshot {
 /** Per-group outcome of reconciliation (spec §8). */
 export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'skipped';
 
+/** Per-tombstone outcome of reconciliation (spec §8 case 4). */
+export type ReconcileTombstoneOutcome = 'dropped' | 'ignored';
+
 /**
  * Per-group local view used by reconciliation. The implementation (wired by
  * the service layer against `StoredChatGroup` + storage) decides whether an
@@ -109,6 +124,12 @@ export interface ReconcileTarget {
 	localEpoch(gid: string): bigint | undefined;
 	/** Apply one entry. Returns the outcome. */
 	applyEntry(entry: SessionGroupEntry): Promise<ReconcileOutcome>;
+	/**
+	 * Apply one tombstone (spec §8 case 4): drop a local group whose epoch is
+	 * ≤ the tombstone epoch; ignore a stale tombstone (epoch below local) or
+	 * one for an unknown group. Returns `dropped` if a local group was removed.
+	 */
+	applyTombstone(tombstone: SessionTombstone): Promise<ReconcileTombstoneOutcome>;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +196,12 @@ export async function openDocument(
 export function buildSessionDocument(params: {
 	groups: SessionGroupSnapshot[];
 	prev?: string;
+	/**
+	 * Tombstones carried in the published `removed` (spec §10.5 union): the
+	 * device's own tombstones plus any adopted from the reconciled tip. A `gid`
+	 * MUST NOT appear in both `groups` and `removed` (spec §4 XOR).
+	 */
+	removed?: SessionTombstone[];
 }): SessionDocument {
 	return {
 		schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
@@ -187,7 +214,8 @@ export function buildSessionDocument(params: {
 			encrypted: group.encrypted,
 			clientState: bytesToBase64(encode(clientStateEncoder, group.state)),
 			cursor: group.fetchCursor
-		}))
+		})),
+		removed: params.removed
 	};
 }
 
@@ -212,8 +240,14 @@ export async function publishCurrentSession(params: {
 	ownerPubkey: string;
 	store: SessionBlobStore;
 	prev?: string;
+	/** Tombstones carried in the published `removed` (spec §10.5 union). */
+	removed?: SessionTombstone[];
 }): Promise<PublishResult> {
-	const document = buildSessionDocument({ groups: params.groups, prev: params.prev });
+	const document = buildSessionDocument({
+		groups: params.groups,
+		prev: params.prev,
+		removed: params.removed
+	});
 	const sealed = await sealDocument(document, params.seal, params.ownerPubkey);
 	const blob = new TextEncoder().encode(sealed);
 	const { address, url } = await params.store.publish(blob);
@@ -254,7 +288,9 @@ export async function pullSessionDocument(params: {
  * Seed-and-fast-forward reconciliation (spec §8). For each entry the target
  * either seeds a missing group, fast-forwards a present group to a strictly
  * newer epoch (never a downgrade — that is the rollback defense), or skips it
- * as advisory. Returns the entries per outcome.
+ * as advisory. Tombstones (spec §8 case 4) are processed AFTER groups so a
+ * malformed doc that violates the §4 XOR rule still resolves removal-wins on
+ * ties (§8). For well-formed docs (XOR) the order is irrelevant.
  *
  * ponytail: single-snapshot fast-forward only. The `prev`-chain walk
  * (spec §8.5) recovers messages a fast-forward would lose across skipped
@@ -269,10 +305,14 @@ export async function reconcileFromDocument(
 	seeded: SessionGroupEntry[];
 	fastForwarded: SessionGroupEntry[];
 	skipped: SessionGroupEntry[];
+	dropped: SessionTombstone[];
+	ignored: SessionTombstone[];
 }> {
 	const seeded: SessionGroupEntry[] = [];
 	const fastForwarded: SessionGroupEntry[] = [];
 	const skipped: SessionGroupEntry[] = [];
+	const dropped: SessionTombstone[] = [];
+	const ignored: SessionTombstone[] = [];
 
 	for (const entry of document.groups) {
 		const outcome = await target.applyEntry(entry);
@@ -281,11 +321,45 @@ export async function reconcileFromDocument(
 		else skipped.push(entry);
 	}
 
-	return { seeded, fastForwarded, skipped };
+	// Tombstones after groups (removal-wins-on-tie when §4 XOR is violated).
+	// ponytail: no device-local tombstone memory — a tombstone for an unknown
+	// group is carried forward by the caller via the published union (§10.5);
+	// case 7 (refuse to re-seed from a stale peer that blind-pushes the group
+	// as present) is enforced by the §10.5 reconcile-before-push discipline,
+	// not by a local denylist.
+	for (const tombstone of document.removed ?? []) {
+		const outcome = await target.applyTombstone(tombstone);
+		if (outcome === 'dropped') dropped.push(tombstone);
+		else ignored.push(tombstone);
+	}
+
+	return { seeded, fastForwarded, skipped, dropped, ignored };
 }
 
 /** Decode an entry's `clientState` to read its epoch (used by §8 comparison). */
 export function entryEpoch(entry: SessionGroupEntry): bigint | undefined {
 	const decoded = clientStateDecoder(base64ToBytes(entry.clientState), 0);
 	return decoded ? decoded[0].groupContext.epoch : undefined;
+}
+
+/**
+ * Compose the published `removed` union (spec §10.5): own pending tombstones
+ * plus any adopted from the reconciled tip, deduped per `gid` (highest epoch
+ * wins), with the §4 XOR rule enforced — a `gid` present in local state is
+ * alive, so its tombstone is dropped (a sibling Commit resurrected it, §10).
+ * Pure: the caller passes the set of locally-present `gid`s.
+ */
+export function composeTombstoneUnion(
+	pending: SessionTombstone[],
+	adopted: SessionTombstone[],
+	presentGids: Iterable<string>
+): SessionTombstone[] {
+	const present = new Set(presentGids);
+	const byGid = new Map<string, SessionTombstone>();
+	for (const t of [...pending, ...adopted]) {
+		if (present.has(t.gid)) continue; // XOR: alive locally → not removed
+		const prevT = byGid.get(t.gid);
+		if (!prevT || t.epoch > prevT.epoch) byGid.set(t.gid, t);
+	}
+	return [...byGid.values()];
 }

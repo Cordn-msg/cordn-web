@@ -28,7 +28,8 @@ const withCoordinatorClientMock = vi.fn(
 vi.mock('$lib/services/chatRuntime', () => ({
 	getCoordinatorClient: getCoordinatorClientMock,
 	requireActiveAccount: requireActiveAccountMock,
-	withCoordinatorClient: withCoordinatorClientMock
+	withCoordinatorClient: withCoordinatorClientMock,
+	withCoordinatorClientRetry: withCoordinatorClientMock
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
@@ -722,7 +723,8 @@ describe('loadGroups snapshot baseline', () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
-			withCoordinatorClient: withCoordinatorClientMock
+			withCoordinatorClient: withCoordinatorClientMock,
+			withCoordinatorClientRetry: withCoordinatorClientMock
 		}));
 
 		const { getChatStorage } = await import('$lib/storage/chatStorage');
@@ -774,7 +776,8 @@ describe('loadGroups snapshot baseline', () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
-			withCoordinatorClient: withCoordinatorClientMock
+			withCoordinatorClient: withCoordinatorClientMock,
+			withCoordinatorClientRetry: withCoordinatorClientMock
 		}));
 
 		const { getChatStorage } = await import('$lib/storage/chatStorage');

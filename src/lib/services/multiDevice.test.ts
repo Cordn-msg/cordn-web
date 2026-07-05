@@ -28,6 +28,7 @@ import {
 	MULTI_DEVICE_SCHEMA_VERSION,
 	buildSessionDocument,
 	canonicalJson,
+	composeTombstoneUnion,
 	documentAddress,
 	entryEpoch,
 	openDocument,
@@ -38,8 +39,10 @@ import {
 	type Nip44Seal,
 	type ReconcileTarget,
 	type SessionBlobStore,
+	type SessionDocument,
 	type SessionGroupEntry,
-	type SessionGroupSnapshot
+	type SessionGroupSnapshot,
+	type SessionTombstone
 } from './multiDevice';
 
 /** Fake encoder: stamp `{epoch, gid}` as UTF-8 bytes. Decoder inverts it. */
@@ -221,23 +224,7 @@ describe('multiDevice core', () => {
 			['present-equal', 5n],
 			['present-newer', 9n]
 		]);
-		const applied: Array<{ gid: string; outcome: string }> = [];
-		const target: ReconcileTarget = {
-			localEpoch(gid) {
-				return local.get(gid);
-			},
-			async applyEntry(entry) {
-				const localE = local.get(entry.gid);
-				const incoming = entryEpoch(entry);
-				let outcome: 'seeded' | 'fast-forwarded' | 'skipped';
-				if (localE === undefined) outcome = 'seeded';
-				else if (incoming !== undefined && incoming > localE) outcome = 'fast-forwarded';
-				else outcome = 'skipped';
-				applied.push({ gid: entry.gid, outcome });
-				local.set(entry.gid, incoming ?? localE!);
-				return outcome;
-			}
-		};
+		const target = makeTarget(local);
 
 		const entries: SessionGroupEntry[] = [
 			'missing',
@@ -258,6 +245,146 @@ describe('multiDevice core', () => {
 		expect(res.seeded.map((e) => e.gid)).toEqual(['missing']);
 		expect(res.fastForwarded.map((e) => e.gid)).toEqual(['present-old']);
 		expect(res.skipped.map((e) => e.gid).sort()).toEqual(['present-equal', 'present-newer']);
+		expect(res.dropped).toHaveLength(0);
+		expect(res.ignored).toHaveLength(0);
+	});
+});
+
+/**
+ * Build a `ReconcileTarget` over an in-memory `gid → epoch` map. Mirrors the
+ * service semantics: seed when absent, fast-forward on strictly-newer, skip
+ * otherwise; drop on a tombstone whose epoch ≥ local, ignore stale/unknown.
+ */
+function makeTarget(local: Map<string, bigint>): ReconcileTarget {
+	return {
+		localEpoch(gid) {
+			return local.get(gid);
+		},
+		async applyEntry(entry) {
+			const localE = local.get(entry.gid);
+			const incoming = entryEpoch(entry);
+			let outcome: 'seeded' | 'fast-forwarded' | 'skipped';
+			if (localE === undefined) outcome = 'seeded';
+			else if (incoming !== undefined && incoming > localE) outcome = 'fast-forwarded';
+			else outcome = 'skipped';
+			if (incoming !== undefined) local.set(entry.gid, incoming);
+			return outcome;
+		},
+		async applyTombstone(tombstone) {
+			const localE = local.get(tombstone.gid);
+			if (localE === undefined) return 'ignored';
+			if (BigInt(tombstone.epoch) < localE) return 'ignored'; // stale
+			local.delete(tombstone.gid);
+			return 'dropped';
+		}
+	};
+}
+
+function tombstone(gid: string, epoch: number): SessionTombstone {
+	return { gid, epoch };
+}
+
+describe('multiDevice tombstones (spec §8/§10.5)', () => {
+	test('a tombstone drops the local group on reconcile (spec §8 case 4)', async () => {
+		const local = new Map<string, bigint>([['g', 3n]]);
+		const doc: SessionDocument = {
+			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+			issuedAt: 0,
+			groups: [],
+			removed: [tombstone('g', 3)]
+		};
+		const res = await reconcileFromDocument(makeTarget(local), doc);
+		expect(res.dropped).toContainEqual(tombstone('g', 3));
+		expect(res.ignored).toHaveLength(0);
+		expect(local.has('g')).toBe(false);
+	});
+
+	test('a stale tombstone (epoch below local) is ignored (§8 anti-downgrade)', async () => {
+		const local = new Map<string, bigint>([['g', 5n]]);
+		const doc: SessionDocument = {
+			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+			issuedAt: 0,
+			groups: [],
+			removed: [tombstone('g', 3)]
+		};
+		const res = await reconcileFromDocument(makeTarget(local), doc);
+		expect(res.dropped).toHaveLength(0);
+		expect(res.ignored).toContainEqual(tombstone('g', 3));
+		expect(local.get('g')).toBe(5n); // retained
+	});
+
+	test('a tombstone for an unknown group is ignored, not seeded', async () => {
+		const local = new Map<string, bigint>([]);
+		const doc: SessionDocument = {
+			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+			issuedAt: 0,
+			groups: [],
+			removed: [tombstone('unknown', 9)]
+		};
+		const res = await reconcileFromDocument(makeTarget(local), doc);
+		expect(res.dropped).toHaveLength(0);
+		expect(res.ignored).toContainEqual(tombstone('unknown', 9));
+	});
+
+	test('absence from both arrays is not removal (spec §8)', async () => {
+		const local = new Map<string, bigint>([['g', 3n]]);
+		const doc: SessionDocument = {
+			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+			issuedAt: 0,
+			groups: [],
+			removed: []
+		};
+		const res = await reconcileFromDocument(makeTarget(local), doc);
+		expect(res.dropped).toHaveLength(0);
+		expect(local.get('g')).toBe(3n); // retained
+	});
+
+	test('tombstones processed after groups: removal wins on a §4-XOR tie', async () => {
+		// A malformed doc carrying `g` in BOTH groups (epoch 3) and removed (epoch 3).
+		const local = new Map<string, bigint>([['g', 2n]]);
+		const doc: SessionDocument = {
+			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+			issuedAt: 0,
+			groups: [
+				{
+					gid: 'g',
+					coordinator: 'c',
+					encrypted: true,
+					clientState: bytesToBase64Local(fakeStateBytes(3, 'g')),
+					cursor: 0
+				}
+			],
+			removed: [tombstone('g', 3)]
+		};
+		const res = await reconcileFromDocument(makeTarget(local), doc);
+		// Group fast-forwards 2→3, then the tombstone at epoch 3 (≥ local 3) drops it.
+		expect(res.fastForwarded.map((e) => e.gid)).toEqual(['g']);
+		expect(res.dropped).toContainEqual(tombstone('g', 3));
+		expect(local.has('g')).toBe(false);
+	});
+});
+
+describe('composeTombstoneUnion (spec §10.5)', () => {
+	test('merges own pending + adopted, dedupes by gid keeping highest epoch', () => {
+		const union = composeTombstoneUnion(
+			[tombstone('a', 2), tombstone('b', 5)],
+			[tombstone('a', 4), tombstone('c', 1)],
+			[]
+		);
+		expect(union.sort((x, y) => (x.gid < y.gid ? -1 : 1))).toEqual([
+			tombstone('a', 4),
+			tombstone('b', 5),
+			tombstone('c', 1)
+		]);
+	});
+
+	test('XOR: a gid present locally is alive, its tombstone is dropped (§10 resurrection)', () => {
+		const union = composeTombstoneUnion([tombstone('alive', 3)], [], ['alive']);
+		expect(union).toEqual([]);
+	});
+
+	test('empty inputs yield an empty union', () => {
+		expect(composeTombstoneUnion([], [], [])).toEqual([]);
 	});
 });
 
