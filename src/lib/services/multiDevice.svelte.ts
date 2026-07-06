@@ -1,25 +1,19 @@
 /**
- * Multi-device session sync service layer (see `multiDevice.ts` for the pure
- * protocol core and `cordn/spec/applications/multi-device.md` for the spec).
+ * Multi-device sync service (see `multiDevice.ts` for the pure core,
+ * `cordn/spec/applications/multi-device.md` for the spec).
  *
- * Owns the per-owner multi-device config (enable flag, the once-generated
- * ephemeral signing keypair + stable `d`, the editable relay set, and the last
- * published document address) in localStorage keyed by owner pubkey. Wires
- * the pure core to the real account signer, Blossom, the chat group store,
- * and the applesauce relay pool.
+ * Owns the per-owner config (enable flag, once-generated ephemeral signing key
+ * + stable `d`, editable relay set) in localStorage. Wires the pure core to the
+ * account signer, Blossom, the group store, and the relay pool.
  *
- * Tip transport (spec §6): an opaque replaceable `kind:30078` event signed by
- * the persisted ephemeral key, whose `content` is a NIP-44 seal (to the owner
- * npub) of an owner-signed inner `kind:178` event carrying `x` (document
- * sha256) + ordered `server` tags. The owner npub never appears on the wire.
+ * Tip transport (§6): a replaceable `kind:30078` signed by the ephemeral key,
+ * whose content is a NIP-44 seal (to the owner npub) of an owner-signed inner
+ * `kind:178` carrying typed `x` tags (`['x', sha256, 'group', gid]` per live
+ * group + `['x', sha256, 'meta']`) + ordered `server` tags. Owner npub never
+ * appears on the wire. Connection string (§11) = naddr + ephemeral write key.
  *
- * Connection string (spec §11): a payload carrying the outer-event locator
- * (naddr: kind + ephemeral pubkey + `d` + relay hints) and the ephemeral write
- * key, encoded for QR/paste. Carries NO owner key material.
- *
- * Re-publish hook (spec §10): `onLocalStateAdvance()` is fire-and-forget and a
- * no-op when multi-device is disabled or no signer/seal is available. Wired at
- * group creation and on locally-authored Commit confirmation elsewhere.
+ * Re-publish hooks (§10): `onGroupStateAdvance(gid)` + `onMetaStateChange()`,
+ * fire-and-forget, no-ops when disabled or no signer/seal.
  */
 import { browser } from '$app/environment';
 import { generateSecretKey, getPublicKey, finalizeEvent, verifyEvent } from 'nostr-tools/pure';
@@ -41,34 +35,49 @@ import {
 	deleteChatGroup,
 	decodeStoredGroupState,
 	reloadChatGroupsForOwner,
+	runGroupOperation,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
+import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
+import { ingestChatGroupMessages } from '$lib/services/chatGroupMessages.svelte';
+import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
 import { normalizePubKey } from '$lib/utils';
+import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
-	publishCurrentSession,
-	pullSessionDocument,
-	reconcileFromDocument,
+	MultiDeviceError,
+	publishGroupDocument,
+	publishMetaDocument,
+	pullDocument,
+	reconcileMetaDocument,
 	composeTombstoneUnion,
-	entryEpoch,
+	groupEpoch,
+	groupMetadata,
+	walkGroupChain,
 	type Nip44Seal,
-	type SessionBlobStore,
-	type SessionDocument,
-	type SessionGroupSnapshot,
-	type SessionGroupEntry,
-	type SessionTombstone,
-	type ReconcileTarget
+	type BlobStore,
+	type GroupDocument,
+	type GroupSnapshot,
+	type MetaDocument,
+	type Tombstone,
+	type ReconcileTarget,
+	type ReconcileOutcome,
+	type ChainStep
 } from '$lib/services/multiDevice';
+import {
+	getLastResortKeyPackageEntry,
+	loadLastResortKeyPackage
+} from '$lib/services/chatKeyPackages.svelte';
 
 /**
  * Outer replaceable event kind (spec §14 — a coordination detail all clients
  * must agree on). The exact value is a coordination detail; this is cordn-web's
  * choice for the opaque tip transport.
  */
-export const MULTI_DEVICE_TIP_KIND = 30078;
+const MULTI_DEVICE_TIP_KIND = 30078;
 /** Inner, sealed, owner-signed event kind (self-labeling; never relayed). */
-export const MULTI_DEVICE_INNER_KIND = 178;
+const MULTI_DEVICE_INNER_KIND = 178;
 
 const CONFIG_STORAGE_KEY = 'cordn.multiDevice';
 
@@ -100,17 +109,27 @@ export interface MultiDeviceOwnerConfig {
 	ephemeralPubkey: string;
 	/** Editable relay set the tip is published/subscribed on. */
 	relays: string[];
-	/** Blossom server URLs that host the sealed document (ordered, most-reliable first). */
+	/** Blossom server URLs that host the sealed documents (ordered, most-reliable first). */
 	blossomServers: string[];
-	/** Last published document address (sha256 of the sealed doc). Forms the `prev` chain + doubles as the §10.5 tip-address check (if the fetched tip still equals this, no peer has published since). */
-	lastPublishedAddress?: string;
 	/**
-	 * This device's own soft-delete tombstones awaiting publish (spec §10.5
-	 * union). Cleared after a successful publish; refilled by `softDeleteGroup`.
-	 * Adopted peer tombstones are NOT stored here — they are re-adopted from the
-	 * tip on every reconcile-before-push and carried in the same publish.
+	 * Last-seen tip addresses (§6: persist last-seen `x` per `gid` + `meta` to
+	 * diff + fetch only what changed). Survives reload; also the §10.5 offline-
+	 * defer signal — if set, a tip is out there we could clobber, so defer the
+	 * push when the tip is briefly unreachable. Servers excluded (live tip each read).
 	 */
-	pendingTombstones?: SessionTombstone[];
+	lastSeenTip?: { groups: TipGroupPointer[]; metaAddress?: string };
+	/**
+	 * Outer tip event id last seen (§10.5 Tip-address check). An id we've processed
+	 * is self-echo / duplicate relay delivery → `handleTipEvent` skips it.
+	 * Persisted BEFORE the relay publish so loopback short-circuits.
+	 */
+	lastSeenTipEventId?: string;
+	/**
+	 * Own soft-delete tombstones awaiting publish (§10.5 union). Cleared after a
+	 * successful publish; refilled by `softDeleteGroup`. Adopted peer tombstones
+	 * aren't stored — re-adopted from the tip on every reconcile-before-push.
+	 */
+	pendingTombstones?: Tombstone[];
 	/** Whether sync is active. When false, no publishing, no subscription. */
 	enabled: boolean;
 	/** Whether this device minted the document (source) or adopted it (linked). Defaults to 'source' for legacy configs. */
@@ -143,6 +162,11 @@ export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConf
 	// ponytail: legacy configs predate the `role` field; assume source (the
 	// original minter) rather than persist a migration.
 	return cfg ? { ...cfg, role: cfg.role ?? 'source' } : undefined;
+}
+
+/** Whether multi-device sync is on for the active (or given) owner. */
+export function isMultiDeviceActive(ownerPubkey?: string): boolean {
+	return !!getMultiDeviceConfig(ownerPubkey)?.enabled;
 }
 
 function saveConfig(config: MultiDeviceOwnerConfig): void {
@@ -203,11 +227,15 @@ export function enableMultiDevice(
 	config.enabled = true;
 	saveConfig(config);
 	dbg('enableMultiDevice done', { dTag: config.dTag.slice(0, 8), enabled: config.enabled });
-	// Spec §11: the connection string is only usable once a document + tip exist.
-	// A user enabling with existing groups would otherwise see "last published:
-	// never" forever (the re-publish hook only fires on new-group/own-commit).
-	// Publish the current snapshot immediately so the string is live.
-	onLocalStateAdvance();
+	// Spec §11: the connection string is only usable once documents + a tip exist.
+	// Publish every local group document + the meta document + the tip in one shot
+	// so the string is live (the hooks otherwise only fire on new-group/own-commit).
+	scheduleRepublish(() => publish({ resealGroups: 'all', resealMeta: true }));
+	// Open the live tip subscription + adopt any peer state: a mid-session
+	// enable is not cold start (so §10.6 ordering doesn't strictly apply), but we
+	// still reconcile once so the enabling device catches up to siblings, and the
+	// idempotent starter opens the subscription for ongoing convergence.
+	void awaitMultiDeviceReconciled();
 	return config;
 }
 
@@ -219,7 +247,7 @@ export function disableMultiDevice(): void {
 		config.enabled = false;
 		saveConfig(config);
 	}
-	stopTipSubscription();
+	resetMultiDeviceSession();
 }
 
 /** Rotate the ephemeral keypair + `d` together (spec §11). All devices must re-link. */
@@ -262,10 +290,11 @@ export function setMultiDeviceBlossomServers(servers: string[]): void {
 		.filter((s) => (seen.includes(s) ? false : (seen.push(s), true)));
 	config.blossomServers = normalized.length ? normalized : DEFAULT_BLOSSOM_SERVERS;
 	saveConfig(config);
-	// The document address is stable (content-addressed), so a server change only
-	// needs the tip re-published with the new server list — but republishing also
-	// re-uploads to the new primary, guaranteeing it's reachable. Cheap; just do it.
-	onLocalStateAdvance();
+	// The document addresses are stable (content-addressed), so a server change
+	// only needs the tip re-published with the new server list — but republishing
+	// also re-uploads to the new primary, guaranteeing it's reachable. Cheap; just
+	// do it. Full re-publish (every group doc + meta) re-uploads them all.
+	void scheduleRepublish(() => publish({ resealGroups: 'all', resealMeta: true }));
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +327,8 @@ function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefi
 	};
 }
 
-/** Blossom store for the sealed session document (spec §12), ephemeral-signed. */
-function makeBlossomStore(signer: BlossomSigner): SessionBlobStore {
+/** Blossom store for sealed documents (spec §12), ephemeral-signed. */
+function makeBlossomStore(signer: BlossomSigner): BlobStore {
 	return {
 		async publish(blob) {
 			// Try each configured server; first success wins (ordered, most-reliable first).
@@ -334,10 +363,9 @@ function makeBlossomStore(signer: BlossomSigner): SessionBlobStore {
 // Tip transport (spec §6)
 // ---------------------------------------------------------------------------
 
-/** Build the owner-signed inner event pointing at the document address. */
+/** Build the owner-signed inner event listing the document inventory (spec §6). */
 async function buildInnerTipEvent(params: {
-	address: string;
-	blossomServers: string[];
+	pointer: TipPointer;
 	ownerPubkey: string;
 }): Promise<NostrEvent> {
 	const template = {
@@ -345,12 +373,18 @@ async function buildInnerTipEvent(params: {
 		pubkey: params.ownerPubkey,
 		content: '',
 		created_at: Math.floor(Date.now() / 1000),
-		tags: [['x', params.address], ...params.blossomServers.map((s) => ['server', s])]
+		tags: [
+			...params.pointer.groups.map((g) => ['x', g.address, 'group', g.gid] as string[]),
+			...(params.pointer.metaAddress
+				? [['x', params.pointer.metaAddress, 'meta'] as string[]]
+				: []),
+			...params.pointer.servers.map((s) => ['server', s] as string[])
+		]
 	};
 	const account = manager.getActive();
 	if (!account) throw new Error('No active account to sign the tip');
 	// Inner event MUST be owner-signed (spec §6) — that is the authenticity
-	// guarantee for the document, since the seal is confidentiality-only.
+	// guarantee for the documents, since the seal is confidentiality-only.
 	return account.signer.signEvent(template);
 }
 
@@ -375,12 +409,23 @@ function buildOuterTipEvent(params: {
 	return finalizeEvent(template, hexToBytes(params.ephemeralPrivateKey));
 }
 
-export interface TipPointer {
+interface TipGroupPointer {
+	/** Group document content address (spec §6 `x` tagged `group`). */
 	address: string;
-	blossomServers: string[];
+	/** Delivery group id the document is for — enables fetch-only-changed. */
+	gid: string;
 }
 
-/** Parse + verify an outer tip event into the document pointer it carries. */
+interface TipPointer {
+	/** One pointer per live group document (spec §6: `['x', h, 'group', gid]`). */
+	groups: TipGroupPointer[];
+	/** Meta document content address, if any (spec §6: `['x', h, 'meta']`). */
+	metaAddress?: string;
+	/** Ordered Blossom server URLs hosting the blobs (spec §6 `server`). */
+	servers: string[];
+}
+
+/** Parse + verify an outer tip event into the document inventory it carries. */
 async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<TipPointer | null> {
 	if (outer.kind !== MULTI_DEVICE_TIP_KIND) return null;
 	const { seal } = getActiveNip44Seal() ?? {};
@@ -399,42 +444,65 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Ti
 	}
 	// The inner event MUST be owner-signed (spec §6 authenticity guarantee).
 	if (!verifyEvent(inner) || inner.pubkey !== ownerPubkey) return null;
-	const xTag = inner.tags.find((t) => t[0] === 'x');
-	const serverTags = inner.tags.filter((t) => t[0] === 'server').map((t) => t[1]);
-	if (!xTag) return null;
-	return { address: xTag[1], blossomServers: serverTags };
+	const groups: TipGroupPointer[] = [];
+	let metaAddress: string | undefined;
+	for (const tag of inner.tags) {
+		if (tag[0] !== 'x') continue;
+		if (tag[2] === 'group' && typeof tag[1] === 'string' && typeof tag[3] === 'string') {
+			groups.push({ address: tag[1], gid: tag[3] });
+		} else if (tag[2] === 'meta' && typeof tag[1] === 'string') {
+			metaAddress = tag[1];
+		}
+	}
+	const servers = inner.tags
+		.filter((t) => t[0] === 'server')
+		.map((t) => t[1])
+		.filter((s): s is string => typeof s === 'string');
+	if (groups.length === 0 && metaAddress === undefined) return null;
+	return { groups, metaAddress, servers };
 }
 
-/** Publish a tip for the current document address. */
-async function publishTip(address: string, config: MultiDeviceOwnerConfig): Promise<void> {
+/** Pick the first advertised server for an address (spec §6 fetch order). */
+function urlFromTip(address: string, pointer: TipPointer): string {
+	return `${pointer.servers[0]?.replace(/\/+$/, '') ?? ''}/${address}`;
+}
+
+/** Build (and seal) the outer tip event for the current inventory (spec §6). */
+async function buildTipEvent(
+	pointer: TipPointer,
+	config: MultiDeviceOwnerConfig
+): Promise<NostrEvent> {
 	const account = manager.getActive();
-	if (!account) return;
+	if (!account) throw new Error('No active account');
 	const ownerPubkey = normalizePubKey(account.pubkey);
-	const inner = await buildInnerTipEvent({
-		address,
-		blossomServers: config.blossomServers,
-		ownerPubkey
+	const inner = await buildInnerTipEvent({ pointer, ownerPubkey });
+	dbg('tip inner owner-signed', {
+		groups: pointer.groups.length,
+		meta: !!pointer.metaAddress
 	});
-	dbg('tip inner owner-signed', { address: address.slice(0, 12) });
 	const { seal } = getActiveNip44Seal() ?? {};
 	if (!seal) throw new Error('Active account cannot NIP-44 seal (signer lacks nip44)');
 	const sealedContent = await seal.encrypt(ownerPubkey, JSON.stringify(inner));
-	const outer = buildOuterTipEvent({
+	return buildOuterTipEvent({
 		innerEvent: inner,
 		sealedContent,
 		ephemeralPrivateKey: config.ephemeralPrivateKey,
 		ephemeralPubkey: config.ephemeralPubkey,
 		dTag: config.dTag
 	});
-	const responses = await relayPool.publish(config.relays, outer);
-	dbg('tip outer published', { relays: config.relays, accepted: responses.length });
+}
+
+/** Publish a built tip event to the config relays (spec §6). */
+async function publishOuterTip(outer: NostrEvent, relays: string[]): Promise<void> {
+	const responses = await relayPool.publish(relays, outer);
+	dbg('tip outer published', { relays, accepted: responses.length });
 }
 
 // ---------------------------------------------------------------------------
 // Connection string (spec §11)
 // ---------------------------------------------------------------------------
 
-export interface ConnectionPayload {
+interface ConnectionPayload {
 	/** naddr locating the outer replaceable tip event. */
 	naddr: string;
 	/** Ephemeral write key (hex). Carries NO owner key material. */
@@ -478,137 +546,282 @@ function parseConnectionString(connection: string): ConnectionPayload {
 let publishInFlight: Promise<void> = Promise.resolve();
 
 /**
- * The fire-and-forget re-publish hook (spec §10). Snapshots the active
- * session, seals + publishes the document, and moves the tip. No-op when
- * multi-device is disabled, no account, or the signer can't NIP-44 seal.
- * Publishing latency never blocks the caller; errors are logged, not thrown.
- *
- * Wired at group creation and on locally-authored Commit confirmation; the
- * common case (application traffic) needs no re-publish.
+ * Schedule a republish on the shared serialized lane. The tip is a single
+ * replaceable event, so read-modify-write republishes (group + meta) MUST
+ * serialize. Fire-and-forget; errors are logged, not thrown.
  */
-export function onLocalStateAdvance(): void {
-	if (!browser) return;
-	const config = getMultiDeviceConfig();
-	if (!config?.enabled) {
-		// ponytail: noisy if left on; uncomment to trace why a publish didn't fire.
-		// dbg('onLocalStateAdvance skip', { enabled: config?.enabled });
-		return;
-	}
-	dbg('onLocalStateAdvance fired', { dTag: config.dTag.slice(0, 8) });
-	// Chain off the previous publish so concurrent advances coalesce (last wins,
-	// per-group epoch comparison converges — spec §8).
+function scheduleRepublish(operation: () => Promise<void>): void {
 	publishInFlight = publishInFlight
 		.catch(() => {})
-		.then(() => republishSessionDocument())
+		.then(() => operation())
 		.catch((error) => {
 			console.warn('[multi-device] re-publish failed', error);
 		});
 }
 
-async function republishSessionDocument(): Promise<void> {
+/**
+ * Re-publish hook for a group change (spec §10): publish only that group's
+ * document and update only its `group` `x` tag in the tip. Fire-and-forget;
+ * a no-op when multi-device is disabled. Wired at group creation and on
+ * locally-authored Commit self-echo confirmation.
+ */
+export function onGroupStateAdvance(gid: string): void {
+	if (!browser) return;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) {
-		dbg('republish skip', { reason: 'disabled' });
-		return;
-	}
-	const active = getActiveNip44Seal();
-	if (!active) {
-		dbg('republish skip', { reason: 'no nip44 seal' });
-		return;
-	}
-	const { seal, ownerPubkey } = active;
-	const pending = config.pendingTombstones ?? [];
+	if (!config?.enabled) return;
+	dbg('onGroupStateAdvance', { gid: gid.slice(0, 8), dTag: config.dTag.slice(0, 8) });
+	scheduleRepublish(() => publish({ resealGroups: [gid], resealMeta: false }));
+}
 
-	// §10.5 reconcile-before-push: fetch the current tip and adopt any peer
-	// facts newer than ours BEFORE pushing. Pushing blind is the root cause of
-	// clobbering a peer's tombstone (re-adding a group a peer soft-deleted) and
-	// the stale-push resurrection race (§10.5). The tip-address check (SHOULD):
-	// if the tip still equals our last publish, no peer moved it — skip the
-	// reconcile fetch and chain straight off our own tip.
-	const signer: BlossomSigner = {
+/**
+ * Re-publish hook for an identity-level change (spec §10.5): a soft-delete
+ * tombstone or a last-resort key-package publish/rotate. Publishes only the
+ * meta document and updates only its `meta` `x` tag. Fire-and-forget.
+ */
+export function onMetaStateChange(): void {
+	if (!browser) return;
+	const config = getMultiDeviceConfig();
+	if (!config?.enabled) return;
+	dbg('onMetaStateChange', { dTag: config.dTag.slice(0, 8) });
+	scheduleRepublish(() => publish({ resealGroups: [], resealMeta: true }));
+}
+
+/** An empty tip pointer (used when the fetched tip parses to nothing). */
+function emptyTipPointer(config: MultiDeviceOwnerConfig): TipPointer {
+	return { groups: [], servers: config.blossomServers };
+}
+
+/** Ephemeral Blossom signer used by all republish paths. */
+function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
+	return {
 		async signEvent(template) {
 			return finalizeEvent(template, hexToBytes(config.ephemeralPrivateKey));
 		}
 	};
-	const writeStore = makeBlossomStore(signer);
+}
 
-	let prev: string | undefined;
-	let adoptedTombstones: SessionTombstone[] = [];
+/**
+ * §10.5 reconcile-before-push head: fetch the current tip, parse it, and decide
+ * whether to proceed. Returns the parsed pointer (possibly empty) and a
+ * `deferred` flag for the offline-MUST — a tip that was reachable before (we
+ * have seen one: `lastSeenTip` is set) but isn't now → defer the push. On a
+ * first-ever publish (never seen a tip) the caller may push fresh.
+ */
+async function fetchTipForPublish(
+	config: MultiDeviceOwnerConfig,
+	ownerPubkey: string
+): Promise<{ pointer: TipPointer; deferred: boolean }> {
 	const tipEvent = await fetchLatestTipEvent(config);
-	if (tipEvent) {
-		const pointer = await parseTipEvent(tipEvent, ownerPubkey);
-		if (pointer) {
-			prev = pointer.address;
-			if (pointer.address === config.lastPublishedAddress) {
-				dbg('republish tip unchanged', { address: pointer.address.slice(0, 12) });
-			} else {
-				dbg('republish tip moved by peer', {
-					tip: pointer.address.slice(0, 12),
-					ours: config.lastPublishedAddress?.slice(0, 12)
-				});
-				// Pull + reconcile the peer doc (seeds / fast-forwards / drops locally).
-				const reconciled = await pullAndReconcile(pointer, seal, ownerPubkey, config);
-				// Carry ALL tombstones from the reconciled doc forward (§10.5 union):
-				// this is what propagates a deletion across the fleet.
-				adoptedTombstones = reconciled.doc.removed ?? [];
-				dbg('republish reconciled peer doc', { counts: reconciled.counts });
-			}
+	if (!tipEvent) {
+		if (config.lastSeenTip) {
+			dbg('republish deferred', { reason: 'tip unreachable; cannot reconcile before push' });
+			return { pointer: emptyTipPointer(config), deferred: true };
 		}
-	} else if (config.lastPublishedAddress) {
-		// §10.5 offline MUST: the tip was reachable before but isn't now → defer
-		// the push (keep pendingTombstones) until we're online and can reconcile.
-		dbg('republish deferred', {
-			reason: 'tip unreachable; cannot reconcile before push',
-			pendingTombstones: pending.length
-		});
-		return;
+		return { pointer: emptyTipPointer(config), deferred: false };
 	}
-	// else: first-ever publish (no lastPublishedAddress, no tip) → fresh chain.
+	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
+	return { pointer: parsed ?? emptyTipPointer(config), deferred: false };
+}
 
-	// Collect the snapshot AFTER reconciling the peer doc so it reflects any
-	// adopted seeds / fast-forwards / tombstone drops.
-	const groups = collectSessionSnapshots();
-	if (groups.length === 0 && pending.length === 0 && adoptedTombstones.length === 0) {
-		dbg('republish skip', { reason: 'nothing to publish' });
-		return;
-	}
-	const removed = composeTombstoneUnion(
-		pending,
-		adoptedTombstones,
-		groups.map((g) => g.gid)
-	);
-	dbg('republish snapshot', {
-		groupCount: groups.length,
-		pending: pending.length,
-		adopted: adoptedTombstones.length,
-		union: removed.length
-	});
+/** gids of a tombstone list — for the §4.3 invariant (a `gid` is in `x` XOR `removed`). */
+function tombstoneGids(tombstones: Tombstone[]): Set<string> {
+	return new Set(tombstones.map((t) => t.gid));
+}
 
-	const result = await publishCurrentSession({
-		groups,
-		seal,
-		ownerPubkey,
-		store: writeStore,
-		prev,
-		removed
-	});
-	dbg('republish document uploaded', {
-		address: result.address.slice(0, 12),
-		prev: prev?.slice(0, 12),
-		removed: removed.length
-	});
-	await publishTip(result.address, config);
-	dbg('republish tip published', { relays: config.relays });
-	config.lastPublishedAddress = result.address;
-	// Own tombstones are now in the immutable published doc; clear the pending
-	// list. They will be re-adopted from the tip on the next reconcile-before-push.
-	config.pendingTombstones = [];
+/** Record a seen tip + its event id (§6 per-doc delta + §10.5 self-echo dedup). */
+function setLastSeenTip(
+	config: MultiDeviceOwnerConfig,
+	pointer: TipPointer,
+	eventId: string
+): void {
+	config.lastSeenTip = { groups: pointer.groups, metaAddress: pointer.metaAddress };
+	config.lastSeenTipEventId = eventId;
 	saveConfig(config);
 }
 
-/** Snapshot every active local group for the session document (spec §4). */
-function collectSessionSnapshots(): SessionGroupSnapshot[] {
-	const groups: SessionGroupSnapshot[] = [];
+/** What a `publish()` call re-seals (spec §10.5 publishing unit). */
+type PublishPlan = {
+	/** Gids to re-seal + re-upload, or `'all'` for every active local group. */
+	resealGroups: string[] | 'all';
+	/** Re-seal + re-upload the meta document (tombstones + last-resort key package). */
+	resealMeta: boolean;
+};
+
+/**
+ * Build the tip's group inventory (§4.3): start from the fetched tip's slots
+ * (peer addresses), drop tombstoned gids, then overlay the freshly re-sealed
+ * addresses. A re-sealed gid absent from the fetched tip (newly created, or a
+ * stale peer tip) is added. §4.3 is enforced here, once, for every publish.
+ */
+function buildInventory(
+	pointer: TipPointer,
+	resealed: TipGroupPointer[],
+	tombstonedGids: Set<string>
+): TipGroupPointer[] {
+	const inv: TipGroupPointer[] = [];
+	for (const g of pointer.groups) {
+		if (tombstonedGids.has(g.gid)) continue; // §4.3: tombstoned gid leaves the tip
+		inv.push(resealed.find((r) => r.gid === g.gid) ?? g); // overlay re-sealed address
+	}
+	for (const r of resealed) {
+		if (tombstonedGids.has(r.gid)) continue;
+		if (!pointer.groups.some((g) => g.gid === r.gid)) inv.push(r); // new / stale-peer-tip
+	}
+	return inv;
+}
+
+/**
+ * Ingestion chokepoint (§6 + §8): reconcile only documents whose address
+ * changed vs `lastSeenTip`. Shared by the read path (`handleTipEvent`) and the
+ * write path (`publish`). Does NOT write `lastSeenTip` — the caller records it.
+ */
+async function applyTip(
+	pointer: TipPointer,
+	ctx: { seal: Nip44Seal; ownerPubkey: string; config: MultiDeviceOwnerConfig }
+): Promise<{ adoptedTombstones: Tombstone[]; counts: ReconcileCounts }> {
+	const { seal, ownerPubkey, config } = ctx;
+	const lastSeen = config.lastSeenTip;
+	const counts: ReconcileCounts = {
+		seeded: 0,
+		fastForwarded: 0,
+		skipped: 0,
+		dropped: 0,
+		ignored: 0
+	};
+	let adoptedTombstones: Tombstone[] = [];
+
+	for (const group of pointer.groups) {
+		const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
+		if (lastSeenGroup?.address === group.address) continue;
+		dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
+		try {
+			const { outcome } = await pullAndReconcileGroup(group, pointer, seal, ownerPubkey, config);
+			if (outcome === 'seeded') counts.seeded++;
+			else if (outcome === 'fast-forwarded') counts.fastForwarded++;
+			else counts.skipped++;
+		} catch (error) {
+			dbg('applyTip group reconcile failed', { gid: group.gid, error });
+		}
+	}
+
+	if (pointer.metaAddress && pointer.metaAddress !== lastSeen?.metaAddress) {
+		dbg('applyTip meta changed', { address: pointer.metaAddress.slice(0, 12) });
+		try {
+			const { doc, counts: metaCounts } = await pullAndReconcileMeta(
+				pointer,
+				seal,
+				ownerPubkey,
+				config
+			);
+			adoptedTombstones = doc.removed ?? [];
+			counts.dropped += metaCounts.dropped;
+			counts.ignored += metaCounts.ignored;
+		} catch (error) {
+			dbg('applyTip meta reconcile failed', { error });
+		}
+	}
+
+	return { adoptedTombstones, counts };
+}
+
+/**
+ * The one §10.5 procedure: reconcile the full doc set, then publish only the
+ * affected document(s) and rewrite the tip. `plan` picks what to re-seal
+ * (group change → that group; meta change → meta; enable/server → all). §4.3
+ * is enforced once in `buildInventory`.
+ */
+async function publish(plan: PublishPlan): Promise<void> {
+	const config = getMultiDeviceConfig();
+	if (!config?.enabled) return;
+	const active = getActiveNip44Seal();
+	if (!active) return;
+	const { seal, ownerPubkey } = active;
+	const { pointer, deferred } = await fetchTipForPublish(config, ownerPubkey);
+	if (deferred) return;
+
+	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
+	const { adoptedTombstones } = await applyTip(pointer, { seal, ownerPubkey, config });
+	const writeStore = makeBlossomStore(ephemeralSigner(config));
+
+	// The published `removed` set (own pending + adopted, XOR'd vs the live
+	// inventory per §4.3) drives both the meta doc and the tip's group filter.
+	const liveSnapshots = collectGroupSnapshots();
+	const removed = composeTombstoneUnion(
+		config.pendingTombstones ?? [],
+		adoptedTombstones,
+		liveSnapshots.map((s) => s.gid)
+	);
+	const tombstonedGids = tombstoneGids(removed);
+
+	// Re-seal the affected group documents (§10.5 publishing unit).
+	const resealed: TipGroupPointer[] = [];
+	const gidsToReseal =
+		plan.resealGroups === 'all' ? liveSnapshots.map((s) => s.gid) : plan.resealGroups;
+	for (const gid of gidsToReseal) {
+		const snapshot = liveSnapshots.find((s) => s.gid === gid);
+		if (!snapshot) continue; // gone (tombstoned/deleted) since the trigger fired
+		const prev = pointer.groups.find((g) => g.gid === gid)?.address;
+		const result = await publishGroupDocument({
+			group: snapshot,
+			seal,
+			ownerPubkey,
+			store: writeStore,
+			prev
+		});
+		resealed.push({ address: result.address, gid });
+		dbg('publish group doc', { gid, address: result.address.slice(0, 12) });
+	}
+
+	// Re-seal the meta document (tombstones + last-resort key package) only when asked.
+	let metaAddress = pointer.metaAddress;
+	if (plan.resealMeta) {
+		const result = await publishMetaDocument({
+			seal,
+			ownerPubkey,
+			store: writeStore,
+			removed,
+			lastResortKeyPackage: getLastResortKeyPackageEntry()
+		});
+		metaAddress = result.address;
+		dbg('publish meta doc', { address: result.address.slice(0, 12), removed: removed.length });
+	}
+
+	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
+	const groups = buildInventory(pointer, resealed, tombstonedGids);
+	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config);
+
+	// Own tombstones are now in the immutable published meta doc; clear pending.
+	if (plan.resealMeta) {
+		config.pendingTombstones = [];
+		saveConfig(config);
+	}
+	dbg('publish done', {
+		reseal: gidsToReseal.length,
+		meta: plan.resealMeta,
+		groups: groups.length
+	});
+}
+
+/**
+ * Shared tail: publish the tip for `pointer` and persist the new addresses as
+ * the last-seen tip (§6 per-doc delta + §10.5 offline-defer signal).
+ */
+async function finalizeTipPublish(
+	pointer: TipPointer,
+	config: MultiDeviceOwnerConfig
+): Promise<void> {
+	const outer = await buildTipEvent(pointer, config);
+	// Persist the new addresses + event id BEFORE the relay publish: the publish
+	// loops the event back through our own subscription, and this ordering makes
+	// that self-echo short-circuit in `handleTipEvent` (§10.5 tip-address check)
+	// instead of re-fetching our own just-published documents.
+	setLastSeenTip(config, pointer, outer.id);
+	await publishOuterTip(outer, config.relays);
+}
+
+/** Snapshot every active local group (spec §4 — the live inventory). */
+function collectGroupSnapshots(): GroupSnapshot[] {
+	const groups: GroupSnapshot[] = [];
 	for (const group of listChatGroups()) {
 		if (group.status && group.status !== 'active') continue;
 		const state = decodeStoredGroupState(group);
@@ -616,8 +829,6 @@ function collectSessionSnapshots(): SessionGroupSnapshot[] {
 			gid: getProtocolGroupId(state),
 			state,
 			coordinatorKey: group.coordinatorKey,
-			metadata: group.metadata,
-			encrypted: true, // outbound sealing is always on (see sealForPosting)
 			fetchCursor: group.fetchCursor
 		});
 	}
@@ -630,12 +841,18 @@ function collectSessionSnapshots(): SessionGroupSnapshot[] {
 
 let tipSubscription: { unsubscribe: () => void } | null = null;
 
+// §10.6: one-shot cold-start reconcile promise. Holds while the tip is fetched
+// + applied before the delivery stream opens; resolves immediately when MD is
+// off. Reset on account change / disable via resetMultiDeviceSession.
+let mdReconcilePromise: Promise<void> | null = null;
+const MD_RECONCILE_TIMEOUT_MS = 8000;
+
 /**
  * Subscribe to the tip replaceable event for the active owner's config and
  * reconcile on every change. Idempotent: re-subscribing tears down the prior
  * subscription first. No-op when disabled.
  */
-export function startTipSubscription(): void {
+function startTipSubscription(): void {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
@@ -673,7 +890,7 @@ export function startTipSubscription(): void {
 	};
 }
 
-export function stopTipSubscription(): void {
+function stopTipSubscription(): void {
 	if (tipSubscription) {
 		try {
 			tipSubscription.unsubscribe();
@@ -684,13 +901,54 @@ export function stopTipSubscription(): void {
 	}
 }
 
-/**
- * Manual one-shot reconcile (diagnostic / recovery). Fetches the current tip and
- * reconciles it against local state (spec §8), bypassing the in-session dedup
- * so a repeat click always re-applies. Used by the config-page "Re-sync now"
- * action when a device suspects it has fallen behind. No-op when sync is off or
- * no account is active. Does not start the live subscription.
- */
+/** §10.6 gate: reconcile the tip once per session before the delivery stream
+ * opens, so cold-start backlog fetches see a fast-forwarded state. Idempotent
+ * (concurrent awaiters join the in-flight reconcile); no-op when MD is off.
+ * Reset by {@link resetMultiDeviceSession}. */
+export function awaitMultiDeviceReconciled(): Promise<void> {
+	if (!browser) return Promise.resolve();
+	if (mdReconcilePromise) return mdReconcilePromise;
+	const config = getMultiDeviceConfig();
+	if (!config?.enabled) return Promise.resolve();
+	mdReconcilePromise = startMultiDevice();
+	return mdReconcilePromise;
+}
+
+/** One-shot cold-start reconcile + open the live tip subscription. Bounded:
+ * if the reconcile overruns, fall back to the mdActive gate so delivery isn't
+ * blocked (§10.6 "behind is not corruption"). */
+async function startMultiDevice(): Promise<void> {
+	const account = manager.getActive();
+	const config = account ? getMultiDeviceConfig() : null;
+	if (!account || !config) return;
+	const ownerPubkey = normalizePubKey(account.pubkey);
+	const reconcile = async () => {
+		try {
+			const tipEvent = await fetchLatestTipEvent(config);
+			if (tipEvent) await handleTipEvent(tipEvent, ownerPubkey);
+		} catch (error) {
+			dbg('startMultiDevice reconcile failed', { error });
+		}
+	};
+	await Promise.race([
+		reconcile(),
+		new Promise<void>((resolve) => setTimeout(resolve, MD_RECONCILE_TIMEOUT_MS))
+	]);
+	startTipSubscription();
+}
+
+/** Tear down the session: clear the reconcile promise + stop the tip
+ * subscription. Called on account change + disable so the next start
+ * re-reconciles for the new owner. */
+export function resetMultiDeviceSession(): void {
+	mdReconcilePromise = null;
+	stopTipSubscription();
+}
+
+/** Manual one-shot reconcile (diagnostic / recovery). Fetches the tip +
+ * reconciles (§8), bypassing the in-session dedup so a repeat click always
+ * re-applies. Used by the config-page "Re-sync now" action. No-op when sync is
+ * off / no account; does not start the live subscription. */
 export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null> {
 	if (!browser) return null;
 	const config = getMultiDeviceConfig();
@@ -704,16 +962,15 @@ export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null>
 		dbg('reconcileMultiDeviceNow no tip found');
 		return null;
 	}
-	// Bypass the per-owner dedup: a manual trigger should always re-apply, even
-	// if the tip address matches the last auto-reconciled one.
-	delete lastReconciledByOwner[ownerPubkey];
+	// Bypass the per-doc + per-event dedup: a manual trigger should always
+	// re-apply, even if the tip address/event id matches the last auto-reconcile.
+	config.lastSeenTip = undefined;
+	config.lastSeenTipEventId = undefined;
+	saveConfig(config);
 	const counts = await handleTipEvent(tipEvent, ownerPubkey);
 	dbg('reconcileMultiDeviceNow done', { counts });
 	return counts;
 }
-
-/** Per-owner dedup of the last reconciled tip address (spec: replaceable events replay). */
-const lastReconciledByOwner: Record<string, string> = {};
 
 /** Reconcile outcome counts surfaced to callers (UI / link flow / logs). */
 export interface ReconcileCounts {
@@ -724,105 +981,142 @@ export interface ReconcileCounts {
 	ignored: number;
 }
 
+/** Read-order server list: the tip's advertised hosts first, then the configured fallbacks. */
+function readServers(pointer: TipPointer, config: MultiDeviceOwnerConfig | undefined): string[] {
+	return [...pointer.servers, ...(config?.blossomServers ?? BLOSSOM_SERVERS)];
+}
+
 /**
- * Read-only blob store that fetches a sealed document from the tip's advertised
- * servers (ordered, most-reliable first), falling back to the locally-configured
- * server list. Shared by the live tip subscription and the reconcile-before-push
- * read in `republishSessionDocument`.
+ * Read-only content-addressed store: try each server in order for the blob's
+ * address (the URL's last path segment). The single read store for every path
+ * — per-doc tip pulls and the §8.5 chain walk.
  */
-function makeTipReadStore(
-	pointer: TipPointer,
-	config: MultiDeviceOwnerConfig | undefined
-): SessionBlobStore {
+function makeReadStore(servers: string[]): BlobStore {
+	const clean = [...new Set(servers.map((s) => s.replace(/\/+$/, '')))].filter(Boolean);
 	return {
 		async publish() {
 			throw new Error('read-only store');
 		},
-		async fetch() {
-			const urls = pointer.blossomServers.map((s) => `${s.replace(/\/+$/, '')}/${pointer.address}`);
+		async fetch(url: string) {
+			const address = url.split('/').pop() ?? '';
 			let lastError: unknown;
-			for (const url of urls) {
+			for (const server of clean) {
 				try {
-					return await fetchBlob(url);
-				} catch (error) {
-					lastError = error;
-				}
-			}
-			for (const server of config?.blossomServers ?? BLOSSOM_SERVERS) {
-				try {
-					return await fetchBlob(`${server.replace(/\/+$/, '')}/${pointer.address}`);
+					return await fetchBlob(`${server}/${address}`);
 				} catch (error) {
 					lastError = error;
 				}
 			}
 			throw lastError instanceof Error
-				? new Error(`Could not fetch session document: ${lastError.message}`)
-				: new Error('Could not fetch session document');
+				? new Error(`Could not fetch document: ${lastError.message}`)
+				: new Error('Could not fetch document');
 		}
 	};
 }
 
 /**
- * Pull a sealed document from a tip pointer and reconcile it against local
- * state (spec §8). Reloads the in-memory group store when any group is seeded.
- * Used by both the live tip subscription and the reconcile-before-push read.
+ * Pull one group document from the tip and reconcile it (spec §8). Reloads the
+ * in-memory group store when the group is seeded. `groupAddress` threads into
+ * the chained catch-up (spec §8.5) as the walk's tip address.
  */
-async function pullAndReconcile(
+async function pullAndReconcileGroup(
+	group: TipGroupPointer,
 	pointer: TipPointer,
 	seal: Nip44Seal,
 	ownerPubkey: string,
 	config: MultiDeviceOwnerConfig | undefined
-): Promise<{ doc: SessionDocument; counts: ReconcileCounts }> {
-	const store = makeTipReadStore(pointer, config);
-	const doc = await pullSessionDocument({
-		address: pointer.address,
+): Promise<{ doc: GroupDocument; outcome: ReconcileOutcome }> {
+	const store = makeReadStore(readServers(pointer, config));
+	const doc = await pullDocument({
+		address: group.address,
 		store,
-		addressToUrl: (a) => `${pointer.blossomServers[0]?.replace(/\/+$/, '') ?? ''}/${a}`,
+		addressToUrl: (a) => urlFromTip(a, pointer),
 		seal,
 		ownerPubkey
 	});
-	const result = await reconcileFromDocument(makeReconcileTarget(ownerPubkey), doc);
-	if (result.seeded.length > 0) {
+	if (doc.type !== 'group') {
+		throw new MultiDeviceError('Tip group tag pointed at a non-group document');
+	}
+	const outcome = await makeReconcileTarget(ownerPubkey, {
+		groupAddress: group.address,
+		pointer,
+		seal,
+		config
+	}).applyGroupDocument(doc);
+	if (outcome === 'seeded') {
 		// Seeding changes the group set; refresh the in-memory store.
 		await reloadChatGroupsForOwner(ownerPubkey);
 	}
+	return { doc, outcome };
+}
+
+/** Pull the meta document from the tip and reconcile tombstones + key package. */
+async function pullAndReconcileMeta(
+	pointer: TipPointer,
+	seal: Nip44Seal,
+	ownerPubkey: string,
+	config: MultiDeviceOwnerConfig | undefined
+): Promise<{
+	doc: MetaDocument;
+	counts: { dropped: number; ignored: number; keyPackageLoaded: boolean };
+}> {
+	if (!pointer.metaAddress) throw new Error('No meta address in tip');
+	const store = makeReadStore(readServers(pointer, config));
+	const doc = await pullDocument({
+		address: pointer.metaAddress,
+		store,
+		addressToUrl: (a) => urlFromTip(a, pointer),
+		seal,
+		ownerPubkey
+	});
+	if (doc.type !== 'meta') {
+		throw new MultiDeviceError('Tip meta tag pointed at a non-meta document');
+	}
+	const result = await reconcileMetaDocument(makeReconcileTarget(ownerPubkey), doc);
 	return {
 		doc,
 		counts: {
-			seeded: result.seeded.length,
-			fastForwarded: result.fastForwarded.length,
-			skipped: result.skipped.length,
 			dropped: result.dropped.length,
-			ignored: result.ignored.length
+			ignored: result.ignored.length,
+			keyPackageLoaded: result.keyPackageLoaded
 		}
 	};
 }
 
+/**
+ * Reconcile a tip event: per-gid + per-meta DELTA against the last-seen tip
+ * (spec §6 — pull only documents whose address changed). A gid that vanished
+ * from the tip was soft-deleted by the peer; its tombstone arrives via the meta
+ * document. The eventStore already dedups identical replaceable replays, so we
+ * are only called with a genuinely newer tip.
+ */
 async function handleTipEvent(
 	outer: NostrEvent,
 	ownerPubkey: string
 ): Promise<ReconcileCounts | null> {
 	const { seal } = getActiveNip44Seal() ?? {};
 	if (!seal) return null;
-
+	const config = getMultiDeviceConfig();
+	// §10.5 tip-address check: an event id we've already processed is our own
+	// self-echo (publish loopback) or a duplicate relay delivery — skip without
+	// parsing or fetching. This is the cheap dedup layer above the per-doc
+	// address delta.
+	if (config?.lastSeenTipEventId === outer.id) return null;
 	const pointer = await parseTipEvent(outer, ownerPubkey);
 	if (!pointer) return null;
-	// Replaceable events can replay; skip if we already reconciled this address
-	// for this owner (per-owner so an identity switch can't starve the new owner).
-	if (pointer.address === lastReconciledByOwner[ownerPubkey]) {
-		dbg('handleTipEvent skip', {
-			reason: 'already reconciled',
-			address: pointer.address.slice(0, 12)
-		});
-		return null;
-	}
-	const config = getMultiDeviceConfig();
-	dbg('handleTipEvent reconcile', {
-		address: pointer.address.slice(0, 12),
-		servers: pointer.blossomServers.length
+	if (!config) return null;
+
+	dbg('handleTipEvent', {
+		groups: pointer.groups.length,
+		meta: !!pointer.metaAddress,
+		cold: !config.lastSeenTip
 	});
-	const { counts } = await pullAndReconcile(pointer, seal, ownerPubkey, config);
-	lastReconciledByOwner[ownerPubkey] = pointer.address;
+
+	// Ingest via the shared chokepoint (same reconcile the write path runs before
+	// every push), then record the peer tip as the last-seen one.
+	const { counts } = await applyTip(pointer, { seal, ownerPubkey, config });
+	setLastSeenTip(config, pointer, outer.id);
+
 	dbg('handleTipEvent done', { counts });
 	// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
 	// advance republishes; republishing here risks a publish loop across devices.
@@ -830,32 +1124,69 @@ async function handleTipEvent(
 }
 
 /**
- * Build a `ReconcileTarget` over the live chat group store. Seeding installs a
- * new `StoredChatGroup` (via importChatGroups + store refresh); fast-forward
- * replaces an existing group's state+cursor only at a strictly newer epoch;
- * tombstones drop a local group whose epoch is ≤ the tombstone epoch (spec §8
- * case 4, anti-downgrade on the epoch check).
+ * Build a `ReconcileTarget` over the live group store. Seed installs a new
+ * `StoredChatGroup`; fast-forward replaces state+cursor only at a strictly newer
+ * epoch (§8); tombstones drop a group whose epoch ≤ the tombstone (§8, anti-
+ * downgrade).
  */
-function makeReconcileTarget(ownerPubkey: string): ReconcileTarget {
+function makeReconcileTarget(
+	ownerPubkey: string,
+	catchUp?: {
+		groupAddress: string;
+		pointer: TipPointer;
+		seal: Nip44Seal;
+		config: MultiDeviceOwnerConfig | undefined;
+	}
+): ReconcileTarget {
 	return {
 		localEpoch(gid) {
 			const group = getChatGroup(gid);
 			if (!group) return undefined;
 			return decodeStoredGroupState(group).groupContext.epoch;
 		},
-		async applyEntry(entry) {
-			const existing = getChatGroup(entry.gid);
+		async applyGroupDocument(doc) {
+			const existing = getChatGroup(doc.gid);
 			if (!existing) {
-				await seedGroup(entry, ownerPubkey);
+				await seedGroup(doc, ownerPubkey);
 				return 'seeded';
 			}
-			const incomingEpoch = entryEpoch(entry);
+			const incomingEpoch = groupEpoch(doc);
 			const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
 			// Forward-only epoch check (spec §8) — the rollback defense.
 			if (incomingEpoch === undefined || incomingEpoch <= localEpoch) {
 				return 'skipped';
 			}
-			fastForwardGroup(existing, entry);
+			// Capture the pre-fast-forward decrypt frontier + local state. fast-forward
+			// advances both to the tip, so the chained catch-up (spec §8.5) needs the
+			// values from BEFORE it ran to know where the lossless gap starts and
+			// what state decrypts range 0.
+			const decryptFrontier = existing.fetchCursor;
+			const localStateBase64 = existing.stateBase64;
+			await fastForwardGroup(doc); // liveness first (locked CAS write)
+			// Background lossless recovery (§8.5): replay the message gap epoch-by-epoch
+			// so messages sent during the behind window aren't lost. Fire-and-forget —
+			// fast-forward already restored liveness. Skipped when the decrypt frontier
+			// is already at the adopted cursor: an online device sibling-skipped the
+			// Commit on the stream, so there's no gap to recover (saves the chain walk
+			// + gap fetch on every online sibling-Commit fast-forward).
+			if (catchUp && decryptFrontier < doc.cursor) {
+				void catchUpGroupFromChain({
+					groupId: doc.gid,
+					localEpoch,
+					localStateBase64,
+					decryptFrontier,
+					groupAddress: catchUp.groupAddress,
+					pointer: catchUp.pointer,
+					seal: catchUp.seal,
+					config: catchUp.config,
+					ownerPubkey
+				}).catch((error) =>
+					dbg('catchUp failed; fast-forward preserved liveness', {
+						gid: doc.gid,
+						error: error instanceof Error ? error.message : String(error)
+					})
+				);
+			}
 			return 'fast-forwarded';
 		},
 		async applyTombstone(tombstone) {
@@ -874,59 +1205,249 @@ function makeReconcileTarget(ownerPubkey: string): ReconcileTarget {
 				localEpoch: String(localEpoch)
 			});
 			return 'dropped';
+		},
+		async loadLastResortKeyPackage(entry) {
+			return loadLastResortKeyPackage(entry);
+		},
+		getLastResortKeyPackage() {
+			return getLastResortKeyPackageEntry();
 		}
 	};
 }
 
-/** Seed a missing group from a document entry (spec §9). */
-async function seedGroup(entry: SessionGroupEntry, ownerPubkey: string): Promise<void> {
+/** Seed a missing group from a group document (spec §9). */
+async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void> {
 	// ponytail: joinEpoch 0 — seeded groups adopt the writer's current state via
 	// clientState, so there's no pre-membership boundary to filter (spec §9).
 	const seeded: StoredChatGroup = {
-		id: entry.gid,
+		id: doc.gid,
 		ownerPubkey,
-		coordinatorKey: entry.coordinator,
+		coordinatorKey: doc.coordinator,
 		createdAt: Date.now(),
-		stateBase64: entry.clientState,
-		lastCursor: entry.cursor,
-		fetchCursor: entry.cursor,
+		stateBase64: doc.clientState,
+		lastCursor: doc.cursor,
+		fetchCursor: doc.cursor,
 		messages: [],
 		syncIssues: [],
 		snapshots: [],
-		metadata: entry.metadata,
+		metadata: groupMetadata(doc),
 		joinEpoch: 0n,
 		status: 'active'
 	};
 	await importChatGroups([seeded]);
+	dbg('seedGroup', { gid: doc.gid.slice(0, 8), epoch: String(groupEpoch(doc)) });
 	// Establish the coordinator relationship so it appears in the coordinator list
 	// and operational queries (available key packages, welcomes) — mirrors the
 	// create/join seam. Idempotent if the coordinator is already known.
-	markCoordinatorUsed(entry.coordinator);
+	markCoordinatorUsed(doc.coordinator);
 }
 
-/** Fast-forward an existing group to a strictly newer epoch (spec §8). */
-function fastForwardGroup(existing: StoredChatGroup, entry: SessionGroupEntry): void {
-	const next: StoredChatGroup = {
-		...existing,
-		stateBase64: entry.clientState,
-		metadata: entry.metadata ?? existing.metadata,
-		coordinatorKey: entry.coordinator,
-		// Cursor advances to the entry's (the adopted state processed through it).
-		fetchCursor: Math.max(existing.fetchCursor, entry.cursor),
-		lastCursor: Math.max(existing.lastCursor, entry.cursor),
-		// The adopted state is authoritative (owner-signed, content-addressed), so
-		// clear any transient poisoning from the stale-state ingestion window — an
-		// ahead-of-local-epoch message the device couldn't decrypt before this
-		// fast-forward arrived. Removal is a genuine MLS event, not transient, so
-		// it is left intact (spec §8).
-		...(existing.status === 'poisoned'
-			? { status: 'active' as const, poisonedAtCursor: undefined }
-			: {})
-	};
-	replaceGroup(existing.id, next);
-	dbg('fastForwardGroup', {
-		gid: existing.id.slice(0, 8),
-		unpoisoned: existing.status === 'poisoned'
+/**
+ * Fast-forward a group to a strictly newer epoch (§8). Runs under the per-group
+ * lock (`runGroupOperation`) so it can't clobber (nor be clobbered by) a
+ * concurrent live-delivery cycle — both mutate the same record. Re-reads +
+ * re-checks the epoch UNDER the lock (CAS): a watch cycle may have caught up
+ * while we waited, in which case this is a no-op.
+ */
+async function fastForwardGroup(doc: GroupDocument): Promise<void> {
+	await runGroupOperation(doc.gid, async () => {
+		const existing = getChatGroup(doc.gid);
+		if (!existing) return; // vanished (soft-deleted) while waiting for the lock
+		const incomingEpoch = groupEpoch(doc);
+		const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
+		// Re-check under the lock (CAS): a concurrent cycle may have caught up.
+		if (incomingEpoch === undefined || incomingEpoch <= localEpoch) return;
+		replaceGroup(existing.id, {
+			...existing,
+			stateBase64: doc.clientState,
+			metadata: groupMetadata(doc),
+			coordinatorKey: doc.coordinator,
+			// Cursor advances to the document's (the adopted state processed through it).
+			fetchCursor: Math.max(existing.fetchCursor, doc.cursor),
+			lastCursor: Math.max(existing.lastCursor, doc.cursor),
+			// The adopted state is authoritative (owner-signed, content-addressed), so
+			// clear any transient poisoning from the stale-state ingestion window — an
+			// ahead-of-local-epoch message the device couldn't decrypt before this
+			// fast-forward arrived. Removal is a genuine MLS event, not transient, so
+			// it is left intact (spec §8).
+			...(existing.status === 'poisoned'
+				? { status: 'active' as const, poisonedAtCursor: undefined }
+				: {})
+		});
+		dbg('fastForwardGroup', {
+			gid: existing.id.slice(0, 8),
+			epoch: `${localEpoch}→${incomingEpoch}`,
+			cursor: doc.cursor,
+			msgs: existing.messages.length,
+			unpoisoned: existing.status === 'poisoned'
+		});
+	});
+}
+
+/** Decode a base64 gen-0 ClientState (throws if undecodable). */
+function decodeClientStateBase64(base64: string): ClientState {
+	const decoded = clientStateDecoder(base64ToBytes(base64), 0);
+	if (!decoded) throw new Error('Unable to decode client state');
+	return decoded[0];
+}
+
+/** Fetch the raw message gap from a cursor (spec §8.5 gap fetch). */
+async function fetchMessageGap(
+	group: StoredChatGroup,
+	gid: string,
+	after: number
+): Promise<
+	{ cursor: number; createdAt: number; opaqueMessageBase64: string; encrypted?: boolean }[]
+> {
+	const account = requireActiveAccount('You must be logged in to catch up group messages');
+	const sinceEpoch = after === 0 && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
+	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		client.FetchGroupMessages({
+			gid,
+			after: after > 0 ? after : undefined,
+			since_epoch: sinceEpoch
+		})
+	);
+	return result.messages.map((m) => ({
+		cursor: m.cursor,
+		createdAt: m.at,
+		opaqueMessageBase64: m.msg_64,
+		encrypted: m.encrypted
+	}));
+}
+
+/**
+ * Chained catch-up (§8.5): replay the message gap epoch-by-epoch so messages
+ * sent during the behind window are recovered (single-snapshot fast-forward
+ * would lose them by MLS forward secrecy). Background, after `fastForwardGroup`
+ * restored liveness; any failure leaves the fast-forwarded state (§8.5 fallback).
+ *
+ * Sibling-Commits skip (shared-leaf guard) and the next chain step bridges the
+ * epoch. Catch-up is pure message recovery — the persisted state stays the
+ * fast-forward's tip; no regression.
+ */
+async function catchUpGroupFromChain(params: {
+	groupId: string;
+	localEpoch: bigint;
+	localStateBase64: string;
+	decryptFrontier: number;
+	groupAddress: string;
+	pointer: TipPointer;
+	seal: Nip44Seal;
+	config: MultiDeviceOwnerConfig | undefined;
+	ownerPubkey: string;
+}): Promise<void> {
+	const group = getChatGroup(params.groupId);
+	if (!group) return; // vanished (soft-deleted) mid-flight
+	const gid = getProtocolGroupId(decodeStoredGroupState(group));
+
+	// 1. Walk this group's `prev` chain from its tip document back to localEpoch (spec §8.5).
+	let chain: ChainStep[];
+	try {
+		chain = await walkGroupChain({
+			tipAddress: params.groupAddress,
+			groupId: gid,
+			localEpoch: params.localEpoch,
+			store: makeReadStore(readServers(params.pointer, params.config)),
+			addressToUrl: (a) => urlFromTip(a, params.pointer),
+			seal: params.seal,
+			ownerPubkey: params.ownerPubkey
+		});
+	} catch (error) {
+		dbg('catchUp walk failed; fast-forward preserved liveness', {
+			gid: params.groupId,
+			error: error instanceof Error ? error.message : String(error)
+		});
+		return;
+	}
+	if (chain.length === 0) {
+		dbg('catchUp empty chain', { gid: params.groupId });
+		return;
+	}
+
+	// 2. Fetch the whole gap once (messages after the decrypt frontier).
+	let gap: {
+		cursor: number;
+		createdAt: number;
+		opaqueMessageBase64: string;
+		encrypted?: boolean;
+	}[];
+	try {
+		gap = await fetchMessageGap(group, gid, params.decryptFrontier);
+	} catch (error) {
+		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
+			gid: params.groupId,
+			error: error instanceof Error ? error.message : String(error)
+		});
+		return;
+	}
+	if (gap.length === 0) {
+		dbg('catchUp no gap to replay', { gid: params.groupId, steps: chain.length });
+		return;
+	}
+
+	dbg('catchUp replaying', { gid: params.groupId, steps: chain.length, gap: gap.length });
+
+	// 3. Per-range replay. states[0] = local (s0); states[i>0] = chain[i-1].
+	//    Each epoch's messages decrypt with that epoch's gen-0 ClientState;
+	//    sibling-Commits skip (shared-leaf guard) and the next step bridges.
+	//    mdActive so any partition imperfection skips instead of poisoning. ONE
+	//    working session accumulates recovered messages across ranges.
+	const account = requireActiveAccount('You must be logged in to catch up group messages');
+	const workingGroup = createWorkingChatGroupSession(
+		group,
+		decodeClientStateBase64(params.localStateBase64)
+	);
+	workingGroup.fetchCursor = params.decryptFrontier;
+	const states = [params.localStateBase64, ...chain.map((s) => s.clientState)];
+	const boundaries = [
+		params.decryptFrontier,
+		...chain.map((s) => s.cursor),
+		Number.POSITIVE_INFINITY
+	];
+	for (let i = 0; i < states.length; i++) {
+		const lo = boundaries[i]!;
+		const hi = boundaries[i + 1]!;
+		const range = gap.filter((m) => m.cursor > lo && m.cursor <= hi);
+		if (range.length === 0) continue;
+		workingGroup.state = decodeClientStateBase64(states[i]!);
+		await ingestChatGroupMessages({
+			group: workingGroup,
+			messages: range,
+			localStablePubkey: normalizePubKey(account.pubkey),
+			mdActive: true
+		});
+	}
+
+	// 4. Merge recovered messages into the latest snapshot (live delivery may
+	//    have advanced the group while catch-up ran). Dedup by cursor; keep the
+	//    current state/fetchCursor (tip + live). Catch-up never touches state.
+	//    The read-merge-write runs inside the per-group lock so it cannot clobber
+	//    (nor be clobbered by) a concurrent live-delivery cycle on the same group.
+	await runGroupOperation(params.groupId, async () => {
+		const current = getChatGroup(params.groupId);
+		if (!current) return; // vanished
+		const have = new Set(current.messages.map((m) => m.cursor));
+		const recovered = workingGroup.messages.filter((m) => !have.has(m.cursor));
+		if (recovered.length === 0) {
+			dbg('catchUp no new messages (already current)', { gid: params.groupId });
+			return;
+		}
+		const issueHave = new Set(current.syncIssues.map((i) => i.cursor));
+		const mergedIssues = [
+			...current.syncIssues,
+			...workingGroup.syncIssues.filter((i) => !issueHave.has(i.cursor))
+		];
+		replaceGroup(params.groupId, {
+			...current,
+			messages: [...current.messages, ...recovered].sort((a, b) => a.cursor - b.cursor),
+			syncIssues: mergedIssues.slice(-50)
+		});
+		dbg('catchUp done', {
+			gid: params.groupId,
+			recovered: recovered.length,
+			total: current.messages.length + recovered.length
+		});
 	});
 }
 
@@ -940,11 +1461,11 @@ function fastForwardGroup(existing: StoredChatGroup, entry: SessionGroupEntry): 
  * The local group is dropped regardless of whether multi-device is enabled;
  * the tombstone only propagates when enabled.
  */
-export async function softDeleteGroup(groupId: string): Promise<SessionTombstone> {
+export async function softDeleteGroup(groupId: string): Promise<Tombstone> {
 	const group = getChatGroup(groupId);
 	if (!group) throw new Error(`Cannot soft-delete: group ${groupId} not found`);
 	const state = decodeStoredGroupState(group);
-	const tombstone: SessionTombstone = {
+	const tombstone: Tombstone = {
 		gid: getProtocolGroupId(state),
 		epoch: Number(state.groupContext.epoch)
 	};
@@ -953,13 +1474,16 @@ export async function softDeleteGroup(groupId: string): Promise<SessionTombstone
 	deleteChatGroup(groupId);
 	dbg('softDeleteGroup dropped local', tombstone);
 
-	const config = getMultiDeviceConfig();
-	if (config?.enabled) {
-		config.pendingTombstones = [...(config.pendingTombstones ?? []), tombstone];
-		saveConfig(config);
-		// Fire-and-forget: the next republish carries the tombstone in the union.
-		onLocalStateAdvance();
-	}
+	// Append the tombstone + publish atomically on the serialized lane so a
+	// concurrent meta publish can't clear `pendingTombstones` between the append
+	// and the republish (§10.5: a deletion must stick across the fleet).
+	scheduleRepublish(async () => {
+		const cfg = getMultiDeviceConfig();
+		if (!cfg?.enabled) return;
+		cfg.pendingTombstones = [...(cfg.pendingTombstones ?? []), tombstone];
+		saveConfig(cfg);
+		await publish({ resealGroups: [], resealMeta: true });
+	});
 	return tombstone;
 }
 
@@ -1020,6 +1544,9 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	}
 	// Live subscription reconciles on every subsequent tip move (spec §6).
 	startTipSubscription();
+	// Mark the session reconciled: link just applied the tip directly, so the
+	// watch's §10.6 gate (awaitMultiDeviceReconciled) should not re-run it.
+	mdReconcilePromise = Promise.resolve();
 	return result;
 }
 

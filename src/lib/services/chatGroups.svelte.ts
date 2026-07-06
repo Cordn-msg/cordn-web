@@ -8,7 +8,7 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { getMultiDeviceConfig, onLocalStateAdvance } from '$lib/services/multiDevice.svelte';
+import { onGroupStateAdvance, isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
@@ -529,7 +529,10 @@ export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	void persistSingleGroup(nextGroup);
 }
 
-async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>): Promise<T> {
+export async function runGroupOperation<T>(
+	groupId: string,
+	operation: () => Promise<T>
+): Promise<T> {
 	const previous = groupOperationChains.get(groupId) ?? Promise.resolve();
 	let release!: () => void;
 	const current = new Promise<void>((resolve) => {
@@ -622,7 +625,7 @@ export async function createChatGroup(input: {
 	void pruneConsumedKeyPackagesForActiveGroups();
 	// spec multi-device §10: a new group must reach siblings so they can seed it.
 	// Fire-and-forget; a no-op when multi-device is disabled.
-	onLocalStateAdvance();
+	onGroupStateAdvance(group.id);
 	return group;
 }
 
@@ -681,7 +684,7 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	// spec multi-device §10: a freshly-joined group (via Welcome) must reach
 	// siblings so they can seed the shared leaf. Fire-and-forget; a no-op when
 	// multi-device is disabled. (Group creation fires the same hook itself.)
-	onLocalStateAdvance();
+	onGroupStateAdvance(group.id);
 
 	return group;
 }
@@ -822,7 +825,7 @@ export async function inviteChatGroupMember(input: {
 			pendingEpochOperations,
 			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
 			localStablePubkey: normalizePubKey(account.pubkey),
-			mdActive: !!getMultiDeviceConfig(normalizePubKey(account.pubkey))?.enabled
+			mdActive: isMultiDeviceActive(normalizePubKey(account.pubkey))
 		});
 
 		const inviteSystemMessages = createSystemMessagesFromStateChange({
@@ -1111,7 +1114,7 @@ async function applyIncomingChatGroupMessages(
 		pendingEpochOperations,
 		coordinatorClient,
 		localStablePubkey: normalizePubKey(account.pubkey),
-		mdActive: !!getMultiDeviceConfig(normalizePubKey(account.pubkey))?.enabled
+		mdActive: isMultiDeviceActive(normalizePubKey(account.pubkey))
 	});
 
 	const nextGroup = buildPersistedChatGroup({

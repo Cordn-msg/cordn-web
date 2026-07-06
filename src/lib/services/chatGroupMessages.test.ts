@@ -131,7 +131,7 @@ describe('ingestChatGroupMessages()', () => {
 	test('skips an ahead-of-local-epoch message when MD is active (no poison)', async () => {
 		// spec/applications/multi-device.md §10: behind a sibling Commit or
 		// pre-reconcile, an app message at a newer epoch is undecryptable here.
-		// The session document owns that epoch, so skip + await fast-forward;
+		// The group document owns that epoch, so skip + await fast-forward;
 		// never poison (would silently fork the device out of the group).
 		mlsMessageDecoderMock.mockReturnValue([
 			{ wireformat: 2, privateMessage: { epoch: 7n, contentType: 1 } },
@@ -161,11 +161,45 @@ describe('ingestChatGroupMessages()', () => {
 
 		expect(group.status).toBe('active');
 		expect(result.poisoned).toBe(false);
-		expect(group.fetchCursor).toBe(11);
-		expect(group.lastCursor).toBe(11);
+		// Cursor is NOT advanced: the message stays re-fetchable so a chained
+		// catch-up (spec §8.5) can recover it once the chain state arrives.
+		expect(group.fetchCursor).toBe(0);
+		expect(group.lastCursor).toBe(0);
 		expect(result.issues).toHaveLength(1);
 		expect(result.issues[0]?.cursor).toBe(11);
 		expect(result.issues[0]?.detail).toMatch(/ahead of local epoch 5/i);
+	});
+
+	test('dedups the ahead-of-epoch advisory issue across re-fetches (cursor not advanced)', async () => {
+		// Because the cursor is left at the decrypt frontier, a backlog re-fetch
+		// (e.g. reconnect) re-delivers the same ahead-of-epoch cursor until
+		// catch-up resolves it. The advisory issue must not pile up per re-fetch.
+		mlsMessageDecoderMock.mockReturnValue([
+			{ wireformat: 2, privateMessage: { epoch: 7n, contentType: 1 } },
+			1
+		]);
+		processMessageMock.mockRejectedValue(new Error('OperationError: The operation failed'));
+
+		const group = {
+			state: {
+				groupContext: { epoch: 5n },
+				ratchetTree: [],
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [] as Array<{ cursor: number; createdAt: number; detail: string }>,
+			status: 'active' as const
+		};
+
+		const msg = { cursor: 11, createdAt: 300, opaqueMessageBase64: 'ahead-app-message' };
+		await ingestChatGroupMessages({ group, mdActive: true, messages: [msg] });
+		await ingestChatGroupMessages({ group, mdActive: true, messages: [msg] });
+
+		expect(group.syncIssues.filter((i) => i.cursor === 11)).toHaveLength(1);
+		expect(group.fetchCursor).toBe(0);
 	});
 
 	test('poisons on the same ahead-of-local-epoch message when MD is inactive', async () => {

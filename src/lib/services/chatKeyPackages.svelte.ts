@@ -36,6 +36,8 @@ import { bytesToHex } from 'applesauce-core/helpers';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
+import { type LastResortKeyPackageEntry } from '$lib/services/multiDevice';
+import { onMetaStateChange } from '$lib/services/multiDevice.svelte';
 
 function isMissingRemoteKeyPackageRemovalError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
@@ -322,6 +324,13 @@ export async function createChatKeyPackage(input?: {
 		await publishChatKeyPackage(record.keyPackageRef, input.publishCoordinatorKey);
 	}
 
+	if (isLastResort) {
+		// spec §10.5: a new/rotated last-resort key package triggers a meta
+		// republish so the meta document carries it for cross-device Welcome
+		// coverage (spec §11.5).
+		onMetaStateChange();
+	}
+
 	return {
 		record,
 		keyPackage: generated.publicPackage,
@@ -504,4 +513,64 @@ export async function markKeyPackagePublished(
 			};
 		})
 	);
+	if (isLastResort) {
+		// spec §10.5/§11.5: an existing key package promoted to last-resort on
+		// publish must reach the meta document for cross-device Welcome coverage.
+		onMetaStateChange();
+	}
+}
+
+/**
+ * The account's currently-published last-resort key package, for the meta
+ * document (spec §4.2/§11.5). Returns undefined when the device holds none.
+ * Both fields are the base64 the record already stores.
+ */
+export function getLastResortKeyPackageEntry(): LastResortKeyPackageEntry | undefined {
+	const ownerPubkey = normalizePubKey(getActivePubkey());
+	const record = chatKeyPackagesStore.keyPackages.find(
+		(kp) => kp.isLastResort && kp.ownerPubkey === ownerPubkey
+	);
+	if (!record) return undefined;
+	return {
+		keyPackage: record.keyPackageBase64,
+		privateKeyPackage: record.privateKeyPackageBase64
+	};
+}
+
+/**
+ * Load the account's last-resort key package from a meta document (spec §11.5)
+ * so this device can process a Welcome built against it. Idempotent by
+ * `keyPackageRef`: a package already held is not re-added. Returns true if
+ * newly loaded, false if it was already present.
+ */
+export async function loadLastResortKeyPackage(entry: LastResortKeyPackageEntry): Promise<boolean> {
+	const ownerPubkey = normalizePubKey(getActivePubkey());
+	const keyPackageDecoded = keyPackageDecoder(base64ToBytes(entry.keyPackage), 0);
+	if (!keyPackageDecoded) throw new Error('Unable to decode last-resort key package');
+	const cipherSuite = await getCipherSuite();
+	const keyPackageRef = bytesToHex(await makeKeyPackageRef(keyPackageDecoded[0], cipherSuite.hash));
+	if (chatKeyPackagesStore.keyPackages.some((kp) => kp.keyPackageRef === keyPackageRef)) {
+		return false; // already held
+	}
+	const privateKeyPackageDecoded = privateKeyPackageDecoder(
+		base64ToBytes(entry.privateKeyPackage),
+		0
+	);
+	if (!privateKeyPackageDecoded)
+		throw new Error('Unable to decode last-resort private key package');
+	const timestamp = Date.now();
+	const record: StoredKeyPackageRecord = {
+		id: `${ownerPubkey.slice(0, 8)}-lr-${timestamp}`,
+		ownerPubkey,
+		label: 'Last resort (replicated)',
+		isLastResort: true,
+		keyPackageRef,
+		keyPackageBase64: entry.keyPackage,
+		privateKeyPackageBase64: entry.privateKeyPackage,
+		cipherSuite: CLI_CIPHERSUITE,
+		createdAt: timestamp,
+		publishedCoordinatorKeys: []
+	};
+	await setKeyPackages([record, ...chatKeyPackagesStore.keyPackages]);
+	return true;
 }

@@ -325,21 +325,16 @@ function isRatchetTreeInvariantIssue(detail: string): boolean {
 }
 
 /**
- * Sentinel thrown from the ingest callback when an incoming Commit was authored
- * by this identity's own shared leaf (a sibling device, spec/applications/
- * multi-device.md §10). A sibling Commit refreshes the committer's leaf with
- * new HPKE keys via an UpdatePath whose private keys only the committer holds;
- * a device that tried to ingest it would update its leaf's public keys to the
- * sibling's new keys without the matching private keys, which ts-mls surfaces
- * as the member being removed from the group. Throwing this before
- * `processMessage` applies the UpdatePath lets the loop skip the Commit
- * (advance the cursor, await convergence via the session document) instead of
- * self-removing. The detection is exact: in the shared-leaf model only our own
- * identity occupies our leaf index, so sender-leaf === own-leaf === sibling.
+ * Sentinel for the §10 sibling-skip: an incoming Commit was authored by this
+ * identity's own shared leaf (a sibling device). Ingesting it would adopt the
+ * sibling's new public keys without the matching private keys → ts-mls
+ * self-removes us. Thrown before the UpdatePath applies so the loop skips the
+ * Commit (advance cursor, await the group document) instead. Detection is
+ * exact: in the shared-leaf model only our identity occupies our leaf index.
  */
 class SiblingCommitSkippedError extends Error {
 	constructor() {
-		super('Skipped sibling commit (own shared leaf); awaiting session-document fast-forward');
+		super('Skipped sibling commit (own shared leaf); awaiting group-document fast-forward');
 		this.name = 'SiblingCommitSkippedError';
 	}
 }
@@ -481,9 +476,9 @@ export async function ingestChatGroupMessages(params: {
 	messages: RawChatGroupMessage[];
 	hasPendingEpochOperation?: (opaqueMessageBase64: string) => boolean;
 	localStablePubkey?: string;
-	/** When true, the session document is an authority that can resolve epochs
-	 * this device can't derive locally (sibling Commits / pre-reconcile). Such
-	 * messages are skipped + awaited instead of poisoning (spec §8/§10). */
+	/** MD active: the group document can resolve epochs this device can't derive
+	 * (sibling Commits / pre-reconcile). Such messages skip + await instead of
+	 * poisoning (§8/§10). */
 	mdActive?: boolean;
 }): Promise<{
 	received: StoredChatMessage[];
@@ -585,10 +580,9 @@ export async function ingestChatGroupMessages(params: {
 				}
 			});
 		} catch (error) {
-			// Sibling-skip (spec multi-device §10): the callback detected a Commit
-			// from our own shared leaf before the UpdatePath was applied. Advance
-			// the cursor past it and await convergence via the session document;
-			// do NOT process it (that self-removes) and do NOT poison the group.
+			// Sibling-skip (§10): the callback detected a Commit from our own shared
+			// leaf before the UpdatePath applied. Advance the cursor and await the
+			// group document; do NOT process (self-removes) or poison.
 			if (error instanceof SiblingCommitSkippedError) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
@@ -623,24 +617,32 @@ export async function ingestChatGroupMessages(params: {
 							: 'unknown'
 			});
 
-			// Multi-device (spec/applications/multi-device.md §10): when this device
-			// is behind a sibling's Commit (skipped on the stream) or has not yet
-			// reconciled the tip, an application message at a newer epoch is
-			// undecryptable here. The session document owns that epoch — it carries
-			// the leaf private keys the stream cannot convey. Skip and await the
-			// fast-forward; never derive secrets locally or poison for an epoch the
-			// document resolves (that would silently fork the device out of the
-			// group). Only poison when MD is off, since then there is no rescue.
+			// Multi-device §10/§10.6: an app message at a newer epoch is undecryptable
+			// when this device is behind a sibling's Commit (skipped on the stream) —
+			// the group document owns that epoch (it carries the leaf private keys the
+			// stream cannot). Skip + await fast-forward; never poison for an epoch the
+			// document resolves (would fork the device out). The §10.6 gate
+			// (awaitMultiDeviceReconciled) reconciles before the stream opens at cold
+			// start; this gate is the safety net for the mid-session window (sibling
+			// Commits after the gate ran). Poison only when MD is off — no rescue then.
 			if (params.mdActive && epochAhead) {
-				group.fetchCursor = message.cursor;
-				group.lastCursor = Math.max(group.lastCursor, message.cursor);
-				const issue = {
-					cursor: message.cursor,
-					createdAt: message.createdAt,
-					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting session-document fast-forward`
-				};
-				group.syncIssues.push(issue);
-				issues.push(issue);
+				// Do NOT advance fetchCursor/lastCursor: this message is undecryptable
+				// only because the device is behind a sibling's Commit the session
+				// document owns. Leaving the cursor at the decrypt frontier lets a
+				// chained catch-up (spec §8.5) re-fetch this message once the chain
+				// state arrives — advancing here makes it unrecoverable (the
+				// coordinator never resends by cursor). Dedup the advisory issue: the
+				// same ahead-of-epoch cursor re-delivers on each backlog re-fetch
+				// until catch-up resolves it, so one issue per cursor is enough.
+				if (!group.syncIssues.some((i) => i.cursor === message.cursor)) {
+					const issue = {
+						cursor: message.cursor,
+						createdAt: message.createdAt,
+						detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
+					};
+					group.syncIssues.push(issue);
+					issues.push(issue);
+				}
 				continue;
 			}
 

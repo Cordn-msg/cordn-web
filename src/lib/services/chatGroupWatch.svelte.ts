@@ -23,9 +23,8 @@ import {
 } from '$lib/services/chatReconnectStatus.svelte';
 import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
 import {
-	startTipSubscription,
-	stopTipSubscription,
-	getMultiDeviceConfig
+	awaitMultiDeviceReconciled,
+	resetMultiDeviceSession
 } from '$lib/services/multiDevice.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -142,17 +141,15 @@ if (browser) {
 		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
 			await groupLoadPromise;
 			pruneChatGroupPresence();
+			// Multi-device tip subscription follows the active account: reset the
+			// previous owner's reconcile promise + subscription, then let the watch's
+			// §10.6 gate re-reconcile for this owner (it's a no-op when MD is off).
+			resetMultiDeviceSession();
 			if (account) {
 				// Account switches converge on the same delta-based starter as the
 				// steady-state layout effect instead of a stop-the-world resume, so the
 				// two paths never race to open duplicate fetches/subscriptions.
 				void startWatchingAllGroups();
-				// Multi-device tip subscription follows the active account: stop the
-				// previous owner's subscription, then start this one's if enabled.
-				stopTipSubscription();
-				if (getMultiDeviceConfig(account.pubkey)?.enabled) startTipSubscription();
-			} else {
-				stopTipSubscription();
 			}
 		});
 		if (previousAccount) {
@@ -809,6 +806,10 @@ let startAllRequestedDuringRun = false;
 
 async function runStartWatchingAllGroups(options: { skipBacklogSync?: boolean }) {
 	try {
+		// §10.6: reconcile the tip before any delivery stream opens so cold-start
+		// backlog fetches see a fast-forwarded state. Idempotent + a no-op when MD
+		// is off; runs even for an empty group set since the reconcile may seed.
+		await awaitMultiDeviceReconciled();
 		const groupsToWatch = getWatchableGroups({ includeCurrentWatches: false });
 		if (groupsToWatch.length === 0) {
 			chatGroupWatchStore.startup = 'ready';

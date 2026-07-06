@@ -1,25 +1,16 @@
 /**
- * Multi-device session synchronization core (see
- * `cordn/spec/applications/multi-device.md`).
+ * Multi-device sync core (see `cordn/spec/applications/multi-device.md`).
  *
- * Devices of one identity share a single MLS leaf per group. This module
- * snapshots a session's per-group `ClientState` and fetch cursor into a sealed
- * *session document*, content-addresses it, and lets another device of the
- * same identity fetch, decrypt, and seed the groups it is missing — then
- * converge via the normal coordinator delivery stream.
+ * Two sealed, content-addressed document types: a *group document* per live
+ * group (its `ClientState` + cursor, linked by a per-`gid` `prev` chain) and one
+ * *meta document* per identity (last-resort key package + tombstones; no chain).
+ * Each is NIP-44-sealed to the owner npub and addressed by `sha256(sealed)`;
+ * the tip (§6) advertising them lives in the service layer.
  *
- * Pure protocol/encoding core: no Svelte, no browser, no account coupling.
- * The NIP-44 seal, the content-addressed blob store, and the per-group
- * snapshot/apply are injected so the module is testable in isolation and the
- * service layer (`multiDevice.svelte.ts`) wires real account + Blossom +
- * storage. Mirrors `cordn/src/cli/multiDevice.ts`, swapping Node crypto for
- * `@noble/hashes` and the raw-private-key seal for an injected `Nip44Seal`
- * (so NIP-07/NIP-46 signers that expose `nip44` but never the `nsec` work).
- *
- * The document carries group state only (no `nsec`, no messages). The seal is
- * confidentiality-only; authenticity is provided by the tip (a sealed,
- * owner-signed inner Nostr event that points at the document address —
- * spec §6), implemented in the service layer.
+ * Pure core: no Svelte/browser/account coupling. The seal + blob store are
+ * injected (testability; NIP-07/NIP-46 signers that expose `nip44` but not the
+ * `nsec`). Documents carry group state only; the seal is confidentiality-only
+ * (§7) — authenticity comes from the owner-signed tip (§6), in the service.
  */
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from 'applesauce-core/helpers';
@@ -32,7 +23,10 @@ import {
 	type ClientState
 } from 'ts-mls';
 
-import type { GroupMetadataInput } from '$lib/services/chatGroupLifecycle.svelte';
+import {
+	getCordnGroupMetadataExtension,
+	type CordnGroupMetadata
+} from '$lib/services/chatMlsUtils';
 
 export const MULTI_DEVICE_SCHEMA_VERSION = 1;
 
@@ -46,43 +40,13 @@ export interface Nip44Seal {
 
 /**
  * Minimal content-addressed blob store seam (Blossom in production). The
- * address is `sha256(blob)` lowercase hex (spec §6); `publish` returns the
- * URL the blob was stored at; `fetch` retrieves bytes by URL. The service
- * layer wires `chatBlossomClient.uploadBlob`/`fetchBlob`.
+ * address is `sha256(blob)` lowercase hex (spec §6); `publish` returns the URL
+ * the blob was stored at; `fetch` retrieves bytes by URL. The service layer
+ * wires `chatBlossomClient.uploadBlob`/`fetchBlob`.
  */
-export interface SessionBlobStore {
+export interface BlobStore {
 	publish(blob: Uint8Array): Promise<{ address: string; url: string }>;
 	fetch(url: string): Promise<Uint8Array>;
-}
-
-export interface SessionGroupEntry {
-	gid: string;
-	coordinator: string;
-	metadata?: GroupMetadataInput;
-	encrypted: boolean;
-	/** Base64 of `encode(clientStateEncoder, state)`. */
-	clientState: string;
-	/** Writer's last-processed delivery cursor for this `gid`. */
-	cursor: number;
-}
-
-/**
- * Tombstone (spec §4 `removed[]`): records that the identity stopped tracking
- * `gid` when the group was at MLS `epoch`. `epoch` is a JSON number (MLS epochs
- * are small); compared as `BigInt` against `groupContext.epoch`. A `gid` appears
- * in `groups` XOR `removed`, never both in the same document.
- */
-export interface SessionTombstone {
-	gid: string;
-	epoch: number;
-}
-
-export interface SessionDocument {
-	schemaVersion: typeof MULTI_DEVICE_SCHEMA_VERSION;
-	issuedAt: number;
-	prev?: string;
-	groups: SessionGroupEntry[];
-	removed?: SessionTombstone[];
 }
 
 export class MultiDeviceError extends Error {
@@ -92,14 +56,69 @@ export class MultiDeviceError extends Error {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Document shapes (spec §4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tombstone (spec §4.2 `removed[]`): the identity stopped tracking `gid` when
+ * the group was at MLS `epoch`. `epoch` is a JSON number (MLS epochs are
+ * small); compared as `BigInt` against `groupContext.epoch`.
+ */
+export interface Tombstone {
+	gid: string;
+	epoch: number;
+}
+
+/**
+ * Last-resort key package entry (spec §4.2). Both fields are base64 of the MLS
+ * library serialization (matching `clientState`). One per account (RFC 9420
+ * §17.2); replicates so any device can process a Welcome built against it.
+ */
+export interface LastResortKeyPackageEntry {
+	keyPackage: string;
+	privateKeyPackage: string;
+}
+
+/**
+ * One group document (spec §4.1): one per live group, per epoch. `prev` chains
+ * per `gid`. `clientState` (base64) is the sole carrier of presentation state
+ * — `CordnGroupMetadata` (spec/01) is a GroupContext extension inside it.
+ */
+export interface GroupDocument {
+	schemaVersion: typeof MULTI_DEVICE_SCHEMA_VERSION;
+	type: 'group';
+	gid: string;
+	coordinator: string;
+	issuedAt: number;
+	prev?: string;
+	clientState: string;
+	cursor: number;
+}
+
+/**
+ * One meta document per identity (spec §4.2): a current-state set with NO
+ * `prev` chain. Carries the account's last-resort key package and tombstones.
+ */
+export interface MetaDocument {
+	schemaVersion: typeof MULTI_DEVICE_SCHEMA_VERSION;
+	type: 'meta';
+	issuedAt: number;
+	lastResortKeyPackage?: LastResortKeyPackageEntry;
+	removed?: Tombstone[];
+}
+
+export type MultiDeviceDocument = GroupDocument | MetaDocument;
+
+// ---------------------------------------------------------------------------
+// Local view + reconciliation seam
+// ---------------------------------------------------------------------------
+
 /** A locally-known group, the view the document builder needs. */
-export interface SessionGroupSnapshot {
+export interface GroupSnapshot {
 	gid: string;
 	state: ClientState;
 	coordinatorKey: string;
-	metadata?: GroupMetadataInput;
-	/** True when the group uses end-to-end encrypted payloads (spec/03). */
-	encrypted: boolean;
 	fetchCursor: number;
 }
 
@@ -110,54 +129,31 @@ export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'skipped';
 export type ReconcileTombstoneOutcome = 'dropped' | 'ignored';
 
 /**
- * Per-group local view used by reconciliation. The implementation (wired by
- * the service layer against `StoredChatGroup` + storage) decides whether an
- * entry seeds a missing group, fast-forwards a present group to a strictly
- * newer epoch, or is advisory. The forward-only epoch check (spec §8) is the
- * rollback defense and is load-bearing — implementations MUST NOT downgrade.
+ * Per-group local view used by reconciliation (§8). Wired by the service layer
+ * against `StoredChatGroup`. The forward-only epoch check is the rollback
+ * defense and is load-bearing — implementations MUST NOT downgrade.
  */
 export interface ReconcileTarget {
-	/**
-	 * Local epoch for `gid`, or `undefined` when the group is not present
-	 * locally (the entry should seed it).
-	 */
+	/** Local epoch for `gid`, or `undefined` when absent (document should seed). */
 	localEpoch(gid: string): bigint | undefined;
-	/** Apply one entry. Returns the outcome. */
-	applyEntry(entry: SessionGroupEntry): Promise<ReconcileOutcome>;
 	/**
-	 * Apply one tombstone (spec §8 case 4): drop a local group whose epoch is
-	 * ≤ the tombstone epoch; ignore a stale tombstone (epoch below local) or
-	 * one for an unknown group. Returns `dropped` if a local group was removed.
+	 * Seed a missing group, fast-forward a present group to a strictly newer
+	 * epoch, or skip. A sibling Commit's new private keys travel here (§10)
+	 * since the stream can't convey them (shared-leaf UpdatePath).
 	 */
-	applyTombstone(tombstone: SessionTombstone): Promise<ReconcileTombstoneOutcome>;
+	applyGroupDocument(doc: GroupDocument): Promise<ReconcileOutcome>;
+	/** Apply one tombstone (§8): drop a local group whose epoch ≤ the tombstone
+	 * epoch; ignore stale/unknown. Returns `dropped` if a local group was removed. */
+	applyTombstone(tombstone: Tombstone): Promise<ReconcileTombstoneOutcome>;
+	/** Load the meta document's last-resort key package (§11.5). */
+	loadLastResortKeyPackage(entry: LastResortKeyPackageEntry): Promise<boolean>;
+	/** The account's currently-published last-resort key package, if any. */
+	getLastResortKeyPackage(): LastResortKeyPackageEntry | undefined;
 }
 
 // ---------------------------------------------------------------------------
-// Canonical JSON + content addressing + sealing
+// Content addressing + sealing (spec §5, §6, §7)
 // ---------------------------------------------------------------------------
-
-/**
- * Deterministic JSON for content-addressing: object members sorted by name,
- * no insignificant whitespace. Sufficient for a stable `sha256` of a document
- * we control end-to-end (writer and reader share this encoder). Not full
- * RFC 8785 — big-number/string-escaping edge cases are irrelevant for the
- * document shape defined here, which is the only thing that is ever addressed.
- */
-export function canonicalJson(value: unknown): string {
-	return JSON.stringify(canonicalize(value));
-}
-
-function canonicalize(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(canonicalize);
-	if (value && typeof value === 'object') {
-		const sorted: Record<string, unknown> = {};
-		for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-			sorted[key] = canonicalize((value as Record<string, unknown>)[key]);
-		}
-		return sorted;
-	}
-	return value;
-}
 
 /** `sha256` of the sealed payload's UTF-8 bytes, lowercase hex. Spec §6. */
 export function documentAddress(sealedPayload: string): string {
@@ -166,55 +162,64 @@ export function documentAddress(sealedPayload: string): string {
 
 /** NIP-44 v2 encryption to the owner's own npub (spec §7). */
 export async function sealDocument(
-	doc: SessionDocument,
+	doc: MultiDeviceDocument,
 	seal: Nip44Seal,
 	ownerPubkey: string
 ): Promise<string> {
-	return seal.encrypt(ownerPubkey, canonicalJson(doc));
+	// Spec §5: no canonical JSON — NIP-44's random salt means identical plaintext
+	// seals to different ciphertext/address each time, so canonicalization enables
+	// neither addressing nor dedup.
+	return seal.encrypt(ownerPubkey, JSON.stringify(doc));
 }
 
-/** Decrypt and schema-validate a sealed document (spec §7). */
+/** Decrypt and validate a sealed document. Dispatches on `type`. Spec §7. */
 export async function openDocument(
 	sealedPayload: string,
 	seal: Nip44Seal,
 	ownerPubkey: string
-): Promise<SessionDocument> {
+): Promise<MultiDeviceDocument> {
 	const plaintext = await seal.decrypt(ownerPubkey, sealedPayload);
-	const doc = JSON.parse(plaintext) as SessionDocument;
+	const doc = JSON.parse(plaintext) as MultiDeviceDocument;
 	if (doc.schemaVersion !== MULTI_DEVICE_SCHEMA_VERSION) {
 		throw new MultiDeviceError(`Unsupported multi-device schema version: ${doc.schemaVersion}`);
 	}
 	// Authenticity lives in the tip (a sealed owner-signed inner event, spec
 	// §6), not in the document: the seal is confidentiality-only (spec §7).
+	if (doc.type !== 'group' && doc.type !== 'meta') {
+		throw new MultiDeviceError(`Unknown document type: ${String((doc as { type?: string }).type)}`);
+	}
 	return doc;
 }
 
 // ---------------------------------------------------------------------------
-// Document construction
+// Document construction (spec §4.1, §4.2)
 // ---------------------------------------------------------------------------
 
-export function buildSessionDocument(params: {
-	groups: SessionGroupSnapshot[];
-	prev?: string;
-	/**
-	 * Tombstones carried in the published `removed` (spec §10.5 union): the
-	 * device's own tombstones plus any adopted from the reconciled tip. A `gid`
-	 * MUST NOT appear in both `groups` and `removed` (spec §4 XOR).
-	 */
-	removed?: SessionTombstone[];
-}): SessionDocument {
+function buildGroupDocument(
+	input: { gid: string; state: ClientState; coordinatorKey: string; fetchCursor: number },
+	prev?: string
+): GroupDocument {
 	return {
 		schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+		type: 'group',
+		gid: input.gid,
+		coordinator: input.coordinatorKey,
 		issuedAt: Date.now(),
-		prev: params.prev,
-		groups: params.groups.map((group) => ({
-			gid: group.gid,
-			coordinator: group.coordinatorKey,
-			metadata: group.metadata,
-			encrypted: group.encrypted,
-			clientState: bytesToBase64(encode(clientStateEncoder, group.state)),
-			cursor: group.fetchCursor
-		})),
+		prev,
+		clientState: bytesToBase64(encode(clientStateEncoder, input.state)),
+		cursor: input.fetchCursor
+	};
+}
+
+function buildMetaDocument(params: {
+	lastResortKeyPackage?: LastResortKeyPackageEntry;
+	removed?: Tombstone[];
+}): MetaDocument {
+	return {
+		schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+		type: 'meta',
+		issuedAt: Date.now(),
+		lastResortKeyPackage: params.lastResortKeyPackage,
 		removed: params.removed
 	};
 }
@@ -230,27 +235,10 @@ export interface PublishResult {
 	url: string;
 }
 
-/**
- * Build + seal + publish the current session. `prev` forms the catch-up chain
- * (spec §4) — the caller tracks the last published address per owner.
- */
-export async function publishCurrentSession(params: {
-	groups: SessionGroupSnapshot[];
-	seal: Nip44Seal;
-	ownerPubkey: string;
-	store: SessionBlobStore;
-	prev?: string;
-	/** Tombstones carried in the published `removed` (spec §10.5 union). */
-	removed?: SessionTombstone[];
-}): Promise<PublishResult> {
-	const document = buildSessionDocument({
-		groups: params.groups,
-		prev: params.prev,
-		removed: params.removed
-	});
-	const sealed = await sealDocument(document, params.seal, params.ownerPubkey);
+/** Publish-and-verify tail shared by group + meta publishes (spec §6 MUST). */
+async function publishSealed(sealed: string, store: BlobStore): Promise<PublishResult> {
 	const blob = new TextEncoder().encode(sealed);
-	const { address, url } = await params.store.publish(blob);
+	const { address, url } = await store.publish(blob);
 	// ponytail: trust the store's claimed sha256 only after re-deriving it from
 	// the bytes we sealed — same content-addressing MUST as the read side.
 	const derived = documentAddress(sealed);
@@ -263,17 +251,59 @@ export async function publishCurrentSession(params: {
 }
 
 /**
- * Fetch a sealed document by its content address. `addressToUrl` maps the
- * address to the store's URL scheme (Blossom: `https://<server>/<sha256>`).
- * Re-verifies `sha256(blob) == address` (spec §6 MUST) before unsealing.
+ * Publish one group document, extending its per-`gid` `prev` chain (§10.5: a
+ * group change republishes only that group's doc). `prev` is the current tip
+ * address for this `gid` (read from the reconciled tip; no persistent root).
  */
-export async function pullSessionDocument(params: {
+export async function publishGroupDocument(params: {
+	group: GroupSnapshot;
+	seal: Nip44Seal;
+	ownerPubkey: string;
+	store: BlobStore;
+	prev?: string;
+}): Promise<PublishResult> {
+	const doc = buildGroupDocument(
+		{
+			gid: params.group.gid,
+			state: params.group.state,
+			coordinatorKey: params.group.coordinatorKey,
+			fetchCursor: params.group.fetchCursor
+		},
+		params.prev
+	);
+	const sealed = await sealDocument(doc, params.seal, params.ownerPubkey);
+	return publishSealed(sealed, params.store);
+}
+
+/** Publish the meta document (§4.2): a current-state set with no `prev`. A
+ * tombstone/key-package change republishes only this doc + its `meta` x-tag (§10.5). */
+export async function publishMetaDocument(params: {
+	seal: Nip44Seal;
+	ownerPubkey: string;
+	store: BlobStore;
+	removed?: Tombstone[];
+	lastResortKeyPackage?: LastResortKeyPackageEntry;
+}): Promise<PublishResult> {
+	const doc = buildMetaDocument({
+		lastResortKeyPackage: params.lastResortKeyPackage,
+		removed: params.removed
+	});
+	const sealed = await sealDocument(doc, params.seal, params.ownerPubkey);
+	return publishSealed(sealed, params.store);
+}
+
+/**
+ * Fetch a document by its content address. `addressToUrl` maps the address to
+ * the store's URL scheme (Blossom: `https://<server>/<sha256>`). Re-verifies
+ * `sha256(blob) == address` (spec §6 MUST) before unsealing.
+ */
+export async function pullDocument(params: {
 	address: string;
-	store: SessionBlobStore;
+	store: BlobStore;
 	addressToUrl: (address: string) => string;
 	seal: Nip44Seal;
 	ownerPubkey: string;
-}): Promise<SessionDocument> {
+}): Promise<MultiDeviceDocument> {
 	const blob = await params.store.fetch(params.addressToUrl(params.address));
 	const sealed = new TextDecoder().decode(blob);
 	if (documentAddress(sealed) !== params.address) {
@@ -285,77 +315,122 @@ export async function pullSessionDocument(params: {
 }
 
 /**
- * Seed-and-fast-forward reconciliation (spec §8). For each entry the target
- * either seeds a missing group, fast-forwards a present group to a strictly
- * newer epoch (never a downgrade — that is the rollback defense), or skips it
- * as advisory. Tombstones (spec §8 case 4) are processed AFTER groups so a
- * malformed doc that violates the §4 XOR rule still resolves removal-wins on
- * ties (§8). For well-formed docs (XOR) the order is irrelevant.
- *
- * ponytail: single-snapshot fast-forward only. The `prev`-chain walk
- * (spec §8.5) recovers messages a fast-forward would lose across skipped
- * sibling-commit epochs; ship that only when offline-during-sibling-commit
- * with messages is a reported data-loss case. `prev` is still WRITTEN so the
- * chain is walkable later — just not walked yet.
+ * Apply a meta document: drop tombstoned groups (§8) + load the last-resort key
+ * package (§11.5). Tombstone order is irrelevant for a well-formed meta doc.
  */
-export async function reconcileFromDocument(
+export async function reconcileMetaDocument(
 	target: ReconcileTarget,
-	document: SessionDocument
-): Promise<{
-	seeded: SessionGroupEntry[];
-	fastForwarded: SessionGroupEntry[];
-	skipped: SessionGroupEntry[];
-	dropped: SessionTombstone[];
-	ignored: SessionTombstone[];
-}> {
-	const seeded: SessionGroupEntry[] = [];
-	const fastForwarded: SessionGroupEntry[] = [];
-	const skipped: SessionGroupEntry[] = [];
-	const dropped: SessionTombstone[] = [];
-	const ignored: SessionTombstone[] = [];
-
-	for (const entry of document.groups) {
-		const outcome = await target.applyEntry(entry);
-		if (outcome === 'seeded') seeded.push(entry);
-		else if (outcome === 'fast-forwarded') fastForwarded.push(entry);
-		else skipped.push(entry);
-	}
-
-	// Tombstones after groups (removal-wins-on-tie when §4 XOR is violated).
-	// ponytail: no device-local tombstone memory — a tombstone for an unknown
-	// group is carried forward by the caller via the published union (§10.5);
-	// case 7 (refuse to re-seed from a stale peer that blind-pushes the group
-	// as present) is enforced by the §10.5 reconcile-before-push discipline,
-	// not by a local denylist.
-	for (const tombstone of document.removed ?? []) {
+	doc: MetaDocument
+): Promise<{ dropped: Tombstone[]; ignored: Tombstone[]; keyPackageLoaded: boolean }> {
+	const dropped: Tombstone[] = [];
+	const ignored: Tombstone[] = [];
+	for (const tombstone of doc.removed ?? []) {
 		const outcome = await target.applyTombstone(tombstone);
-		if (outcome === 'dropped') dropped.push(tombstone);
-		else ignored.push(tombstone);
+		// ponytail: no device-local tombstone memory — a tombstone for an unknown
+		// group is carried forward by the caller via the published union (§10.5);
+		// the §10.5 reconcile-before-push discipline keeps a stale peer from
+		// resurrecting it by blind-pushing the group as present.
+		(outcome === 'dropped' ? dropped : ignored).push(tombstone);
 	}
-
-	return { seeded, fastForwarded, skipped, dropped, ignored };
+	const keyPackageLoaded = doc.lastResortKeyPackage
+		? await target.loadLastResortKeyPackage(doc.lastResortKeyPackage)
+		: false;
+	return { dropped, ignored, keyPackageLoaded };
 }
 
-/** Decode an entry's `clientState` to read its epoch (used by §8 comparison). */
-export function entryEpoch(entry: SessionGroupEntry): bigint | undefined {
-	const decoded = clientStateDecoder(base64ToBytes(entry.clientState), 0);
+// ---------------------------------------------------------------------------
+// Group-state decode helpers (spec §4: metadata lives in clientState)
+// ---------------------------------------------------------------------------
+
+/** Decode a group document's `clientState` epoch (used by §8 comparison). */
+export function groupEpoch(doc: GroupDocument): bigint | undefined {
+	const decoded = clientStateDecoder(base64ToBytes(doc.clientState), 0);
 	return decoded ? decoded[0].groupContext.epoch : undefined;
 }
 
+/** Derive a group's presentation metadata from its `clientState` (§9 step 2):
+ * `CordnGroupMetadata` is a GroupContext extension, not a document field (§4). */
+export function groupMetadata(doc: GroupDocument): CordnGroupMetadata | undefined {
+	const decoded = clientStateDecoder(base64ToBytes(doc.clientState), 0);
+	return decoded ? getCordnGroupMetadataExtension(decoded[0]) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Per-group chained catch-up (spec §8.5)
+// ---------------------------------------------------------------------------
+
+/** One step of a walked `prev` chain (spec §8.5): a gen-0 `ClientState` for an epoch strictly newer than local. */
+export interface ChainStep {
+	/** MLS epoch of `clientState` (decoded). */
+	epoch: bigint;
+	/** Base64 `ClientState` for this epoch (spec §4.1 `clientState`). */
+	clientState: string;
+	/** Writer's cursor when this epoch's doc was published — epoch boundary for
+	 * partitioning the catch-up message gap. */
+	cursor: number;
+	/** Content address of the document this step was read from. */
+	address: string;
+}
+
 /**
- * Compose the published `removed` union (spec §10.5): own pending tombstones
- * plus any adopted from the reconciled tip, deduped per `gid` (highest epoch
- * wins), with the §4 XOR rule enforced — a `gid` present in local state is
- * alive, so its tombstone is dropped (a sibling Commit resurrected it, §10).
- * Pure: the caller passes the set of locally-present `gid`s.
+ * Walk one group's `prev` chain (§4.1) backward from the tip, collecting one
+ * gen-0 `ClientState` per epoch strictly newer than `localEpoch`. Authenticity
+ * is transitive (tip §6 → each `prev` → `sha256` re-checked per hop). Keeps the
+ * OLDEST doc per epoch (smallest cursor = gen-0; a newer same-epoch doc has an
+ * advanced ratchet and can't derive earlier generations). Sorted ascending by
+ * cursor so callers partition the message gap at chain cursors.
+ * ponytail: bounded to 1000 hops; a deeper gap should single-snapshot
+ * fast-forward (§10). Sibling-Commits aren't applied — caller skips them.
+ */
+export async function walkGroupChain(params: {
+	tipAddress: string;
+	groupId: string;
+	localEpoch: bigint;
+	store: BlobStore;
+	addressToUrl: (address: string) => string;
+	seal: Nip44Seal;
+	ownerPubkey: string;
+}): Promise<ChainStep[]> {
+	const byEpoch = new Map<bigint, ChainStep>();
+	let address: string | undefined = params.tipAddress;
+	for (let hop = 0; hop < 1000 && address; hop++) {
+		const doc = await pullDocument({
+			address,
+			store: params.store,
+			addressToUrl: params.addressToUrl,
+			seal: params.seal,
+			ownerPubkey: params.ownerPubkey
+		});
+		// The chain is per-gid: stop at a meta doc or a different group's doc.
+		if (doc.type !== 'group' || doc.gid !== params.groupId) break;
+		const epoch = groupEpoch(doc);
+		if (epoch === undefined || epoch <= params.localEpoch) break; // reached local-or-older state
+		const existing = byEpoch.get(epoch);
+		if (!existing || doc.cursor < existing.cursor) {
+			byEpoch.set(epoch, {
+				epoch,
+				clientState: doc.clientState,
+				cursor: doc.cursor,
+				address
+			});
+		}
+		address = doc.prev;
+	}
+	return [...byEpoch.values()].sort((a, b) => a.cursor - b.cursor);
+}
+
+/**
+ * Published `removed` union (§10.5): own pending + adopted tombstones, deduped
+ * per `gid` (highest epoch wins), with the §4.3 XOR — a `gid` present locally
+ * is alive, so its tombstone is dropped (sibling-Commit resurrection, §10).
  */
 export function composeTombstoneUnion(
-	pending: SessionTombstone[],
-	adopted: SessionTombstone[],
+	pending: Tombstone[],
+	adopted: Tombstone[],
 	presentGids: Iterable<string>
-): SessionTombstone[] {
+): Tombstone[] {
 	const present = new Set(presentGids);
-	const byGid = new Map<string, SessionTombstone>();
+	const byGid = new Map<string, Tombstone>();
 	for (const t of [...pending, ...adopted]) {
 		if (present.has(t.gid)) continue; // XOR: alive locally → not removed
 		const prevT = byGid.get(t.gid);

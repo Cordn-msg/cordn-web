@@ -3,8 +3,8 @@ import { describe, expect, test, vi } from 'vitest';
 /**
  * Pure-core tests for multiDevice.ts. The MLS encode/decode seam is mocked so
  * `clientState` round-trips as a deterministic base64 of a tiny fake object,
- * and `entryEpoch` reads back the `epoch` the mock stamps. The NIP-44 seal is
- * a plain inverted-cipher stub ( confidentiality-only, so any invertible
+ * and `groupEpoch` reads back the `epoch` the mock stamps. The NIP-44 seal is
+ * a plain inverted-cipher stub (confidentiality-only, so any invertible
  * transform is a faithful stand-in for the protocol tests here).
  */
 
@@ -26,23 +26,24 @@ vi.mock('ts-mls', async () => {
 
 import {
 	MULTI_DEVICE_SCHEMA_VERSION,
-	buildSessionDocument,
-	canonicalJson,
 	composeTombstoneUnion,
 	documentAddress,
-	entryEpoch,
+	groupEpoch,
 	openDocument,
-	publishCurrentSession,
-	pullSessionDocument,
-	reconcileFromDocument,
+	publishGroupDocument,
+	publishMetaDocument,
+	pullDocument,
+	reconcileMetaDocument,
 	sealDocument,
+	walkGroupChain,
+	type BlobStore,
+	type GroupDocument,
+	type GroupSnapshot,
+	type LastResortKeyPackageEntry,
+	type MetaDocument,
 	type Nip44Seal,
 	type ReconcileTarget,
-	type SessionBlobStore,
-	type SessionDocument,
-	type SessionGroupEntry,
-	type SessionGroupSnapshot,
-	type SessionTombstone
+	type Tombstone
 } from './multiDevice';
 
 /** Fake encoder: stamp `{epoch, gid}` as UTF-8 bytes. Decoder inverts it. */
@@ -71,80 +72,116 @@ function fakeSeal(): Nip44Seal {
 	};
 }
 
-function snapshot(epoch: number, gid: string, cursor = 5): SessionGroupSnapshot {
+const OWNER = 'ab'.repeat(32);
+
+function snapshot(epoch: number, gid: string, cursor = 5): GroupSnapshot {
 	return {
 		gid,
 		state: { __bytes: fakeStateBytes(epoch, gid) } as never,
 		coordinatorKey: 'coord:' + gid,
-		encrypted: true,
 		fetchCursor: cursor
 	};
 }
 
-const OWNER = 'ab'.repeat(32);
+function groupDoc(epoch: number, gid: string, cursor = 5, prev?: string): GroupDocument {
+	return {
+		schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
+		type: 'group',
+		gid,
+		coordinator: 'coord:' + gid,
+		issuedAt: 0,
+		prev,
+		clientState: bytesToBase64Local(fakeStateBytes(epoch, gid)),
+		cursor
+	};
+}
+
+function metaDoc(opts: {
+	removed?: Tombstone[];
+	lastResortKeyPackage?: LastResortKeyPackageEntry;
+}): MetaDocument {
+	return { schemaVersion: MULTI_DEVICE_SCHEMA_VERSION, type: 'meta', issuedAt: 0, ...opts };
+}
+
+function tombstone(gid: string, epoch: number): Tombstone {
+	return { gid, epoch };
+}
+
+/** An honest store: derives the address from the bytes it receives. */
+function honestStore(blobs?: Map<string, Uint8Array>): BlobStore {
+	const store = blobs ?? new Map<string, Uint8Array>();
+	return {
+		async publish(blob) {
+			const sealed = new TextDecoder().decode(blob);
+			const address = documentAddress(sealed);
+			store.set(address, blob);
+			return { address, url: `https://blossom.test/${address}` };
+		},
+		async fetch(url) {
+			const address = url.split('/').pop()!;
+			const blob = store.get(address);
+			if (!blob) throw new Error('not found: ' + address);
+			return blob;
+		}
+	};
+}
 
 describe('multiDevice core', () => {
-	test('canonicalJson is deterministic + member-sorted + no whitespace', () => {
-		const a = canonicalJson({ b: 1, a: 2, c: { z: 1, y: 2 } });
-		const b = canonicalJson({ c: { y: 2, z: 1 }, a: 2, b: 1 });
-		expect(a).toBe(b);
-		expect(a).toBe('{"a":2,"b":1,"c":{"y":2,"z":1}}');
-		expect(a).not.toMatch(/\s/);
-	});
-
 	test('documentAddress is sha256 of the sealed UTF-8 payload', () => {
-		// sha256('enc:hello') precomputed
 		const addr = documentAddress('enc:hello');
 		expect(addr).toMatch(/^[0-9a-f]{64}$/);
-		// Different input → different address.
 		expect(documentAddress('enc:hello')).not.toBe(documentAddress('enc:world'));
 	});
 
-	test('seal/open round-trips a document', async () => {
-		const doc = buildSessionDocument({ groups: [snapshot(3, 'g1')] });
-		const sealed = await sealDocument(doc, fakeSeal(), OWNER);
+	test('seal/open round-trips a group document', async () => {
+		const sealed = await sealDocument(groupDoc(3, 'g1'), fakeSeal(), OWNER);
 		const reopened = await openDocument(sealed, fakeSeal(), OWNER);
 		expect(reopened.schemaVersion).toBe(MULTI_DEVICE_SCHEMA_VERSION);
-		expect(reopened.groups[0]?.gid).toBe('g1');
-		expect(reopened.groups[0]?.cursor).toBe(5);
+		expect(reopened.type).toBe('group');
+		if (reopened.type === 'group') {
+			expect(reopened.gid).toBe('g1');
+			expect(reopened.cursor).toBe(5);
+		}
 	});
 
 	test('openDocument rejects an unknown schema version', async () => {
-		const sealed = await fakeSeal().encrypt(OWNER, '{"schemaVersion":99,"groups":[]}');
+		const sealed = await fakeSeal().encrypt(OWNER, '{"schemaVersion":99,"type":"group"}');
 		await expect(openDocument(sealed, fakeSeal(), OWNER)).rejects.toThrow(
 			/unsupported multi-device schema version/i
 		);
 	});
 
-	test('publishCurrentSession seals + content-addresses + returns address', async () => {
-		const published: Uint8Array[] = [];
-		const store: SessionBlobStore = {
-			async publish(blob) {
-				published.push(blob);
-				// Address MUST equal sha256(blob) — the store derives it honestly.
-				const { documentAddress } = await import('./multiDevice');
-				return {
-					address: documentAddress(new TextDecoder().decode(blob)),
-					url: `https://blossom.test/${documentAddress(new TextDecoder().decode(blob))}`
-				};
-			},
-			async fetch() {
-				return new Uint8Array();
-			}
-		};
-		const res = await publishCurrentSession({
-			groups: [snapshot(1, 'g1')],
+	test('openDocument rejects an unknown document type', async () => {
+		const sealed = await fakeSeal().encrypt(
+			OWNER,
+			`{"schemaVersion":${MULTI_DEVICE_SCHEMA_VERSION},"type":"bogus"}`
+		);
+		await expect(openDocument(sealed, fakeSeal(), OWNER)).rejects.toThrow(/unknown document type/i);
+	});
+
+	test('publishGroupDocument seals + content-addresses + threads prev', async () => {
+		const store = honestStore();
+		const res = await publishGroupDocument({
+			group: snapshot(1, 'g1'),
 			seal: fakeSeal(),
 			ownerPubkey: OWNER,
 			store,
 			prev: 'prevaddr'
 		});
 		expect(res.address).toMatch(/^[0-9a-f]{64}$/);
-		expect(published).toHaveLength(1);
+		// Round-trips through the honest store and carries prev.
+		const pulled = await pullDocument({
+			address: res.address,
+			store,
+			addressToUrl: (a) => `https://blossom.test/${a}`,
+			seal: fakeSeal(),
+			ownerPubkey: OWNER
+		});
+		if (pulled.type === 'group') expect(pulled.prev).toBe('prevaddr');
 	});
 
-	test('publishCurrentSession rejects a store that lies about the address', async () => {
-		const store: SessionBlobStore = {
+	test('publishGroupDocument rejects a store that lies about the address', async () => {
+		const store: BlobStore = {
 			async publish() {
 				return { address: '0'.repeat(64), url: 'https://x' };
 			},
@@ -153,8 +190,8 @@ describe('multiDevice core', () => {
 			}
 		};
 		await expect(
-			publishCurrentSession({
-				groups: [snapshot(1, 'g1')],
+			publishGroupDocument({
+				group: snapshot(1, 'g1'),
 				seal: fakeSeal(),
 				ownerPubkey: OWNER,
 				store
@@ -162,10 +199,32 @@ describe('multiDevice core', () => {
 		).rejects.toThrow(/does not match sha256/i);
 	});
 
-	test('pullSessionDocument rejects a blob whose hash != advertised address', async () => {
-		const realDoc = buildSessionDocument({ groups: [snapshot(1, 'g1')] });
-		const realSealed = await sealDocument(realDoc, fakeSeal(), OWNER);
-		const store: SessionBlobStore = {
+	test('publishMetaDocument carries removed + lastResortKeyPackage', async () => {
+		const store = honestStore();
+		const res = await publishMetaDocument({
+			seal: fakeSeal(),
+			ownerPubkey: OWNER,
+			store,
+			removed: [tombstone('g', 3)],
+			lastResortKeyPackage: { keyPackage: 'kp', privateKeyPackage: 'pkp' }
+		});
+		const pulled = await pullDocument({
+			address: res.address,
+			store,
+			addressToUrl: (a) => `https://blossom.test/${a}`,
+			seal: fakeSeal(),
+			ownerPubkey: OWNER
+		});
+		expect(pulled.type).toBe('meta');
+		if (pulled.type === 'meta') {
+			expect(pulled.removed).toContainEqual(tombstone('g', 3));
+			expect(pulled.lastResortKeyPackage?.keyPackage).toBe('kp');
+		}
+	});
+
+	test('pullDocument rejects a blob whose hash != advertised address', async () => {
+		const realSealed = await sealDocument(groupDoc(1, 'g1'), fakeSeal(), OWNER);
+		const store: BlobStore = {
 			async publish() {
 				return { address: '', url: '' };
 			},
@@ -174,7 +233,7 @@ describe('multiDevice core', () => {
 			}
 		};
 		await expect(
-			pullSessionDocument({
+			pullDocument({
 				address: '0'.repeat(64),
 				store,
 				addressToUrl: (a) => `https://blossom.test/${a}`,
@@ -184,116 +243,88 @@ describe('multiDevice core', () => {
 		).rejects.toThrow(/address mismatch/i);
 	});
 
-	test('pullSessionDocument round-trips a honestly-addressed blob', async () => {
-		const realDoc = buildSessionDocument({ groups: [snapshot(7, 'g1')] });
-		const realSealed = await sealDocument(realDoc, fakeSeal(), OWNER);
-		const addr = documentAddress(realSealed);
-		const store: SessionBlobStore = {
-			async publish() {
-				return { address: addr, url: `https://b/${addr}` };
-			},
-			async fetch() {
-				return new TextEncoder().encode(realSealed);
-			}
-		};
-		const reopened = await pullSessionDocument({
-			address: addr,
-			store,
-			addressToUrl: (a) => `https://b/${a}`,
-			seal: fakeSeal(),
-			ownerPubkey: OWNER
-		});
-		expect(reopened.groups[0]?.gid).toBe('g1');
+	test('groupEpoch reads the epoch from a group document clientState', () => {
+		expect(groupEpoch(groupDoc(4, 'g1'))).toBe(4n);
 	});
+});
 
-	test('entryEpoch reads the epoch from an entry clientState', () => {
-		const bytes = fakeStateBytes(4, 'g1');
-		const entry: SessionGroupEntry = {
-			gid: 'g1',
-			coordinator: 'c',
-			encrypted: true,
-			clientState: bytesToBase64Local(bytes),
-			cursor: 0
-		};
-		expect(entryEpoch(entry)).toBe(4n);
-	});
+// ---------------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------------
 
-	test('reconcileFromDocument: seeds missing, fast-forwards newer, skips equal-or-older', async () => {
+/**
+ * Build a `ReconcileTarget` over an in-memory `gid → epoch` map. Mirrors the
+ * service semantics: seed when absent, fast-forward on strictly-newer, skip
+ * otherwise; drop on a tombstone whose epoch ≥ local, ignore stale/unknown.
+ * Tracks the last-resort key package in-memory (idempotent by value).
+ */
+function makeTarget(
+	local: Map<string, bigint>,
+	opts?: { lastResort?: LastResortKeyPackageEntry }
+): ReconcileTarget {
+	let heldLastResort = opts?.lastResort;
+	return {
+		localEpoch(gid) {
+			return local.get(gid);
+		},
+		async applyGroupDocument(doc) {
+			const localE = local.get(doc.gid);
+			const incoming = groupEpoch(doc);
+			let outcome: 'seeded' | 'fast-forwarded' | 'skipped';
+			if (localE === undefined) outcome = 'seeded';
+			else if (incoming !== undefined && incoming > localE) outcome = 'fast-forwarded';
+			else outcome = 'skipped';
+			if (outcome !== 'skipped' && incoming !== undefined) local.set(doc.gid, incoming);
+			return outcome;
+		},
+		async applyTombstone(t) {
+			const localE = local.get(t.gid);
+			if (localE === undefined) return 'ignored';
+			if (BigInt(t.epoch) < localE) return 'ignored'; // stale
+			local.delete(t.gid);
+			return 'dropped';
+		},
+		async loadLastResortKeyPackage(entry) {
+			if (heldLastResort?.keyPackage === entry.keyPackage) return false; // already held
+			heldLastResort = entry;
+			return true;
+		},
+		getLastResortKeyPackage() {
+			return heldLastResort;
+		}
+	};
+}
+
+describe('group reconciliation via ReconcileTarget.applyGroupDocument (spec §8)', () => {
+	test('seeds missing, fast-forwards newer, skips equal-or-older', async () => {
 		const local = new Map<string, bigint>([
 			['present-old', 1n],
 			['present-equal', 5n],
 			['present-newer', 9n]
 		]);
 		const target = makeTarget(local);
+		// missing=2 → seed; present-old=3>1 → ff; present-equal=5=5 → skip; present-newer=7<9 → skip.
+		expect(await target.applyGroupDocument(groupDoc(2, 'missing'))).toBe('seeded');
+		expect(await target.applyGroupDocument(groupDoc(3, 'present-old'))).toBe('fast-forwarded');
+		expect(await target.applyGroupDocument(groupDoc(5, 'present-equal'))).toBe('skipped');
+		expect(await target.applyGroupDocument(groupDoc(7, 'present-newer'))).toBe('skipped');
+	});
 
-		const entries: SessionGroupEntry[] = [
-			'missing',
-			'present-old',
-			'present-equal',
-			'present-newer'
-		].map((gid, i) => ({
-			gid,
-			coordinator: 'c',
-			encrypted: true,
-			// epochs: missing=2(seeds), present-old=3(>1 ff), present-equal=5(=skip),
-			// present-newer=7(<9 skip).
-			clientState: bytesToBase64Local(fakeStateBytes([2, 3, 5, 7][i], gid)),
-			cursor: i
-		}));
-
-		const res = await reconcileFromDocument(target, { groups: entries } as never);
-		expect(res.seeded.map((e) => e.gid)).toEqual(['missing']);
-		expect(res.fastForwarded.map((e) => e.gid)).toEqual(['present-old']);
-		expect(res.skipped.map((e) => e.gid).sort()).toEqual(['present-equal', 'present-newer']);
-		expect(res.dropped).toHaveLength(0);
-		expect(res.ignored).toHaveLength(0);
+	test('a strictly-older document is skipped, never downgrading local epoch (§8)', async () => {
+		const local = new Map<string, bigint>([['g', 5n]]);
+		const outcome = await makeTarget(local).applyGroupDocument(groupDoc(2, 'g'));
+		expect(outcome).toBe('skipped');
+		expect(local.get('g')).toBe(5n); // unchanged
 	});
 });
 
-/**
- * Build a `ReconcileTarget` over an in-memory `gid → epoch` map. Mirrors the
- * service semantics: seed when absent, fast-forward on strictly-newer, skip
- * otherwise; drop on a tombstone whose epoch ≥ local, ignore stale/unknown.
- */
-function makeTarget(local: Map<string, bigint>): ReconcileTarget {
-	return {
-		localEpoch(gid) {
-			return local.get(gid);
-		},
-		async applyEntry(entry) {
-			const localE = local.get(entry.gid);
-			const incoming = entryEpoch(entry);
-			let outcome: 'seeded' | 'fast-forwarded' | 'skipped';
-			if (localE === undefined) outcome = 'seeded';
-			else if (incoming !== undefined && incoming > localE) outcome = 'fast-forwarded';
-			else outcome = 'skipped';
-			if (incoming !== undefined) local.set(entry.gid, incoming);
-			return outcome;
-		},
-		async applyTombstone(tombstone) {
-			const localE = local.get(tombstone.gid);
-			if (localE === undefined) return 'ignored';
-			if (BigInt(tombstone.epoch) < localE) return 'ignored'; // stale
-			local.delete(tombstone.gid);
-			return 'dropped';
-		}
-	};
-}
-
-function tombstone(gid: string, epoch: number): SessionTombstone {
-	return { gid, epoch };
-}
-
-describe('multiDevice tombstones (spec §8/§10.5)', () => {
-	test('a tombstone drops the local group on reconcile (spec §8 case 4)', async () => {
+describe('reconcileMetaDocument (spec §8 case 4, §11.5)', () => {
+	test('a tombstone drops the local group on reconcile', async () => {
 		const local = new Map<string, bigint>([['g', 3n]]);
-		const doc: SessionDocument = {
-			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
-			issuedAt: 0,
-			groups: [],
-			removed: [tombstone('g', 3)]
-		};
-		const res = await reconcileFromDocument(makeTarget(local), doc);
+		const res = await reconcileMetaDocument(
+			makeTarget(local),
+			metaDoc({ removed: [tombstone('g', 3)] })
+		);
 		expect(res.dropped).toContainEqual(tombstone('g', 3));
 		expect(res.ignored).toHaveLength(0);
 		expect(local.has('g')).toBe(false);
@@ -301,66 +332,41 @@ describe('multiDevice tombstones (spec §8/§10.5)', () => {
 
 	test('a stale tombstone (epoch below local) is ignored (§8 anti-downgrade)', async () => {
 		const local = new Map<string, bigint>([['g', 5n]]);
-		const doc: SessionDocument = {
-			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
-			issuedAt: 0,
-			groups: [],
-			removed: [tombstone('g', 3)]
-		};
-		const res = await reconcileFromDocument(makeTarget(local), doc);
+		const res = await reconcileMetaDocument(
+			makeTarget(local),
+			metaDoc({ removed: [tombstone('g', 3)] })
+		);
 		expect(res.dropped).toHaveLength(0);
 		expect(res.ignored).toContainEqual(tombstone('g', 3));
 		expect(local.get('g')).toBe(5n); // retained
 	});
 
-	test('a tombstone for an unknown group is ignored, not seeded', async () => {
+	test('a tombstone for an unknown group is ignored', async () => {
 		const local = new Map<string, bigint>([]);
-		const doc: SessionDocument = {
-			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
-			issuedAt: 0,
-			groups: [],
-			removed: [tombstone('unknown', 9)]
-		};
-		const res = await reconcileFromDocument(makeTarget(local), doc);
+		const res = await reconcileMetaDocument(
+			makeTarget(local),
+			metaDoc({ removed: [tombstone('unknown', 9)] })
+		);
 		expect(res.dropped).toHaveLength(0);
 		expect(res.ignored).toContainEqual(tombstone('unknown', 9));
 	});
 
-	test('absence from both arrays is not removal (spec §8)', async () => {
+	test('absence from removed is not removal (spec §8)', async () => {
 		const local = new Map<string, bigint>([['g', 3n]]);
-		const doc: SessionDocument = {
-			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
-			issuedAt: 0,
-			groups: [],
-			removed: []
-		};
-		const res = await reconcileFromDocument(makeTarget(local), doc);
+		const res = await reconcileMetaDocument(makeTarget(local), metaDoc({ removed: [] }));
 		expect(res.dropped).toHaveLength(0);
 		expect(local.get('g')).toBe(3n); // retained
 	});
 
-	test('tombstones processed after groups: removal wins on a §4-XOR tie', async () => {
-		// A malformed doc carrying `g` in BOTH groups (epoch 3) and removed (epoch 3).
-		const local = new Map<string, bigint>([['g', 2n]]);
-		const doc: SessionDocument = {
-			schemaVersion: MULTI_DEVICE_SCHEMA_VERSION,
-			issuedAt: 0,
-			groups: [
-				{
-					gid: 'g',
-					coordinator: 'c',
-					encrypted: true,
-					clientState: bytesToBase64Local(fakeStateBytes(3, 'g')),
-					cursor: 0
-				}
-			],
-			removed: [tombstone('g', 3)]
-		};
-		const res = await reconcileFromDocument(makeTarget(local), doc);
-		// Group fast-forwards 2→3, then the tombstone at epoch 3 (≥ local 3) drops it.
-		expect(res.fastForwarded.map((e) => e.gid)).toEqual(['g']);
-		expect(res.dropped).toContainEqual(tombstone('g', 3));
-		expect(local.has('g')).toBe(false);
+	test('loads the last-resort key package, idempotent on re-expose (§11.5)', async () => {
+		const local = new Map<string, bigint>();
+		const target = makeTarget(local);
+		const entry: LastResortKeyPackageEntry = { keyPackage: 'kp1', privateKeyPackage: 'pkp1' };
+		const r1 = await reconcileMetaDocument(target, metaDoc({ lastResortKeyPackage: entry }));
+		expect(r1.keyPackageLoaded).toBe(true);
+		expect(target.getLastResortKeyPackage()).toEqual(entry);
+		const r2 = await reconcileMetaDocument(target, metaDoc({ lastResortKeyPackage: entry }));
+		expect(r2.keyPackageLoaded).toBe(false); // already held
 	});
 });
 
@@ -385,6 +391,106 @@ describe('composeTombstoneUnion (spec §10.5)', () => {
 
 	test('empty inputs yield an empty union', () => {
 		expect(composeTombstoneUnion([], [], [])).toEqual([]);
+	});
+});
+
+describe('walkGroupChain (spec §8.5)', () => {
+	async function buildChain(epochs: { epoch: number; cursor: number }[], gid = 'g1') {
+		const seal = fakeSeal();
+		const store = honestStore();
+		let prev: string | undefined;
+		let tip = '';
+		// Oldest-first; each doc links to the prior via `prev` (spec §4.1).
+		for (const { epoch, cursor } of epochs) {
+			const sealed = await sealDocument(groupDoc(epoch, gid, cursor, prev), seal, OWNER);
+			const address = documentAddress(sealed);
+			await store.publish(new TextEncoder().encode(sealed));
+			prev = address;
+			tip = address;
+		}
+		return { seal, store, tip };
+	}
+
+	test('walks prev chain, one gen-0 step per newer epoch, sorted ascending by cursor', async () => {
+		const { seal, store, tip } = await buildChain([
+			{ epoch: 1, cursor: 10 },
+			{ epoch: 2, cursor: 20 },
+			{ epoch: 3, cursor: 30 }
+		]);
+		const chain = await walkGroupChain({
+			tipAddress: tip,
+			groupId: 'g1',
+			localEpoch: 0n,
+			store,
+			addressToUrl: (a) => `https://x/${a}`,
+			seal,
+			ownerPubkey: OWNER
+		});
+		expect(chain.map((s) => Number(s.epoch))).toEqual([1, 2, 3]);
+		expect(chain.map((s) => s.cursor)).toEqual([10, 20, 30]);
+		expect(chain[2]!.address).toBe(tip); // tip is the newest step
+	});
+
+	test('stops once it reaches localEpoch (excludes local-and-older)', async () => {
+		const { seal, store, tip } = await buildChain([
+			{ epoch: 1, cursor: 10 },
+			{ epoch: 2, cursor: 20 },
+			{ epoch: 3, cursor: 30 }
+		]);
+		const chain = await walkGroupChain({
+			tipAddress: tip,
+			groupId: 'g1',
+			localEpoch: 2n, // local at epoch 2 → only epoch 3 is strictly newer
+			store,
+			addressToUrl: (a) => `https://x/${a}`,
+			seal,
+			ownerPubkey: OWNER
+		});
+		expect(chain.map((s) => Number(s.epoch))).toEqual([3]);
+	});
+
+	test('keeps the oldest (smallest cursor = gen-0) doc per epoch', async () => {
+		// epoch 2 published twice: cursor 20 (gen-0) then cursor 25 (advanced
+		// ratchet). A newer same-epoch doc cannot decrypt that epoch's earlier
+		// messages (MLS forward secrecy), so the walk keeps cursor 20.
+		const seal = fakeSeal();
+		const store = honestStore();
+		const put = async (doc: GroupDocument) => {
+			const sealed = await sealDocument(doc, seal, OWNER);
+			await store.publish(new TextEncoder().encode(sealed));
+			return documentAddress(sealed);
+		};
+		const a1 = await put(groupDoc(1, 'g1', 10));
+		const a2a = await put(groupDoc(2, 'g1', 20, a1));
+		const a2b = await put(groupDoc(2, 'g1', 25, a2a));
+		const tip = await put(groupDoc(3, 'g1', 30, a2b));
+
+		const chain = await walkGroupChain({
+			tipAddress: tip,
+			groupId: 'g1',
+			localEpoch: 0n,
+			store,
+			addressToUrl: (a) => `https://x/${a}`,
+			seal,
+			ownerPubkey: OWNER
+		});
+		const epoch2 = chain.filter((s) => Number(s.epoch) === 2);
+		expect(epoch2).toHaveLength(1);
+		expect(epoch2[0]!.cursor).toBe(20);
+	});
+
+	test('stops at a meta doc or a different group (per-gid chain)', async () => {
+		const { seal, store, tip } = await buildChain([{ epoch: 1, cursor: 10 }], 'g1');
+		const chain = await walkGroupChain({
+			tipAddress: tip,
+			groupId: 'g-other', // different gid → the tip doc is not this group's
+			localEpoch: 0n,
+			store,
+			addressToUrl: (a) => `https://x/${a}`,
+			seal,
+			ownerPubkey: OWNER
+		});
+		expect(chain).toEqual([]);
 	});
 });
 

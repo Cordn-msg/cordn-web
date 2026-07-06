@@ -151,7 +151,7 @@
 		try {
 			const counts = await reconcileMultiDeviceNow();
 			if (!counts) {
-				toast.error('Sync is off, or no session document was found');
+				toast.error('Sync is off, or no group document was found');
 			} else {
 				toast.success(
 					`Re-synced — ${counts.fastForwarded} caught up, ${counts.seeded} new, ${counts.skipped} already current`
@@ -469,7 +469,7 @@
 										{/if}
 									</Button>
 									<p class="mt-1 text-xs text-muted-foreground">
-										Fetch the latest session document and catch this device up. Use it if a group
+										Fetch the latest group document and catch this device up. Use it if a group
 										looks stuck or out of sync.
 									</p>
 
