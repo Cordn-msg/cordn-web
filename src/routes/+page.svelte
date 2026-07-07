@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import LandingChatPreview from '$lib/components/LandingChatPreview.svelte';
 	import Github from '@lucide/svelte/icons/git-branch';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import MessageSquare from '@lucide/svelte/icons/message-square';
@@ -142,20 +143,7 @@
 			</div>
 
 			<div class="flex justify-center lg:justify-end">
-				<div
-					class="flex w-full max-w-sm items-center justify-center rounded-3xl border border-border bg-card/70 p-8 shadow-sm backdrop-blur-sm"
-				>
-					<img
-						src="/cordn-logo-black.svg"
-						alt="Cordn logo"
-						class="w-full max-w-[240px] dark:hidden"
-					/>
-					<img
-						src="/cordn-logo.svg"
-						alt="Cordn logo"
-						class="hidden w-full max-w-[240px] dark:block"
-					/>
-				</div>
+				<LandingChatPreview />
 			</div>
 		</section>
 
