@@ -22,11 +22,16 @@ import { nip19 } from 'nostr-tools';
 import type { NostrEvent } from 'nostr-tools';
 
 import { manager } from '$lib/services/accountManager.svelte';
-import { relayPool, commonRelays } from '$lib/services/relay-pool';
+import { relayPool } from '$lib/services/relay-pool';
 import { eventStore } from '$lib/services/eventStore';
 import { mapEventsToStore } from 'applesauce-core/observable';
-import { uploadBlob, fetchBlob, type BlossomSigner } from '$lib/services/chatBlossomClient';
-import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
+import {
+	uploadBlob,
+	fetchBlob,
+	type BlossomSigner,
+	type UploadedBlob
+} from '$lib/services/chatBlossomClient';
+import { BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
 	listChatGroups,
 	getChatGroup,
@@ -75,19 +80,30 @@ import {
  * must agree on). The exact value is a coordination detail; this is cordn-web's
  * choice for the opaque tip transport.
  */
-const MULTI_DEVICE_TIP_KIND = 30078;
+export const MULTI_DEVICE_TIP_KIND = 30078;
 /** Inner, sealed, owner-signed event kind (self-labeling; never relayed). */
 const MULTI_DEVICE_INNER_KIND = 178;
 
 const CONFIG_STORAGE_KEY = 'cordn.multiDevice';
 
 /**
- * Default document hosts: the configured primary plus one preset fallback so a
- * single server outage can't strand the sealed document. Editable in Advanced.
+ * Default tip relays: 3 for locator redundancy (spec §6) — one relay dropping
+ * the tip event must not strand linked devices. Editable in Advanced.
+ */
+export const DEFAULT_MULTI_DEVICE_RELAYS = [
+	'wss://relay.nostr.net',
+	'wss://relay.ditto.pub/',
+	'wss://relay.primal.net'
+];
+
+/**
+ * Default document hosts: 3-way replication so a single server outage can't
+ * strand the sealed document. Editable in Advanced.
  */
 export const DEFAULT_BLOSSOM_SERVERS = [
-	DEFAULT_BLOSSOM_SERVER,
-	BLOSSOM_SERVERS.find((s) => s !== DEFAULT_BLOSSOM_SERVER) ?? DEFAULT_BLOSSOM_SERVER
+	'https://blossom.primal.net/',
+	'https://cdn.hzrd149.com/',
+	'https://blossom.ditto.pub/'
 ];
 
 /**
@@ -124,6 +140,13 @@ export interface MultiDeviceOwnerConfig {
 	 * Persisted BEFORE the relay publish so loopback short-circuits.
 	 */
 	lastSeenTipEventId?: string;
+	/**
+	 * Dev-mode tip transition log (newest first, capped at 20). One entry per
+	 * tip move that actually changed ≥1 address — recorded in `setLastSeenTip`,
+	 * the single chokepoint both read and write paths route through. Pure
+	 * visibility; never read by sync logic.
+	 */
+	tipHistory?: TipTransition[];
 	/**
 	 * Own soft-delete tombstones awaiting publish (§10.5 union). Cleared after a
 	 * successful publish; refilled by `softDeleteGroup`. Adopted peer tombstones
@@ -190,7 +213,7 @@ function generateDTag(): string {
 
 /** Build a fresh config (new ephemeral key + `d`), inheriting default relays. */
 function createFreshConfig(
-	relays: string[] = commonRelays,
+	relays: string[] = DEFAULT_MULTI_DEVICE_RELAYS,
 	blossomServers: string[] = DEFAULT_BLOSSOM_SERVERS
 ): MultiDeviceOwnerConfig {
 	const sk = generateSecretKey();
@@ -230,7 +253,7 @@ export function enableMultiDevice(
 	// Spec §11: the connection string is only usable once documents + a tip exist.
 	// Publish every local group document + the meta document + the tip in one shot
 	// so the string is live (the hooks otherwise only fire on new-group/own-commit).
-	scheduleRepublish(() => publish({ resealGroups: 'all', resealMeta: true }));
+	scheduleRepublish({ resealGroups: 'all', resealMeta: true });
 	// Open the live tip subscription + adopt any peer state: a mid-session
 	// enable is not cold start (so §10.6 ordering doesn't strictly apply), but we
 	// still reconcile once so the enabling device catches up to siblings, and the
@@ -294,7 +317,7 @@ export function setMultiDeviceBlossomServers(servers: string[]): void {
 	// only needs the tip re-published with the new server list — but republishing
 	// also re-uploads to the new primary, guaranteeing it's reachable. Cheap; just
 	// do it. Full re-publish (every group doc + meta) re-uploads them all.
-	void scheduleRepublish(() => publish({ resealGroups: 'all', resealMeta: true }));
+	void scheduleRepublish({ resealGroups: 'all', resealMeta: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -331,27 +354,42 @@ function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefi
 function makeBlossomStore(signer: BlossomSigner): BlobStore {
 	return {
 		async publish(blob) {
-			// Try each configured server; first success wins (ordered, most-reliable first).
+			// Replicate to every configured host so the read path's failover has
+			// real fallbacks (the config UI promises "uploaded to all selected
+			// hosts"). Parallel + best-effort: a non-primary failure is logged,
+			// not fatal — fail only if EVERY host failed. The content address
+			// (sha256(blob)) is deterministic, so every successful upload returns
+			// the same address regardless of which server wins the race.
 			const config = getMultiDeviceConfig();
 			const servers = config?.blossomServers ?? BLOSSOM_SERVERS;
-			let lastError: unknown;
-			for (const server of servers) {
-				try {
-					const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
-					dbg('blossom upload ok', {
-						server,
-						sha256: uploaded.sha256.slice(0, 12),
-						bytes: blob.byteLength
-					});
-					return { address: uploaded.sha256, url: uploaded.url };
-				} catch (error) {
-					dbg('blossom upload failed', { server, error: (error as Error)?.message });
-					lastError = error;
-				}
+			const results = await Promise.allSettled(
+				servers.map((server) => uploadBlob({ serverUrl: server, blob, signer }))
+			);
+			const firstOk = results.find(
+				(r): r is PromiseFulfilledResult<UploadedBlob> => r.status === 'fulfilled'
+			);
+			if (!firstOk) {
+				const failed = results.find((r) => r.status === 'rejected');
+				const reason = failed?.status === 'rejected' ? failed.reason : undefined;
+				throw reason instanceof Error
+					? new Error(`All Blossom servers failed: ${reason.message}`)
+					: new Error('All Blossom servers failed');
 			}
-			throw lastError instanceof Error
-				? new Error(`All Blossom servers failed: ${lastError.message}`)
-				: new Error('All Blossom servers failed');
+			results.forEach((r, i) => {
+				if (r.status === 'rejected') {
+					dbg('blossom replication failed', {
+						server: servers[i],
+						error: (r.reason as Error)?.message
+					});
+				}
+			});
+			dbg('blossom upload ok', {
+				ok: results.filter((r) => r.status === 'fulfilled').length,
+				of: servers.length,
+				sha256: firstOk.value.sha256.slice(0, 12),
+				bytes: blob.byteLength
+			});
+			return { address: firstOk.value.sha256, url: firstOk.value.url };
 		},
 		async fetch(url) {
 			return fetchBlob(url);
@@ -546,17 +584,50 @@ function parseConnectionString(connection: string): ConnectionPayload {
 let publishInFlight: Promise<void> = Promise.resolve();
 
 /**
- * Schedule a republish on the shared serialized lane. The tip is a single
- * replaceable event, so read-modify-write republishes (group + meta) MUST
- * serialize. Fire-and-forget; errors are logged, not thrown.
+ * Run an operation on the shared serialized publish lane. The tip is a single
+ * replaceable event, so read-modify-write republishes MUST serialize. Used
+ * directly by paths needing an atomic side effect before publish
+ * (`softDeleteGroup` appends a tombstone inside the lane so a concurrent publish
+ * can't clear it). Fire-and-forget; errors are logged, not thrown.
  */
-function scheduleRepublish(operation: () => Promise<void>): void {
+function runSerialized(operation: () => Promise<void>): void {
 	publishInFlight = publishInFlight
 		.catch(() => {})
 		.then(() => operation())
 		.catch((error) => {
 			console.warn('[multi-device] re-publish failed', error);
 		});
+}
+
+/** Union two publish plans: gids merge (any `'all'` wins), meta ORs. */
+function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
+	const groups =
+		a.resealGroups === 'all' || b.resealGroups === 'all'
+			? 'all'
+			: [...new Set([...a.resealGroups, ...b.resealGroups])];
+	return { resealGroups: groups, resealMeta: a.resealMeta || b.resealMeta };
+}
+
+let pendingPlan: PublishPlan | null = null;
+let flushScheduled = false;
+
+/**
+ * Queue a plan-only republish, merged with any plan queued in the same tick.
+ * Hooks that fire back-to-back (e.g. two `onMetaStateChange` during enable)
+ * coalesce into ONE publish — one tip fetch, one upload round, one tip publish —
+ * instead of N serialized ones. Flushes on the next microtask; `runSerialized`
+ * still orders each flush after any in-flight publish.
+ */
+function scheduleRepublish(plan: PublishPlan): void {
+	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
+	if (flushScheduled) return;
+	flushScheduled = true;
+	queueMicrotask(() => {
+		flushScheduled = false;
+		const batch = pendingPlan;
+		pendingPlan = null;
+		if (batch) runSerialized(() => publish(batch));
+	});
 }
 
 /**
@@ -570,7 +641,7 @@ export function onGroupStateAdvance(gid: string): void {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
 	dbg('onGroupStateAdvance', { gid: gid.slice(0, 8), dTag: config.dTag.slice(0, 8) });
-	scheduleRepublish(() => publish({ resealGroups: [gid], resealMeta: false }));
+	scheduleRepublish({ resealGroups: [gid], resealMeta: false });
 }
 
 /**
@@ -583,7 +654,7 @@ export function onMetaStateChange(): void {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
 	dbg('onMetaStateChange', { dTag: config.dTag.slice(0, 8) });
-	scheduleRepublish(() => publish({ resealGroups: [], resealMeta: true }));
+	scheduleRepublish({ resealGroups: [], resealMeta: true });
 }
 
 /** An empty tip pointer (used when the fetched tip parses to nothing). */
@@ -628,12 +699,54 @@ function tombstoneGids(tombstones: Tombstone[]): Set<string> {
 	return new Set(tombstones.map((t) => t.gid));
 }
 
-/** Record a seen tip + its event id (§6 per-doc delta + §10.5 self-echo dedup). */
+/**
+ * Diff two tip group inventories by gid (pure projection for the dev log).
+ * Obviously-correct Set math; no test — visualization only, not a trust path.
+ */
+function diffTipGroups(
+	prev: TipGroupPointer[],
+	next: TipGroupPointer[]
+): { added: TipGroupPointer[]; removed: TipGroupPointer[]; changed: TipGroupPointer[] } {
+	const prevAddr = new Map(prev.map((g) => [g.gid, g.address]));
+	const nextGids = new Set(next.map((g) => g.gid));
+	const added: TipGroupPointer[] = [];
+	const changed: TipGroupPointer[] = [];
+	for (const g of next) {
+		const old = prevAddr.get(g.gid);
+		if (old === undefined) added.push(g);
+		else if (old !== g.address) changed.push(g);
+	}
+	const removed = prev.filter((g) => !nextGids.has(g.gid));
+	return { added, removed, changed };
+}
+
+/**
+ * Record a seen tip + its event id (§6 per-doc delta + §10.5 self-echo dedup).
+ * Also appends a `TipTransition` to the dev log when the tip actually moved —
+ * same-address re-deliveries (relay replay, self-echo past the dedup) are noise.
+ */
 function setLastSeenTip(
 	config: MultiDeviceOwnerConfig,
 	pointer: TipPointer,
-	eventId: string
+	eventId: string,
+	meta: { source: 'read' | 'write'; counts?: ReconcileCounts }
 ): void {
+	const prev = config.lastSeenTip;
+	const diff = diffTipGroups(prev?.groups ?? [], pointer.groups);
+	const metaChanged = pointer.metaAddress !== prev?.metaAddress;
+	if (diff.added.length || diff.removed.length || diff.changed.length || metaChanged) {
+		const entry: TipTransition = {
+			at: Date.now(),
+			eventId,
+			source: meta.source,
+			counts: meta.counts,
+			added: diff.added,
+			removed: diff.removed,
+			changed: diff.changed,
+			metaChanged
+		};
+		config.tipHistory = [entry, ...(config.tipHistory ?? [])].slice(0, 20);
+	}
 	config.lastSeenTip = { groups: pointer.groups, metaAddress: pointer.metaAddress };
 	config.lastSeenTipEventId = eventId;
 	saveConfig(config);
@@ -740,7 +853,7 @@ async function publish(plan: PublishPlan): Promise<void> {
 	if (deferred) return;
 
 	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
-	const { adoptedTombstones } = await applyTip(pointer, { seal, ownerPubkey, config });
+	const { adoptedTombstones, counts } = await applyTip(pointer, { seal, ownerPubkey, config });
 	const writeStore = makeBlossomStore(ephemeralSigner(config));
 
 	// The published `removed` set (own pending + adopted, XOR'd vs the live
@@ -788,7 +901,7 @@ async function publish(plan: PublishPlan): Promise<void> {
 
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
-	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config);
+	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
 
 	// Own tombstones are now in the immutable published meta doc; clear pending.
 	if (plan.resealMeta) {
@@ -808,14 +921,15 @@ async function publish(plan: PublishPlan): Promise<void> {
  */
 async function finalizeTipPublish(
 	pointer: TipPointer,
-	config: MultiDeviceOwnerConfig
+	config: MultiDeviceOwnerConfig,
+	counts?: ReconcileCounts
 ): Promise<void> {
 	const outer = await buildTipEvent(pointer, config);
 	// Persist the new addresses + event id BEFORE the relay publish: the publish
 	// loops the event back through our own subscription, and this ordering makes
 	// that self-echo short-circuit in `handleTipEvent` (§10.5 tip-address check)
 	// instead of re-fetching our own just-published documents.
-	setLastSeenTip(config, pointer, outer.id);
+	setLastSeenTip(config, pointer, outer.id, { source: 'write', counts });
 	await publishOuterTip(outer, config.relays);
 }
 
@@ -981,6 +1095,24 @@ export interface ReconcileCounts {
 	ignored: number;
 }
 
+/**
+ * One entry in the per-owner tip transition log (dev visibility). Newest first.
+ * `source` distinguishes a peer tip we ingested (`read`) from our own publish
+ * (`write`) — the core debugging question when sync looks stuck.
+ */
+export interface TipTransition {
+	at: number;
+	eventId: string;
+	source: 'read' | 'write';
+	/** Counts from the `applyTip` that ran alongside (read path always; write
+	 * path's reconcile-before-push). Undefined only if applyTip was skipped. */
+	counts?: ReconcileCounts;
+	added: TipGroupPointer[];
+	removed: TipGroupPointer[];
+	changed: TipGroupPointer[];
+	metaChanged: boolean;
+}
+
 /** Read-order server list: the tip's advertised hosts first, then the configured fallbacks. */
 function readServers(pointer: TipPointer, config: MultiDeviceOwnerConfig | undefined): string[] {
 	return [...pointer.servers, ...(config?.blossomServers ?? BLOSSOM_SERVERS)];
@@ -1115,7 +1247,7 @@ async function handleTipEvent(
 	// Ingest via the shared chokepoint (same reconcile the write path runs before
 	// every push), then record the peer tip as the last-seen one.
 	const { counts } = await applyTip(pointer, { seal, ownerPubkey, config });
-	setLastSeenTip(config, pointer, outer.id);
+	setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
 
 	dbg('handleTipEvent done', { counts });
 	// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
@@ -1477,7 +1609,7 @@ export async function softDeleteGroup(groupId: string): Promise<Tombstone> {
 	// Append the tombstone + publish atomically on the serialized lane so a
 	// concurrent meta publish can't clear `pendingTombstones` between the append
 	// and the republish (§10.5: a deletion must stick across the fleet).
-	scheduleRepublish(async () => {
+	runSerialized(async () => {
 		const cfg = getMultiDeviceConfig();
 		if (!cfg?.enabled) return;
 		cfg.pendingTombstones = [...(cfg.pendingTombstones ?? []), tombstone];
@@ -1518,8 +1650,8 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 		dTag: naddr.identifier,
 		ephemeralPrivateKey: payload.ephemeralPrivateKey,
 		ephemeralPubkey: naddr.pubkey,
-		relays: naddr.relays?.length ? naddr.relays : commonRelays,
-		// ponytail: inherit the default 2-host redundancy rather than the source's
+		relays: naddr.relays?.length ? naddr.relays : DEFAULT_MULTI_DEVICE_RELAYS,
+		// ponytail: inherit the default 3-host replication rather than the source's
 		// full list — the read path tries them in order and the user can expand.
 		blossomServers: DEFAULT_BLOSSOM_SERVERS,
 		enabled: true,

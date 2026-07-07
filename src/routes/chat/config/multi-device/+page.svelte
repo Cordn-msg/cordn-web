@@ -5,13 +5,14 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
+	import MultiDeviceDevPanel from '$lib/components/chat/MultiDeviceDevPanel.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { commonRelays } from '$lib/services/relay-pool';
 	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 	import {
 		enableMultiDevice,
@@ -21,6 +22,7 @@
 		getMultiDeviceConfig,
 		setMultiDeviceBlossomServers,
 		DEFAULT_BLOSSOM_SERVERS,
+		DEFAULT_MULTI_DEVICE_RELAYS,
 		buildConnectionString,
 		linkDeviceFromConnectionString,
 		reconcileMultiDeviceNow,
@@ -55,6 +57,9 @@
 	let linkInput = $state('');
 	let scanning = $state(false);
 	let advancedOpen = $state(false);
+	// ponytail: session-only — not persisted. Off on every page load by design,
+	// switched on deliberately when you actually want the dev panel.
+	let devMode = $state(false);
 
 	$effect(() => {
 		// Track the active account so config reloads on identity switch.
@@ -64,7 +69,7 @@
 		const cfg = getMultiDeviceConfig();
 		config = cfg;
 		connectionString = cfg ? buildConnectionString(cfg) : '';
-		relaysDraft = (cfg?.relays ?? commonRelays).join('\n');
+		relaysDraft = (cfg?.relays ?? DEFAULT_MULTI_DEVICE_RELAYS).join('\n');
 		const servers = cfg ? cfg.blossomServers : DEFAULT_BLOSSOM_SERVERS;
 		blossomChecked.clear();
 		for (const s of servers) blossomChecked.add(s);
@@ -492,6 +497,21 @@
 											Use rotation if this string leaked. Every previously-linked device must be
 											re-linked.
 										</p>
+									</div>
+								{/if}
+
+								{#if config}
+									<div class="space-y-3 border-t border-border pt-4">
+										<div class="flex items-center gap-2">
+											<Switch bind:checked={devMode} id="md-dev-mode" />
+											<Label for="md-dev-mode">Dev mode</Label>
+											<span class="text-xs text-muted-foreground">
+												visibility into the tip, transition history, and relay/blob health
+											</span>
+										</div>
+										{#if devMode}
+											<MultiDeviceDevPanel {config} />
+										{/if}
 									</div>
 								{/if}
 							</div>

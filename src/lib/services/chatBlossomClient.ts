@@ -213,3 +213,39 @@ export async function fetchBlob(url: string): Promise<Uint8Array> {
 	}
 	return new Uint8Array(await res.arrayBuffer());
 }
+
+/**
+ * BUD-01 `HEAD /<sha256>` — Has Blob. Presence check with NO body download: the
+ * server returns the same metadata headers as GET (`Content-Type`,
+ * `Content-Length`) but an empty body. `status` is the raw HTTP code so callers
+ * can distinguish `404` (server up, blob missing) from a network/CORS block
+ * (status `0`, `reason: 'unreachable'`) — the exact signal coherence checks need.
+ * Anonymous like `fetchBlob`; servers that require `get` auth (BUD-11) return 401
+ * and the caller treats that as "present but gated" by status alone.
+ */
+export interface BlobPresence {
+	ok: boolean;
+	status: number;
+	/** `Content-Length` when the server returns it — free size signal. */
+	size: number | null;
+	/** `X-Reason` header on error responses (BUD-01), if any. */
+	reason?: string;
+}
+
+export async function hasBlob(serverUrl: string, sha256Hex: string): Promise<BlobPresence> {
+	const server = serverUrl.replace(/\/+$/, '');
+	try {
+		const res = await fetch(`${server}/${sha256Hex}`, { method: 'HEAD' });
+		const len = res.headers.get('content-length');
+		return {
+			ok: res.ok,
+			status: res.status,
+			size: len ? Number(len) : null,
+			reason: res.headers.get('x-reason') ?? undefined
+		};
+	} catch {
+		// fetch threw before any response — network failure or CORS preflight
+		// rejection. Distinct from a 404: the server itself is unreachable.
+		return { ok: false, status: 0, size: null, reason: 'unreachable' };
+	}
+}
