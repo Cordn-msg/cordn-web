@@ -154,8 +154,6 @@ export interface ReconcileTarget {
 	applyTombstone(tombstone: Tombstone): Promise<ReconcileTombstoneOutcome>;
 	/** Load the meta document's last-resort key package (§11.5). */
 	loadLastResortKeyPackage(entry: LastResortKeyPackageEntry): Promise<boolean>;
-	/** The account's currently-published last-resort key package, if any. */
-	getLastResortKeyPackage(): LastResortKeyPackageEntry | undefined;
 }
 
 // ---------------------------------------------------------------------------

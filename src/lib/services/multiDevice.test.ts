@@ -290,9 +290,6 @@ function makeTarget(
 			if (heldLastResort?.keyPackage === entry.keyPackage) return false; // already held
 			heldLastResort = entry;
 			return true;
-		},
-		getLastResortKeyPackage() {
-			return heldLastResort;
 		}
 	};
 }
@@ -366,7 +363,6 @@ describe('reconcileMetaDocument (spec §8 case 4, §11.5)', () => {
 		const entry: LastResortKeyPackageEntry = { keyPackage: 'kp1', privateKeyPackage: 'pkp1' };
 		const r1 = await reconcileMetaDocument(target, metaDoc({ lastResortKeyPackage: entry }));
 		expect(r1.keyPackageLoaded).toBe(true);
-		expect(target.getLastResortKeyPackage()).toEqual(entry);
 		const r2 = await reconcileMetaDocument(target, metaDoc({ lastResortKeyPackage: entry }));
 		expect(r2.keyPackageLoaded).toBe(false); // already held
 	});

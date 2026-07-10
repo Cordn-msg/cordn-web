@@ -255,8 +255,8 @@ export async function deleteBlob(params: {
  * ponytail: some servers answer 401 and require a `get` auth token (BUD-11);
  * add a signed-get retry path only when a server we use actually demands it.
  */
-export async function fetchBlob(url: string): Promise<Uint8Array> {
-	const res = await fetch(url);
+export async function fetchBlob(url: string, signal?: AbortSignal): Promise<Uint8Array> {
+	const res = await fetch(url, { signal });
 	if (!res.ok) {
 		throw new Error(`Blossom fetch failed: ${res.status} ${res.statusText}`);
 	}

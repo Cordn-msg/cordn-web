@@ -228,10 +228,7 @@ export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConf
 	if (!browser) return undefined;
 	const owner = ownerPubkey ?? manager.getActive()?.pubkey;
 	if (!owner) return undefined;
-	const cfg = readAllConfigs()[normalizePubKey(owner)];
-	// ponytail: legacy configs predate the `role` field; assume source (the
-	// original minter) rather than persist a migration.
-	return cfg ? { ...cfg, role: cfg.role ?? 'source' } : undefined;
+	return readAllConfigs()[normalizePubKey(owner)];
 }
 
 /** Whether multi-device sync is on for the active (or given) owner. */
@@ -926,13 +923,16 @@ async function fetchTipForPublish(
 		}
 		return { pointer: emptyTipPointer(config), deferred: false };
 	}
+	// §10.5 reconcile-before-push: same outer event id ⇒ byte-identical tip ⇒ no
+	// peer change since our last write/read. Reuse the local pointer and skip the
+	// owner-signer decrypt. Mirrors handleTipEvent's dedup; falls through to decrypt
+	// whenever a peer moved the tip (or the relay returned a stale event).
+	if (tipEvent.id === config.lastSeenTipEventId && config.lastSeenTip) {
+		dbg('republish tip unchanged', { eventId: tipEvent.id.slice(0, 12) });
+		return { pointer: { ...config.lastSeenTip, servers: config.blossomServers }, deferred: false };
+	}
 	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
 	return { pointer: parsed?.pointer ?? emptyTipPointer(config), deferred: false };
-}
-
-/** gids of a tombstone list — for the §4.3 invariant (a `gid` is in `x` XOR `removed`). */
-function tombstoneGids(tombstones: Tombstone[]): Set<string> {
-	return new Set(tombstones.map((t) => t.gid));
 }
 
 /**
@@ -1127,13 +1127,13 @@ async function publish(plan: PublishPlan): Promise<void> {
 
 	// The published `removed` set (own pending + adopted, XOR'd vs the live
 	// inventory per §4.3) drives both the meta doc and the tip's group filter.
-	const liveSnapshots = collectGroupSnapshots();
+	const liveGroups = collectActiveGroups();
 	const removed = composeTombstoneUnion(
 		config.pendingTombstones ?? [],
 		adoptedTombstones,
-		liveSnapshots.map((s) => s.gid)
+		liveGroups.map((g) => g.id)
 	);
-	const tombstonedGids = tombstoneGids(removed);
+	const tombstonedGids = new Set(removed.map((t) => t.gid));
 
 	// Re-seal the affected group documents (§10.5 publishing unit) in parallel.
 	// The groups are independent — each reads its `prev` from the immutable
@@ -1141,7 +1141,7 @@ async function publish(plan: PublishPlan): Promise<void> {
 	// needs every address. Promise.all preserves input order, so the tip's
 	// `groups` array order is unchanged.
 	const gidsToReseal =
-		plan.resealGroups === 'all' ? liveSnapshots.map((s) => s.gid) : plan.resealGroups;
+		plan.resealGroups === 'all' ? liveGroups.map((g) => g.id) : plan.resealGroups;
 	// Surface progress only for bulk reseals (enable / server change / rotation);
 	// steady-state reseals a single changed group and would flicker a bar for
 	// nothing. The DEK seal is local, so the Blossom upload round is the slow part.
@@ -1152,8 +1152,9 @@ async function publish(plan: PublishPlan): Promise<void> {
 	try {
 		const results = await Promise.all(
 			gidsToReseal.map(async (gid): Promise<TipGroupPointer | null> => {
-				const snapshot = liveSnapshots.find((s) => s.gid === gid);
-				if (!snapshot) return null; // gone (tombstoned/deleted) since the trigger fired
+				const group = liveGroups.find((g) => g.id === gid);
+				if (!group) return null; // gone (tombstoned/deleted) since the trigger fired
+				const snapshot = toGroupSnapshot(group);
 				const prev = pointer.groups.find((g) => g.gid === gid)?.address;
 				const result = await publishGroupDocument({
 					group: snapshot,
@@ -1235,20 +1236,21 @@ async function finalizeTipPublish(
 	await publishOuterTip(outer, config.relays);
 }
 
-/** Snapshot every active local group (spec §4 — the live inventory). */
-function collectGroupSnapshots(): GroupSnapshot[] {
-	const groups: GroupSnapshot[] = [];
-	for (const group of listChatGroups()) {
-		if (group.status && group.status !== 'active') continue;
-		const state = decodeStoredGroupState(group);
-		groups.push({
-			gid: getProtocolGroupId(state),
-			state,
-			coordinatorKey: group.coordinatorKey,
-			fetchCursor: group.fetchCursor
-		});
-	}
-	return groups;
+/** Active local groups, undecoded (spec §4 — the live inventory). `group.id` IS
+ * the protocol gid (set at creation, immutable), so listing needs no MLS decode. */
+function collectActiveGroups(): StoredChatGroup[] {
+	return listChatGroups().filter((g) => !g.status || g.status === 'active');
+}
+
+/** Decode one group's MLS state into a publish snapshot. Called only for the
+ * groups actually being re-sealed, so a single-group advance decodes 1, not N. */
+function toGroupSnapshot(group: StoredChatGroup): GroupSnapshot {
+	return {
+		gid: group.id,
+		state: decodeStoredGroupState(group),
+		coordinatorKey: group.coordinatorKey,
+		fetchCursor: group.fetchCursor
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -1441,7 +1443,19 @@ function makeReadStore(servers: string[]): BlobStore {
 			// sequential `for`-loop paid N full (untimed) waits when the first-listed
 			// server was slow or down, stalling the cold-link seed for every group.
 			try {
-				return await Promise.any(clean.map((server) => fetchBlob(`${server}/${address}`)));
+				const controller = new AbortController();
+				return await Promise.any(
+					clean.map(async (server) => {
+						const blob = await fetchBlob(`${server}/${address}`, controller.signal);
+						controller.abort(); // first winner → cancel the losers' downloads
+						dbg('read store fetch', {
+							winner: server,
+							racing: clean.length,
+							address: address.slice(0, 12)
+						});
+						return blob;
+					})
+				);
 			} catch (agg) {
 				const errors = agg instanceof AggregateError ? agg.errors : [agg];
 				throw new Error(
@@ -1683,9 +1697,6 @@ function makeReconcileTarget(catchUp?: {
 		},
 		async loadLastResortKeyPackage(entry) {
 			return loadLastResortKeyPackage(entry);
-		},
-		getLastResortKeyPackage() {
-			return getLastResortKeyPackageEntry();
 		}
 	};
 }
@@ -1726,7 +1737,7 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void>
 	};
 	// Add to the reactive store + persist in one shot — the create/join seam's
 	// primitive. The store updates synchronously, so the caller's
-	// collectGroupSnapshots and the reactive UI see the seeded group at once; no
+	// collectActiveGroups and the reactive UI see the seeded group at once; no
 	// reloadChatGroupsForOwner (full IDB scan) needed.
 	persistGroup(seeded);
 	dbg('seedGroup', { gid: doc.gid.slice(0, 8), epoch: String(epoch) });
