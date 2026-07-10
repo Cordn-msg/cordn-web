@@ -13,6 +13,7 @@
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import MultiDeviceDevPanel from '$lib/components/chat/MultiDeviceDevPanel.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { page } from '$app/state';
 	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 	import {
 		enableMultiDevice,
@@ -26,6 +27,7 @@
 		buildConnectionString,
 		linkDeviceFromConnectionString,
 		reconcileMultiDeviceNow,
+		mdProgress,
 		type MultiDeviceOwnerConfig,
 		type LinkResult
 	} from '$lib/services/multiDevice.svelte';
@@ -40,7 +42,7 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Download from '@lucide/svelte/icons/download';
 
-	let tab = $state<'add' | 'link'>('add');
+	let tab = $state<'add' | 'link'>(page.url.searchParams.get('tab') === 'link' ? 'link' : 'add');
 
 	// Live config; re-read on every reactive tick so enable/disable/rotate reflect.
 	let config = $state<MultiDeviceOwnerConfig | undefined>(undefined);
@@ -141,7 +143,7 @@
 		}
 		rotating = true;
 		try {
-			config = rotateMultiDeviceKey();
+			config = await rotateMultiDeviceKey();
 			connectionString = buildConnectionString(config);
 			toast.success('Multi-device key rotated — re-link your other devices');
 		} catch (error) {
@@ -294,7 +296,30 @@
 					</Card.Content>
 				</Card.Root>
 
-				<!-- Tab navigation: always visible. Enablement happens on action completion. -->
+				{#if mdProgress.phase}
+				<div class="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+					<div class="flex items-center gap-2 text-sm">
+						<Spinner class="size-4" />
+						<span class="font-medium">
+							{mdProgress.phase}{#if mdProgress.total}
+								<span class="text-muted-foreground">
+									({mdProgress.current}/{mdProgress.total})</span
+								>
+							{/if}
+						</span>
+					</div>
+					{#if mdProgress.total}
+						<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+							<div
+								class="h-full rounded-full bg-foreground transition-all duration-200"
+								style="width: {Math.min(100, (mdProgress.current / mdProgress.total) * 100)}%"
+							></div>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Tab navigation: always visible. Enablement happens on action completion. -->
 				<div class="flex space-x-1 rounded-lg bg-muted p-1">
 					<button
 						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'add'
@@ -604,8 +629,9 @@
 					</Card.Header>
 					<Card.Content class="space-y-2 text-xs text-muted-foreground">
 						<p>
-							Group state is sealed (NIP-44) to your own npub — only a device that can sign as you
-							can decrypt it.
+							Group state is sealed to a per-identity document key (DEK) that itself travels inside
+							a NIP-44 seal to your npub — so only a device that can sign as you can obtain the DEK
+							and decrypt your groups, yet decryption stays local (no signer round-trip per group).
 						</p>
 						<p>
 							The tip pointer is published under an ephemeral key so it does not reveal your

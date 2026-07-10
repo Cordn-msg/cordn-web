@@ -201,6 +201,55 @@ export async function verifyBlobRoundtrip(url: string, expectedSha256Hex: string
 	}
 }
 
+/** Outcome of a best-effort `DELETE` (BUD-12) — never throws. */
+export interface BlobDeleteResult {
+	readonly ok: boolean;
+	readonly status: number;
+	readonly reason?: string;
+}
+
+/**
+ * Delete a blob via `DELETE /<sha256>` (BUD-12), authorized with a `delete`
+ * BUD-11 token scoped to that hash. Best-effort: returns a result instead of
+ * throwing so a fan-out across servers treats each independently. `200`/`204` =
+ * deleted; `404` = already gone (idempotent success); `402`/`403` (paid/policy)
+ * and network blocks (`status: 0`) are reported not-OK but never abort the
+ * caller — garbage collection is hygiene, not a correctness path.
+ *
+ * The token MUST be signed by the same key that uploaded the blob (BUD-11: the
+ * uploading pubkey owns it); the multi-device path passes the persisted owner
+ * signer, never the active identity, to preserve unlinkability.
+ */
+export async function deleteBlob(params: {
+	serverUrl: string;
+	sha256Hex: string;
+	signer: BlossomSigner;
+}): Promise<BlobDeleteResult> {
+	const server = params.serverUrl.replace(/\/+$/, '');
+	const event = await buildBlossomAuth({
+		signer: params.signer,
+		action: 'delete',
+		serverUrl: server,
+		sha256Hex: params.sha256Hex,
+		content: 'Delete superseded document'
+	});
+	try {
+		const res = await fetch(`${server}/${params.sha256Hex}`, {
+			method: 'DELETE',
+			headers: { Authorization: blossomAuthHeader(event) }
+		});
+		if (res.ok || res.status === 404) return { ok: true, status: res.status };
+		return {
+			ok: false,
+			status: res.status,
+			reason: res.headers.get('x-reason') ?? res.statusText
+		};
+	} catch {
+		// fetch threw before any response — network failure or CORS. Report, don't abort.
+		return { ok: false, status: 0, reason: 'unreachable' };
+	}
+}
+
 /**
  * Fetch a blob by its URL (BUD-01 GET). Anonymous: most servers permit it.
  * ponytail: some servers answer 401 and require a `get` auth token (BUD-11);

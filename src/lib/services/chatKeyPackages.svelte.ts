@@ -338,6 +338,122 @@ export async function createChatKeyPackage(input?: {
 	};
 }
 
+export type EnsureLastResortResult =
+	| { kind: 'ready'; keyPackageRef: string }
+	| { kind: 'foreign'; keyPackageRef: string; coordinatorKey: string };
+
+/**
+ * Ensure the active account has a last-resort key package published to
+ * `coordinatorKey`, reusing existing material instead of minting a new one.
+ *
+ * The coordinator keeps ONE last-resort per identity (quota eviction, see
+ * references/cordn enforceKeyPackageQuota). Publishing a second last-resort
+ * silently removes the first, stranding pending join requests / invites that
+ * referenced it — so this MUST NOT publish when the coordinator already holds
+ * a last-resort for this identity.
+ *
+ * Resolution order:
+ *  1. local last-resort already marked published to this coordinator -> reuse.
+ *  2. coordinator query (ListAvailableKeyPackages, my identity's last-resort):
+ *     - present and held locally -> reuse (re-marks the local claim on drift).
+ *     - present but NOT held locally -> 'foreign' (another device published it;
+ *       caller must prompt link/take-over; never auto-publish).
+ *     - absent -> publish a held local last-resort, or mint one if we have none.
+ *
+ * Meta-doc inheritance (spec 11.5) flows through step 1: a linked device that
+ * has pulled the canonical last-resort via loadLastResortKeyPackage holds it
+ * locally, so it is reused instead of minted. Linking itself is the caller's
+ * job (multi-device flow), not done inline here.
+ */
+export async function ensureLastResortPublished(
+	coordinatorKey: string
+): Promise<EnsureLastResortResult> {
+	const ownerPubkey = normalizePubKey(getActivePubkey());
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+
+	// 1. Already published to this coordinator and held locally.
+	const localAlreadyPublished = chatKeyPackagesStore.keyPackages.find(
+		(entry) =>
+			entry.isLastResort &&
+			normalizePubKey(entry.ownerPubkey) === ownerPubkey &&
+			entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
+	);
+	if (localAlreadyPublished) {
+		return { kind: 'ready', keyPackageRef: localAlreadyPublished.keyPackageRef };
+	}
+
+	// 2. Ask the coordinator what is actually published for this identity.
+	const available = await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, normalizedCoordinator),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(normalizedCoordinator),
+		staleTime: 30 * 1000
+	});
+	const coordinatorLastResort = available
+		.filter((entry) => normalizePubKey(entry.pk) === ownerPubkey && entry.last_resort)
+		.sort((a, b) => b.at - a.at)[0];
+	if (coordinatorLastResort) {
+		const heldLocally = chatKeyPackagesStore.keyPackages.some(
+			(entry) => entry.keyPackageRef === coordinatorLastResort.kp_ref
+		);
+		if (heldLocally) {
+			// Reconcile drift: published remotely but our local record lost the
+			// coordinator marker. Re-mark it rather than re-publish.
+			await markKeyPackagePublished(
+				coordinatorLastResort.kp_ref,
+				normalizedCoordinator,
+				true
+			);
+			return { kind: 'ready', keyPackageRef: coordinatorLastResort.kp_ref };
+		}
+		// Foreign: another device published it. Publishing our own would evict
+		// it and strand its pending invites — caller must prompt link/take-over.
+		return {
+			kind: 'foreign',
+			keyPackageRef: coordinatorLastResort.kp_ref,
+			coordinatorKey: normalizedCoordinator
+		};
+	}
+
+	// 3. Coordinator has no last-resort for us -> safe to publish our own.
+	const localLastResort = chatKeyPackagesStore.keyPackages.find(
+		(entry) => entry.isLastResort && normalizePubKey(entry.ownerPubkey) === ownerPubkey
+	);
+	if (localLastResort) {
+		await publishChatKeyPackage(localLastResort.keyPackageRef, normalizedCoordinator);
+		return { kind: 'ready', keyPackageRef: localLastResort.keyPackageRef };
+	}
+
+	// 4. No local last-resort anywhere -> mint one and publish.
+	const created = await createChatKeyPackage({
+		isLastResort: true,
+		publishCoordinatorKey: normalizedCoordinator
+	});
+	return { kind: 'ready', keyPackageRef: created.record.keyPackageRef };
+}
+
+/**
+ * Explicit last-resort take-over: publish this device's last-resort to
+ * `coordinatorKey`, evicting whatever foreign last-resort is there. Only the
+ * user-facing conflict prompt should call this — ensureLastResortPublished
+ * refuses to publish over a foreign one. Returns the published ref.
+ */
+export async function takeOverLastResort(coordinatorKey: string): Promise<string> {
+	const ownerPubkey = normalizePubKey(getActivePubkey());
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	const localLastResort = chatKeyPackagesStore.keyPackages.find(
+		(entry) => entry.isLastResort && normalizePubKey(entry.ownerPubkey) === ownerPubkey
+	);
+	if (localLastResort) {
+		await publishChatKeyPackage(localLastResort.keyPackageRef, normalizedCoordinator);
+		return localLastResort.keyPackageRef;
+	}
+	const created = await createChatKeyPackage({
+		isLastResort: true,
+		publishCoordinatorKey: normalizedCoordinator
+	});
+	return created.record.keyPackageRef;
+}
+
 export function decodeStoredKeyPackage(record: StoredKeyPackageRecord): {
 	keyPackage: KeyPackage;
 	privateKeyPackage: PrivateKeyPackage;
@@ -498,19 +614,42 @@ export async function markKeyPackagePublished(
 	isLastResort?: boolean
 ) {
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	const owner = chatKeyPackagesStore.keyPackages.find(
+		(entry) => entry.keyPackageRef === keyPackageRef
+	)?.ownerPubkey;
 	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.map((entry) => {
-			if (entry.keyPackageRef !== keyPackageRef) return entry;
-			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(
-				normalizedCoordinator
-			)
-				? entry.publishedCoordinatorKeys
-				: [...entry.publishedCoordinatorKeys, normalizedCoordinator];
-			return {
-				...entry,
-				isLastResort: isLastResort ?? entry.isLastResort,
-				publishedCoordinatorKeys
-			};
+			if (entry.keyPackageRef === keyPackageRef) {
+				const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.includes(
+					normalizedCoordinator
+				)
+					? entry.publishedCoordinatorKeys
+					: [...entry.publishedCoordinatorKeys, normalizedCoordinator];
+				return {
+					...entry,
+					isLastResort: isLastResort ?? entry.isLastResort,
+					publishedCoordinatorKeys
+				};
+			}
+			// Coordinator keeps exactly one last-resort per identity (quota = 1):
+			// publishing this one as last-resort evicts any other last-resort of
+			// the same owner on that coordinator, so drop the stale local claim
+			// now instead of waiting for reconcile.
+			if (
+				isLastResort &&
+				owner !== undefined &&
+				entry.ownerPubkey === owner &&
+				entry.isLastResort &&
+				entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
+			) {
+				return {
+					...entry,
+					publishedCoordinatorKeys: entry.publishedCoordinatorKeys.filter(
+						(key) => key !== normalizedCoordinator
+					)
+				};
+			}
+			return entry;
 		})
 	);
 	if (isLastResort) {

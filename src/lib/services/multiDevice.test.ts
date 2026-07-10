@@ -45,6 +45,8 @@ import {
 	type ReconcileTarget,
 	type Tombstone
 } from './multiDevice';
+import { nip44 } from 'applesauce-core/helpers/encryption';
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 
 /** Fake encoder: stamp `{epoch, gid}` as UTF-8 bytes. Decoder inverts it. */
 function fakeStateBytes(epoch: number, gid: string): Uint8Array {
@@ -164,7 +166,7 @@ describe('multiDevice core', () => {
 		const res = await publishGroupDocument({
 			group: snapshot(1, 'g1'),
 			seal: fakeSeal(),
-			ownerPubkey: OWNER,
+			dekPubkey: OWNER,
 			store,
 			prev: 'prevaddr'
 		});
@@ -175,7 +177,7 @@ describe('multiDevice core', () => {
 			store,
 			addressToUrl: (a) => `https://blossom.test/${a}`,
 			seal: fakeSeal(),
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		if (pulled.type === 'group') expect(pulled.prev).toBe('prevaddr');
 	});
@@ -193,7 +195,7 @@ describe('multiDevice core', () => {
 			publishGroupDocument({
 				group: snapshot(1, 'g1'),
 				seal: fakeSeal(),
-				ownerPubkey: OWNER,
+				dekPubkey: OWNER,
 				store
 			})
 		).rejects.toThrow(/does not match sha256/i);
@@ -203,7 +205,7 @@ describe('multiDevice core', () => {
 		const store = honestStore();
 		const res = await publishMetaDocument({
 			seal: fakeSeal(),
-			ownerPubkey: OWNER,
+			dekPubkey: OWNER,
 			store,
 			removed: [tombstone('g', 3)],
 			lastResortKeyPackage: { keyPackage: 'kp', privateKeyPackage: 'pkp' }
@@ -213,7 +215,7 @@ describe('multiDevice core', () => {
 			store,
 			addressToUrl: (a) => `https://blossom.test/${a}`,
 			seal: fakeSeal(),
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		expect(pulled.type).toBe('meta');
 		if (pulled.type === 'meta') {
@@ -238,7 +240,7 @@ describe('multiDevice core', () => {
 				store,
 				addressToUrl: (a) => `https://blossom.test/${a}`,
 				seal: fakeSeal(),
-				ownerPubkey: OWNER
+				dekPubkey: OWNER
 			})
 		).rejects.toThrow(/address mismatch/i);
 	});
@@ -424,7 +426,7 @@ describe('walkGroupChain (spec §8.5)', () => {
 			store,
 			addressToUrl: (a) => `https://x/${a}`,
 			seal,
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		expect(chain.map((s) => Number(s.epoch))).toEqual([1, 2, 3]);
 		expect(chain.map((s) => s.cursor)).toEqual([10, 20, 30]);
@@ -444,7 +446,7 @@ describe('walkGroupChain (spec §8.5)', () => {
 			store,
 			addressToUrl: (a) => `https://x/${a}`,
 			seal,
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		expect(chain.map((s) => Number(s.epoch))).toEqual([3]);
 	});
@@ -472,7 +474,7 @@ describe('walkGroupChain (spec §8.5)', () => {
 			store,
 			addressToUrl: (a) => `https://x/${a}`,
 			seal,
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		const epoch2 = chain.filter((s) => Number(s.epoch) === 2);
 		expect(epoch2).toHaveLength(1);
@@ -488,7 +490,7 @@ describe('walkGroupChain (spec §8.5)', () => {
 			store,
 			addressToUrl: (a) => `https://x/${a}`,
 			seal,
-			ownerPubkey: OWNER
+			dekPubkey: OWNER
 		});
 		expect(chain).toEqual([]);
 	});
@@ -502,3 +504,24 @@ function bytesToBase64Local(bytes: Uint8Array): string {
 	for (const b of bytes) bin += String.fromCharCode(b);
 	return btoa(bin);
 }
+
+describe('NIP-44 large-payload seal (nostr-tools override guard)', () => {
+	// Regression guard for the `pnpm.overrides.nostr-tools` pin in package.json.
+	// The multi-device seal reaches NIP-44 through applesauce-core's re-export
+	// (`PrivateKeySigner` does `import { nip44 } from "applesauce-core/helpers/encryption"`,
+	// which is `export { nip44 } from "nostr-tools"`). Applesauce pins
+	// nostr-tools ~2.19 transitively — whose NIP-44 caps plaintext at 65535 bytes —
+	// so a large MLS group-state document blew up as
+	// `re-publish failed: invalid plaintext size: must be between 1 and 65535 bytes`.
+	// The override forces the whole tree onto 2.23.9 (extended 6-byte length prefix,
+	// 4 GB ceiling). If it is removed, this re-export re-binds to ~2.19 and throws.
+	test('applesauce-core nip44 re-export encrypts + round-trips a >64 KB plaintext', async () => {
+		const sk = generateSecretKey();
+		const conversationKey = nip44.v2.utils.getConversationKey(sk, getPublicKey(sk));
+		// 70 KB — comfortably past the old 65535-byte ceiling.
+		const plaintext = 'x'.repeat(70_000);
+		const payload = nip44.v2.encrypt(plaintext, conversationKey);
+		expect(payload).not.toBe(plaintext);
+		expect(nip44.v2.decrypt(payload, conversationKey)).toBe(plaintext);
+	});
+});

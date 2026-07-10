@@ -15,11 +15,8 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
-	import {
-		createChatKeyPackage,
-		listChatKeyPackages,
-		publishChatKeyPackage
-	} from '$lib/services/chatKeyPackages.svelte';
+	import { ensureLastResortPublished } from '$lib/services/chatKeyPackages.svelte';
+	import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
 	import {
 		hasJoinRequestBeenSent,
 		markJoinRequestSent,
@@ -162,34 +159,16 @@
 		}
 
 		try {
-			// A key package ref is only consumable on the coordinator it was
-			// published to: the ref is global but its existence is per-coordinator.
-			// So reuse a last-resort already published to THIS coordinator, else
-			// reuse + publish a last-resort held elsewhere, else mint a new
-			// last-resort here. Last-resort is mandatory so a concurrent consume
-			// by another group/admin can't strand the join before a welcome lands.
-			const normalizedCoordinator = normalizePubKey(coordinatorKey);
-			const existingKeyPackages = listChatKeyPackages($activeAccount.pubkey);
-			const alreadyHere = existingKeyPackages.find(
-				(kp) => kp.isLastResort && kp.publishedCoordinatorKeys.includes(normalizedCoordinator)
-			);
-
-			let keyPackageRef: string;
-			if (alreadyHere) {
-				keyPackageRef = alreadyHere.keyPackageRef;
-			} else {
-				const reusable = existingKeyPackages.find((kp) => kp.isLastResort);
-				if (reusable) {
-					await publishChatKeyPackage(reusable.keyPackageRef, normalizedCoordinator);
-					keyPackageRef = reusable.keyPackageRef;
-				} else {
-					const created = await createChatKeyPackage({
-						isLastResort: true,
-						publishCoordinatorKey: normalizedCoordinator
-					});
-					keyPackageRef = created.record.keyPackageRef;
-				}
-			}
+			// Ensure a last-resort is published to this coordinator, reusing existing
+			// material instead of minting (and evicting) a new one. If another device
+			// already published one we don't hold, surface that as a multi-device
+			// prompt instead of silently taking over.
+			const result = await ensureLastResortPublished(coordinatorKey);
+			const keyPackageRef =
+				result.kind === 'foreign'
+					? await promptForeignLastResort(result.coordinatorKey)
+					: result.keyPackageRef;
+			if (!keyPackageRef) return;
 
 			await storeJoinRequest(coordinatorKey, groupId, keyPackageRef);
 			markJoinRequestSent(groupId);

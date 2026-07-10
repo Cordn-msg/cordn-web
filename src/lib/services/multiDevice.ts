@@ -4,13 +4,15 @@
  * Two sealed, content-addressed document types: a *group document* per live
  * group (its `ClientState` + cursor, linked by a per-`gid` `prev` chain) and one
  * *meta document* per identity (last-resort key package + tombstones; no chain).
- * Each is NIP-44-sealed to the owner npub and addressed by `sha256(sealed)`;
- * the tip (§6) advertising them lives in the service layer.
+ * Each is NIP-44-sealed to a per-identity document encryption key (DEK, §7) — a
+ * self-seal to the DEK's own pubkey — and addressed by `sha256(sealed)`; the tip
+ * (§6) advertising them lives in the service layer.
  *
  * Pure core: no Svelte/browser/account coupling. The seal + blob store are
- * injected (testability; NIP-07/NIP-46 signers that expose `nip44` but not the
- * `nsec`). Documents carry group state only; the seal is confidentiality-only
- * (§7) — authenticity comes from the owner-signed tip (§6), in the service.
+ * injected (testability; the DEK is a local keypair, so the service wires a
+ * local NIP-44 self-seal, not the account signer). Documents carry group state
+ * only; the seal is confidentiality-only (§7) — authenticity comes from the
+ * owner-signed tip (§6), in the service.
  */
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from 'applesauce-core/helpers';
@@ -30,9 +32,14 @@ import {
 
 export const MULTI_DEVICE_SCHEMA_VERSION = 1;
 
-/** NIP-44 v2 seal to the owner's own npub (spec §7). Confidentiality only. */
+/**
+ * NIP-44 v2 self-seal to the DEK's own pubkey (spec §7). Confidentiality only.
+ * The injected seal is bound to the DEK keypair; `pubkey` is the DEK's own
+ * pubkey (sender = recipient = DEK). Authenticity comes from the owner-signed
+ * tip (§6), never from the seal.
+ */
 export interface Nip44Seal {
-	/** Encrypt `plaintext` to `pubkey` (here: the owner's own). */
+	/** Encrypt `plaintext` to `pubkey` (the DEK's own, for the self-seal). */
 	encrypt(pubkey: string, plaintext: string): Promise<string>;
 	/** Decrypt `ciphertext` addressed to `pubkey`. */
 	decrypt(pubkey: string, ciphertext: string): Promise<string>;
@@ -160,25 +167,25 @@ export function documentAddress(sealedPayload: string): string {
 	return bytesToHex(sha256(new TextEncoder().encode(sealedPayload)));
 }
 
-/** NIP-44 v2 encryption to the owner's own npub (spec §7). */
+/** NIP-44 v2 self-seal to the DEK's own pubkey (spec §7). */
 export async function sealDocument(
 	doc: MultiDeviceDocument,
 	seal: Nip44Seal,
-	ownerPubkey: string
+	dekPubkey: string
 ): Promise<string> {
 	// Spec §5: no canonical JSON — NIP-44's random salt means identical plaintext
 	// seals to different ciphertext/address each time, so canonicalization enables
 	// neither addressing nor dedup.
-	return seal.encrypt(ownerPubkey, JSON.stringify(doc));
+	return seal.encrypt(dekPubkey, JSON.stringify(doc));
 }
 
 /** Decrypt and validate a sealed document. Dispatches on `type`. Spec §7. */
 export async function openDocument(
 	sealedPayload: string,
 	seal: Nip44Seal,
-	ownerPubkey: string
+	dekPubkey: string
 ): Promise<MultiDeviceDocument> {
-	const plaintext = await seal.decrypt(ownerPubkey, sealedPayload);
+	const plaintext = await seal.decrypt(dekPubkey, sealedPayload);
 	const doc = JSON.parse(plaintext) as MultiDeviceDocument;
 	if (doc.schemaVersion !== MULTI_DEVICE_SCHEMA_VERSION) {
 		throw new MultiDeviceError(`Unsupported multi-device schema version: ${doc.schemaVersion}`);
@@ -258,7 +265,7 @@ async function publishSealed(sealed: string, store: BlobStore): Promise<PublishR
 export async function publishGroupDocument(params: {
 	group: GroupSnapshot;
 	seal: Nip44Seal;
-	ownerPubkey: string;
+	dekPubkey: string;
 	store: BlobStore;
 	prev?: string;
 }): Promise<PublishResult> {
@@ -271,7 +278,7 @@ export async function publishGroupDocument(params: {
 		},
 		params.prev
 	);
-	const sealed = await sealDocument(doc, params.seal, params.ownerPubkey);
+	const sealed = await sealDocument(doc, params.seal, params.dekPubkey);
 	return publishSealed(sealed, params.store);
 }
 
@@ -279,7 +286,7 @@ export async function publishGroupDocument(params: {
  * tombstone/key-package change republishes only this doc + its `meta` x-tag (§10.5). */
 export async function publishMetaDocument(params: {
 	seal: Nip44Seal;
-	ownerPubkey: string;
+	dekPubkey: string;
 	store: BlobStore;
 	removed?: Tombstone[];
 	lastResortKeyPackage?: LastResortKeyPackageEntry;
@@ -288,7 +295,7 @@ export async function publishMetaDocument(params: {
 		lastResortKeyPackage: params.lastResortKeyPackage,
 		removed: params.removed
 	});
-	const sealed = await sealDocument(doc, params.seal, params.ownerPubkey);
+	const sealed = await sealDocument(doc, params.seal, params.dekPubkey);
 	return publishSealed(sealed, params.store);
 }
 
@@ -302,7 +309,7 @@ export async function pullDocument(params: {
 	store: BlobStore;
 	addressToUrl: (address: string) => string;
 	seal: Nip44Seal;
-	ownerPubkey: string;
+	dekPubkey: string;
 }): Promise<MultiDeviceDocument> {
 	const blob = await params.store.fetch(params.addressToUrl(params.address));
 	const sealed = new TextDecoder().decode(blob);
@@ -311,7 +318,7 @@ export async function pullDocument(params: {
 			'Document address mismatch: fetched blob does not match the advertised tip'
 		);
 	}
-	return openDocument(sealed, params.seal, params.ownerPubkey);
+	return openDocument(sealed, params.seal, params.dekPubkey);
 }
 
 /**
@@ -389,7 +396,7 @@ export async function walkGroupChain(params: {
 	store: BlobStore;
 	addressToUrl: (address: string) => string;
 	seal: Nip44Seal;
-	ownerPubkey: string;
+	dekPubkey: string;
 }): Promise<ChainStep[]> {
 	const byEpoch = new Map<bigint, ChainStep>();
 	let address: string | undefined = params.tipAddress;
@@ -399,7 +406,7 @@ export async function walkGroupChain(params: {
 			store: params.store,
 			addressToUrl: params.addressToUrl,
 			seal: params.seal,
-			ownerPubkey: params.ownerPubkey
+			dekPubkey: params.dekPubkey
 		});
 		// The chain is per-gid: stop at a meta doc or a different group's doc.
 		if (doc.type !== 'group' || doc.gid !== params.groupId) break;

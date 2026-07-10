@@ -331,9 +331,15 @@ export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string
 			});
 		}
 
+		// Consume by the requester's identity, not the stored kp_ref: a last-resort
+		// ref can be evicted if the requester rotates/publishes from another device
+		// (coordinator quota = 1 last-resort per identity), which would make a
+		// by-ref consume return null. By-identity resolves to their currently-
+		// published key package, so acceptance survives a rotation. kpRef stays on
+		// the entry for display only.
 		const group = await inviteChatGroupMember({
 			groupId: entry.groupId,
-			identifier: entry.kpRef
+			identifier: requesterPubkey
 		});
 
 		markJoinRequestAccepted(entry.id, group.id);

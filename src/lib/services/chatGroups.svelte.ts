@@ -8,7 +8,11 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
-import { onGroupStateAdvance, isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
+import {
+	onGroupStateAdvance,
+	isMultiDeviceActive,
+	reconcileMultiDeviceNow
+} from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
@@ -517,8 +521,18 @@ function requireChatGroup(groupId: string): StoredChatGroup {
 	return group;
 }
 
-function persistGroup(group: StoredChatGroup) {
-	chatGroupsStore.groups = [...chatGroupsStore.groups, group];
+/**
+ * Upsert a group into the reactive store by id (add-or-replace) and persist it.
+ * Matches IDB's keyed `putGroup`: idempotent, so a concurrent seed of the same
+ * gid (multi-device publish lane ⊕ live subscription) replaces instead of
+ * leaving a duplicate record. Callers pass genuinely-new groups; the replace
+ * branch only fires under a race, where replace is the lesser evil.
+ */
+export function persistGroup(group: StoredChatGroup) {
+	const exists = chatGroupsStore.groups.some((g) => g.id === group.id);
+	chatGroupsStore.groups = exists
+		? chatGroupsStore.groups.map((g) => (g.id === group.id ? group : g))
+		: [...chatGroupsStore.groups, group];
 	void persistSingleGroup(group);
 }
 
@@ -636,10 +650,24 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 		throw new Error('Stored welcome not found');
 	}
 
-	const group = await acceptWelcomeToGroup({
-		welcome,
-		encodeState
-	});
+	let group: StoredChatGroup;
+	try {
+		group = await acceptWelcomeToGroup({ welcome, encodeState });
+	} catch (error) {
+		// A linked device may receive a welcome for the identity's last-resort
+		// before that material has replicated here. Pull the meta document once
+		// (which loads the last-resort private key package) and retry.
+		if (
+			isMultiDeviceActive(normalizePubKey(account.pubkey)) &&
+			error instanceof Error &&
+			error.message.startsWith('Missing local key package for welcome')
+		) {
+			await reconcileMultiDeviceNow();
+			group = await acceptWelcomeToGroup({ welcome, encodeState });
+		} else {
+			throw error;
+		}
+	}
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
 	group.ownerPubkey = normalizePubKey(account.pubkey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
@@ -739,7 +767,9 @@ export async function inviteChatGroupMember(input: {
 		});
 
 		if (!consumeResult.keyPackage) {
-			throw new Error(`No published key package found for ${input.identifier}`);
+			throw new Error(
+				'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
+			);
 		}
 
 		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);

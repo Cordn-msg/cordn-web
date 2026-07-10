@@ -25,9 +25,11 @@ import { manager } from '$lib/services/accountManager.svelte';
 import { relayPool } from '$lib/services/relay-pool';
 import { eventStore } from '$lib/services/eventStore';
 import { mapEventsToStore } from 'applesauce-core/observable';
+import { nip44 } from 'applesauce-core/helpers/encryption';
 import {
 	uploadBlob,
 	fetchBlob,
+	deleteBlob,
 	type BlossomSigner,
 	type UploadedBlob
 } from '$lib/services/chatBlossomClient';
@@ -35,11 +37,10 @@ import { BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
 	listChatGroups,
 	getChatGroup,
-	importChatGroups,
+	persistGroup,
 	replaceGroup,
 	deleteChatGroup,
 	decodeStoredGroupState,
-	reloadChatGroupsForOwner,
 	runGroupOperation,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
@@ -115,6 +116,37 @@ function dbg(label: string, detail?: unknown): void {
 	console.debug('[multi-device]', label, detail ?? '');
 }
 
+/**
+ * Session-only progress for user-initiated multi-device operations (linking a
+ * device, enabling / bulk-publishing). Reactive so the config UI can render a bar
+ * + one-liner. `phase` is the active label, or null when idle — the gate the
+ * shared reconcilers check before updating. Background subscription cycles and
+ * steady-state single-group publishes leave phase null, so they never surface a
+ * bar. Cleared by the activating flow on completion or error.
+ */
+export interface MultiDeviceProgress {
+	phase: string | null;
+	current: number;
+	total: number;
+}
+export const mdProgress = $state<MultiDeviceProgress>({ phase: null, current: 0, total: 0 });
+
+/** Activate a phase (and optional i/N total). Idle when phase is null. */
+function setMdProgress(phase: string, current = 0, total = 0): void {
+	mdProgress.phase = phase;
+	mdProgress.current = current;
+	mdProgress.total = total;
+}
+
+function clearMdProgress(): void {
+	mdProgress.phase = null;
+}
+
+/** Advance the in-flight item counter — a no-op unless a flow activated progress. */
+function bumpMdProgress(current: number): void {
+	if (mdProgress.phase) mdProgress.current = current;
+}
+
 /** Per-owner multi-device config. Keyed by owner pubkey in localStorage. */
 export interface MultiDeviceOwnerConfig {
 	/** Stable opaque `d` for the replaceable tip event. Generated once. */
@@ -123,6 +155,14 @@ export interface MultiDeviceOwnerConfig {
 	ephemeralPrivateKey: string;
 	/** Derived once from `ephemeralPrivateKey`. */
 	ephemeralPubkey: string;
+	/**
+	 * Per-identity document encryption key (DEK, spec §7) private key — 64 hex
+	 * chars. A fresh Nostr keypair generated once per identity; documents are
+	 * NIP-44 self-sealed to its pubkey so decrypts are local (no signer round
+	 * trip). The source device generates it; a linked device reads it from the
+	 * tip's `dek` tag on first reconcile. Optional only pre-first-tip-read.
+	 */
+	dekPrivateKey?: string;
 	/** Editable relay set the tip is published/subscribed on. */
 	relays: string[];
 	/** Blossom server URLs that host the sealed documents (ordered, most-reliable first). */
@@ -153,6 +193,13 @@ export interface MultiDeviceOwnerConfig {
 	 * aren't stored — re-adopted from the tip on every reconcile-before-push.
 	 */
 	pendingTombstones?: Tombstone[];
+	/**
+	 * Superseded document addresses awaiting Blossom deletion (spec §12 GC),
+	 * drained at the start of the next publish. Carries the previous meta address
+	 * after a meta re-seal, surviving a one-publish grace window for in-flight
+	 * peer fetches before reaping. Best-effort hygiene; never blocks the push.
+	 */
+	pendingReap?: string[];
 	/** Whether sync is active. When false, no publishing, no subscription. */
 	enabled: boolean;
 	/** Whether this device minted the document (source) or adopted it (linked). Defaults to 'source' for legacy configs. */
@@ -223,8 +270,14 @@ function createFreshConfig(
 		dTag: generateDTag(),
 		ephemeralPrivateKey,
 		ephemeralPubkey,
+		// Spec §7: a fresh Nostr keypair per identity, reused across every publish.
+		// Independent of the ephemeral signing key (§7 requirement) so a connection-
+		// string leak stays denial-of-service only (the DEK lives behind the
+		// owner-NIP-44 seal in the tip, not behind the ephemeral key).
+		dekPrivateKey: bytesToHex(generateSecretKey()),
 		relays,
 		blossomServers,
+		pendingReap: [],
 		enabled: true,
 		role: 'source'
 	};
@@ -274,14 +327,26 @@ export function disableMultiDevice(): void {
 }
 
 /** Rotate the ephemeral keypair + `d` together (spec §11). All devices must re-link. */
-export function rotateMultiDeviceKey(
+export async function rotateMultiDeviceKey(
 	relays?: string[],
 	blossomServers?: string[]
-): MultiDeviceOwnerConfig {
+): Promise<MultiDeviceOwnerConfig> {
 	if (!browser) throw new Error('Multi-device can only run in the browser');
 	const account = manager.getActive();
 	if (!account) throw new Error('Log in to rotate the multi-device key');
 	const existing = getMultiDeviceConfig(account.pubkey);
+	// §12 GC: best-effort reap of every reachable document with the OLD key BEFORE
+	// discarding it. Once `saveConfig(fresh)` runs the old ephemeral key is gone
+	// and its blobs are permanently undeletable, so this is the last chance.
+	// Bounded by a timeout so a hung server can't block rotation; the background
+	// reap keeps running (the old key lives on in the closure) and completes if
+	// it can. Pre-§12 historical orphans stay stranded either way.
+	if (existing) {
+		await Promise.race([
+			reapAllReachable(existing).catch((error) => dbg('rotate reap failed', error)),
+			new Promise<void>((resolve) => setTimeout(resolve, 15_000))
+		]);
+	}
 	const fresh = createFreshConfig(
 		relays ?? existing?.relays,
 		blossomServers ?? existing?.blossomServers
@@ -327,7 +392,9 @@ export function setMultiDeviceBlossomServers(servers: string[]): void {
 /**
  * Adapt the active account's `nip44` capability to the `Nip44Seal` interface.
  * Returns undefined if the account signer doesn't expose nip44 (some signers
- * can't). The seal is always to the owner's own npub (spec §7).
+ * can't). Used ONLY for the tip's outer content — a NIP-44 seal to the owner
+ * npub that carries the DEK private key (spec §6). Document seals use the DEK
+ * (see {@link getDekSeal}); this is the single owner-npub operation left.
  */
 function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefined {
 	const account = manager.getActive();
@@ -346,6 +413,37 @@ function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefi
 		seal: {
 			encrypt: (pubkey, plaintext) => accountNip44.encrypt(pubkey, plaintext),
 			decrypt: (pubkey, ciphertext) => accountNip44.decrypt(pubkey, ciphertext)
+		}
+	};
+}
+
+/**
+ * Build the per-identity document encryption key (DEK) self-seal (spec §7). The
+ * DEK is a local Nostr keypair (we hold the private key), so the seal is a
+ * local NIP-44 self-seal — NOT the account signer. This is the whole point of
+ * the DEK: document decrypts are local, avoiding a remote-signer round trip per
+ * document (crippling on NIP-46 over poor connectivity). Returns undefined when
+ * the device has not yet learned the DEK (a linked device before its first tip
+ * read); the document paths then bail.
+ */
+function getDekSeal(
+	config: MultiDeviceOwnerConfig
+): { seal: Nip44Seal; dekPubkey: string } | undefined {
+	if (!config.dekPrivateKey) {
+		dbg('getDekSeal skip', { reason: 'no DEK learned yet' });
+		return undefined;
+	}
+	const dekPriv = hexToBytes(config.dekPrivateKey);
+	const dekPubkey = getPublicKey(dekPriv);
+	// Self-seal: sender = recipient = the DEK keypair, so one conversation key
+	// both encrypts and decrypts (symmetric). Precomputed once per config.
+	const conversationKey = nip44.v2.utils.getConversationKey(dekPriv, dekPubkey);
+	return {
+		dekPubkey,
+		seal: {
+			// pubkey arg is the DEK's own (self-seal); the conversation key is fixed.
+			encrypt: async (_pubkey, plaintext) => nip44.v2.encrypt(plaintext, conversationKey),
+			decrypt: async (_pubkey, ciphertext) => nip44.v2.decrypt(ciphertext, conversationKey)
 		}
 	};
 }
@@ -397,6 +495,121 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 	};
 }
 
+/**
+ * Best-effort Blossom deletion of superseded/orphaned document addresses
+ * (spec §12 GC). Fans `DELETE /<sha256>` (BUD-12) across every host the blobs
+ * were replicated to: `404` is success (idempotent), `402`/`403`/unreachable
+ * are logged and skipped. GC is hygiene, never a correctness path, so it never
+ * throws. Delete auth is signed by the persisted owner signer (the uploading
+ * pubkey), preserving the unlinkability of the ephemeral identity.
+ */
+async function reapAddresses(
+	addresses: string[],
+	servers: string[],
+	signer: BlossomSigner
+): Promise<void> {
+	const targets = [...new Set(addresses.filter(Boolean))];
+	if (targets.length === 0) return;
+	const clean = [...new Set(servers.map((s) => s.replace(/\/+$/, '')))].filter(Boolean);
+	const results = await Promise.allSettled(
+		targets.flatMap((address) =>
+			clean.map((server) => deleteBlob({ serverUrl: server, sha256Hex: address, signer }))
+		)
+	);
+	dbg('reap addresses', {
+		addresses: targets.length,
+		servers: clean.length,
+		ok: results.filter((r) => r.status === 'fulfilled' && r.value.ok).length,
+		total: results.length
+	});
+}
+
+/**
+ * Delete a tombstoned group's whole `prev` chain (spec §12 GC). A soft-deleted
+ * group is unreachable from the new tip and serves no catch-up purpose — behind
+ * devices fast-forward from a snapshot (§8.5). Reuses the catch-up walker with
+ * `localEpoch: -1n` to enumerate every epoch (all real epochs ≥ 0 > −1), then
+ * fans out deletes. Fire-and-forget from `publish`; a missing link or hung
+ * server just leaves that blob stranded.
+ */
+async function reapGroupChain(params: {
+	headAddress: string;
+	gid: string;
+	pointer: TipPointer;
+	dekSeal: Nip44Seal;
+	dekPubkey: string;
+	config: MultiDeviceOwnerConfig;
+}): Promise<void> {
+	let chain: ChainStep[] = [];
+	try {
+		chain = await walkGroupChain({
+			tipAddress: params.headAddress,
+			groupId: params.gid,
+			localEpoch: -1n,
+			store: makeReadStore(readServers(params.pointer, params.config)),
+			addressToUrl: (a) => urlFromTip(a, params.pointer),
+			seal: params.dekSeal,
+			dekPubkey: params.dekPubkey
+		});
+	} catch (error) {
+		dbg('reap chain walk failed (best-effort)', {
+			gid: params.gid.slice(0, 8),
+			error: error instanceof Error ? error.message : String(error)
+		});
+	}
+	// Head unioned explicitly: covers the epoch-0 doc and the throw-before-any-step case.
+	await reapAddresses(
+		[params.headAddress, ...chain.map((s) => s.address)],
+		params.config.blossomServers,
+		ephemeralSigner(params.config)
+	);
+}
+
+/**
+ * Delete every document reachable from a config's last-seen tip — each live
+ * group's full chain plus the current meta and any pending-reap addresses —
+ * using that config's ephemeral key. Used by `rotateMultiDeviceKey` as a
+ * best-effort full cleanup BEFORE the key is discarded (after which its blobs
+ * are permanently undeletable). Needs the DEK to decrypt the chain for walking.
+ * Pre-§12 historical orphans (unreachable + unrecorded) stay stranded — those
+ * are unrecoverable without the optional BUD-12 `/list`.
+ */
+async function reapAllReachable(config: MultiDeviceOwnerConfig): Promise<void> {
+	const tip = config.lastSeenTip;
+	if (!tip) return;
+	const dek = getDekSeal(config);
+	if (!dek) return;
+	const pointer: TipPointer = {
+		groups: tip.groups,
+		metaAddress: tip.metaAddress,
+		servers: config.blossomServers
+	};
+	const targets: string[] = [];
+	if (tip.metaAddress) targets.push(tip.metaAddress);
+	for (const g of tip.groups) {
+		try {
+			const chain = await walkGroupChain({
+				tipAddress: g.address,
+				groupId: g.gid,
+				localEpoch: -1n,
+				store: makeReadStore(readServers(pointer, config)),
+				addressToUrl: (a) => urlFromTip(a, pointer),
+				seal: dek.seal,
+				dekPubkey: dek.dekPubkey
+			});
+			targets.push(g.address, ...chain.map((s) => s.address));
+		} catch (error) {
+			targets.push(g.address); // head is known + leaving the tip — delete it anyway
+			dbg('reap-all chain walk failed (best-effort)', {
+				gid: g.gid.slice(0, 8),
+				error: error instanceof Error ? error.message : String(error)
+			});
+		}
+	}
+	targets.push(...(config.pendingReap ?? []));
+	await reapAddresses(targets, config.blossomServers, ephemeralSigner(config));
+}
+
 // ---------------------------------------------------------------------------
 // Tip transport (spec §6)
 // ---------------------------------------------------------------------------
@@ -405,6 +618,8 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 async function buildInnerTipEvent(params: {
 	pointer: TipPointer;
 	ownerPubkey: string;
+	/** Per-identity DEK private key (spec §6 `dek` tag, §7). */
+	dekPrivateKey: string;
 }): Promise<NostrEvent> {
 	const template = {
 		kind: MULTI_DEVICE_INNER_KIND,
@@ -416,6 +631,10 @@ async function buildInnerTipEvent(params: {
 			...(params.pointer.metaAddress
 				? [['x', params.pointer.metaAddress, 'meta'] as string[]]
 				: []),
+			// Spec §6 `dek` tag: the DEK private key travels inside the owner-NIP-44
+			// seal so a linked device obtains it from one tip decrypt, then decrypts
+			// every document locally (no per-doc signer round trip, §7).
+			['dek', params.dekPrivateKey] as string[],
 			...params.pointer.servers.map((s) => ['server', s] as string[])
 		]
 	};
@@ -463,8 +682,15 @@ interface TipPointer {
 	servers: string[];
 }
 
-/** Parse + verify an outer tip event into the document inventory it carries. */
-async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<TipPointer | null> {
+/** Parsed tip: the document inventory plus the DEK private key (spec §6). */
+interface ParsedTip {
+	pointer: TipPointer;
+	/** DEK private key from the inner `dek` tag (absent on legacy pre-DEK tips). */
+	dekPrivateKey?: string;
+}
+
+/** Parse + verify an outer tip event into the document inventory + DEK it carries. */
+async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<ParsedTip | null> {
 	if (outer.kind !== MULTI_DEVICE_TIP_KIND) return null;
 	const { seal } = getActiveNip44Seal() ?? {};
 	if (!seal) return null;
@@ -484,12 +710,17 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Ti
 	if (!verifyEvent(inner) || inner.pubkey !== ownerPubkey) return null;
 	const groups: TipGroupPointer[] = [];
 	let metaAddress: string | undefined;
+	let dekPrivateKey: string | undefined;
 	for (const tag of inner.tags) {
-		if (tag[0] !== 'x') continue;
-		if (tag[2] === 'group' && typeof tag[1] === 'string' && typeof tag[3] === 'string') {
-			groups.push({ address: tag[1], gid: tag[3] });
-		} else if (tag[2] === 'meta' && typeof tag[1] === 'string') {
-			metaAddress = tag[1];
+		if (tag[0] === 'x') {
+			if (tag[2] === 'group' && typeof tag[1] === 'string' && typeof tag[3] === 'string') {
+				groups.push({ address: tag[1], gid: tag[3] });
+			} else if (tag[2] === 'meta' && typeof tag[1] === 'string') {
+				metaAddress = tag[1];
+			}
+		} else if (tag[0] === 'dek' && typeof tag[1] === 'string') {
+			// Spec §6 `dek` tag: 64 hex chars of the DEK private key (§7).
+			dekPrivateKey = tag[1];
 		}
 	}
 	const servers = inner.tags
@@ -497,7 +728,7 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Ti
 		.map((t) => t[1])
 		.filter((s): s is string => typeof s === 'string');
 	if (groups.length === 0 && metaAddress === undefined) return null;
-	return { groups, metaAddress, servers };
+	return { pointer: { groups, metaAddress, servers }, dekPrivateKey };
 }
 
 /** Pick the first advertised server for an address (spec §6 fetch order). */
@@ -513,7 +744,12 @@ async function buildTipEvent(
 	const account = manager.getActive();
 	if (!account) throw new Error('No active account');
 	const ownerPubkey = normalizePubKey(account.pubkey);
-	const inner = await buildInnerTipEvent({ pointer, ownerPubkey });
+	if (!config.dekPrivateKey) throw new Error('Cannot publish tip: no DEK configured');
+	const inner = await buildInnerTipEvent({
+		pointer,
+		ownerPubkey,
+		dekPrivateKey: config.dekPrivateKey
+	});
 	dbg('tip inner owner-signed', {
 		groups: pointer.groups.length,
 		meta: !!pointer.metaAddress
@@ -691,7 +927,7 @@ async function fetchTipForPublish(
 		return { pointer: emptyTipPointer(config), deferred: false };
 	}
 	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
-	return { pointer: parsed ?? emptyTipPointer(config), deferred: false };
+	return { pointer: parsed?.pointer ?? emptyTipPointer(config), deferred: false };
 }
 
 /** gids of a tombstone list — for the §4.3 invariant (a `gid` is in `x` XOR `removed`). */
@@ -790,9 +1026,9 @@ function buildInventory(
  */
 async function applyTip(
 	pointer: TipPointer,
-	ctx: { seal: Nip44Seal; ownerPubkey: string; config: MultiDeviceOwnerConfig }
+	ctx: { dekSeal: Nip44Seal; dekPubkey: string; config: MultiDeviceOwnerConfig }
 ): Promise<{ adoptedTombstones: Tombstone[]; counts: ReconcileCounts }> {
-	const { seal, ownerPubkey, config } = ctx;
+	const { dekSeal, dekPubkey, config } = ctx;
 	const lastSeen = config.lastSeenTip;
 	const counts: ReconcileCounts = {
 		seeded: 0,
@@ -803,27 +1039,47 @@ async function applyTip(
 	};
 	let adoptedTombstones: Tombstone[] = [];
 
-	for (const group of pointer.groups) {
-		const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
-		if (lastSeenGroup?.address === group.address) continue;
-		dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
-		try {
-			const { outcome } = await pullAndReconcileGroup(group, pointer, seal, ownerPubkey, config);
-			if (outcome === 'seeded') counts.seeded++;
-			else if (outcome === 'fast-forwarded') counts.fastForwarded++;
-			else counts.skipped++;
-		} catch (error) {
-			dbg('applyTip group reconcile failed', { gid: group.gid, error });
-		}
-	}
+	// Reconcile changed groups in parallel — each gid writes its own storage key +
+	// MLS state, and fastForwardGroup runs under a per-group lock
+	// (runGroupOperation), so the groups are independent. counts mutates only at
+	// await boundaries (JS is single-threaded), so the increments can't race.
+	let reconciled = 0;
+	await Promise.all(
+		pointer.groups.map(async (group) => {
+			try {
+				const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
+				if (lastSeenGroup?.address === group.address) return;
+				dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
+				try {
+					const { outcome } = await pullAndReconcileGroup(
+						group,
+						pointer,
+						dekSeal,
+						dekPubkey,
+						config
+					);
+					if (outcome === 'seeded') counts.seeded++;
+					else if (outcome === 'fast-forwarded') counts.fastForwarded++;
+					else counts.skipped++;
+				} catch (error) {
+					dbg('applyTip group reconcile failed', { gid: group.gid, error });
+				}
+			} finally {
+				// Advance the per-group counter for an active user-initiated flow (link).
+				// `finally` runs even on the early `return` above, so the bar always
+				// reaches `total`. No-op when mdProgress is null (background cycles).
+				bumpMdProgress(++reconciled);
+			}
+		})
+	);
 
 	if (pointer.metaAddress && pointer.metaAddress !== lastSeen?.metaAddress) {
 		dbg('applyTip meta changed', { address: pointer.metaAddress.slice(0, 12) });
 		try {
 			const { doc, counts: metaCounts } = await pullAndReconcileMeta(
 				pointer,
-				seal,
-				ownerPubkey,
+				dekSeal,
+				dekPubkey,
 				config
 			);
 			adoptedTombstones = doc.removed ?? [];
@@ -846,14 +1102,27 @@ async function applyTip(
 async function publish(plan: PublishPlan): Promise<void> {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
+	// Owner seal still gates the whole flow (tip build/parse is NIP-44 to owner,
+	// spec §6); the DEK gates document encrypt/decrypt (spec §7, local — no signer).
 	const active = getActiveNip44Seal();
 	if (!active) return;
-	const { seal, ownerPubkey } = active;
+	const { ownerPubkey } = active;
+	const dek = getDekSeal(config);
+	if (!dek) return;
+	const { seal: dekSeal, dekPubkey } = dek;
 	const { pointer, deferred } = await fetchTipForPublish(config, ownerPubkey);
 	if (deferred) return;
 
+	// §12 GC: drain addresses queued for deletion last publish (one-publish grace
+	// window for in-flight peer fetches). Fire-and-forget — never block the push.
+	const reapNow = config.pendingReap ?? [];
+	if (reapNow.length) {
+		config.pendingReap = [];
+		void reapAddresses(reapNow, config.blossomServers, ephemeralSigner(config));
+	}
+
 	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
-	const { adoptedTombstones, counts } = await applyTip(pointer, { seal, ownerPubkey, config });
+	const { adoptedTombstones, counts } = await applyTip(pointer, { dekSeal, dekPubkey, config });
 	const writeStore = makeBlossomStore(ephemeralSigner(config));
 
 	// The published `removed` set (own pending + adopted, XOR'd vs the live
@@ -866,31 +1135,49 @@ async function publish(plan: PublishPlan): Promise<void> {
 	);
 	const tombstonedGids = tombstoneGids(removed);
 
-	// Re-seal the affected group documents (§10.5 publishing unit).
-	const resealed: TipGroupPointer[] = [];
+	// Re-seal the affected group documents (§10.5 publishing unit) in parallel.
+	// The groups are independent — each reads its `prev` from the immutable
+	// fetched tip, not from a sibling's result — so only the tip (published below)
+	// needs every address. Promise.all preserves input order, so the tip's
+	// `groups` array order is unchanged.
 	const gidsToReseal =
 		plan.resealGroups === 'all' ? liveSnapshots.map((s) => s.gid) : plan.resealGroups;
-	for (const gid of gidsToReseal) {
-		const snapshot = liveSnapshots.find((s) => s.gid === gid);
-		if (!snapshot) continue; // gone (tombstoned/deleted) since the trigger fired
-		const prev = pointer.groups.find((g) => g.gid === gid)?.address;
-		const result = await publishGroupDocument({
-			group: snapshot,
-			seal,
-			ownerPubkey,
-			store: writeStore,
-			prev
-		});
-		resealed.push({ address: result.address, gid });
-		dbg('publish group doc', { gid, address: result.address.slice(0, 12) });
+	// Surface progress only for bulk reseals (enable / server change / rotation);
+	// steady-state reseals a single changed group and would flicker a bar for
+	// nothing. The DEK seal is local, so the Blossom upload round is the slow part.
+	const trackProgress = gidsToReseal.length >= 2;
+	if (trackProgress) setMdProgress('Preparing groups', 0, gidsToReseal.length);
+	let resealDone = 0;
+	const resealed: TipGroupPointer[] = [];
+	try {
+		const results = await Promise.all(
+			gidsToReseal.map(async (gid): Promise<TipGroupPointer | null> => {
+				const snapshot = liveSnapshots.find((s) => s.gid === gid);
+				if (!snapshot) return null; // gone (tombstoned/deleted) since the trigger fired
+				const prev = pointer.groups.find((g) => g.gid === gid)?.address;
+				const result = await publishGroupDocument({
+					group: snapshot,
+					seal: dekSeal,
+					dekPubkey,
+					store: writeStore,
+					prev
+				});
+				bumpMdProgress(++resealDone);
+				dbg('publish group doc', { gid, address: result.address.slice(0, 12) });
+				return { address: result.address, gid };
+			})
+		);
+		resealed.push(...results.filter((r): r is TipGroupPointer => r !== null));
+	} finally {
+		if (trackProgress) clearMdProgress();
 	}
 
 	// Re-seal the meta document (tombstones + last-resort key package) only when asked.
 	let metaAddress = pointer.metaAddress;
 	if (plan.resealMeta) {
 		const result = await publishMetaDocument({
-			seal,
-			ownerPubkey,
+			seal: dekSeal,
+			dekPubkey,
 			store: writeStore,
 			removed,
 			lastResortKeyPackage: getLastResortKeyPackageEntry()
@@ -904,10 +1191,25 @@ async function publish(plan: PublishPlan): Promise<void> {
 	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
 
 	// Own tombstones are now in the immutable published meta doc; clear pending.
+	// §12 GC: queue the superseded meta for deletion on the NEXT publish — a
+	// one-publish grace window for in-flight peer fetches before the old blob is reaped.
 	if (plan.resealMeta) {
 		config.pendingTombstones = [];
+		if (pointer.metaAddress && pointer.metaAddress !== metaAddress) {
+			config.pendingReap = [...(config.pendingReap ?? []), pointer.metaAddress];
+		}
 		saveConfig(config);
 	}
+
+	// §12 GC: a group leaving the tip this publish (tombstoned while still live
+	// in the fetched tip) has its whole `prev` chain deleted — it is unreachable
+	// from the new tip and behind devices fast-forward from a snapshot (§8.5).
+	// Fire-and-forget; a missing link or hung server just leaves that blob.
+	for (const gid of tombstonedGids) {
+		const head = pointer.groups.find((g) => g.gid === gid)?.address;
+		if (head) void reapGroupChain({ headAddress: head, gid, pointer, dekSeal, dekPubkey, config });
+	}
+
 	dbg('publish done', {
 		reseal: gidsToReseal.length,
 		meta: plan.resealMeta,
@@ -960,6 +1262,9 @@ let tipSubscription: { unsubscribe: () => void } | null = null;
 // off. Reset on account change / disable via resetMultiDeviceSession.
 let mdReconcilePromise: Promise<void> | null = null;
 const MD_RECONCILE_TIMEOUT_MS = 8000;
+// Event id of the tip currently being reconciled by `handleTipEvent`, or null.
+// Re-entrancy guard: see handleTipEvent. Sync check-and-set before the first await.
+let inflightTipEventId: string | null = null;
 
 /**
  * Subscribe to the tip replaceable event for the active owner's config and
@@ -1131,17 +1436,21 @@ function makeReadStore(servers: string[]): BlobStore {
 		},
 		async fetch(url: string) {
 			const address = url.split('/').pop() ?? '';
-			let lastError: unknown;
-			for (const server of clean) {
-				try {
-					return await fetchBlob(`${server}/${address}`);
-				} catch (error) {
-					lastError = error;
-				}
+			// Race all servers — content-addressed, so any holder is a valid source.
+			// First response wins; only fails if every server fails. The old
+			// sequential `for`-loop paid N full (untimed) waits when the first-listed
+			// server was slow or down, stalling the cold-link seed for every group.
+			try {
+				return await Promise.any(clean.map((server) => fetchBlob(`${server}/${address}`)));
+			} catch (agg) {
+				const errors = agg instanceof AggregateError ? agg.errors : [agg];
+				throw new Error(
+					`Could not fetch document from any server: ${errors
+						.map((e) => (e instanceof Error ? e.message : String(e)))
+						.join('; ')}`,
+					{ cause: agg }
+				);
 			}
-			throw lastError instanceof Error
-				? new Error(`Could not fetch document: ${lastError.message}`)
-				: new Error('Could not fetch document');
 		}
 	};
 }
@@ -1154,8 +1463,8 @@ function makeReadStore(servers: string[]): BlobStore {
 async function pullAndReconcileGroup(
 	group: TipGroupPointer,
 	pointer: TipPointer,
-	seal: Nip44Seal,
-	ownerPubkey: string,
+	dekSeal: Nip44Seal,
+	dekPubkey: string,
 	config: MultiDeviceOwnerConfig | undefined
 ): Promise<{ doc: GroupDocument; outcome: ReconcileOutcome }> {
 	const store = makeReadStore(readServers(pointer, config));
@@ -1163,30 +1472,30 @@ async function pullAndReconcileGroup(
 		address: group.address,
 		store,
 		addressToUrl: (a) => urlFromTip(a, pointer),
-		seal,
-		ownerPubkey
+		seal: dekSeal,
+		dekPubkey
 	});
 	if (doc.type !== 'group') {
 		throw new MultiDeviceError('Tip group tag pointed at a non-group document');
 	}
-	const outcome = await makeReconcileTarget(ownerPubkey, {
+	const outcome = await makeReconcileTarget({
 		groupAddress: group.address,
 		pointer,
-		seal,
+		dekSeal,
+		dekPubkey,
 		config
 	}).applyGroupDocument(doc);
-	if (outcome === 'seeded') {
-		// Seeding changes the group set; refresh the in-memory store.
-		await reloadChatGroupsForOwner(ownerPubkey);
-	}
+	// No store reload: seedGroup adds via persistGroup (reactive store + IDB in
+	// one shot), and fast-forward mutates an existing record in place
+	// (replaceGroup). The store is current for the caller + reactive UI.
 	return { doc, outcome };
 }
 
 /** Pull the meta document from the tip and reconcile tombstones + key package. */
 async function pullAndReconcileMeta(
 	pointer: TipPointer,
-	seal: Nip44Seal,
-	ownerPubkey: string,
+	dekSeal: Nip44Seal,
+	dekPubkey: string,
 	config: MultiDeviceOwnerConfig | undefined
 ): Promise<{
 	doc: MetaDocument;
@@ -1198,13 +1507,13 @@ async function pullAndReconcileMeta(
 		address: pointer.metaAddress,
 		store,
 		addressToUrl: (a) => urlFromTip(a, pointer),
-		seal,
-		ownerPubkey
+		seal: dekSeal,
+		dekPubkey
 	});
 	if (doc.type !== 'meta') {
 		throw new MultiDeviceError('Tip meta tag pointed at a non-meta document');
 	}
-	const result = await reconcileMetaDocument(makeReconcileTarget(ownerPubkey), doc);
+	const result = await reconcileMetaDocument(makeReconcileTarget(), doc);
 	return {
 		doc,
 		counts: {
@@ -1226,33 +1535,66 @@ async function handleTipEvent(
 	outer: NostrEvent,
 	ownerPubkey: string
 ): Promise<ReconcileCounts | null> {
-	const { seal } = getActiveNip44Seal() ?? {};
-	if (!seal) return null;
 	const config = getMultiDeviceConfig();
 	// §10.5 tip-address check: an event id we've already processed is our own
 	// self-echo (publish loopback) or a duplicate relay delivery — skip without
 	// parsing or fetching. This is the cheap dedup layer above the per-doc
 	// address delta.
 	if (config?.lastSeenTipEventId === outer.id) return null;
-	const pointer = await parseTipEvent(outer, ownerPubkey);
-	if (!pointer) return null;
-	if (!config) return null;
+	// Re-entrancy guard: the same tip can arrive concurrently — a cold reconcile
+	// overlapping the live subscription, or a relay burst — before setLastSeenTip
+	// records the event id (which only happens AFTER applyTip). lastSeenTipEventId
+	// gates too late for those: without this, each duplicate would run a full
+	// 13-group reconcile in parallel and race a concurrent seedGroup on the same
+	// absent group. Check-and-set BEFORE the first await — JS is single-threaded, so
+	// a sibling delivery in the same tick reads the flag we just set and bails.
+	if (inflightTipEventId === outer.id) return null;
+	inflightTipEventId = outer.id;
+	try {
+		const parsed = await parseTipEvent(outer, ownerPubkey);
+		if (!parsed) return null;
+		if (!config) return null;
 
-	dbg('handleTipEvent', {
-		groups: pointer.groups.length,
-		meta: !!pointer.metaAddress,
-		cold: !config.lastSeenTip
-	});
+		// Adopt the tip's DEK (spec §6 `dek` tag): the channel a linked device obtains
+		// the DEK through, so document decrypts are local from here on (§7). The
+		// source device already holds its own; the idempotent check skips a rewrite.
+		if (parsed.dekPrivateKey && parsed.dekPrivateKey !== config.dekPrivateKey) {
+			config.dekPrivateKey = parsed.dekPrivateKey;
+			saveConfig(config);
+		}
+		const dek = getDekSeal(config);
+		if (!dek) return null; // no DEK → cannot decrypt documents (§7)
+		const pointer = parsed.pointer;
 
-	// Ingest via the shared chokepoint (same reconcile the write path runs before
-	// every push), then record the peer tip as the last-seen one.
-	const { counts } = await applyTip(pointer, { seal, ownerPubkey, config });
-	setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
+		dbg('handleTipEvent', {
+			groups: pointer.groups.length,
+			meta: !!pointer.metaAddress,
+			cold: !config.lastSeenTip
+		});
 
-	dbg('handleTipEvent done', { counts });
-	// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
-	// advance republishes; republishing here risks a publish loop across devices.
-	return counts;
+		// Populate the group-loading total for an active user-initiated flow (link).
+		// Background subscription cycles leave phase null → no-op there, so
+		// steady-state reconciles never surface a bar.
+		if (mdProgress.phase && pointer.groups.length) {
+			setMdProgress('Loading groups', 0, pointer.groups.length);
+		}
+
+		// Ingest via the shared chokepoint (same reconcile the write path runs before
+		// every push), then record the peer tip as the last-seen one.
+		const { counts } = await applyTip(pointer, {
+			dekSeal: dek.seal,
+			dekPubkey: dek.dekPubkey,
+			config
+		});
+		setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
+
+		dbg('handleTipEvent done', { counts });
+		// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
+		// advance republishes; republishing here risks a publish loop across devices.
+		return counts;
+	} finally {
+		if (inflightTipEventId === outer.id) inflightTipEventId = null;
+	}
 }
 
 /**
@@ -1261,15 +1603,13 @@ async function handleTipEvent(
  * epoch (§8); tombstones drop a group whose epoch ≤ the tombstone (§8, anti-
  * downgrade).
  */
-function makeReconcileTarget(
-	ownerPubkey: string,
-	catchUp?: {
-		groupAddress: string;
-		pointer: TipPointer;
-		seal: Nip44Seal;
-		config: MultiDeviceOwnerConfig | undefined;
-	}
-): ReconcileTarget {
+function makeReconcileTarget(catchUp?: {
+	groupAddress: string;
+	pointer: TipPointer;
+	dekSeal: Nip44Seal;
+	dekPubkey: string;
+	config: MultiDeviceOwnerConfig | undefined;
+}): ReconcileTarget {
 	return {
 		localEpoch(gid) {
 			const group = getChatGroup(gid);
@@ -1279,7 +1619,10 @@ function makeReconcileTarget(
 		async applyGroupDocument(doc) {
 			const existing = getChatGroup(doc.gid);
 			if (!existing) {
-				await seedGroup(doc, ownerPubkey);
+				// ownerPubkey labels the seeded group record (the active identity); the
+				// seal is confidentiality-only (DEK), not used for labeling.
+				const account = requireActiveAccount('You must be logged in to seed a group');
+				await seedGroup(doc, normalizePubKey(account.pubkey));
 				return 'seeded';
 			}
 			const incomingEpoch = groupEpoch(doc);
@@ -1309,9 +1652,9 @@ function makeReconcileTarget(
 					decryptFrontier,
 					groupAddress: catchUp.groupAddress,
 					pointer: catchUp.pointer,
-					seal: catchUp.seal,
-					config: catchUp.config,
-					ownerPubkey
+					dekSeal: catchUp.dekSeal,
+					dekPubkey: catchUp.dekPubkey,
+					config: catchUp.config
 				}).catch((error) =>
 					dbg('catchUp failed; fast-forward preserved liveness', {
 						gid: doc.gid,
@@ -1351,6 +1694,7 @@ function makeReconcileTarget(
 async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void> {
 	// ponytail: joinEpoch 0 — seeded groups adopt the writer's current state via
 	// clientState, so there's no pre-membership boundary to filter (spec §9).
+	const epoch = groupEpoch(doc);
 	const seeded: StoredChatGroup = {
 		id: doc.gid,
 		ownerPubkey,
@@ -1361,13 +1705,31 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void>
 		fetchCursor: doc.cursor,
 		messages: [],
 		syncIssues: [],
-		snapshots: [],
+		// Initial healthy snapshot — the recovery baseline `loadAndNormalizeChatGroup`
+		// would mint on next reload. Built inline so persistGroup (reactive store +
+		// IDB in one shot) needs no full reload. cursor is the adopted cursor: the
+		// state is valid AT doc.cursor, not cursor 0 (unlike create/join, whose
+		// fetchCursor is still 0).
+		snapshots: [
+			{
+				groupId: doc.gid,
+				status: 'healthy',
+				epoch: epoch ? epoch.toString() : '0',
+				cursor: doc.cursor,
+				createdAt: Date.now(),
+				stateBase64: doc.clientState
+			}
+		],
 		metadata: groupMetadata(doc),
 		joinEpoch: 0n,
 		status: 'active'
 	};
-	await importChatGroups([seeded]);
-	dbg('seedGroup', { gid: doc.gid.slice(0, 8), epoch: String(groupEpoch(doc)) });
+	// Add to the reactive store + persist in one shot — the create/join seam's
+	// primitive. The store updates synchronously, so the caller's
+	// collectGroupSnapshots and the reactive UI see the seeded group at once; no
+	// reloadChatGroupsForOwner (full IDB scan) needed.
+	persistGroup(seeded);
+	dbg('seedGroup', { gid: doc.gid.slice(0, 8), epoch: String(epoch) });
 	// Establish the coordinator relationship so it appears in the coordinator list
 	// and operational queries (available key packages, welcomes) — mirrors the
 	// create/join seam. Idempotent if the coordinator is already known.
@@ -1465,9 +1827,9 @@ async function catchUpGroupFromChain(params: {
 	decryptFrontier: number;
 	groupAddress: string;
 	pointer: TipPointer;
-	seal: Nip44Seal;
+	dekSeal: Nip44Seal;
+	dekPubkey: string;
 	config: MultiDeviceOwnerConfig | undefined;
-	ownerPubkey: string;
 }): Promise<void> {
 	const group = getChatGroup(params.groupId);
 	if (!group) return; // vanished (soft-deleted) mid-flight
@@ -1482,8 +1844,8 @@ async function catchUpGroupFromChain(params: {
 			localEpoch: params.localEpoch,
 			store: makeReadStore(readServers(params.pointer, params.config)),
 			addressToUrl: (a) => urlFromTip(a, params.pointer),
-			seal: params.seal,
-			ownerPubkey: params.ownerPubkey
+			seal: params.dekSeal,
+			dekPubkey: params.dekPubkey
 		});
 	} catch (error) {
 		dbg('catchUp walk failed; fast-forward preserved liveness', {
@@ -1659,27 +2021,34 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	};
 	saveConfig(config);
 
-	// Fetch the current tip, then the document, then reconcile.
+	// Fetch the current tip, then the document, then reconcile. Surface progress
+	// for this user-initiated link — handleTipEvent + applyTip populate the
+	// group-loading total + counter while mdProgress stays active.
 	const ownerPubkey = normalizePubKey(account.pubkey);
-	const tipEvent = await fetchLatestTipEvent(config);
-	let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0 };
-	if (tipEvent) {
-		const reconciled = await handleTipEvent(tipEvent, ownerPubkey);
-		if (reconciled) {
-			result = {
-				seeded: reconciled.seeded,
-				fastForwarded: reconciled.fastForwarded,
-				skipped: reconciled.skipped,
-				dropped: reconciled.dropped
-			};
+	setMdProgress('Fetching device state');
+	try {
+		const tipEvent = await fetchLatestTipEvent(config);
+		let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0 };
+		if (tipEvent) {
+			const reconciled = await handleTipEvent(tipEvent, ownerPubkey);
+			if (reconciled) {
+				result = {
+					seeded: reconciled.seeded,
+					fastForwarded: reconciled.fastForwarded,
+					skipped: reconciled.skipped,
+					dropped: reconciled.dropped
+				};
+			}
 		}
+		// Live subscription reconciles on every subsequent tip move (spec §6).
+		startTipSubscription();
+		// Mark the session reconciled: link just applied the tip directly, so the
+		// watch's §10.6 gate (awaitMultiDeviceReconciled) should not re-run it.
+		mdReconcilePromise = Promise.resolve();
+		return result;
+	} finally {
+		clearMdProgress();
 	}
-	// Live subscription reconciles on every subsequent tip move (spec §6).
-	startTipSubscription();
-	// Mark the session reconciled: link just applied the tip directly, so the
-	// watch's §10.6 gate (awaitMultiDeviceReconciled) should not re-run it.
-	mdReconcilePromise = Promise.resolve();
-	return result;
 }
 
 /** Fetch the latest (greatest created_at) tip event for a config. */
