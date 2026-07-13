@@ -61,6 +61,7 @@ import {
 	groupEpoch,
 	groupMetadata,
 	walkGroupChain,
+	buildInventory,
 	type Nip44Seal,
 	type BlobStore,
 	type GroupDocument,
@@ -69,7 +70,9 @@ import {
 	type Tombstone,
 	type ReconcileTarget,
 	type ReconcileOutcome,
-	type ChainStep
+	type ChainStep,
+	type TipGroupPointer,
+	type TipPointer
 } from '$lib/services/multiDevice';
 import {
 	getLastResortKeyPackageEntry,
@@ -188,11 +191,23 @@ export interface MultiDeviceOwnerConfig {
 	 */
 	tipHistory?: TipTransition[];
 	/**
-	 * Own soft-delete tombstones awaiting publish (§10.5 union). Cleared after a
-	 * successful publish; refilled by `softDeleteGroup`. Adopted peer tombstones
-	 * aren't stored — re-adopted from the tip on every reconcile-before-push.
+	 * Own soft-delete tombstones awaiting their first publish (§10.5). Queued by
+	 * `softDeleteGroup`, merged into {@link carriedTombstones} + cleared once
+	 * published. The first-publish-only lifecycle keeps the queue bounded: a
+	 * tombstone's durability after that is {@link carriedTombstones}'s job.
 	 */
 	pendingTombstones?: Tombstone[];
+	/**
+	 * Tombstones carried forward across publishes (§10.5): own tombstones that
+	 * have been published + peer tombstones adopted on reconcile, deduped per gid
+	 * at the highest epoch. Set to the just-published `removed` union after every
+	 * meta publish and unioned with the meta doc's `removed` on every read. This
+	 * is what makes a deletion stick across the fleet: without it, a meta-only
+	 * republish whose tip meta address is unchanged (e.g. a last-resort change
+	 * after adopting a peer tombstone) would drop the peer's tombstone from the
+	 * union. Resurrected gids are pruned at publish (composeTombstoneUnion XOR).
+	 */
+	carriedTombstones?: Tombstone[];
 	/**
 	 * Superseded document addresses awaiting Blossom deletion (spec §12 GC),
 	 * drained at the start of the next publish. Carries the previous meta address
@@ -202,8 +217,6 @@ export interface MultiDeviceOwnerConfig {
 	pendingReap?: string[];
 	/** Whether sync is active. When false, no publishing, no subscription. */
 	enabled: boolean;
-	/** Whether this device minted the document (source) or adopted it (linked). Defaults to 'source' for legacy configs. */
-	role?: 'source' | 'linked';
 }
 
 interface MultiDeviceConfigStore {
@@ -275,8 +288,7 @@ function createFreshConfig(
 		relays,
 		blossomServers,
 		pendingReap: [],
-		enabled: true,
-		role: 'source'
+		enabled: true
 	};
 }
 
@@ -349,6 +361,11 @@ export async function rotateMultiDeviceKey(
 		blossomServers ?? existing?.blossomServers
 	);
 	saveConfig(fresh);
+	// Spec §11: rotation = mint a fresh ephemeral keypair + `d`, publish a new
+	// tip, re-share. Without this republish the new (pubkey, d) has no tip event
+	// until an unrelated trigger fires — leaving devices linked with the new
+	// string looking at an empty tip while the old blobs have just been reaped.
+	scheduleRepublish({ resealGroups: 'all', resealMeta: true });
 	return fresh;
 }
 
@@ -389,9 +406,10 @@ export function setMultiDeviceBlossomServers(servers: string[]): void {
 /**
  * Adapt the active account's `nip44` capability to the `Nip44Seal` interface.
  * Returns undefined if the account signer doesn't expose nip44 (some signers
- * can't). Used ONLY for the tip's outer content — a NIP-44 seal to the owner
- * npub that carries the DEK private key (spec §6). Document seals use the DEK
- * (see {@link getDekSeal}); this is the single owner-npub operation left.
+ * can't). Used ONLY to DECRYPT the tip's outer content (the seal is to the owner
+ * npub, so decryption needs the owner nsec via the signer — spec §6). The seal
+ * is now encrypted locally as ephemeral→owner (see buildTipEvent), so this
+ * signer-bound seal is read-path only. Document seals use the DEK (getDekSeal).
  */
 function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefined {
 	const account = manager.getActive();
@@ -663,22 +681,6 @@ function buildOuterTipEvent(params: {
 	return finalizeEvent(template, hexToBytes(params.ephemeralPrivateKey));
 }
 
-interface TipGroupPointer {
-	/** Group document content address (spec §6 `x` tagged `group`). */
-	address: string;
-	/** Delivery group id the document is for — enables fetch-only-changed. */
-	gid: string;
-}
-
-interface TipPointer {
-	/** One pointer per live group document (spec §6: `['x', h, 'group', gid]`). */
-	groups: TipGroupPointer[];
-	/** Meta document content address, if any (spec §6: `['x', h, 'meta']`). */
-	metaAddress?: string;
-	/** Ordered Blossom server URLs hosting the blobs (spec §6 `server`). */
-	servers: string[];
-}
-
 /** Parsed tip: the document inventory plus the DEK private key (spec §6). */
 interface ParsedTip {
 	pointer: TipPointer;
@@ -691,9 +693,12 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Pa
 	if (outer.kind !== MULTI_DEVICE_TIP_KIND) return null;
 	const { seal } = getActiveNip44Seal() ?? {};
 	if (!seal) return null;
+	// The seal is from the ephemeral keypair to the owner (§6): decrypt uses the
+	// outer event's pubkey (ephemeral) as the sender, with the owner nsec as
+	// recipient (via the signer).
 	let innerJson: string;
 	try {
-		innerJson = await seal.decrypt(ownerPubkey, outer.content);
+		innerJson = await seal.decrypt(outer.pubkey, outer.content);
 	} catch {
 		return null;
 	}
@@ -751,9 +756,16 @@ async function buildTipEvent(
 		groups: pointer.groups.length,
 		meta: !!pointer.metaAddress
 	});
-	const { seal } = getActiveNip44Seal() ?? {};
-	if (!seal) throw new Error('Active account cannot NIP-44 seal (signer lacks nip44)');
-	const sealedContent = await seal.encrypt(ownerPubkey, JSON.stringify(inner));
+	// Seal the inner from the ephemeral keypair to the owner npub. The ephemeral
+	// private key is local (config), so this is a local NIP-44 operation — no
+	// signer round trip, cutting publish from 2 → 1 owner RTT. Recipient stays the
+	// owner so the DEK carried inside stays behind the owner key (§7); only the
+	// sender changes from the prior owner-self-seal. ponytail: diverges from spec
+	// §6's implied owner-self-seal — the spec should pin the sender to ephemeral.
+	const sealedContent = nip44.v2.encrypt(
+		JSON.stringify(inner),
+		nip44.v2.utils.getConversationKey(hexToBytes(config.ephemeralPrivateKey), ownerPubkey)
+	);
 	return buildOuterTipEvent({
 		innerEvent: inner,
 		sealedContent,
@@ -997,29 +1009,6 @@ type PublishPlan = {
 };
 
 /**
- * Build the tip's group inventory (§4.3): start from the fetched tip's slots
- * (peer addresses), drop tombstoned gids, then overlay the freshly re-sealed
- * addresses. A re-sealed gid absent from the fetched tip (newly created, or a
- * stale peer tip) is added. §4.3 is enforced here, once, for every publish.
- */
-function buildInventory(
-	pointer: TipPointer,
-	resealed: TipGroupPointer[],
-	tombstonedGids: Set<string>
-): TipGroupPointer[] {
-	const inv: TipGroupPointer[] = [];
-	for (const g of pointer.groups) {
-		if (tombstonedGids.has(g.gid)) continue; // §4.3: tombstoned gid leaves the tip
-		inv.push(resealed.find((r) => r.gid === g.gid) ?? g); // overlay re-sealed address
-	}
-	for (const r of resealed) {
-		if (tombstonedGids.has(r.gid)) continue;
-		if (!pointer.groups.some((g) => g.gid === r.gid)) inv.push(r); // new / stale-peer-tip
-	}
-	return inv;
-}
-
-/**
  * Ingestion chokepoint (§6 + §8): reconcile only documents whose address
  * changed vs `lastSeenTip`. Shared by the read path (`handleTipEvent`) and the
  * write path (`publish`). Does NOT write `lastSeenTip` — the caller records it.
@@ -1027,7 +1016,7 @@ function buildInventory(
 async function applyTip(
 	pointer: TipPointer,
 	ctx: { dekSeal: Nip44Seal; dekPubkey: string; config: MultiDeviceOwnerConfig }
-): Promise<{ adoptedTombstones: Tombstone[]; counts: ReconcileCounts }> {
+): Promise<{ counts: ReconcileCounts }> {
 	const { dekSeal, dekPubkey, config } = ctx;
 	const lastSeen = config.lastSeenTip;
 	const counts: ReconcileCounts = {
@@ -1037,7 +1026,6 @@ async function applyTip(
 		dropped: 0,
 		ignored: 0
 	};
-	let adoptedTombstones: Tombstone[] = [];
 
 	// Reconcile changed groups in parallel — each gid writes its own storage key +
 	// MLS state, and fastForwardGroup runs under a per-group lock
@@ -1082,7 +1070,17 @@ async function applyTip(
 				dekPubkey,
 				config
 			);
-			adoptedTombstones = doc.removed ?? [];
+			// §10.5 tombstone durability: union the peer's `removed` set into the
+			// persistent carry-forward store so a later meta-only republish (whose tip
+			// meta address is unchanged, so this block won't re-run) still publishes
+			// them. The caller persists config via setLastSeenTip. An empty
+			// `presentGids` keeps every peer tombstone here — the XOR against live
+			// groups happens at publish (composeTombstoneUnion).
+			config.carriedTombstones = composeTombstoneUnion(
+				config.carriedTombstones ?? [],
+				doc.removed ?? [],
+				[]
+			);
 			counts.dropped += metaCounts.dropped;
 			counts.ignored += metaCounts.ignored;
 		} catch (error) {
@@ -1090,7 +1088,7 @@ async function applyTip(
 		}
 	}
 
-	return { adoptedTombstones, counts };
+	return { counts };
 }
 
 /**
@@ -1102,8 +1100,10 @@ async function applyTip(
 async function publish(plan: PublishPlan): Promise<void> {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
-	// Owner seal still gates the whole flow (tip build/parse is NIP-44 to owner,
-	// spec §6); the DEK gates document encrypt/decrypt (spec §7, local — no signer).
+	// The owner-NIP-44 capability still gates the flow: publish decrypts the
+	// current tip to reconcile (parseTipEvent, NIP-44 to owner §6) — the tip's own
+	// seal is now a local ephemeral→owner encrypt (buildTipEvent). The DEK gates
+	// document encrypt/decrypt (§7, local — no signer).
 	const active = getActiveNip44Seal();
 	if (!active) return;
 	const { ownerPubkey } = active;
@@ -1122,15 +1122,17 @@ async function publish(plan: PublishPlan): Promise<void> {
 	}
 
 	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
-	const { adoptedTombstones, counts } = await applyTip(pointer, { dekSeal, dekPubkey, config });
+	const { counts } = await applyTip(pointer, { dekSeal, dekPubkey, config });
 	const writeStore = makeBlossomStore(ephemeralSigner(config));
 
-	// The published `removed` set (own pending + adopted, XOR'd vs the live
-	// inventory per §4.3) drives both the meta doc and the tip's group filter.
+	// The published `removed` set (own pending + carried-forward, XOR'd vs the
+	// live inventory per §4.3) drives both the meta doc and the tip's group
+	// filter. `carriedTombstones` is the persistent store (own-published + peer-
+	// adopted) so a deletion sticks across the fleet across publishes (§10.5).
 	const liveGroups = collectActiveGroups();
 	const removed = composeTombstoneUnion(
 		config.pendingTombstones ?? [],
-		adoptedTombstones,
+		config.carriedTombstones ?? [],
 		liveGroups.map((g) => g.id)
 	);
 	const tombstonedGids = new Set(removed.map((t) => t.gid));
@@ -1191,10 +1193,17 @@ async function publish(plan: PublishPlan): Promise<void> {
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
 	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
 
-	// Own tombstones are now in the immutable published meta doc; clear pending.
+	// Tombstone carry-forward (§10.5): persist the just-published `removed` union
+	// (own pending + carried, XOR'd vs live) as the new carry-forward store, then
+	// clear pending. This is the fix for tombstone durability — without it, the
+	// next meta-only republish (a last-resort change, a re-mark) would publish an
+	// empty `removed` and silently un-tombstone the group fleet-wide. Resurrected
+	// gids are already absent from `removed` (composeTombstoneUnion's XOR), so
+	// assigning the pruned union keeps the store from growing unboundedly.
 	// §12 GC: queue the superseded meta for deletion on the NEXT publish — a
 	// one-publish grace window for in-flight peer fetches before the old blob is reaped.
 	if (plan.resealMeta) {
+		config.carriedTombstones = removed;
 		config.pendingTombstones = [];
 		if (pointer.metaAddress && pointer.metaAddress !== metaAddress) {
 			config.pendingReap = [...(config.pendingReap ?? []), pointer.metaAddress];
@@ -2027,8 +2036,7 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 		// ponytail: inherit the default 3-host replication rather than the source's
 		// full list — the read path tries them in order and the user can expand.
 		blossomServers: DEFAULT_BLOSSOM_SERVERS,
-		enabled: true,
-		role: 'linked'
+		enabled: true
 	};
 	saveConfig(config);
 

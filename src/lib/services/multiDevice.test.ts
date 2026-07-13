@@ -36,6 +36,7 @@ import {
 	reconcileMetaDocument,
 	sealDocument,
 	walkGroupChain,
+	buildInventory,
 	type BlobStore,
 	type GroupDocument,
 	type GroupSnapshot,
@@ -43,7 +44,9 @@ import {
 	type MetaDocument,
 	type Nip44Seal,
 	type ReconcileTarget,
-	type Tombstone
+	type Tombstone,
+	type TipGroupPointer,
+	type TipPointer
 } from './multiDevice';
 import { nip44 } from 'applesauce-core/helpers/encryption';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
@@ -208,7 +211,11 @@ describe('multiDevice core', () => {
 			dekPubkey: OWNER,
 			store,
 			removed: [tombstone('g', 3)],
-			lastResortKeyPackage: { keyPackage: 'kp', privateKeyPackage: 'pkp' }
+			lastResortKeyPackage: {
+				keyPackage: 'kp',
+				privateKeyPackage: 'pkp',
+				coordinators: ['c1', 'c2']
+			}
 		});
 		const pulled = await pullDocument({
 			address: res.address,
@@ -221,6 +228,9 @@ describe('multiDevice core', () => {
 		if (pulled.type === 'meta') {
 			expect(pulled.removed).toContainEqual(tombstone('g', 3));
 			expect(pulled.lastResortKeyPackage?.keyPackage).toBe('kp');
+			// Coordinator association round-trips (spec §11.5 extension) so linked
+			// devices restore the kp's per-coordinator publish state.
+			expect(pulled.lastResortKeyPackage?.coordinators).toEqual(['c1', 'c2']);
 		}
 	});
 
@@ -519,5 +529,85 @@ describe('NIP-44 large-payload seal (nostr-tools override guard)', () => {
 		const payload = nip44.v2.encrypt(plaintext, conversationKey);
 		expect(payload).not.toBe(plaintext);
 		expect(nip44.v2.decrypt(payload, conversationKey)).toBe(plaintext);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Tip inventory (spec §4.3 XOR, §6)
+// ---------------------------------------------------------------------------
+
+function tipGroup(gid: string, address: string): TipGroupPointer {
+	return { gid, address };
+}
+
+function tipOf(groups: TipGroupPointer[], metaAddress?: string): TipPointer {
+	return { groups, metaAddress, servers: ['https://x'] };
+}
+
+describe('buildInventory (spec §4.3: live XOR tombstoned, never both at a tip)', () => {
+	test('overlays re-sealed addresses onto fetched tip slots', () => {
+		const pointer = tipOf([tipGroup('g1', 'old-addr')]);
+		const inv = buildInventory(pointer, [tipGroup('g1', 'new-addr')], new Set());
+		expect(inv).toEqual([tipGroup('g1', 'new-addr')]);
+	});
+
+	test('adds a re-sealed gid absent from the fetched tip (new group / stale peer)', () => {
+		const pointer = tipOf([tipGroup('g1', 'a1')]);
+		const inv = buildInventory(pointer, [tipGroup('g2', 'a2')], new Set());
+		expect(inv).toEqual([tipGroup('g1', 'a1'), tipGroup('g2', 'a2')]);
+	});
+
+	test('drops a tombstoned gid from the fetched tip (§4.3)', () => {
+		const pointer = tipOf([tipGroup('g1', 'a1'), tipGroup('g2', 'a2')]);
+		const inv = buildInventory(pointer, [], new Set(['g1']));
+		expect(inv).toEqual([tipGroup('g2', 'a2')]);
+	});
+
+	test('drops a tombstoned gid even when it was just re-sealed (§4.3 wins)', () => {
+		// A soft-deleted gid that also appears in the re-seal set (e.g. a stale
+		// peer tip carried it live) must still leave the inventory — §4.3 is the
+		// single source of truth enforced once here.
+		const pointer = tipOf([tipGroup('g1', 'old')]);
+		const inv = buildInventory(pointer, [tipGroup('g1', 'fresh')], new Set(['g1']));
+		expect(inv).toEqual([]);
+	});
+
+	test('empty inputs yield an empty inventory', () => {
+		expect(buildInventory(tipOf([]), [], new Set())).toEqual([]);
+	});
+});
+
+/**
+ * Regression guard for the tombstone carry-forward fix in `publish` (§10.5).
+ * The publish path computes `removed = compose(pending, carried, live)`, then
+ * persists `removed` back as the new `carried`. The invariant that makes that
+ * correct is idempotency: re-feeding the published union as `carried` (with no
+ * new pending) reproduces the same union. If this fails, a meta-only republish
+ * would silently drop tombstones fleet-wide — the original bug.
+ */
+describe('tombstone carry-forward idempotency (§10.5 durability)', () => {
+	test('a published tombstone survives a subsequent meta-only republish', () => {
+		// Publish 1: own soft-delete of G at epoch 5, nothing live.
+		const published = composeTombstoneUnion([tombstone('g', 5)], [], []);
+		expect(published).toContainEqual(tombstone('g', 5));
+		// Publish 2: no new pending, the published union is now `carried`. G is still
+		// not live, so the tombstone must carry forward unchanged.
+		const republished = composeTombstoneUnion([], published, []);
+		expect(republished).toContainEqual(tombstone('g', 5));
+	});
+
+	test('an adopted peer tombstone is dropped once the gid is present locally', () => {
+		// Resurrection: a sibling Commit re-raises G's epoch, G is live again → the
+		// XOR prunes the carried tombstone at the next publish (§8/§10).
+		const carried = [tombstone('g', 5)];
+		const republished = composeTombstoneUnion([], carried, ['g']);
+		expect(republished).toEqual([]);
+	});
+
+	test('a higher-epoch rejoin tombstone supersedes a carried one', () => {
+		const carried = [tombstone('g', 5)];
+		// Same gid soft-deleted again at a higher epoch — highest wins (§8).
+		const republished = composeTombstoneUnion([tombstone('g', 9)], carried, []);
+		expect(republished).toEqual([tombstone('g', 9)]);
 	});
 });

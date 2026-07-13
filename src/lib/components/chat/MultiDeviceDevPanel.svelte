@@ -95,12 +95,7 @@
 <div class="space-y-4 rounded-lg border border-dashed border-border bg-muted/20 p-4">
 	<!-- Current persisted tip: pure projection of config.lastSeenTip. -->
 	<div class="space-y-2">
-		<div class="flex items-center justify-between gap-2">
-			<h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Local tip</h4>
-			<span class="rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground">
-				{config.role ?? 'source'}
-			</span>
-		</div>
+		<h4 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Local tip</h4>
 		{#if tip}
 			<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
 				<dt class="text-muted-foreground">event</dt>

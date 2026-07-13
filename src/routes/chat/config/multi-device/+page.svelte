@@ -79,19 +79,13 @@
 
 	const hasConfig = $derived(!!config);
 	const enabled = $derived(config?.enabled === true);
-	const role = $derived(config?.role ?? 'source');
 	// Hides the "already set up elsewhere?" hint once this device has groups.
 	const hasLocalGroups = $derived(listChatGroups().length > 0);
 
-	// Status copy reflects the producer/consumer role, not just enabled state.
+	// Every enabled device both reads and writes (mesh of equal peers, spec §11),
+	// so the only honest status distinction is active / paused / not-set-up.
 	const statusLabel = $derived(
-		!hasConfig
-			? 'Not set up yet'
-			: !enabled
-				? 'Sync paused'
-				: role === 'linked'
-					? 'Linked to another device'
-					: 'Sharing from this device'
+		!hasConfig ? 'Not set up yet' : !enabled ? 'Sync paused' : 'Sync active'
 	);
 
 	function toggleBlossom(server: string, checked: boolean) {
@@ -297,29 +291,29 @@
 				</Card.Root>
 
 				{#if mdProgress.phase}
-				<div class="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
-					<div class="flex items-center gap-2 text-sm">
-						<Spinner class="size-4" />
-						<span class="font-medium">
-							{mdProgress.phase}{#if mdProgress.total}
-								<span class="text-muted-foreground">
-									({mdProgress.current}/{mdProgress.total})</span
-								>
-							{/if}
-						</span>
-					</div>
-					{#if mdProgress.total}
-						<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-							<div
-								class="h-full rounded-full bg-foreground transition-all duration-200"
-								style="width: {Math.min(100, (mdProgress.current / mdProgress.total) * 100)}%"
-							></div>
+					<div class="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+						<div class="flex items-center gap-2 text-sm">
+							<Spinner class="size-4" />
+							<span class="font-medium">
+								{mdProgress.phase}{#if mdProgress.total}
+									<span class="text-muted-foreground">
+										({mdProgress.current}/{mdProgress.total})</span
+									>
+								{/if}
+							</span>
 						</div>
-					{/if}
-				</div>
-			{/if}
+						{#if mdProgress.total}
+							<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+								<div
+									class="h-full rounded-full bg-foreground transition-all duration-200"
+									style="width: {Math.min(100, (mdProgress.current / mdProgress.total) * 100)}%"
+								></div>
+							</div>
+						{/if}
+					</div>
+				{/if}
 
-			<!-- Tab navigation: always visible. Enablement happens on action completion. -->
+				<!-- Tab navigation: always visible. Enablement happens on action completion. -->
 				<div class="flex space-x-1 rounded-lg bg-muted p-1">
 					<button
 						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'add'

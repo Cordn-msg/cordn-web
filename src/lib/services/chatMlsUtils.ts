@@ -308,14 +308,20 @@ export function makeCordnGroupMetadataExtension(
 	});
 }
 
-export function getCordnGroupMetadataExtension(state: ClientState): CordnGroupMetadata | undefined {
-	const extension = state.groupContext.extensions.find(
+export function getCordnGroupMetadataFromExtensions(
+	extensions: GroupContextExtension[]
+): CordnGroupMetadata | undefined {
+	const extension = extensions.find(
 		(entry) => entry.extensionType === CORDN_GROUP_METADATA_EXTENSION_TYPE
 	);
 	if (!extension) {
 		return undefined;
 	}
 	return decodeCordnGroupMetadata((extension as CustomExtension).extensionData);
+}
+
+export function getCordnGroupMetadataExtension(state: ClientState): CordnGroupMetadata | undefined {
+	return getCordnGroupMetadataFromExtensions(state.groupContext.extensions);
 }
 
 export async function getCordnCipherSuite() {
@@ -516,7 +522,7 @@ export async function updateGroupMetadataExtension(params: {
 	};
 }
 
-function decodeKeyPackageIdentity(keyPackage: KeyPackage): string {
+export function decodeKeyPackageIdentity(keyPackage: KeyPackage): string {
 	const credential = keyPackage.leafNode.credential;
 	if (
 		!isDefaultCredential(credential) ||

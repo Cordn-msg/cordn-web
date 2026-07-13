@@ -397,12 +397,11 @@ export async function ensureLastResortPublished(
 		);
 		if (heldLocally) {
 			// Reconcile drift: published remotely but our local record lost the
-			// coordinator marker. Re-mark it rather than re-publish.
-			await markKeyPackagePublished(
-				coordinatorLastResort.kp_ref,
-				normalizedCoordinator,
-				true
-			);
+			// coordinator marker. Re-mark it rather than re-publish, and establish
+			// the coordinator relationship so the list stays consistent with the kp
+			// marker (publishChatKeyPackage does both; this drift path must too).
+			markCoordinatorUsed(normalizedCoordinator);
+			await markKeyPackagePublished(coordinatorLastResort.kp_ref, normalizedCoordinator, true);
 			return { kind: 'ready', keyPackageRef: coordinatorLastResort.kp_ref };
 		}
 		// Foreign: another device published it. Publishing our own would evict
@@ -672,7 +671,10 @@ export function getLastResortKeyPackageEntry(): LastResortKeyPackageEntry | unde
 	if (!record) return undefined;
 	return {
 		keyPackage: record.keyPackageBase64,
-		privateKeyPackage: record.privateKeyPackageBase64
+		privateKeyPackage: record.privateKeyPackageBase64,
+		// Carry the per-coordinator publish state so linked devices restore the
+		// coordinator list + the kp's coordinator markers (spec §11.5 extension).
+		coordinators: record.publishedCoordinatorKeys
 	};
 }
 
@@ -697,6 +699,13 @@ export async function loadLastResortKeyPackage(entry: LastResortKeyPackageEntry)
 	);
 	if (!privateKeyPackageDecoded)
 		throw new Error('Unable to decode last-resort private key package');
+	// Coordinator association (spec §11.5 + cordn-web): the meta doc carries the
+	// coordinators this last-resort is published to, so a linked device restores
+	// the full state — the kp record's per-coordinator markers AND the coordinator
+	// list (markCoordinatorUsed). Mirrors seedGroup marking the group's coordinator
+	// on adoption; fires only on first load (early-return above), so once-per-kp —
+	// same frequency profile as seedGroup.
+	const coordinators = (entry.coordinators ?? []).map((c) => normalizePubKey(c));
 	const timestamp = Date.now();
 	const record: StoredKeyPackageRecord = {
 		id: `${ownerPubkey.slice(0, 8)}-lr-${timestamp}`,
@@ -708,8 +717,11 @@ export async function loadLastResortKeyPackage(entry: LastResortKeyPackageEntry)
 		privateKeyPackageBase64: entry.privateKeyPackage,
 		cipherSuite: CLI_CIPHERSUITE,
 		createdAt: timestamp,
-		publishedCoordinatorKeys: []
+		publishedCoordinatorKeys: coordinators
 	};
 	await setKeyPackages([record, ...chatKeyPackagesStore.keyPackages]);
+	// Establish each coordinator relationship so they appear in the coordinator
+	// list + operational queries — idempotent if already known.
+	for (const c of coordinators) markCoordinatorUsed(c);
 	return true;
 }

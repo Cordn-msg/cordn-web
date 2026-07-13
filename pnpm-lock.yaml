@@ -20,8 +20,8 @@ importers:
         specifier: ^1.30
         version: 1.30.0(zod@4.4.3)
       '@contextvm/sdk':
-        specifier: ^0.13.8
-        version: 0.13.8(typescript@6.0.3)
+        specifier: ^0.13.9
+        version: 0.13.9(typescript@6.0.3)
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -197,8 +197,8 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4.0
 
-  '@contextvm/sdk@0.13.8':
-    resolution: {integrity: sha512-TigSgkRFsUOSmkjmiDDOeFjvni2N798As366IiN9sPY18SeRvg6xUaptAcR2ayzBIjs6bgMHp6LscGCaHwa8rw==}
+  '@contextvm/sdk@0.13.9':
+    resolution: {integrity: sha512-YmVrO2z5ILAORLEvFogk4gEnjpGMMMGHhdGXdxJlxaIMbXCusjwLzugs9XWEUMeuLgGfIWOEL9ZURuTm4RXrNw==}
     engines: {bun: '>=1.2.0'}
     peerDependencies:
       typescript: ^5.9.3
@@ -2047,7 +2047,7 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
 
-  '@contextvm/sdk@0.13.8(typescript@6.0.3)':
+  '@contextvm/sdk@0.13.9(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.4.3)
       '@noble/hashes': 2.2.0

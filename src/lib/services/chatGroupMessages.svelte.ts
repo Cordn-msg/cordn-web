@@ -2,14 +2,17 @@ import {
 	base64ToBytes,
 	bytesToBase64,
 	createApplicationMessage,
+	defaultProposalTypes,
 	encode,
+	isDefaultProposal,
 	mlsExporter,
 	mlsMessageDecoder,
 	mlsMessageEncoder,
 	processMessage,
 	unsafeTestingAuthenticationService,
 	type ClientState,
-	type IncomingMessageCallback
+	type IncomingMessageCallback,
+	type ProposalWithSender
 } from 'ts-mls';
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { concatBytes, randomBytes } from '@noble/ciphers/utils.js';
@@ -25,8 +28,10 @@ import {
 	listGroupMembers
 } from '$lib/services/chatAdminPolicy';
 import {
+	decodeKeyPackageIdentity,
 	getCordnCipherSuite,
 	getCordnGroupMetadataExtension,
+	getCordnGroupMetadataFromExtensions,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
 import { normalizePubKey } from '$lib/utils';
@@ -360,6 +365,32 @@ function buildSystemMessageContent(data: StoredChatSystemMessageData): string {
 	return JSON.stringify(data);
 }
 
+/**
+ * Build an inbound system message (presentation-only) from the varying parts.
+ * Centralizes the boilerplate (cursor/createdAt/direction/sender/kind/tags) and
+ * derives both id and content from `systemKind` + optional target/detail, so the
+ * state-diff path and the sibling-commit-proposal path can't drift apart on id
+ * or content parity (fleet presentation consistency, spec §10).
+ */
+function buildInboundSystemMessage(
+	cursor: number,
+	createdAt: number,
+	committer: string | undefined,
+	systemKind: StoredChatSystemMessageData['systemKind'],
+	variants: { target?: string; detail?: string } = {}
+): StoredChatMessage {
+	return {
+		cursor,
+		createdAt,
+		direction: 'inbound',
+		sender: committer ?? '',
+		id: buildSystemMessageId(cursor, systemKind, variants.target),
+		kind: SYSTEM_MESSAGE_KIND,
+		tags: [],
+		content: buildSystemMessageContent({ systemKind, committer, ...variants })
+	};
+}
+
 function describeMetadataChanges(
 	oldMeta?: CordnGroupMetadata,
 	newMeta?: CordnGroupMetadata
@@ -412,60 +443,98 @@ export function createSystemMessagesFromStateChange(input: {
 
 	for (const member of addedMembers) {
 		const target = normalizePubKey(member.stablePubkey);
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'member-added', target),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'member-added',
-				target,
-				committer
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-added', {
+				target
 			})
-		});
+		);
 	}
 
 	for (const member of removedMembers) {
 		const target = normalizePubKey(member.stablePubkey);
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'member-removed', target),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'member-removed',
-				target,
-				committer
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-removed', {
+				target
 			})
-		});
+		);
 	}
 
 	const metadataChanges = describeMetadataChanges(input.oldMetadata, input.newMetadata);
 	if (metadataChanges.length > 0) {
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'metadata-changed'),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'metadata-changed',
-				committer,
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
 				detail: metadataChanges.join(', ')
 			})
-		});
+		);
 	}
 
 	if (input.encrypted) {
 		for (const message of messages) message.encrypted = true;
+	}
+
+	return messages;
+}
+
+/**
+ * Synthesize system messages for a sibling Commit that was skipped (spec §10).
+ * The Commit's UpdatePath can't be applied on a sibling device (private keys
+ * live only on the committer), so the normal state-diff synthesis never runs.
+ * But the Commit's proposals are authenticated data — not path secrets — so
+ * reading them is MLS-safe and carries the member/metadata changes. Produces
+ * the same message ids + content the committer's own device generates via
+ * `createSystemMessagesFromStateChange`, so presentation stays consistent
+ * across the fleet without re-ingesting the Commit.
+ */
+export function createSystemMessagesFromCommitProposals(input: {
+	cursor: number;
+	createdAt: number;
+	proposals: ProposalWithSender[];
+	oldState: ClientState;
+	oldMetadata?: CordnGroupMetadata;
+	committerPubkey?: string;
+}): StoredChatMessage[] {
+	const messages: StoredChatMessage[] = [];
+	const committer = input.committerPubkey ? normalizePubKey(input.committerPubkey) : undefined;
+
+	for (const { proposal } of input.proposals) {
+		if (!isDefaultProposal(proposal)) continue;
+		switch (proposal.proposalType) {
+			case defaultProposalTypes.add: {
+				const target = normalizePubKey(decodeKeyPackageIdentity(proposal.add.keyPackage));
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-added', {
+						target
+					})
+				);
+				break;
+			}
+			case defaultProposalTypes.remove: {
+				const member = listGroupMembers(input.oldState).find(
+					(m) => m.leafIndex === proposal.remove.removed
+				);
+				if (!member) break;
+				const target = normalizePubKey(member.stablePubkey);
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-removed', {
+						target
+					})
+				);
+				break;
+			}
+			case defaultProposalTypes.group_context_extensions: {
+				const newMetadata = getCordnGroupMetadataFromExtensions(
+					proposal.groupContextExtensions.extensions
+				);
+				const changes = describeMetadataChanges(input.oldMetadata, newMetadata);
+				if (changes.length === 0) break;
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
+						detail: changes.join(', ')
+					})
+				);
+				break;
+			}
+		}
 	}
 
 	return messages;
@@ -547,6 +616,7 @@ export async function ingestChatGroupMessages(params: {
 
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
 		let commitSenderPubkey: string | undefined;
+		let commitProposals: ProposalWithSender[] = [];
 
 		try {
 			const adminCallback = createAdminAuthorizationCallback({
@@ -562,6 +632,7 @@ export async function ingestChatGroupMessages(params: {
 							(member) => member.leafIndex === incoming.senderLeafIndex
 						);
 						commitSenderPubkey = sender?.stablePubkey;
+						commitProposals = incoming.proposals ?? [];
 						// Sibling-skip (spec multi-device §10): a Commit from our own
 						// shared leaf cannot be ingested (UpdatePath private keys live
 						// only on the committer). The authorization callback fires
@@ -593,6 +664,37 @@ export async function ingestChatGroupMessages(params: {
 				};
 				group.syncIssues.push(issue);
 				issues.push(issue);
+				// Sibling Commit skipped (§10): the group document owns the MLS state,
+				// but the presentation-layer system messages would be lost without the
+				// state-diff synthesis (which never ran). Rebuild them from the Commit's
+				// proposals — authenticated data, MLS-safe to read without the path.
+				// Best-effort: this is presentation-only, so it must never throw — ingest
+				// runs inside catchUpGroupFromChain's unguarded replay loop, where a throw
+				// would abort gap recovery and silently lose the offline message window.
+				try {
+					const systemMessages = createSystemMessagesFromCommitProposals({
+						cursor: message.cursor,
+						createdAt: message.createdAt,
+						proposals: commitProposals,
+						oldState: group.state,
+						oldMetadata: getCordnGroupMetadataExtension(group.state),
+						committerPubkey: commitSenderPubkey
+					});
+					if (systemMessages.length > 0) {
+						seenCursors.add(message.cursor);
+						for (const systemMessage of systemMessages) {
+							if (seenMessageIds.has(systemMessage.id)) continue;
+							seenMessageIds.add(systemMessage.id);
+							group.messages.push(systemMessage);
+							received.push(systemMessage);
+						}
+					}
+				} catch (synthesisError) {
+					console.warn('[MLS] sibling-commit system-message synthesis failed', {
+						cursor: message.cursor,
+						error: synthesisError instanceof Error ? synthesisError.message : String(synthesisError)
+					});
+				}
 				continue;
 			}
 

@@ -78,13 +78,28 @@ export interface Tombstone {
 }
 
 /**
- * Last-resort key package entry (spec §4.2). Both fields are base64 of the MLS
- * library serialization (matching `clientState`). One per account (RFC 9420
- * §17.2); replicates so any device can process a Welcome built against it.
+ * Last-resort key package entry (spec §4.2). One per account (RFC 9420 §17.2);
+ * replicates so any device can process a Welcome built against it.
+ *
+ * `coordinators` carries the coordinator pubkeys this last-resort is published
+ * to (cordn-web's per-coordinator publish state). Spec §4.2's shape omits it —
+ * the spec assumed coordinators are discovered via group seeding (§9), which
+ * breaks for a last-resort published to a coordinator with no groups on it.
+ * Carrying it here restores the coordinator list + the kp's per-coordinator
+ * markers on link. Optional + forward-compatible (old clients ignore it); the
+ * spec can adopt it alongside the tip-seal-sender reconciliation.
+ *
+ * NOTE: spec §4.2 specifies the TLS wire form (RFC 9420 §3) for `keyPackage`.
+ * These fields hold the ts-mls library serialization (matching `clientState`,
+ * which the spec explicitly defers to library serialization) — fine for the
+ * current ts-mls-only fleet, but a cross-implementation Welcome path would need
+ * the TLS wire form. Cross-impl interop is pending; tracked separately from the
+ * spec divergence (tip seal sender) being reconciled in parallel.
  */
 export interface LastResortKeyPackageEntry {
 	keyPackage: string;
 	privateKeyPackage: string;
+	coordinators?: string[];
 }
 
 /**
@@ -442,4 +457,47 @@ export function composeTombstoneUnion(
 		if (!prevT || t.epoch > prevT.epoch) byGid.set(t.gid, t);
 	}
 	return [...byGid.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Tip inventory (spec §4.3, §6)
+// ---------------------------------------------------------------------------
+
+/** One live group document's tip entry (spec §6 `['x', sha256, 'group', gid]`). */
+export interface TipGroupPointer {
+	/** Group document content address (spec §6 `x` tagged `group`). */
+	address: string;
+	/** Delivery group id the document is for — enables fetch-only-changed. */
+	gid: string;
+}
+
+/** The tip's document inventory (spec §6): live group pointers + meta + servers. */
+export interface TipPointer {
+	groups: TipGroupPointer[];
+	metaAddress?: string;
+	servers: string[];
+}
+
+/**
+ * Build the tip's group inventory (§4.3): start from the fetched tip's slots
+ * (peer addresses), drop tombstoned gids, then overlay the freshly re-sealed
+ * addresses. A re-sealed gid absent from the fetched tip (newly created, or a
+ * stale peer tip) is added. §4.3 (a gid appears live XOR tombstoned, never both
+ * at the same tip) is enforced here, once, for every publish.
+ */
+export function buildInventory(
+	pointer: TipPointer,
+	resealed: TipGroupPointer[],
+	tombstonedGids: Set<string>
+): TipGroupPointer[] {
+	const inv: TipGroupPointer[] = [];
+	for (const g of pointer.groups) {
+		if (tombstonedGids.has(g.gid)) continue; // §4.3: tombstoned gid leaves the tip
+		inv.push(resealed.find((r) => r.gid === g.gid) ?? g); // overlay re-sealed address
+	}
+	for (const r of resealed) {
+		if (tombstonedGids.has(r.gid)) continue;
+		if (!pointer.groups.some((g) => g.gid === r.gid)) inv.push(r); // new / stale-peer-tip
+	}
+	return inv;
 }
