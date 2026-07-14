@@ -17,7 +17,7 @@
 	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 	import {
 		enableMultiDevice,
-		disableMultiDevice,
+		unlinkMultiDevice,
 		rotateMultiDeviceKey,
 		setMultiDeviceRelays,
 		getMultiDeviceConfig,
@@ -41,6 +41,7 @@
 	import Copy from '@lucide/svelte/icons/copy';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Download from '@lucide/svelte/icons/download';
+	import Unlink from '@lucide/svelte/icons/unlink';
 
 	let tab = $state<'add' | 'link'>(page.url.searchParams.get('tab') === 'link' ? 'link' : 'add');
 
@@ -78,15 +79,12 @@
 	});
 
 	const hasConfig = $derived(!!config);
-	const enabled = $derived(config?.enabled === true);
 	// Hides the "already set up elsewhere?" hint once this device has groups.
 	const hasLocalGroups = $derived(listChatGroups().length > 0);
 
-	// Every enabled device both reads and writes (mesh of equal peers, spec §11),
-	// so the only honest status distinction is active / paused / not-set-up.
-	const statusLabel = $derived(
-		!hasConfig ? 'Not set up yet' : !enabled ? 'Sync paused' : 'Sync active'
-	);
+	// Every linked device both reads and writes (mesh of equal peers, spec §11),
+	// so the only honest status distinction is active / not-set-up.
+	const statusLabel = $derived(!hasConfig ? 'Not set up yet' : 'Sync active');
 
 	function toggleBlossom(server: string, checked: boolean) {
 		if (checked) {
@@ -115,16 +113,24 @@
 		try {
 			config = enableMultiDevice(relays, blossom);
 			connectionString = buildConnectionString(config);
-			toast.success(hasConfig ? 'Sync resumed' : 'Multi-device sync enabled');
+			toast.success('Multi-device sync enabled');
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Could not enable multi-device');
 		}
 	}
 
-	function handlePause() {
-		disableMultiDevice();
+	function handleUnlink() {
+		if (
+			!confirm(
+				'Unlink this device? It will stop syncing. Your groups stay on this device as last synced. Re-link anytime with a connection string.'
+			)
+		) {
+			return;
+		}
+		unlinkMultiDevice();
 		config = getMultiDeviceConfig();
-		toast.success('Multi-device sync paused');
+		connectionString = config ? buildConnectionString(config) : '';
+		toast.success('Device unlinked — re-link anytime with a connection string');
 	}
 
 	async function handleRotate() {
@@ -262,11 +268,9 @@
 							<div class="min-w-0">
 								<p class="flex items-center gap-2 text-sm font-medium">
 									<span
-										class="size-2 shrink-0 rounded-full {enabled
+										class="size-2 shrink-0 rounded-full {hasConfig
 											? 'bg-emerald-500'
-											: hasConfig
-												? 'bg-red-500'
-												: 'bg-muted-foreground'}"
+											: 'bg-muted-foreground'}"
 									></span>
 									{statusLabel}
 								</p>
@@ -281,11 +285,6 @@
 									{/if}
 								</p>
 							</div>
-							{#if enabled}
-								<Button variant="ghost" size="sm" onclick={handlePause}>Pause sync</Button>
-							{:else if hasConfig}
-								<Button variant="ghost" size="sm" onclick={handleSetup}>Resume sync</Button>
-							{/if}
 						</div>
 					</Card.Content>
 				</Card.Root>
@@ -335,7 +334,7 @@
 
 				{#if tab === 'add'}
 					<!-- "Share FROM here": this device is (or becomes) the source. -->
-					{#if enabled}
+					{#if hasConfig}
 						<Card.Root>
 							<Card.Header>
 								<Card.Title>Your connection code</Card.Title>
@@ -385,10 +384,10 @@
 							</Card.Content>
 						</Card.Root>
 					{:else}
-						<!-- No config yet, or paused. Configure (defaults pre-filled) then turn on. -->
+						<!-- No config yet. Configure (defaults pre-filled) then turn on. -->
 						<Card.Root>
 							<Card.Header>
-								<Card.Title>{hasConfig ? 'Resume sharing' : 'Share from this device'}</Card.Title>
+								<Card.Title>Share from this device</Card.Title>
 								<Card.Description>
 									Turn on sync to seal your groups' MLS state and generate a connection code other
 									devices can adopt.
@@ -405,7 +404,7 @@
 								</ol>
 
 								<Button onclick={handleSetup} class="w-full">
-									{hasConfig ? 'Resume sync' : 'Turn on sync & generate code'}
+									Turn on sync & generate code
 								</Button>
 
 								{#if !hasConfig}
@@ -421,7 +420,7 @@
 						</Card.Root>
 					{/if}
 
-					<!-- Advanced: relays + Blossom redundancy + (when enabled) rotate.
+					<!-- Advanced: relays + Blossom redundancy + (when configured) rotate.
 						 Pre-filled with sensible defaults so most users never open it. -->
 					<Collapsible.Root bind:open={advancedOpen}>
 						<Collapsible.Trigger
@@ -473,7 +472,7 @@
 									</p>
 								</div>
 
-								{#if enabled}
+								{#if hasConfig}
 									<Button variant="outline" onclick={handleSaveAdvanced} class="w-full">
 										Save advanced settings
 									</Button>
@@ -515,6 +514,17 @@
 										<p class="mt-1 text-xs text-muted-foreground">
 											Use rotation if this string leaked. Every previously-linked device must be
 											re-linked.
+										</p>
+									</div>
+
+									<div class="border-t border-border pt-4">
+										<Button variant="outline" onclick={handleUnlink} class="w-full">
+											<Unlink class="mr-2 size-4" />
+											Unlink this device
+										</Button>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Stop syncing on this device. Your groups stay as last synced; re-link anytime
+											with a connection string. Other devices keep syncing.
 										</p>
 									</div>
 								{/if}

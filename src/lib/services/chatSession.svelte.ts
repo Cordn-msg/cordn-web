@@ -11,6 +11,7 @@ import {
 import { deleteWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { disconnectCoordinatorClients } from '$lib/services/chatRuntime';
+import { clearMultiDeviceConfig } from '$lib/services/multiDevice.svelte';
 import { normalizePubKey } from '$lib/utils';
 
 export async function cleanupActiveAccountChatData(): Promise<void> {
@@ -27,7 +28,8 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 		Promise.resolve(deleteChatGroupPresenceForOwner(ownerPubkey)),
 		Promise.resolve(deleteWelcomeNotificationsForOwner(ownerPubkey)),
 		Promise.resolve(deleteJoinRequestsForOwner(ownerPubkey)),
-		Promise.resolve(deleteSentJoinRequestsForOwner(ownerPubkey))
+		Promise.resolve(deleteSentJoinRequestsForOwner(ownerPubkey)),
+		Promise.resolve(clearMultiDeviceConfig(ownerPubkey))
 	]);
 	manager.clearActive();
 }

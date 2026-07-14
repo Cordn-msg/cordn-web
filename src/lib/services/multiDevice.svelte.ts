@@ -220,8 +220,6 @@ export interface MultiDeviceOwnerConfig {
 	 * peer fetches before reaping. Best-effort hygiene; never blocks the push.
 	 */
 	pendingReap?: string[];
-	/** Whether sync is active. When false, no publishing, no subscription. */
-	enabled: boolean;
 }
 
 interface MultiDeviceConfigStore {
@@ -251,7 +249,7 @@ export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConf
 
 /** Whether multi-device sync is on for the active (or given) owner. */
 export function isMultiDeviceActive(ownerPubkey?: string): boolean {
-	return !!getMultiDeviceConfig(ownerPubkey)?.enabled;
+	return !!getMultiDeviceConfig(ownerPubkey);
 }
 
 function saveConfig(config: MultiDeviceOwnerConfig): void {
@@ -263,7 +261,6 @@ function saveConfig(config: MultiDeviceOwnerConfig): void {
 	writeAllConfigs(all);
 	dbg('saveConfig', {
 		owner: owner.slice(0, 8),
-		enabled: config.enabled,
 		dTag: config.dTag.slice(0, 8)
 	});
 }
@@ -292,8 +289,7 @@ function createFreshConfig(
 		dekPrivateKey: bytesToHex(generateSecretKey()),
 		relays,
 		blossomServers,
-		pendingReap: [],
-		enabled: true
+		pendingReap: []
 	};
 }
 
@@ -314,9 +310,8 @@ export function enableMultiDevice(
 	const config = existing ?? createFreshConfig(relays, blossomServers);
 	if (relays && relays.length) config.relays = relays;
 	if (blossomServers && blossomServers.length) config.blossomServers = blossomServers;
-	config.enabled = true;
 	saveConfig(config);
-	dbg('enableMultiDevice done', { dTag: config.dTag.slice(0, 8), enabled: config.enabled });
+	dbg('enableMultiDevice done', { dTag: config.dTag.slice(0, 8) });
 	// Spec §11: the connection string is only usable once documents + a tip exist.
 	// Publish every local group document + the meta document + the tip in one shot
 	// so the string is live (the hooks otherwise only fire on new-group/own-commit).
@@ -329,14 +324,31 @@ export function enableMultiDevice(
 	return config;
 }
 
-/** Disable sync (stops publishing + subscription). Keeps the config for re-enable. */
-export function disableMultiDevice(): void {
-	dbg('disableMultiDevice enter');
-	const config = getMultiDeviceConfig();
-	if (config) {
-		config.enabled = false;
-		saveConfig(config);
-	}
+/**
+ * Clear the multi-device config for an owner (used by "log out and clean
+ * data"). The tip subscription is torn down by the account-change path after
+ * `manager.clearActive()`; this only removes the persisted config entry so the
+ * next login starts clean. No-op without a browser / owner.
+ */
+export function clearMultiDeviceConfig(ownerPubkey: string): void {
+	if (!browser) return;
+	const all = readAllConfigs();
+	delete all[normalizePubKey(ownerPubkey)];
+	writeAllConfigs(all);
+}
+
+/**
+ * Unlink this device: clear its config and stop being a sync peer. Local groups
+ * remain as last-synced; re-link anytime via a connection string. Unlike
+ * rotation, this does NOT reap the shared documents — other devices keep
+ * syncing off the existing tip. A device is either linked (syncing) or
+ * unlinked (not), never a half-state.
+ */
+export function unlinkMultiDevice(): void {
+	dbg('unlinkMultiDevice enter');
+	const owner = manager.getActive()?.pubkey;
+	if (!owner) return;
+	clearMultiDeviceConfig(owner);
 	resetMultiDeviceSession();
 }
 
@@ -884,7 +896,7 @@ function scheduleRepublish(plan: PublishPlan): void {
 export function onGroupStateAdvance(gid: string): void {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return;
+	if (!config) return;
 	dbg('onGroupStateAdvance', { gid: gid.slice(0, 8), dTag: config.dTag.slice(0, 8) });
 	scheduleRepublish({ resealGroups: [gid], resealMeta: false });
 }
@@ -897,7 +909,7 @@ export function onGroupStateAdvance(gid: string): void {
 export function onMetaStateChange(): void {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return;
+	if (!config) return;
 	dbg('onMetaStateChange', { dTag: config.dTag.slice(0, 8) });
 	scheduleRepublish({ resealGroups: [], resealMeta: true });
 }
@@ -1118,7 +1130,7 @@ async function applyTip(
  */
 async function publish(plan: PublishPlan): Promise<void> {
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return;
+	if (!config) return;
 	// The owner-NIP-44 capability gates the flow: publish decrypts the current
 	// tip to reconcile (parseTipEvent, owner self-seal §6) and re-seals the new
 	// tip via the same signer (buildTipEvent, owner self-seal §6). The DEK gates
@@ -1310,7 +1322,7 @@ let inflightTipEventId: string | null = null;
 function startTipSubscription(): void {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return;
+	if (!config) return;
 	stopTipSubscription();
 	const ownerPubkey = normalizePubKey(manager.getActive()!.pubkey);
 	// Relay burst → eventStore: the store keeps only the newest addressable
@@ -1364,7 +1376,7 @@ export function awaitMultiDeviceReconciled(): Promise<void> {
 	if (!browser) return Promise.resolve();
 	if (mdReconcilePromise) return mdReconcilePromise;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return Promise.resolve();
+	if (!config) return Promise.resolve();
 	mdReconcilePromise = startMultiDevice();
 	return mdReconcilePromise;
 }
@@ -1407,7 +1419,7 @@ export function resetMultiDeviceSession(): void {
 export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null> {
 	if (!browser) return null;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return null;
+	if (!config) return null;
 	const account = manager.getActive();
 	if (!account) return null;
 	const ownerPubkey = normalizePubKey(account.pubkey);
@@ -1450,7 +1462,7 @@ export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null>
 export async function reconcileTipForOutbound(): Promise<void> {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
-	if (!config?.enabled) return;
+	if (!config) return;
 	const account = manager.getActive();
 	if (!account) return;
 	try {
@@ -2051,7 +2063,7 @@ export async function softDeleteGroup(groupId: string): Promise<Tombstone> {
 	// and the republish (§10.5: a deletion must stick across the fleet).
 	runSerialized(async () => {
 		const cfg = getMultiDeviceConfig();
-		if (!cfg?.enabled) return;
+		if (!cfg) return;
 		cfg.pendingTombstones = [...(cfg.pendingTombstones ?? []), tombstone];
 		saveConfig(cfg);
 		await publish({ resealGroups: [], resealMeta: true });
@@ -2093,8 +2105,7 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 		relays: naddr.relays?.length ? naddr.relays : DEFAULT_MULTI_DEVICE_RELAYS,
 		// ponytail: inherit the default 3-host replication rather than the source's
 		// full list — the read path tries them in order and the user can expand.
-		blossomServers: DEFAULT_BLOSSOM_SERVERS,
-		enabled: true
+		blossomServers: DEFAULT_BLOSSOM_SERVERS
 	};
 	saveConfig(config);
 
