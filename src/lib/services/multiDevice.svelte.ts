@@ -15,7 +15,7 @@
  * Re-publish hooks (§10): `onGroupStateAdvance(gid)` + `onMetaStateChange()`,
  * fire-and-forget, no-ops when disabled or no signer/seal.
  */
-import { browser } from '$app/environment';
+import { browser, dev } from '$app/environment';
 import { generateSecretKey, getPublicKey, finalizeEvent, verifyEvent } from 'nostr-tools/pure';
 import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
 import { nip19 } from 'nostr-tools';
@@ -62,6 +62,8 @@ import {
 	groupMetadata,
 	walkGroupChain,
 	buildInventory,
+	partitionGapByEpoch,
+	planCarryForward,
 	type Nip44Seal,
 	type BlobStore,
 	type GroupDocument,
@@ -111,11 +113,14 @@ export const DEFAULT_BLOSSOM_SERVERS = [
 ];
 
 /**
- * Dev-phase debug log. Filter the console by `[multi-device]` to trace the
- * enable/disable → save → publish → reconcile flow. Remove before shipping.
+ * Dev-only debug log. Filter the console by `[multi-device]` to trace the
+ * enable/disable → save → publish → reconcile flow. Silent in production —
+ * `dev` is the SvelteKit dev-server flag (not NODE_ENV/MODE), so dbg only
+ * fires under `pnpm dev`. Add a `localStorage` read on top if prod debug is
+ * ever needed.
  */
 function dbg(label: string, detail?: unknown): void {
-	if (!browser) return;
+	if (!browser || !dev) return;
 	console.debug('[multi-device]', label, detail ?? '');
 }
 
@@ -404,12 +409,13 @@ export function setMultiDeviceBlossomServers(servers: string[]): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Adapt the active account's `nip44` capability to the `Nip44Seal` interface.
- * Returns undefined if the account signer doesn't expose nip44 (some signers
- * can't). Used ONLY to DECRYPT the tip's outer content (the seal is to the owner
- * npub, so decryption needs the owner nsec via the signer — spec §6). The seal
- * is now encrypted locally as ephemeral→owner (see buildTipEvent), so this
- * signer-bound seal is read-path only. Document seals use the DEK (getDekSeal).
+ * Return the active account's `nip44` capability as the tip seal. `ISigner["nip44"]`
+ * already conforms to `Nip44Seal`, so no wrapping is needed. Returns undefined if
+ * there is no active account or the signer doesn't expose nip44 (some signers
+ * can't). Used for BOTH directions of the tip seal, which is an owner self-seal
+ * (owner is sender AND recipient, spec §6) — so publish (encrypt) and read
+ * (decrypt) both route through the signer's nip44. Document seals use the DEK
+ * (getDekSeal), which stays local.
  */
 function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefined {
 	const account = manager.getActive();
@@ -421,15 +427,7 @@ function getActiveNip44Seal(): { seal: Nip44Seal; ownerPubkey: string } | undefi
 		dbg('getActiveNip44Seal skip', { reason: 'signer has no nip44', accountType: account.type });
 		return undefined;
 	}
-	const ownerPubkey = normalizePubKey(account.pubkey);
-	const accountNip44 = account.nip44;
-	return {
-		ownerPubkey,
-		seal: {
-			encrypt: (pubkey, plaintext) => accountNip44.encrypt(pubkey, plaintext),
-			decrypt: (pubkey, ciphertext) => accountNip44.decrypt(pubkey, ciphertext)
-		}
-	};
+	return { ownerPubkey: normalizePubKey(account.pubkey), seal: account.nip44 };
 }
 
 /**
@@ -693,12 +691,13 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Pa
 	if (outer.kind !== MULTI_DEVICE_TIP_KIND) return null;
 	const { seal } = getActiveNip44Seal() ?? {};
 	if (!seal) return null;
-	// The seal is from the ephemeral keypair to the owner (§6): decrypt uses the
-	// outer event's pubkey (ephemeral) as the sender, with the owner nsec as
-	// recipient (via the signer).
+	// Owner self-seal (spec §6): the seal sender is the owner npub (NOT the outer
+	// event's ephemeral author — that only authorizes the replaceable event on the
+	// relay). Decrypt uses the owner npub as sender, owner nsec (via the signer)
+	// as recipient.
 	let innerJson: string;
 	try {
-		innerJson = await seal.decrypt(outer.pubkey, outer.content);
+		innerJson = await seal.decrypt(ownerPubkey, outer.content);
 	} catch {
 		return null;
 	}
@@ -756,16 +755,17 @@ async function buildTipEvent(
 		groups: pointer.groups.length,
 		meta: !!pointer.metaAddress
 	});
-	// Seal the inner from the ephemeral keypair to the owner npub. The ephemeral
-	// private key is local (config), so this is a local NIP-44 operation — no
-	// signer round trip, cutting publish from 2 → 1 owner RTT. Recipient stays the
-	// owner so the DEK carried inside stays behind the owner key (§7); only the
-	// sender changes from the prior owner-self-seal. ponytail: diverges from spec
-	// §6's implied owner-self-seal — the spec should pin the sender to ephemeral.
-	const sealedContent = nip44.v2.encrypt(
-		JSON.stringify(inner),
-		nip44.v2.utils.getConversationKey(hexToBytes(config.ephemeralPrivateKey), ownerPubkey)
-	);
+	// Owner self-seal (spec §6): NIP-44 v2 with the owner as BOTH sender and
+	// recipient — getConversationKey(owner_nsec, owner_npub), via the signer. This
+	// is the only seal sender that keeps the DEK (carried in the inner `dek` tag,
+	// §7) behind the owner key and out of reach of a connection-string leak
+	// (§11, §13): NIP-44's conversation key is symmetric ECDH, so any holder of
+	// the SENDER's private half derives it too, and the ephemeral private key
+	// travels in the connection string — it MUST NOT be the seal sender. Costs one
+	// signer nip44 round trip on the publish path, which §10.5 makes non-blocking.
+	const { seal } = getActiveNip44Seal() ?? {};
+	if (!seal) throw new Error('Cannot publish tip: signer has no nip44');
+	const sealedContent = await seal.encrypt(ownerPubkey, JSON.stringify(inner));
 	return buildOuterTipEvent({
 		innerEvent: inner,
 		sealedContent,
@@ -1013,6 +1013,33 @@ type PublishPlan = {
  * changed vs `lastSeenTip`. Shared by the read path (`handleTipEvent`) and the
  * write path (`publish`). Does NOT write `lastSeenTip` — the caller records it.
  */
+// Max groups reconciled in parallel during a tip apply. Each group's
+// `pullAndReconcileGroup` races M Blossom servers via `makeReadStore`, so this
+// bounds the concurrent fetch burst (groups × servers) on a cold link — a
+// 13-group seed at 3 servers is 39 fetches unbounded; 5×3 = 15 is plenty fast
+// without saturating the browser's connection pool behind one slow host.
+const MD_GROUP_RECONCILE_CONCURRENCY = 5;
+
+/** Minimal order-preserving concurrency-limited map. No dependency for a pool
+ * this small. */
+async function mapPool<T, R>(
+	items: T[],
+	limit: number,
+	fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let next = 0;
+	await Promise.all(
+		Array.from({ length: Math.min(limit, items.length) }, async () => {
+			while (true) {
+				const i = next++;
+				if (i >= items.length) return;
+				results[i] = await fn(items[i]!, i);
+			}
+		})
+	);
+	return results;
+}
 async function applyTip(
 	pointer: TipPointer,
 	ctx: { dekSeal: Nip44Seal; dekPubkey: string; config: MultiDeviceOwnerConfig }
@@ -1032,34 +1059,26 @@ async function applyTip(
 	// (runGroupOperation), so the groups are independent. counts mutates only at
 	// await boundaries (JS is single-threaded), so the increments can't race.
 	let reconciled = 0;
-	await Promise.all(
-		pointer.groups.map(async (group) => {
+	await mapPool(pointer.groups, MD_GROUP_RECONCILE_CONCURRENCY, async (group) => {
+		try {
+			const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
+			if (lastSeenGroup?.address === group.address) return;
+			dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
 			try {
-				const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
-				if (lastSeenGroup?.address === group.address) return;
-				dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
-				try {
-					const { outcome } = await pullAndReconcileGroup(
-						group,
-						pointer,
-						dekSeal,
-						dekPubkey,
-						config
-					);
-					if (outcome === 'seeded') counts.seeded++;
-					else if (outcome === 'fast-forwarded') counts.fastForwarded++;
-					else counts.skipped++;
-				} catch (error) {
-					dbg('applyTip group reconcile failed', { gid: group.gid, error });
-				}
-			} finally {
-				// Advance the per-group counter for an active user-initiated flow (link).
-				// `finally` runs even on the early `return` above, so the bar always
-				// reaches `total`. No-op when mdProgress is null (background cycles).
-				bumpMdProgress(++reconciled);
+				const { outcome } = await pullAndReconcileGroup(group, pointer, dekSeal, dekPubkey, config);
+				if (outcome === 'seeded') counts.seeded++;
+				else if (outcome === 'fast-forwarded') counts.fastForwarded++;
+				else counts.skipped++;
+			} catch (error) {
+				dbg('applyTip group reconcile failed', { gid: group.gid, error });
 			}
-		})
-	);
+		} finally {
+			// Advance the per-group counter for an active user-initiated flow (link).
+			// `finally` runs even on the early `return` above, so the bar always
+			// reaches `total`. No-op when mdProgress is null (background cycles).
+			bumpMdProgress(++reconciled);
+		}
+	});
 
 	if (pointer.metaAddress && pointer.metaAddress !== lastSeen?.metaAddress) {
 		dbg('applyTip meta changed', { address: pointer.metaAddress.slice(0, 12) });
@@ -1100,9 +1119,9 @@ async function applyTip(
 async function publish(plan: PublishPlan): Promise<void> {
 	const config = getMultiDeviceConfig();
 	if (!config?.enabled) return;
-	// The owner-NIP-44 capability still gates the flow: publish decrypts the
-	// current tip to reconcile (parseTipEvent, NIP-44 to owner §6) — the tip's own
-	// seal is now a local ephemeral→owner encrypt (buildTipEvent). The DEK gates
+	// The owner-NIP-44 capability gates the flow: publish decrypts the current
+	// tip to reconcile (parseTipEvent, owner self-seal §6) and re-seals the new
+	// tip via the same signer (buildTipEvent, owner self-seal §6). The DEK gates
 	// document encrypt/decrypt (§7, local — no signer).
 	const active = getActiveNip44Seal();
 	if (!active) return;
@@ -1203,11 +1222,17 @@ async function publish(plan: PublishPlan): Promise<void> {
 	// §12 GC: queue the superseded meta for deletion on the NEXT publish — a
 	// one-publish grace window for in-flight peer fetches before the old blob is reaped.
 	if (plan.resealMeta) {
-		config.carriedTombstones = removed;
-		config.pendingTombstones = [];
-		if (pointer.metaAddress && pointer.metaAddress !== metaAddress) {
-			config.pendingReap = [...(config.pendingReap ?? []), pointer.metaAddress];
-		}
+		const next = planCarryForward({
+			pendingTombstones: config.pendingTombstones ?? [],
+			carriedTombstones: config.carriedTombstones ?? [],
+			liveGids: liveGroups.map((g) => g.id),
+			oldMetaAddress: pointer.metaAddress,
+			newMetaAddress: metaAddress,
+			pendingReap: config.pendingReap ?? []
+		});
+		config.carriedTombstones = next.carriedTombstones;
+		config.pendingTombstones = next.pendingTombstones;
+		config.pendingReap = next.pendingReap;
 		saveConfig(config);
 	}
 
@@ -1400,6 +1425,42 @@ export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null>
 	const counts = await handleTipEvent(tipEvent, ownerPubkey);
 	dbg('reconcileMultiDeviceNow done', { counts });
 	return counts;
+}
+
+/** §10 mitigation #1: reconcile the tip before staging an epoch-advancing Commit
+ * (invite / remove / metadata). If a sibling Commit advanced the group's epoch,
+ * this fast-forwards the local state first, so the outbound Commit isn't authored
+ * from a behind epoch (which siblings would drop as a former-epoch message).
+ * Self-heals instead of refusing — strictly better UX than the spec's "refuse to
+ * stage" wording, and the device is no longer behind once the reconcile runs.
+ *
+ * Delta-gated: `handleTipEvent` bails on `lastSeenTipEventId` when no peer moved
+ * the tip, so the common case is one relay round-trip (`fetchLatestTipEvent`,
+ * capped at 2s for the outbound path so a degraded relay can't stall an admin
+ * op — on timeout it proceeds without the reconcile and the tip subscription
+ * re-converges). No-op when MD is off. Failures are swallowed — a network blip
+ * here must not block the outbound op; the coordinator catch-up + sibling-skip
+ * still guard correctness, and the tip subscription re-converges on its own.
+ *
+ * ponytail: covers the common race (sibling published its group document but the
+ * tip subscription hasn't delivered it yet). The narrower window — sibling Commit
+ * on the coordinator stream before its group document is published — is left to
+ * the tip subscription's seconds-later convergence; the spec marks full
+ * auto-resolution of that as disproportionate (§10 mitigation #3). */
+export async function reconcileTipForOutbound(): Promise<void> {
+	if (!browser) return;
+	const config = getMultiDeviceConfig();
+	if (!config?.enabled) return;
+	const account = manager.getActive();
+	if (!account) return;
+	try {
+		const tipEvent = await fetchLatestTipEvent(config, 2000);
+		if (tipEvent) await handleTipEvent(tipEvent, normalizePubKey(account.pubkey));
+	} catch (error) {
+		dbg('reconcileTipForOutbound failed', {
+			error: error instanceof Error ? error.message : String(error)
+		});
+	}
 }
 
 /** Reconcile outcome counts surfaced to callers (UI / link flow / logs). */
@@ -1919,15 +1980,14 @@ async function catchUpGroupFromChain(params: {
 		...chain.map((s) => s.cursor),
 		Number.POSITIVE_INFINITY
 	];
-	for (let i = 0; i < states.length; i++) {
-		const lo = boundaries[i]!;
-		const hi = boundaries[i + 1]!;
-		const range = gap.filter((m) => m.cursor > lo && m.cursor <= hi);
-		if (range.length === 0) continue;
+	const ranges = partitionGapByEpoch(gap, boundaries);
+	for (let i = 0; i < ranges.length; i++) {
+		const range = ranges[i]!;
+		if (range.messages.length === 0) continue;
 		workingGroup.state = decodeClientStateBase64(states[i]!);
 		await ingestChatGroupMessages({
 			group: workingGroup,
-			messages: range,
+			messages: range.messages,
 			localStablePubkey: normalizePubKey(account.pubkey),
 			mdActive: true
 		});
@@ -2071,13 +2131,16 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 }
 
 /** Fetch the latest (greatest created_at) tip event for a config. */
-async function fetchLatestTipEvent(config: MultiDeviceOwnerConfig): Promise<NostrEvent | null> {
+async function fetchLatestTipEvent(
+	config: MultiDeviceOwnerConfig,
+	timeoutMs = 5000
+): Promise<NostrEvent | null> {
 	let latest: NostrEvent | null = null;
 	await new Promise<void>((resolve) => {
 		// `request` is the one-off fetch (auto-retry on connection errors, completes
-		// on EOSE). Collect the greatest created_at within a 5s cap; the live
+		// on EOSE). Collect the greatest `created_at` within the cap; the live
 		// subscription (startTipSubscription) handles ongoing convergence if this
-		// initial fetch is slow or incomplete.
+		// fetch is slow or incomplete.
 		const sub = relayPool
 			.request(
 				config.relays,
@@ -2086,7 +2149,7 @@ async function fetchLatestTipEvent(config: MultiDeviceOwnerConfig): Promise<Nost
 					authors: [config.ephemeralPubkey],
 					'#d': [config.dTag]
 				},
-				{ reconnect: 1, timeout: 5000 }
+				{ reconnect: 1, timeout: timeoutMs }
 			)
 			.subscribe({
 				next: (event) => {
@@ -2095,7 +2158,7 @@ async function fetchLatestTipEvent(config: MultiDeviceOwnerConfig): Promise<Nost
 				complete: () => resolve(),
 				error: () => resolve()
 			});
-		// ponytail: hard 5s cap in case `request` neither completes nor errors.
+		// ponytail: hard cap in case `request` neither completes nor errors.
 		setTimeout(() => {
 			try {
 				sub.unsubscribe();
@@ -2103,7 +2166,7 @@ async function fetchLatestTipEvent(config: MultiDeviceOwnerConfig): Promise<Nost
 				/* best-effort */
 			}
 			resolve();
-		}, 5500);
+		}, timeoutMs + 500);
 	});
 	return latest;
 }

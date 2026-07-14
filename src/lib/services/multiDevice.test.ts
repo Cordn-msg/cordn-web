@@ -37,6 +37,8 @@ import {
 	sealDocument,
 	walkGroupChain,
 	buildInventory,
+	partitionGapByEpoch,
+	planCarryForward,
 	type BlobStore,
 	type GroupDocument,
 	type GroupSnapshot,
@@ -502,6 +504,65 @@ describe('walkGroupChain (spec §8.5)', () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// Chained catch-up gap partitioning (spec §8.5)
+// ---------------------------------------------------------------------------
+
+/** The catch-up replay pairs `states[i]` with `ranges[i]`: range i covers
+ * `(boundaries[i], boundaries[i+1]]` and decrypts with that epoch's gen-0
+ * ClientState. `states` has one fewer element than `boundaries`. */
+function gapMsg(cursor: number): { cursor: number; opaqueMessageBase64: string } {
+	return { cursor, opaqueMessageBase64: `m${cursor}` };
+}
+
+describe('partitionGapByEpoch (spec §8.5 replay boundaries)', () => {
+	test('partitions the gap by chain cursor, every message in exactly one range', () => {
+		// decryptFrontier=100; chain epochs at cursors 150, 200 → 3 states (local + 2).
+		const boundaries = [100, 150, 200, Number.POSITIVE_INFINITY];
+		const gap = [gapMsg(110), gapMsg(150), gapMsg(175), gapMsg(200), gapMsg(250)];
+		const ranges = partitionGapByEpoch(gap, boundaries);
+		expect(ranges).toHaveLength(3); // boundaries.length - 1 === states.length
+		expect(ranges[0]!.messages.map((m) => m.cursor)).toEqual([110, 150]); // (100,150]
+		expect(ranges[1]!.messages.map((m) => m.cursor)).toEqual([175, 200]); // (150,200]
+		expect(ranges[2]!.messages.map((m) => m.cursor)).toEqual([250]); // (200,∞]
+		// No message is dropped or duplicated across ranges.
+		const all = ranges.flatMap((r) => r.messages.map((m) => m.cursor));
+		expect(all).toEqual([110, 150, 175, 200, 250]);
+	});
+
+	test('half-open (lo, hi]: cursor == lo excluded, cursor == hi included', () => {
+		// cursor 100 == decryptFrontier: already processed, must NOT replay.
+		// cursor 150 == first chain boundary: belongs to the epoch that just ended,
+		// so it lands in range 0 (the local epoch's tail), not range 1.
+		const boundaries = [100, 150, Number.POSITIVE_INFINITY];
+		const ranges = partitionGapByEpoch([gapMsg(100), gapMsg(150)], boundaries);
+		expect(ranges[0]!.messages.map((m) => m.cursor)).toEqual([150]);
+		expect(ranges[1]!.messages.map((m) => m.cursor)).toEqual([]);
+	});
+
+	test("the +Infinity sentinel captures the tip epoch's tail", () => {
+		const boundaries = [0, Number.POSITIVE_INFINITY];
+		const ranges = partitionGapByEpoch([gapMsg(1), gapMsg(999_999)], boundaries);
+		expect(ranges).toHaveLength(1);
+		expect(ranges[0]!.hi).toBe(Number.POSITIVE_INFINITY);
+		expect(ranges[0]!.messages.map((m) => m.cursor)).toEqual([1, 999_999]);
+	});
+
+	test('returns a (possibly empty) range per epoch so the caller can index states[]', () => {
+		// An epoch with no messages in its window still gets a range — the caller
+		// skips empty ranges but relies on `ranges[i]` pairing with `states[i]`.
+		const boundaries = [0, 10, 20, Number.POSITIVE_INFINITY];
+		const ranges = partitionGapByEpoch([gapMsg(25)], boundaries);
+		expect(ranges.map((r) => r.messages.length)).toEqual([0, 0, 1]);
+	});
+
+	test('empty gap yields empty ranges (one per epoch, no messages)', () => {
+		const ranges = partitionGapByEpoch([], [5, 10, Number.POSITIVE_INFINITY]);
+		expect(ranges).toHaveLength(2);
+		expect(ranges.every((r) => r.messages.length === 0)).toBe(true);
+	});
+});
+
 // ts-mls's real bytesToBase64 is preserved by the mock, but tests here construct
 // state bytes directly — import lazily to avoid circular import ordering issues.
 function bytesToBase64Local(bytes: Uint8Array): string {
@@ -609,5 +670,90 @@ describe('tombstone carry-forward idempotency (§10.5 durability)', () => {
 		// Same gid soft-deleted again at a higher epoch — highest wins (§8).
 		const republished = composeTombstoneUnion([tombstone('g', 9)], carried, []);
 		expect(republished).toEqual([tombstone('g', 9)]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Publish carry-forward + reap bookkeeping (spec §10.5 + §12)
+// ---------------------------------------------------------------------------
+
+describe('planCarryForward (spec §10.5 durability + §12 reap)', () => {
+	test('carries the published union forward and clears pending', () => {
+		// Publish 1: own soft-delete of g1 (pending), nothing carried, nothing live.
+		const next = planCarryForward({
+			pendingTombstones: [tombstone('g1', 5)],
+			carriedTombstones: [],
+			liveGids: [],
+			oldMetaAddress: 'meta-old',
+			newMetaAddress: 'meta-new',
+			pendingReap: []
+		});
+		expect(next.carriedTombstones).toEqual([tombstone('g1', 5)]);
+		expect(next.pendingTombstones).toEqual([]);
+	});
+
+	test('queues the superseded meta for reap when the meta address changed', () => {
+		const next = planCarryForward({
+			pendingTombstones: [],
+			carriedTombstones: [],
+			liveGids: [],
+			oldMetaAddress: 'meta-old',
+			newMetaAddress: 'meta-new',
+			pendingReap: []
+		});
+		expect(next.pendingReap).toEqual(['meta-old']);
+	});
+
+	test('does not queue reap when the meta address is unchanged', () => {
+		// A meta re-seal that lands at the same address (e.g. identical content)
+		// reaps nothing — there is no superseded blob to delete.
+		const next = planCarryForward({
+			pendingTombstones: [],
+			carriedTombstones: [],
+			liveGids: [],
+			oldMetaAddress: 'meta-same',
+			newMetaAddress: 'meta-same',
+			pendingReap: []
+		});
+		expect(next.pendingReap).toEqual([]);
+	});
+
+	test('accumulates reap entries across publishes', () => {
+		const next = planCarryForward({
+			pendingTombstones: [],
+			carriedTombstones: [],
+			liveGids: [],
+			oldMetaAddress: 'meta-2',
+			newMetaAddress: 'meta-3',
+			pendingReap: ['meta-1']
+		});
+		expect(next.pendingReap).toEqual(['meta-1', 'meta-2']);
+	});
+
+	test('resurrection prunes a carried tombstone when the gid is live again', () => {
+		// A sibling-Commit re-raise makes g1 live → the XOR drops its carried
+		// tombstone from the next carry-forward (§8/§10).
+		const next = planCarryForward({
+			pendingTombstones: [],
+			carriedTombstones: [tombstone('g1', 5)],
+			liveGids: ['g1'],
+			oldMetaAddress: 'meta-old',
+			newMetaAddress: 'meta-new',
+			pendingReap: []
+		});
+		expect(next.carriedTombstones).toEqual([]);
+	});
+
+	test('no old meta address → nothing queued for reap', () => {
+		// First-ever meta publish (no superseded address) reaps nothing.
+		const next = planCarryForward({
+			pendingTombstones: [],
+			carriedTombstones: [],
+			liveGids: [],
+			oldMetaAddress: undefined,
+			newMetaAddress: 'meta-first',
+			pendingReap: []
+		});
+		expect(next.pendingReap).toEqual([]);
 	});
 });

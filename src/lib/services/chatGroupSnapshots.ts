@@ -25,16 +25,6 @@ export interface ChatGroupStateSnapshot {
  * - New tentative replaces old tentative
  * - Promotion flips tentative to healthy without evicting previous healthy snapshots
  */
-
-export function appendHealthySnapshot(
-	snapshots: ChatGroupStateSnapshot[],
-	next: ChatGroupStateSnapshot
-): ChatGroupStateSnapshot[] {
-	const withoutTentative = snapshots.filter((snapshot) => snapshot.status === 'healthy');
-	const healthySnapshot: ChatGroupStateSnapshot = { ...next, status: 'healthy' };
-	return [...withoutTentative, healthySnapshot].slice(-3);
-}
-
 export function replaceTentativeSnapshot(
 	snapshots: ChatGroupStateSnapshot[],
 	next: ChatGroupStateSnapshot

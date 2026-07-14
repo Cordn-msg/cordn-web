@@ -18,7 +18,11 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
+	import {
+		getChatGroupSummary,
+		markChatGroupMentionsRead,
+		markChatGroupRead
+	} from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import {
 		getChatCoordinator,
@@ -35,6 +39,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
+	import CheckCheck from '@lucide/svelte/icons/check-check';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
@@ -574,6 +579,17 @@
 									{/snippet}
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content align="end" class="w-44">
+									<DropdownMenu.Item
+										onclick={() =>
+											coordinatorGroup.chats.forEach((chat) => {
+												markChatGroupRead(chat.id, chat.lastCursor);
+												markChatGroupMentionsRead(chat.id, chat.lastCursor);
+											})}
+										class="gap-2"
+									>
+										<CheckCheck class="size-4" />
+										<span>Mark all as read</span>
+									</DropdownMenu.Item>
 									<DropdownMenu.Item
 										onclick={() => {
 											purgeTarget = {

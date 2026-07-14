@@ -11,7 +11,8 @@ import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import {
 	onGroupStateAdvance,
 	isMultiDeviceActive,
-	reconcileMultiDeviceNow
+	reconcileMultiDeviceNow,
+	reconcileTipForOutbound
 } from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
@@ -568,6 +569,26 @@ export async function runGroupOperation<T>(
 	}
 }
 
+/**
+ * Run an epoch-advancing outbound operation (invite / remove / metadata).
+ * Reconciles the multi-device tip FIRST (§10 mitigation #1), then takes the
+ * per-group lock. The order is load-bearing: `reconcileTipForOutbound` may
+ * fast-forward THIS group, and `fastForwardGroup` re-enters `runGroupOperation`
+ * — reconciling from inside the lock would deadlock the chain mutex on the same
+ * group (the inner acquire awaits the outer's `release()`, which only fires
+ * after the outer op completes). Reconciling before the lock lets the
+ * fast-forward acquire + release cleanly; the guard then re-reads fresh state.
+ * Application messages advance no epoch and bypass this via
+ * `prepareGroupForApplicationMessage`.
+ */
+async function runOutboundGroupOperation<T>(
+	groupId: string,
+	operation: () => Promise<T>
+): Promise<T> {
+	await reconcileTipForOutbound();
+	return runGroupOperation(groupId, operation);
+}
+
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
 	if (!metadata) return undefined;
 	return {
@@ -746,7 +767,7 @@ export async function inviteChatGroupMember(input: {
 	groupId: string;
 	identifier: string;
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
@@ -923,7 +944,7 @@ export async function removeChatGroupMember(input: {
 	groupId: string;
 	targetStablePubkey: string;
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to remove a member');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
@@ -1018,7 +1039,7 @@ export async function updateChatGroupMetadata(input: {
 	imageUrl?: string;
 	adminPubkeys?: string[];
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to update group metadata');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({

@@ -439,6 +439,34 @@ export async function walkGroupChain(params: {
 	return [...byEpoch.values()].sort((a, b) => a.cursor - b.cursor);
 }
 
+/** One epoch's slice of the catch-up gap (spec §8.5). Range is half-open
+ * `(lo, hi]` — messages whose `cursor` falls in it decrypt with that epoch's
+ * gen-0 ClientState. `hi === +Infinity` for the final (tip) epoch. */
+export interface GapRange<T extends { cursor: number }> {
+	lo: number;
+	hi: number;
+	messages: T[];
+}
+
+/** Partition the catch-up message gap into per-epoch ranges (spec §8.5).
+ * `boundaries` is `[decryptFrontier, ...chainCursors, +Infinity]`; range `i`
+ * covers `(boundaries[i], boundaries[i+1]]` and pairs with `states[i]` in the
+ * caller (`states` has one fewer element than `boundaries`). Pure so the
+ * partitioning — the subtle part of chained catch-up — is testable without the
+ * MLS / Blossom / orchestration surface. */
+export function partitionGapByEpoch<T extends { cursor: number }>(
+	gap: T[],
+	boundaries: number[]
+): GapRange<T>[] {
+	const ranges: GapRange<T>[] = [];
+	for (let i = 0; i + 1 < boundaries.length; i++) {
+		const lo = boundaries[i]!;
+		const hi = boundaries[i + 1]!;
+		ranges.push({ lo, hi, messages: gap.filter((m) => m.cursor > lo && m.cursor <= hi) });
+	}
+	return ranges;
+}
+
 /**
  * Published `removed` union (§10.5): own pending + adopted tombstones, deduped
  * per `gid` (highest epoch wins), with the §4.3 XOR — a `gid` present locally
@@ -500,4 +528,36 @@ export function buildInventory(
 		if (!pointer.groups.some((g) => g.gid === r.gid)) inv.push(r); // new / stale-peer-tip
 	}
 	return inv;
+}
+
+/** Next carry-forward + reap state after a publish (spec §10.5 + §12). Pure so
+ * the tombstone-durability invariants — pending cleared, the just-published
+ * `removed` union carried forward, a superseded meta queued for reap exactly
+ * once — are testable without the publish orchestration. The caller gates this
+ * on a meta re-seal (`if (plan.resealMeta)`); a group-only publish leaves
+ * tombstone state untouched by not calling. */
+export function planCarryForward(params: {
+	pendingTombstones: Tombstone[];
+	carriedTombstones: Tombstone[];
+	liveGids: string[];
+	/** Meta address before this publish (the one being superseded), if any. */
+	oldMetaAddress?: string;
+	/** Meta address after this publish. */
+	newMetaAddress?: string;
+	pendingReap: string[];
+}): { carriedTombstones: Tombstone[]; pendingTombstones: Tombstone[]; pendingReap: string[] } {
+	const removed = composeTombstoneUnion(
+		params.pendingTombstones,
+		params.carriedTombstones,
+		params.liveGids
+	);
+	const superseded =
+		params.oldMetaAddress !== undefined && params.oldMetaAddress !== params.newMetaAddress
+			? params.oldMetaAddress
+			: null;
+	return {
+		carriedTombstones: removed,
+		pendingTombstones: [],
+		pendingReap: superseded ? [...params.pendingReap, superseded] : params.pendingReap
+	};
 }
