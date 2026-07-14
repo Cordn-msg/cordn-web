@@ -1871,23 +1871,22 @@ async function fetchMessageGap(
 	group: StoredChatGroup,
 	gid: string,
 	after: number
-): Promise<
-	{ cursor: number; createdAt: number; opaqueMessageBase64: string; encrypted?: boolean }[]
-> {
+): Promise<{ cursor: number; createdAt: number; opaqueMessageBase64: string }[]> {
 	const account = requireActiveAccount('You must be logged in to catch up group messages');
-	const sinceEpoch = after === 0 && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 	const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-		client.FetchGroupMessages({
-			gid,
-			after: after > 0 ? after : undefined,
-			since_epoch: sinceEpoch
+		client.FetchManyGroupMessages({
+			groups: [
+				{
+					gid,
+					after: after > 0 ? after : undefined
+				}
+			]
 		})
 	);
 	return result.messages.map((m) => ({
 		cursor: m.cursor,
 		createdAt: m.at,
-		opaqueMessageBase64: m.msg_64,
-		encrypted: m.encrypted
+		opaqueMessageBase64: m.msg_64
 	}));
 }
 
@@ -1945,7 +1944,6 @@ async function catchUpGroupFromChain(params: {
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}[];
 	try {
 		gap = await fetchMessageGap(group, gid, params.decryptFrontier);

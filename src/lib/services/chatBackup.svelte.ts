@@ -5,8 +5,7 @@
  * objects (which carry MLS ClientState secrets), the active account's private
  * keys, and the coordinator list (needed for relay resolution). It does not
  * model sync, decryptability, or MLS — those concerns live inside the group
- * object, so when the since_epoch → cursor migration lands the backup needs
- * zero changes; whatever fields exist on the group ride along.
+ * object, so whatever fields exist on the group ride along.
  *
  * Key packages, welcome/join notifications, presence, and sent-join-requests
  * are intentionally excluded: all regenerable (key packages via coordinator

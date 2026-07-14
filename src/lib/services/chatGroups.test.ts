@@ -58,8 +58,12 @@ vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
 	createApplicationMessageBase64: vi.fn(),
 	createSystemMessagesFromStateChange: vi.fn(() => []),
 	createUnsignedCordnMessageEvent: vi.fn(),
-	encodeAuthenticatedSender: vi.fn(),
-	encryptGroupPayloadBase64: vi.fn().mockResolvedValue({ encryptedBase64: 'sealed' })
+	encodeAuthenticatedSender: vi.fn()
+}));
+
+vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
+	encryptGroupPayloadBase64: vi.fn().mockResolvedValue({ encryptedBase64: 'sealed' }),
+	decryptGroupPayloadBase64: vi.fn()
 }));
 
 vi.mock('$lib/services/chatGroupProtocol', () => ({
@@ -281,7 +285,7 @@ describe('recoverPoisonedChatGroup()', () => {
 
 		// Mock fetch to throw an error
 		const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'));
-		getCoordinatorClientMock.mockReturnValue({ FetchGroupMessages: fetchMock });
+		getCoordinatorClientMock.mockReturnValue({ FetchManyGroupMessages: fetchMock });
 
 		const result = await recoverPoisonedChatGroup('poisoned');
 		expect(result).toBe(false);
@@ -436,8 +440,7 @@ describe('inviteChatGroupMember()', () => {
 		expect(removeMemberFromGroupMock).toHaveBeenCalled();
 		expect(postGroupMessageMock).toHaveBeenCalledWith({
 			msg_64: 'sealed',
-			gid: 'gid',
-			encrypted: true
+			gid: 'gid'
 		});
 		expect(enqueuePendingEpochOperationMock).toHaveBeenCalledWith(
 			expect.anything(),

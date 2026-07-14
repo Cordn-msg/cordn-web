@@ -32,10 +32,10 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
-	encryptGroupPayloadBase64,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import {
 	resolveOutboundMessage,
@@ -123,22 +123,17 @@ const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
 
 /** Seal an outbound MLS message under the current epoch's exporter secret
- *  (spec/03 §4-§5). Sealing is always on. Returns the base64 to post, the
- *  `encrypted` flag for PostGroupMessage, and the delivery `gid` the
- *  coordinator needs to route an opaque payload without MLS-decoding it (the
- *  coordinator gates its opaque path on `gid` being present, NOT on the
- *  `encrypted` flag — omitting `gid` forces the legacy decode path and the
- *  sealed blob fails MLS framing). Inbound traffic is still decrypted
- *  transparently when `encrypted` is absent (legacy plaintext from
- *  mixed-version groups). */
+ *  (spec/03 §4-§5). Sealing is always on: the posted `msg_64` is the sealed
+ *  wrapper and `gid` lets the coordinator route an opaque payload without
+ *  MLS-decoding it. Inbound traffic is always decrypted (encrypted-only
+ *  delivery — see ingestChatGroupMessages). */
 async function sealForPosting(params: {
 	state: ClientState;
 	opaqueMessageBase64: string;
-}): Promise<{ msg_64: string; encrypted: true; gid: string }> {
+}): Promise<{ msg_64: string; gid: string }> {
 	const { encryptedBase64 } = await encryptGroupPayloadBase64(params);
 	return {
 		msg_64: encryptedBase64,
-		encrypted: true,
 		gid: getProtocolGroupId(params.state)
 	};
 }
@@ -406,17 +401,19 @@ async function catchUpGroupBeforeOutboundOperation(
 
 	const account = requireActiveAccount('You must be logged in to catch up group messages');
 	const hasCursor = group.fetchCursor > 0;
-	const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 
 	let result: {
-		messages: Array<{ cursor: number; at: number; msg_64: string; encrypted?: boolean }>;
+		messages: Array<{ cursor: number; at: number; msg_64: string }>;
 	};
 	try {
 		result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid,
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid,
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 	} catch (error) {
@@ -435,8 +432,7 @@ async function catchUpGroupBeforeOutboundOperation(
 			result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			}))
 		);
 	}
@@ -854,12 +850,14 @@ export async function inviteChatGroupMember(input: {
 				group.metadata
 		};
 		const hasCursor = group.fetchCursor > 0;
-		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid: groupIdDecoder.decode(state.groupContext.groupId),
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid: groupIdDecoder.decode(state.groupContext.groupId),
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 
@@ -870,8 +868,7 @@ export async function inviteChatGroupMember(input: {
 			messages: result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			})),
 			pendingEpochOperations,
 			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
@@ -1144,7 +1141,6 @@ async function applyIncomingChatGroupMessages(
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}>
 ): Promise<{
 	group: StoredChatGroup;
@@ -1237,12 +1233,14 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
 		const hasCursor = group.fetchCursor > 0;
-		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid,
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid,
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 
@@ -1251,8 +1249,7 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 			result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			}))
 		);
 	});
@@ -1264,7 +1261,6 @@ export async function ingestIncomingChatGroupMessages(
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}>
 ): Promise<{
 	group: StoredChatGroup;
@@ -1341,7 +1337,6 @@ export async function sendChatGroupMessage(input: {
 			kind: outbound.event.kind,
 			tags: outbound.event.tags,
 			content: outbound.event.content,
-			encrypted: true,
 			// Use the caller-provided key when present (media sends pin it to the
 			// encryption epoch); otherwise derive from the current send state.
 			mediaKeyBase64: findImetaTag(outbound.event.tags)
@@ -1370,7 +1365,7 @@ export async function sendChatGroupMessage(input: {
  * Algorithm:
  * 1. Find newest healthy snapshot
  * 2. Restore state from snapshot
- * 3. Fetch messages using since_epoch from snapshot
+ * 3. Fetch messages from snapshot cursor
  * 4. Replay through ingestion pipeline
  * 5. Clear poisoned status if successful, keep it if failed
  *
@@ -1413,14 +1408,16 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 		// Fetch messages from snapshot epoch
 		const state = decodeStoredGroupState(restoredGroup);
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
-		const sinceEpoch = healthySnapshot.epoch;
 
 		try {
 			const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-				client.FetchGroupMessages({
-					gid,
-					after: healthySnapshot.cursor,
-					since_epoch: sinceEpoch
+				client.FetchManyGroupMessages({
+					groups: [
+						{
+							gid,
+							after: healthySnapshot.cursor
+						}
+					]
 				})
 			);
 
@@ -1430,8 +1427,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 				result.messages.map((message) => ({
 					cursor: message.cursor,
 					createdAt: message.at,
-					opaqueMessageBase64: message.msg_64,
-					encrypted: message.encrypted
+					opaqueMessageBase64: message.msg_64
 				}))
 			);
 

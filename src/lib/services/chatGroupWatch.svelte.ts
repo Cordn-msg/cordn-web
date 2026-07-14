@@ -96,7 +96,6 @@ type WatchIncomingMessage = {
 	cursor: number;
 	createdAt: number;
 	opaqueMessageBase64: string;
-	encrypted?: boolean;
 };
 
 type WatchFetchedMessage = WatchIncomingMessage & {
@@ -401,7 +400,6 @@ type WatchableGroup = {
 	coordinatorKey: string;
 	gid: string;
 	after?: number;
-	sinceEpoch?: string;
 };
 
 function toWatchableGroup(groupId: string): WatchableGroup | null {
@@ -421,8 +419,6 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 
 	if (hasCursor) {
 		watchable.after = group.fetchCursor;
-	} else if (group.joinEpoch > 0n) {
-		watchable.sinceEpoch = group.joinEpoch.toString();
 	}
 
 	return watchable;
@@ -521,8 +517,7 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 		groupMessages.push({
 			cursor: message.cursor,
 			createdAt: message.createdAt,
-			opaqueMessageBase64: message.opaqueMessageBase64,
-			encrypted: message.encrypted
+			opaqueMessageBase64: message.opaqueMessageBase64
 		});
 		messagesByGroupId.set(group.id, groupMessages);
 	}
@@ -559,8 +554,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			{
 				groups: input.groups.map((group) => ({
 					gid: group.gid,
-					after: group.after,
-					since_epoch: group.sinceEpoch
+					after: group.after
 				}))
 			},
 			{ timeout: BACKLOG_FETCH_TIMEOUT_MS }
@@ -574,8 +568,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			gid: message.gid,
 			cursor: message.cursor,
 			createdAt: message.at,
-			opaqueMessageBase64: message.msg_64,
-			encrypted: message.encrypted
+			opaqueMessageBase64: message.msg_64
 		}))
 	);
 }
@@ -685,8 +678,7 @@ async function startWatchingCoordinatorGroups(
 				client.SubscribeManyGroupMessages({
 					groups: subscriptionGroups.map((group) => ({
 						gid: group.gid,
-						after: group.after,
-						since_epoch: group.sinceEpoch
+						after: group.after
 					}))
 				})
 			);
@@ -751,8 +743,7 @@ async function startWatchingCoordinatorGroups(
 							await buffer.push({
 								cursor: message.cursor,
 								createdAt: message.at,
-								opaqueMessageBase64: message.msg_64,
-								encrypted: message.encrypted
+								opaqueMessageBase64: message.msg_64
 							})
 						) {
 							return;

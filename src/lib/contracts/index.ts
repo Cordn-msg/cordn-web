@@ -20,9 +20,7 @@ export const COORDINATOR_METHODS = {
 	storeJoinRequest: 'join_request_store',
 	fetchManyPendingJoinRequests: 'join_request_take_many',
 	postGroupMessage: 'msg_post',
-	fetchGroupMessages: 'msg_fetch',
 	fetchManyGroupMessages: 'msg_fetch_many',
-	subscribeGroupMessages: 'msg_sub',
 	subscribeManyGroupMessages: 'msg_sub_many'
 } as const;
 
@@ -147,8 +145,7 @@ export const fetchManyPendingJoinRequestsOutputSchema = z.object({
 
 export const postGroupMessageInputSchema = z.object({
 	msg_64: z.string().min(1),
-	gid: z.string().min(1).optional(),
-	encrypted: z.boolean().optional()
+	gid: z.string().min(1)
 });
 
 export const postGroupMessageOutputSchema = z.object({
@@ -159,16 +156,14 @@ export const postGroupMessageOutputSchema = z.object({
 
 export const fetchGroupMessagesInputSchema = z.object({
 	gid: z.string().min(1),
-	after: z.number().int().positive().optional(),
-	since_epoch: z.string().optional()
+	after: z.number().int().positive().optional()
 });
 
 export const groupMessageSchema = z.object({
 	cursor: z.number(),
 	gid: z.string(),
 	msg_64: z.string(),
-	at: z.number(),
-	encrypted: z.boolean().optional()
+	at: z.number()
 });
 
 export const fetchGroupMessagesOutputSchema = z.object({
@@ -179,15 +174,7 @@ export const fetchManyGroupMessagesInputSchema = z.object({
 	groups: z.array(fetchGroupMessagesInputSchema).min(1)
 });
 
-export const fetchManyGroupMessagesOutputSchema = z.object({
-	messages: z.array(groupMessageSchema)
-});
-
-export const subscribeGroupMessagesInputSchema = fetchGroupMessagesInputSchema;
-
-export const subscribeGroupMessagesOutputSchema = z.object({
-	subscribed: z.literal(true)
-});
+export const fetchManyGroupMessagesOutputSchema = fetchGroupMessagesOutputSchema;
 
 export const subscribeManyGroupMessagesInputSchema = z.object({
 	groups: z.array(fetchGroupMessagesInputSchema).min(1)
@@ -226,8 +213,6 @@ export type FetchGroupMessagesInput = z.infer<typeof fetchGroupMessagesInputSche
 export type FetchGroupMessagesOutput = z.infer<typeof fetchGroupMessagesOutputSchema>;
 export type FetchManyGroupMessagesInput = z.infer<typeof fetchManyGroupMessagesInputSchema>;
 export type FetchManyGroupMessagesOutput = z.infer<typeof fetchManyGroupMessagesOutputSchema>;
-export type SubscribeGroupMessagesInput = z.infer<typeof subscribeGroupMessagesInputSchema>;
-export type SubscribeGroupMessagesOutput = z.infer<typeof subscribeGroupMessagesOutputSchema>;
 export type SubscribeManyGroupMessagesInput = z.infer<typeof subscribeManyGroupMessagesInputSchema>;
 export type SubscribeManyGroupMessagesOutput = z.infer<
 	typeof subscribeManyGroupMessagesOutputSchema

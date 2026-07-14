@@ -42,6 +42,13 @@ vi.mock('$lib/services/chatMlsUtils', async () => {
 	};
 });
 
+vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
+	decryptGroupPayloadBase64: vi.fn(async ({ encryptedBase64 }: { encryptedBase64: string }) => ({
+		opaqueMessageBase64: encryptedBase64
+	})),
+	encryptGroupPayloadBase64: vi.fn()
+}));
+
 import { ingestChatGroupMessages } from './chatGroupMessages.svelte';
 
 describe('ingestChatGroupMessages()', () => {

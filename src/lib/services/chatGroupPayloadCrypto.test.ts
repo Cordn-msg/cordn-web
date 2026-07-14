@@ -3,7 +3,7 @@ import { bytesToBase64 } from 'ts-mls';
 import {
 	decryptGroupPayloadBase64,
 	encryptGroupPayloadBase64
-} from '$lib/services/chatGroupMessages.svelte';
+} from '$lib/services/chatGroupPayloadCrypto';
 import type { ClientState } from 'ts-mls';
 
 /**
