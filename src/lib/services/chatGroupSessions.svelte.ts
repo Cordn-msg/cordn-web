@@ -5,7 +5,6 @@ import {
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
-import { onGroupStateAdvance } from '$lib/services/multiDevice.svelte';
 import {
 	type GroupIngestionOutcome,
 	type GroupPendingEpochStore,
@@ -91,23 +90,13 @@ export async function syncChatGroupMessages(params: {
 		ingestion: sync
 	});
 
-	// Multi-device re-publish (spec/applications/multi-device.md §10): a pending
-	// own-commit just landed on the stream (self-echo). Siblings cannot ingest it
-	// (shared-leaf UpdatePath) and need a fresh document to fast-forward. This is
-	// the SINGLE trigger point — every own-commit flow (add/remove member,
-	// metadata change, plus subscription-delivered self-echoes) routes through
-	// here, so there is no per-flow wiring to drift out of sync. Fire-and-forget:
-	// `onGroupStateAdvance` queues the per-group republish off `publishInFlight`,
-	// and the actual snapshot runs on a later microtask — after the caller has
-	// persisted the new state to the store (callers persist synchronously after
-	// this await).
-	if (sync.appliedPendingCommitMessages.size > 0) {
-		console.debug('[multi-device] own-commit self-echo confirmed, scheduling republish', {
-			groupId: params.group.id,
-			count: sync.appliedPendingCommitMessages.size
-		});
-		onGroupStateAdvance(params.group.id);
-	}
+	// Multi-device re-publish on an own-Commit is NOT fired here. It is fired
+	// unconditionally at the end of `runOutboundGroupOperation` (the chokepoint
+	// invite/remove/metadata route through) — see chatGroups.svelte.ts. Firing it
+	// here was contingent on detecting the self-echo
+	// (`appliedPendingCommitMessages.size > 0`), which is fragile: the pending-op
+	// marker is an in-memory Map lost on reload, and the self-echo needs the watch
+	// to be running. The read-path divergence diff (§10.5) is the backstop.
 
 	return {
 		workingGroup: params.workingGroup,

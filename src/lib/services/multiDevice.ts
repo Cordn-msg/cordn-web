@@ -512,6 +512,13 @@ export interface TipPointer {
  * addresses. A re-sealed gid absent from the fetched tip (newly created, or a
  * stale peer tip) is added. §4.3 (a gid appears live XOR tombstoned, never both
  * at the same tip) is enforced here, once, for every publish.
+ *
+ * Caller contract: every gid in `tombstonedGids` MUST also be carried in the
+ * meta document this tip points at — otherwise a sibling reading the tip sees
+ * the gid vanish from the group list with no tombstone to explain it, and the
+ * read-path `missingFromTip` diff resurrects it (flip-flop). The service layer
+ * upholds this by only populating `pendingTombstones` inside a meta-publishing
+ * serialized op (see `MultiDeviceOwnerConfig.pendingTombstones` invariant).
  */
 export function buildInventory(
 	pointer: TipPointer,
@@ -528,6 +535,77 @@ export function buildInventory(
 		if (!pointer.groups.some((g) => g.gid === r.gid)) inv.push(r); // new / stale-peer-tip
 	}
 	return inv;
+}
+
+// ---------------------------------------------------------------------------
+// Read-path divergence diff (spec §8 + §10.5 "local ahead of tip")
+// ---------------------------------------------------------------------------
+
+/**
+ * Local-ahead-of-tip diff (spec §8: "a device that holds newer local state —
+ * groups the tip lacks, or higher local epochs — SHOULD re-publish"; §10.5
+ * trigger: "on startup if local state is ahead of the tip"). Pure so the loop-
+ * safety + resurrection semantics are testable without the MLS/Blossom surface.
+ *
+ * Two signals, neither requiring an extra fetch on the read path:
+ *  - `missingFromTip`: local live gids absent from the tip's group list. A gid
+ *    tombstoned-stale on the tip (epoch below local) is not in the tip's group
+ *    list, so it lands here — republishing it is the §8 resurrection, correct.
+ *  - `epochsAhead`: gids the reconcile just fetched and found at a local epoch
+ *    ≥ the document's epoch (the `'skipped'` outcome of §8). The caller collects
+ *    these during `applyTip`; no decode happens here.
+ *
+ * Returns the deduped, sorted union — the gids a read path should re-seal.
+ * Loop-safe by construction: once the device pushes the missing groups, the next
+ * tip read finds every local gid present at a matching epoch and returns `[]`.
+ */
+export function diffLocalAhead(params: {
+	localGids: Iterable<string>;
+	tipGids: Iterable<string>;
+	epochsAheadGids: Iterable<string>;
+}): string[] {
+	const tipSet = new Set(params.tipGids);
+	const ahead = new Set<string>();
+	for (const gid of params.localGids) {
+		if (!tipSet.has(gid)) ahead.add(gid); // live locally, absent from the tip
+	}
+	for (const gid of params.epochsAheadGids) {
+		ahead.add(gid); // fetched + local epoch ≥ document epoch (§8 skip)
+	}
+	return [...ahead].sort();
+}
+
+/**
+ * Deterministic content hash of the meta view that gets published (§4.2):
+ * `lastResortKeyPackage` + the composed `removed` set. Excludes `issuedAt`
+ * (which changes every publish) so the hash is a stable signal for "did the
+ * published meta content change," unlike the meta document address (which is
+ * over the sealed blob and varies with NIP-44's salt). Used by the read path to
+ * detect that local meta state diverged from the tip: the local hash is
+ * recomputed on every tip read and compared to the hash recorded for the meta
+ * content currently believed to be on the tip (recorded on both publish AND
+ * adopt, so a freshly-adopted meta doesn't look "ahead"). Canonical (sorted)
+ * so semantically-equal views hash equal.
+ *
+ * Pure + local-only: the hash never leaves the device. It carries the
+ * `privateKeyPackage` because that field IS part of the published meta doc and
+ * so affects its content-addressed address — excluding it would miss a rotation.
+ */
+export function metaViewHash(params: {
+	lastResortKeyPackage?: LastResortKeyPackageEntry;
+	removed?: Tombstone[];
+}): string {
+	const removed = [...(params.removed ?? [])].sort((a, b) =>
+		a.gid === b.gid ? a.epoch - b.epoch : a.gid < b.gid ? -1 : 1
+	);
+	const kp = params.lastResortKeyPackage
+		? {
+				keyPackage: params.lastResortKeyPackage.keyPackage,
+				privateKeyPackage: params.lastResortKeyPackage.privateKeyPackage,
+				coordinators: [...(params.lastResortKeyPackage.coordinators ?? [])].sort()
+			}
+		: undefined;
+	return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify({ kp, removed }))));
 }
 
 /** Next carry-forward + reap state after a publish (spec §10.5 + §12). Pure so

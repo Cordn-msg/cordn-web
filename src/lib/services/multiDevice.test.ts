@@ -27,8 +27,10 @@ vi.mock('ts-mls', async () => {
 import {
 	MULTI_DEVICE_SCHEMA_VERSION,
 	composeTombstoneUnion,
+	diffLocalAhead,
 	documentAddress,
 	groupEpoch,
+	metaViewHash,
 	openDocument,
 	publishGroupDocument,
 	publishMetaDocument,
@@ -755,5 +757,127 @@ describe('planCarryForward (spec §10.5 durability + §12 reap)', () => {
 			pendingReap: []
 		});
 		expect(next.pendingReap).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Read-path divergence diff (spec §8 + §10.5 "local ahead of tip")
+// ---------------------------------------------------------------------------
+
+describe('diffLocalAhead (spec §8/§10.5: groups the tip lacks + higher local epochs)', () => {
+	test('a local gid absent from the tip is ahead (missing-from-tip)', () => {
+		// The reverse-link case: D_full links to D_empty's empty tip; every local
+		// group is missing from the tip and must be pushed.
+		const ahead = diffLocalAhead({
+			localGids: ['g1', 'g2', 'g3'],
+			tipGids: [],
+			epochsAheadGids: []
+		});
+		expect(ahead).toEqual(['g1', 'g2', 'g3']);
+	});
+
+	test('a gid whose document was fetched but local epoch ≥ incoming is ahead', () => {
+		// The missed-self-echo case: a peer tip re-delivered a doc we already
+		// surpassed; the §8 'skipped' outcome is the local-ahead signal.
+		const ahead = diffLocalAhead({
+			localGids: ['g1'],
+			tipGids: ['g1'],
+			epochsAheadGids: ['g1']
+		});
+		expect(ahead).toEqual(['g1']);
+	});
+
+	test('missing-from-tip and epochs-ahead union, deduped + sorted', () => {
+		const ahead = diffLocalAhead({
+			localGids: ['g3', 'g1'], // g1, g3 local
+			tipGids: ['g2'], // only g2 in tip → g1, g3 missing
+			epochsAheadGids: ['g1', 'g4'] // g1 (dup with missing), g4 ahead
+		});
+		expect(ahead).toEqual(['g1', 'g3', 'g4']);
+	});
+
+	test('every local gid in tip at a matching epoch → empty (loop-safety / convergence)', () => {
+		// After the device pushes its missing groups, the next read finds no
+		// divergence and schedules nothing — this is what makes the read-path push
+		// loop-safe rather than a publish storm.
+		const ahead = diffLocalAhead({
+			localGids: ['g1', 'g2'],
+			tipGids: ['g1', 'g2'],
+			epochsAheadGids: []
+		});
+		expect(ahead).toEqual([]);
+	});
+
+	test('a gid tombstoned-stale on the tip lands in missing-from-tip (§8 resurrection)', () => {
+		// Local holds g at epoch 9; the tip's meta tombstones g at epoch 5 (stale).
+		// g is NOT in the tip's group list, so set-diff flags it ahead → republish
+		// re-adds it, which is the §8/§4.3 resurrection. Correct by construction.
+		const ahead = diffLocalAhead({
+			localGids: ['g'],
+			tipGids: [], // g is tombstoned in meta, absent from the group list
+			epochsAheadGids: []
+		});
+		expect(ahead).toEqual(['g']);
+	});
+
+	test('empty inputs yield an empty diff', () => {
+		expect(diffLocalAhead({ localGids: [], tipGids: [], epochsAheadGids: [] })).toEqual([]);
+	});
+});
+
+describe('metaViewHash (spec §4.2 content signal for meta-ahead diff)', () => {
+	function entry(
+		keyPackage = 'kp',
+		privateKeyPackage = 'pkp',
+		coordinators = ['c1']
+	): LastResortKeyPackageEntry {
+		return { keyPackage, privateKeyPackage, coordinators };
+	}
+
+	test('deterministic: same content → same hash', () => {
+		const a = metaViewHash({ lastResortKeyPackage: entry(), removed: [tombstone('g', 3)] });
+		const b = metaViewHash({ lastResortKeyPackage: entry(), removed: [tombstone('g', 3)] });
+		expect(a).toBe(b);
+		expect(a).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	test('a different lastResort keyPackage changes the hash (rotation detected)', () => {
+		const a = metaViewHash({ lastResortKeyPackage: entry('kp1') });
+		const b = metaViewHash({ lastResortKeyPackage: entry('kp2') });
+		expect(a).not.toBe(b);
+	});
+
+	test('a different privateKeyPackage changes the hash (the field is published)', () => {
+		// Excluding privateKeyPackage would miss a rotation that re-keys the leaf;
+		// it's part of the published meta doc so it's part of the content signal.
+		const a = metaViewHash({ lastResortKeyPackage: entry('kp', 'pkp1') });
+		const b = metaViewHash({ lastResortKeyPackage: entry('kp', 'pkp2') });
+		expect(a).not.toBe(b);
+	});
+
+	test('a different removed set changes the hash', () => {
+		const a = metaViewHash({ removed: [tombstone('g', 3)] });
+		const b = metaViewHash({ removed: [tombstone('g', 5)] });
+		expect(a).not.toBe(b);
+	});
+
+	test('canonical: removed in any order hashes equal', () => {
+		const a = metaViewHash({ removed: [tombstone('a', 1), tombstone('b', 2)] });
+		const b = metaViewHash({ removed: [tombstone('b', 2), tombstone('a', 1)] });
+		expect(a).toBe(b);
+	});
+
+	test('canonical: coordinators in any order hash equal', () => {
+		const a = metaViewHash({ lastResortKeyPackage: entry('kp', 'pkp', ['c1', 'c2']) });
+		const b = metaViewHash({ lastResortKeyPackage: entry('kp', 'pkp', ['c2', 'c1']) });
+		expect(a).toBe(b);
+	});
+
+	test('undefined lastResort vs an entry differ; empty vs undefined removed match', () => {
+		const noKp = metaViewHash({});
+		const withKp = metaViewHash({ lastResortKeyPackage: entry() });
+		expect(noKp).not.toBe(withKp);
+		// `removed` defaults to [] when undefined, so omitting it matches an explicit empty.
+		expect(metaViewHash({})).toBe(metaViewHash({ removed: [] }));
 	});
 });

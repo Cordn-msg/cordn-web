@@ -64,6 +64,8 @@ import {
 	buildInventory,
 	partitionGapByEpoch,
 	planCarryForward,
+	diffLocalAhead,
+	metaViewHash,
 	type Nip44Seal,
 	type BlobStore,
 	type GroupDocument,
@@ -157,6 +159,16 @@ function bumpMdProgress(current: number): void {
 
 /** Per-owner multi-device config. Keyed by owner pubkey in localStorage. */
 export interface MultiDeviceOwnerConfig {
+	/**
+	 * The owner pubkey this config belongs to (normalized). Captured at creation
+	 * so `saveConfig` writes to THIS account's slot — not whatever account happens
+	 * to be active when a long-running publish/write-back completes. Without it,
+	 * an account switch during an in-flight publish (relay fetch + Blossom uploads
+	 * span multiple awaits) would land the in-flight config in the new account's
+	 * slot, leaking the ephemeral write key + DEK across identities. Backfilled on
+	 * read for configs created before the field existed (pre-release dev state).
+	 */
+	ownerPubkey: string;
 	/** Stable opaque `d` for the replaceable tip event. Generated once. */
 	dTag: string;
 	/** Ephemeral signing key for the outer tip event + Blossom auth (hex nsec). */
@@ -200,6 +212,14 @@ export interface MultiDeviceOwnerConfig {
 	 * `softDeleteGroup`, merged into {@link carriedTombstones} + cleared once
 	 * published. The first-publish-only lifecycle keeps the queue bounded: a
 	 * tombstone's durability after that is {@link carriedTombstones}'s job.
+	 *
+	 * INVARIANT: appended ONLY inside `softDeleteGroup`'s `runSerialized` op (which
+	 * always publishes `resealMeta: true`). This guarantees a group-only publish
+	 * (`resealMeta: false`) never observes a non-empty set — which is what keeps
+	 * `buildInventory`'s tombstone filter from dropping a gid from the tip BEFORE
+	 * the meta document carries its tombstone (which would make siblings resurrect
+	 * it via the read-path `missingFromTip` diff). Any future writer MUST append +
+	 * publish-meta atomically on the serialized lane.
 	 */
 	pendingTombstones?: Tombstone[];
 	/**
@@ -220,6 +240,20 @@ export interface MultiDeviceOwnerConfig {
 	 * peer fetches before reaping. Best-effort hygiene; never blocks the push.
 	 */
 	pendingReap?: string[];
+	/**
+	 * Content hash of the meta view the device believes is currently on the tip
+	 * (`metaViewHash` of `lastResortKeyPackage` + the composed `removed` set),
+	 * recorded both when the device PUBLISHES a meta and when it ADOPTS a peer's.
+	 * The read path recomputes the local hash on every tip read and compares — a
+	 * mismatch means local meta state diverged from what's on the tip (an extra
+	 * carried tombstone the tip lacks, or a different lastResort) and a
+	 * `resealMeta` republish is scheduled. Recording it on adopt (not just
+	 * publish) is what stops a freshly-linked device, or one adopting a peer's
+	 * tombstone, from republishing byte-identical content: once the tip carries
+	 * it, every device's local view matches and the diff is a no-op. Undefined
+	 * only pre-first-tip-read (a brand-new link) — the first adopt/publish sets it.
+	 */
+	lastPublishedMetaHash?: string;
 }
 
 interface MultiDeviceConfigStore {
@@ -244,7 +278,12 @@ export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConf
 	if (!browser) return undefined;
 	const owner = ownerPubkey ?? manager.getActive()?.pubkey;
 	if (!owner) return undefined;
-	return readAllConfigs()[normalizePubKey(owner)];
+	const config = readAllConfigs()[normalizePubKey(owner)];
+	// Backfill `ownerPubkey` on configs created before the field existed (pre-
+	// release dev state) so `saveConfig` never silently bails on them. The object
+	// is a fresh JSON.parse, so mutating it is safe; the next save persists it.
+	if (config && !config.ownerPubkey) config.ownerPubkey = normalizePubKey(owner);
+	return config;
 }
 
 /** Whether multi-device sync is on for the active (or given) owner. */
@@ -254,13 +293,19 @@ export function isMultiDeviceActive(ownerPubkey?: string): boolean {
 
 function saveConfig(config: MultiDeviceOwnerConfig): void {
 	if (!browser) return;
-	const owner = manager.getActive()?.pubkey;
-	if (!owner) return;
+	// Write to the config's OWN owner (captured at creation), NOT the currently-
+	// active account. A publish / reconcile spans multiple awaits (relay fetch +
+	// Blossom uploads); if the user switched accounts mid-flight, writing to the
+	// active account would land this config in the wrong slot — leaking the
+	// ephemeral write key + DEK across identities and corrupting the other
+	// account's config. `ownerPubkey` is always set at creation + backfilled on
+	// read, so this is the account that owns the in-flight operation.
+	if (!config.ownerPubkey) return;
 	const all = readAllConfigs();
-	all[normalizePubKey(owner)] = config;
+	all[normalizePubKey(config.ownerPubkey)] = config;
 	writeAllConfigs(all);
 	dbg('saveConfig', {
-		owner: owner.slice(0, 8),
+		owner: config.ownerPubkey.slice(0, 8),
 		dTag: config.dTag.slice(0, 8)
 	});
 }
@@ -272,6 +317,7 @@ function generateDTag(): string {
 
 /** Build a fresh config (new ephemeral key + `d`), inheriting default relays. */
 function createFreshConfig(
+	ownerPubkey: string,
 	relays: string[] = DEFAULT_MULTI_DEVICE_RELAYS,
 	blossomServers: string[] = DEFAULT_BLOSSOM_SERVERS
 ): MultiDeviceOwnerConfig {
@@ -279,6 +325,7 @@ function createFreshConfig(
 	const ephemeralPrivateKey = bytesToHex(sk);
 	const ephemeralPubkey = getPublicKey(sk);
 	return {
+		ownerPubkey: normalizePubKey(ownerPubkey),
 		dTag: generateDTag(),
 		ephemeralPrivateKey,
 		ephemeralPubkey,
@@ -307,14 +354,15 @@ export function enableMultiDevice(
 	if (!account) throw new Error('Log in to enable multi-device sync');
 	dbg('enableMultiDevice enter', { hadAccount: !!account, relayCount: relays?.length ?? 0 });
 	const existing = getMultiDeviceConfig(account.pubkey);
-	const config = existing ?? createFreshConfig(relays, blossomServers);
+	const config = existing ?? createFreshConfig(account.pubkey, relays, blossomServers);
 	if (relays && relays.length) config.relays = relays;
 	if (blossomServers && blossomServers.length) config.blossomServers = blossomServers;
 	saveConfig(config);
 	dbg('enableMultiDevice done', { dTag: config.dTag.slice(0, 8) });
 	// Spec §11: the connection string is only usable once documents + a tip exist.
 	// Publish every local group document + the meta document + the tip in one shot
-	// so the string is live (the hooks otherwise only fire on new-group/own-commit).
+	// so the string is live (the hooks otherwise only fire on individual
+	// group/meta changes, not on enable itself).
 	scheduleRepublish({ resealGroups: 'all', resealMeta: true });
 	// Open the live tip subscription + adopt any peer state: a mid-session
 	// enable is not cold start (so §10.6 ordering doesn't strictly apply), but we
@@ -374,6 +422,7 @@ export async function rotateMultiDeviceKey(
 		]);
 	}
 	const fresh = createFreshConfig(
+		account.pubkey,
 		relays ?? existing?.relays,
 		blossomServers ?? existing?.blossomServers
 	);
@@ -838,6 +887,15 @@ function parseConnectionString(connection: string): ConnectionPayload {
 // Re-publish hook (spec §10)
 // ---------------------------------------------------------------------------
 
+// `publishInFlight` serializes WRITES only. The read path (`handleTipEvent` →
+// `applyTip`) is deliberately off this lane so a slow push can't stall group
+// seeding/fast-forwarding. Consequence: a read reconcile and a write publish can
+// interleave. This is benign by construction: per-group writes are CAS-locked
+// (`runGroupOperation`), the relay event is replaceable, and the read-path
+// divergence diff schedules its push through `scheduleRepublish` → this lane,
+// so the two pushes can't run concurrently — only a read's reconcile can overlap
+// a push. Worst case is one redundant publish cycle (a stale `lastSeenTip` write
+// that the next `fetchTipForPublish` / sub delivery corrects). Not corruption.
 let publishInFlight: Promise<void> = Promise.resolve();
 
 /**
@@ -890,8 +948,11 @@ function scheduleRepublish(plan: PublishPlan): void {
 /**
  * Re-publish hook for a group change (spec §10): publish only that group's
  * document and update only its `group` `x` tag in the tip. Fire-and-forget;
- * a no-op when multi-device is disabled. Wired at group creation and on
- * locally-authored Commit self-echo confirmation.
+ * a no-op when multi-device is disabled. Wired at three epoch-advancing sites:
+ * group creation (`createChatGroup`), welcome acceptance (`acceptChatWelcome`),
+ * and unconditionally at the end of `runOutboundGroupOperation` (the chokepoint
+ * invite/remove/metadata route through). The read-path divergence diff
+ * (`handleTipEvent`) is the backstop that catches any trigger this hook misses.
  */
 export function onGroupStateAdvance(gid: string): void {
 	if (!browser) return;
@@ -902,9 +963,11 @@ export function onGroupStateAdvance(gid: string): void {
 }
 
 /**
- * Re-publish hook for an identity-level change (spec §10.5): a soft-delete
- * tombstone or a last-resort key-package publish/rotate. Publishes only the
- * meta document and updates only its `meta` `x` tag. Fire-and-forget.
+ * Re-publish hook for an identity-level change (spec §10.5): a last-resort
+ * key-package publish/rotate. Publishes only the meta document and updates
+ * only its `meta` `x` tag. Fire-and-forget. (Soft-delete tombstones publish
+ * directly via `softDeleteGroup`'s serialized op — atomically with the
+ * tombstone append — so they don't route through this hook.)
  */
 export function onMetaStateChange(): void {
 	if (!browser) return;
@@ -1055,7 +1118,7 @@ async function mapPool<T, R>(
 async function applyTip(
 	pointer: TipPointer,
 	ctx: { dekSeal: Nip44Seal; dekPubkey: string; config: MultiDeviceOwnerConfig }
-): Promise<{ counts: ReconcileCounts }> {
+): Promise<{ counts: ReconcileCounts; localAheadGids: string[] }> {
 	const { dekSeal, dekPubkey, config } = ctx;
 	const lastSeen = config.lastSeenTip;
 	const counts: ReconcileCounts = {
@@ -1065,6 +1128,10 @@ async function applyTip(
 		dropped: 0,
 		ignored: 0
 	};
+	// gids whose fetched document was at a local epoch ≥ incoming (the §8 'skipped'
+	// outcome). Collected for the read-path divergence diff (§8/§10.5 "local
+	// ahead of tip") — the write path (publish's reconcile-before-push) ignores it.
+	const localAheadGids: string[] = [];
 
 	// Reconcile changed groups in parallel — each gid writes its own storage key +
 	// MLS state, and fastForwardGroup runs under a per-group lock
@@ -1080,7 +1147,12 @@ async function applyTip(
 				const { outcome } = await pullAndReconcileGroup(group, pointer, dekSeal, dekPubkey, config);
 				if (outcome === 'seeded') counts.seeded++;
 				else if (outcome === 'fast-forwarded') counts.fastForwarded++;
-				else counts.skipped++;
+				else {
+					counts.skipped++;
+					// §8 skip ⟺ local epoch ≥ document epoch ⟺ local is ahead of the tip
+					// for this gid. Record for the read-path divergence diff.
+					localAheadGids.push(group.gid);
+				}
 			} catch (error) {
 				dbg('applyTip group reconcile failed', { gid: group.gid, error });
 			}
@@ -1114,12 +1186,26 @@ async function applyTip(
 			);
 			counts.dropped += metaCounts.dropped;
 			counts.ignored += metaCounts.ignored;
+			// Record the tip's meta content as the convergence baseline so the read-path
+			// diff (handleTipEvent) doesn't flag a just-adopted meta as "ahead". Without
+			// this, a fresh link (hash undefined) or a tombstone adoption (carried
+			// changed) would spuriously republish byte-identical content (new issuedAt /
+			// seal address only) — once per device per adoption, pure network waste
+			// since every device shares ONE tip that already carries the content. The
+			// diff compares the LOCAL composed view to this; if local genuinely diverges
+			// (an extra carried tombstone the tip lacks, a different lastResort), it
+			// still fires correctly. Computed from the adopted doc, not the local view,
+			// because this field means "what's on the tip", and we just put that there.
+			config.lastPublishedMetaHash = metaViewHash({
+				lastResortKeyPackage: doc.lastResortKeyPackage,
+				removed: doc.removed
+			});
 		} catch (error) {
 			dbg('applyTip meta reconcile failed', { error });
 		}
 	}
 
-	return { counts };
+	return { counts, localAheadGids };
 }
 
 /**
@@ -1245,6 +1331,14 @@ async function publish(plan: PublishPlan): Promise<void> {
 		config.carriedTombstones = next.carriedTombstones;
 		config.pendingTombstones = next.pendingTombstones;
 		config.pendingReap = next.pendingReap;
+		// Record the content hash of the meta view we just pushed, so the read path's
+		// divergence diff (handleTipEvent) can tell a subsequent read that the local
+		// meta view matches the tip and needs no `resealMeta` push. Computed from
+		// the same `removed` + last-resort entry the doc was sealed from.
+		config.lastPublishedMetaHash = metaViewHash({
+			lastResortKeyPackage: getLastResortKeyPackageEntry(),
+			removed
+		});
 		saveConfig(config);
 	}
 
@@ -1453,6 +1547,15 @@ export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null>
  * re-converges). No-op when MD is off. Failures are swallowed — a network blip
  * here must not block the outbound op; the coordinator catch-up + sibling-skip
  * still guard correctness, and the tip subscription re-converges on its own.
+ *
+ * The explicit `fetchLatestTipEvent` (a fresh `relayPool.request`, NOT a
+ * subscription read) is also what heals a half-open tip subscription for the
+ * outbound path: a socket the relay pool still considers alive but has stopped
+ * delivering on is invisible to the `reconnect: Infinity` auto-reconnect, yet a
+ * one-off request still reaches the relay and returns the current tip. Combined
+ * with the read-path divergence diff (§10.5 "local ahead of tip"), correctness
+ * holds even with a dead sub; only idle liveness (no outbound ops, no
+ * cold-start) is degraded until the sub detects the drop.
  *
  * ponytail: covers the common race (sibling published its group document but the
  * tip subscription hasn't delivered it yet). The narrower window — sibling Commit
@@ -1677,16 +1780,65 @@ async function handleTipEvent(
 
 		// Ingest via the shared chokepoint (same reconcile the write path runs before
 		// every push), then record the peer tip as the last-seen one.
-		const { counts } = await applyTip(pointer, {
+		const { counts, localAheadGids } = await applyTip(pointer, {
 			dekSeal: dek.seal,
 			dekPubkey: dek.dekPubkey,
 			config
 		});
 		setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
 
+		// §8 / §10.5 "local ahead of tip" trigger: if reconciling this peer tip left
+		// local state newer than what the tip carries, schedule a push so siblings
+		// converge. Two signals, neither needing an extra fetch:
+		//  - `missingFromTip`: local gids absent from the tip's group list. Closes
+		//    link-from-an-empty-device (every local group the empty tip lacks) and
+		//    backup-restore. A tombstoned-stale gid (epoch below local) is absent
+		//    from the group list too, so it lands here — republishing it is the §8
+		//    resurrection, which is correct.
+		//  - `epochsAhead`: gids whose fetched document was at a local epoch ≥
+		//    incoming (the §8 'skipped' outcome). Catches a peer tip re-delivering a
+		//    doc we already surpassed.
+		// The missed-own-commit-self-echo case (a Commit whose republish never fired
+		// because the self-echo wasn't observed) is closed by the EAGER hook in
+		// `runOutboundGroupOperation` firing unconditionally — not by this diff.
+		// Residual: a fire-and-forget republish interrupted by tab close leaves a
+		// gid in the tip at its old address with local advanced; this diff can't
+		// see it (address unchanged → no fetch → no epoch compare). It self-heals
+		// on the next local advancement in that group (the eager hook fires again)
+		// or a manual re-sync. Closing it fully needs per-gid published-epoch
+		// tracking — deferred as a narrow liveness gap, not a correctness one.
+		// Loop-safe: once the missing groups/meta are pushed, the next read finds
+		// no divergence and this is a no-op. Gated to the READ path only — the
+		// write path (`publish`) drives its own re-seal plan and must not queue a
+		// redundant second publish here.
+		const liveGids = collectActiveGroups().map((g) => g.id);
+		const localAhead = diffLocalAhead({
+			localGids: liveGids,
+			tipGids: pointer.groups.map((g) => g.gid),
+			epochsAheadGids: localAheadGids
+		});
+		const removed = composeTombstoneUnion(
+			config.pendingTombstones ?? [],
+			config.carriedTombstones ?? [],
+			liveGids
+		);
+		const metaAhead =
+			metaViewHash({
+				lastResortKeyPackage: getLastResortKeyPackageEntry(),
+				removed
+			}) !== config.lastPublishedMetaHash;
+		if (localAhead.length || metaAhead) {
+			dbg('handleTipEvent scheduling local-ahead republish', {
+				groups: localAhead.length,
+				meta: metaAhead
+			});
+			scheduleRepublish({
+				resealGroups: localAhead,
+				resealMeta: metaAhead
+			});
+		}
+
 		dbg('handleTipEvent done', { counts });
-		// ponytail: do not auto-republish on read (spec §8 SHOULD). The next local
-		// advance republishes; republishing here risks a publish loop across devices.
 		return counts;
 	} finally {
 		if (inflightTipEventId === outer.id) inflightTipEventId = null;
@@ -2099,6 +2251,7 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	const naddr = decoded.data;
 	// Persist the inherited config (relays + ephemeral key + d), enabled.
 	const config: MultiDeviceOwnerConfig = {
+		ownerPubkey: normalizePubKey(account.pubkey),
 		dTag: naddr.identifier,
 		ephemeralPrivateKey: payload.ephemeralPrivateKey,
 		ephemeralPubkey: naddr.pubkey,

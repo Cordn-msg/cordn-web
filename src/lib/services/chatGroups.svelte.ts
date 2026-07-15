@@ -582,7 +582,21 @@ async function runOutboundGroupOperation<T>(
 	operation: () => Promise<T>
 ): Promise<T> {
 	await reconcileTipForOutbound();
-	return runGroupOperation(groupId, operation);
+	const result = await runGroupOperation(groupId, operation);
+	// Multi-device re-publish (spec §10): an epoch-advancing outbound Commit
+	// (invite / remove / metadata) just completed and persisted new local state
+	// (`replaceGroup` is the last step of each op, so by here the store holds the
+	// post-Commit state). Siblings cannot ingest the Commit from the stream
+	// (shared-leaf UpdatePath) and need a fresh group document to fast-forward.
+	// Fired here — the single chokepoint all three ops route through —
+	// UNCONDITIONALLY on success, not contingent on self-echo confirmation, so a
+	// missed self-echo (watch not running, tab closed mid-op, in-memory
+	// `pendingEpochOperations` lost on reload) can't strand the new epoch locally.
+	// Fire-and-forget; a no-op when MD is disabled. The read-path divergence diff
+	// (§10.5 "local ahead of tip", in handleTipEvent) is the correctness backstop
+	// that catches any trigger this eager hook misses.
+	onGroupStateAdvance(groupId);
+	return result;
 }
 
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
@@ -1202,9 +1216,11 @@ async function applyIncomingChatGroupMessages(
 
 	replaceGroup(group.id, nextGroup);
 
-	// Multi-device re-publish on own-commit confirmation lives in
-	// `syncChatGroupMessages` (the single ingestion chokepoint every own-commit
-	// self-echo routes through), not here.
+	// Multi-device re-publish is NOT fired on ingestion. Own-Commit republish
+	// fires unconditionally at the end of `runOutboundGroupOperation` (the
+	// invite/remove/metadata chokepoint), before the self-echo reaches ingestion
+	// — see `runOutboundGroupOperation` above. The read-path divergence diff is
+	// the backstop.
 
 	// If ingestion poisoned the group, throw so the caller aborts
 	if (sync.ingestion.poisoned) {

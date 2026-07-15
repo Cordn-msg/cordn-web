@@ -129,7 +129,7 @@
 		}
 		unlinkMultiDevice();
 		config = getMultiDeviceConfig();
-		connectionString = config ? buildConnectionString(config) : '';
+		connectionString = '';
 		toast.success('Device unlinked — re-link anytime with a connection string');
 	}
 
@@ -403,9 +403,9 @@
 									</li>
 								</ol>
 
-								<Button onclick={handleSetup} class="w-full">
-									Turn on sync & generate code
-								</Button>
+								<Button onclick={handleSetup} class="w-full"
+									>Turn on sync &amp; generate code</Button
+								>
 
 								{#if !hasConfig}
 									<p class="text-xs text-muted-foreground">
