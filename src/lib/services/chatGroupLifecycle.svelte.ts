@@ -138,16 +138,20 @@ export async function acceptWelcomeToGroup(params: {
 		joinEpoch: epoch
 	});
 	// spec/03 welcome cursor hint: if the inviter recorded the Commit cursor,
-	// start fetching from there to skip pre-join traffic (replaces reliance on
-	// joinEpoch/since_epoch for new joins).
+	// start fetching from there to skip pre-join traffic. Without it the fetch
+	// starts at 0 and pre-join messages fail decryption (skipped gracefully —
+	// see ingestChatGroupMessages).
 	if (params.welcome.after) {
 		group.fetchCursor = params.welcome.after;
 		group.lastCursor = params.welcome.after;
 	} else {
-		console.info('[cordn/after] invitee joined without cursor hint (will rely on since_epoch)', {
-			after: params.welcome.after,
-			joinEpoch: epoch.toString()
-		});
+		console.info(
+			'[cordn/after] invitee joined without cursor hint (pre-join traffic skipped on decrypt failure)',
+			{
+				after: params.welcome.after,
+				joinEpoch: epoch.toString()
+			}
+		);
 	}
 	return group;
 }

@@ -480,15 +480,24 @@ class IndexedDbChatStorage implements ChatStorage {
 				} else {
 					snapshotStore.delete(group.id);
 				}
-				// Only write messages beyond the durable fetch cursor. The group record
-				// (carrying fetchCursor) and its messages are committed in this same
-				// atomic transaction, so every message with cursor <= existingFetchCursor
-				// is already durable; re-putting it on every ingest makes live delivery
-				// latency scale with the group's history size. New ingestion only ever
-				// produces messages with cursor > fetchCursor.
-				for (const message of group.messages) {
-					if (existing && message.cursor <= existingFetchCursor) continue;
-					messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
+				// Reconcile against the messages actually in storage: write only cursors
+				// we don't already have. fastForwardGroup can advance fetchCursor past
+				// messages that aren't durable yet (catchUpGroupFromChain recovers them
+				// with cursor <= fetchCursor), so a cursor-based skip would silently drop
+				// them on refresh. Checking the real set is robust to any such producer.
+				// One getAllKeys per putGroup is a cheap index scan (reads only; far lighter
+				// than re-writing the whole history), and reads fresh each call so it stays
+				// correct across tabs sharing this IDB. If a huge active group ever makes
+				// this hot, add a durableMessageCursor fast-skip — see putGroup notes.
+				if (group.messages.length > 0) {
+					const storedKeys = messageStore.index('groupId').getAllKeys(group.id);
+					storedKeys.onsuccess = () => {
+						const stored = new Set(storedKeys.result.map((key) => (key as [string, number])[1]));
+						for (const message of group.messages) {
+							if (stored.has(message.cursor)) continue;
+							messageStore.put(cloneMessageRecord({ ...message, groupId: group.id }));
+						}
+					};
 				}
 			};
 			for (const issue of group.syncIssues) {

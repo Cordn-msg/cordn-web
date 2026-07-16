@@ -62,6 +62,7 @@
 		onReact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
+		onRetrySend = () => {},
 		onNavigateToMessage = () => {},
 		onOpenRich = () => {},
 		onPin = () => {},
@@ -75,6 +76,7 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
+		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		onNavigateToMessage?: (messageId: string) => void;
 		onOpenRich?: (eventId: string) => void;
 		onPin?: (message: ChatMessage) => void;
@@ -903,13 +905,15 @@
 							<Check class="size-3" />
 						</span>
 					{:else if message.isOwn && message.deliveryState === 'error'}
-						<span
-							class="inline-flex items-center text-destructive"
-							aria-label={getDeliveryStateLabel()}
-							title={getDeliveryStateLabel()}
+						<button
+							type="button"
+							class="inline-flex items-center text-destructive hover:text-destructive/80"
+							aria-label="Retry send"
+							title="Failed to send — click to retry"
+							onclick={() => onRetrySend(message)}
 						>
 							<X class="size-3" />
-						</span>
+						</button>
 					{:else if message.isOwn && message.deliveryState === 'sending'}
 						<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
 					{/if}

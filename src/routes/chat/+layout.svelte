@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
 	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
+	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
 	import { untrack } from 'svelte';
 	import {
 		createChatLayoutContext,
@@ -136,4 +137,5 @@
 	</div>
 
 	<MediaLightbox />
+	<LastResortConflictDialog />
 </div>

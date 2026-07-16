@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-16-multi-device',
+		createdAt: Date.UTC(2026, 6, 16),
+		version: 1,
+		title: 'Multi-device sync',
+		body: "- ✨ Link your devices and your groups stay in sync across all of them: join or create a group on one device and it appears on the others automatically, and removing a group from your list removes it everywhere.\n- 🔄 To turn it on, go to Config → Multi-device sync and follow the steps to link your devices with a connection string. It's entirely opt-in, so nothing changes if you don't want it.\n- 🔄 Once linked, sync runs quietly in the background over Nostr and Blossom, with nothing to manage.\n- ✨ A message that failed to send now shows a retry button, so you can resend it with one tap instead of retyping it.\n- ✨ When publishing your key package, if a coordinator already holds a conflicting one (for example from another device), you're now asked how to proceed instead of a silent conflict."
+	},
+	{
 		id: 'cordn-news-2026-07-04-reconnect-resilience',
 		createdAt: Date.UTC(2026, 6, 4),
 		version: 1,

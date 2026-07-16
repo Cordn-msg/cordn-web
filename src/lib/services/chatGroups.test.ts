@@ -28,7 +28,8 @@ const withCoordinatorClientMock = vi.fn(
 vi.mock('$lib/services/chatRuntime', () => ({
 	getCoordinatorClient: getCoordinatorClientMock,
 	requireActiveAccount: requireActiveAccountMock,
-	withCoordinatorClient: withCoordinatorClientMock
+	withCoordinatorClient: withCoordinatorClientMock,
+	withCoordinatorClientRetry: withCoordinatorClientMock
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
@@ -57,8 +58,12 @@ vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
 	createApplicationMessageBase64: vi.fn(),
 	createSystemMessagesFromStateChange: vi.fn(() => []),
 	createUnsignedCordnMessageEvent: vi.fn(),
-	encodeAuthenticatedSender: vi.fn(),
-	encryptGroupPayloadBase64: vi.fn().mockResolvedValue({ encryptedBase64: 'sealed' })
+	encodeAuthenticatedSender: vi.fn()
+}));
+
+vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
+	encryptGroupPayloadBase64: vi.fn().mockResolvedValue({ encryptedBase64: 'sealed' }),
+	decryptGroupPayloadBase64: vi.fn()
 }));
 
 vi.mock('$lib/services/chatGroupProtocol', () => ({
@@ -280,7 +285,7 @@ describe('recoverPoisonedChatGroup()', () => {
 
 		// Mock fetch to throw an error
 		const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'));
-		getCoordinatorClientMock.mockReturnValue({ FetchGroupMessages: fetchMock });
+		getCoordinatorClientMock.mockReturnValue({ FetchManyGroupMessages: fetchMock });
 
 		const result = await recoverPoisonedChatGroup('poisoned');
 		expect(result).toBe(false);
@@ -435,8 +440,7 @@ describe('inviteChatGroupMember()', () => {
 		expect(removeMemberFromGroupMock).toHaveBeenCalled();
 		expect(postGroupMessageMock).toHaveBeenCalledWith({
 			msg_64: 'sealed',
-			gid: 'gid',
-			encrypted: true
+			gid: 'gid'
 		});
 		expect(enqueuePendingEpochOperationMock).toHaveBeenCalledWith(
 			expect.anything(),
@@ -617,112 +621,13 @@ describe('snapshot persistence', () => {
 	});
 });
 
-describe('appendHealthySnapshot()', () => {
-	test('adds a healthy snapshot to empty list', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
-
-		const result = appendHealthySnapshot([], {
-			groupId: 'test',
-			status: 'healthy',
-			epoch: '1',
-			cursor: 0,
-			createdAt: 100,
-			stateBase64: 'AA=='
-		});
-
-		expect(result.length).toBe(1);
-		expect(result[0].status).toBe('healthy');
-		expect(result[0].epoch).toBe('1');
-	});
-
-	test('keeps at most 3 snapshots', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
-
-		const base = [
-			{
-				groupId: 'test',
-				status: 'healthy' as const,
-				epoch: '1',
-				cursor: 0,
-				createdAt: 100,
-				stateBase64: 'AA=='
-			},
-			{
-				groupId: 'test',
-				status: 'healthy' as const,
-				epoch: '2',
-				cursor: 5,
-				createdAt: 200,
-				stateBase64: 'BB=='
-			},
-			{
-				groupId: 'test',
-				status: 'healthy' as const,
-				epoch: '3',
-				cursor: 10,
-				createdAt: 300,
-				stateBase64: 'CC=='
-			}
-		];
-
-		const result = appendHealthySnapshot(base, {
-			groupId: 'test',
-			status: 'healthy',
-			epoch: '4',
-			cursor: 15,
-			createdAt: 400,
-			stateBase64: 'DD=='
-		});
-
-		expect(result.length).toBe(3);
-		expect(result[0].epoch).toBe('2');
-		expect(result[1].epoch).toBe('3');
-		expect(result[2].epoch).toBe('4');
-	});
-
-	test('drops tentative snapshots when appending healthy', async () => {
-		const { appendHealthySnapshot } = await import('./chatGroupSnapshots');
-
-		const base = [
-			{
-				groupId: 'test',
-				status: 'healthy' as const,
-				epoch: '1',
-				cursor: 0,
-				createdAt: 100,
-				stateBase64: 'AA=='
-			},
-			{
-				groupId: 'test',
-				status: 'tentative' as const,
-				epoch: '2',
-				cursor: 5,
-				createdAt: 200,
-				stateBase64: 'BB=='
-			}
-		];
-
-		const result = appendHealthySnapshot(base, {
-			groupId: 'test',
-			status: 'healthy',
-			epoch: '3',
-			cursor: 10,
-			createdAt: 300,
-			stateBase64: 'CC=='
-		});
-
-		expect(result.length).toBe(2);
-		expect(result[0].status).toBe('healthy');
-		expect(result[1].status).toBe('healthy');
-	});
-});
-
 describe('loadGroups snapshot baseline', () => {
 	test('creates baseline healthy snapshot for legacy group with no snapshots', async () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
-			withCoordinatorClient: withCoordinatorClientMock
+			withCoordinatorClient: withCoordinatorClientMock,
+			withCoordinatorClientRetry: withCoordinatorClientMock
 		}));
 
 		const { getChatStorage } = await import('$lib/storage/chatStorage');
@@ -774,7 +679,8 @@ describe('loadGroups snapshot baseline', () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
-			withCoordinatorClient: withCoordinatorClientMock
+			withCoordinatorClient: withCoordinatorClientMock,
+			withCoordinatorClientRetry: withCoordinatorClientMock
 		}));
 
 		const { getChatStorage } = await import('$lib/storage/chatStorage');

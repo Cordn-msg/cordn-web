@@ -2,21 +2,22 @@ import {
 	base64ToBytes,
 	bytesToBase64,
 	createApplicationMessage,
+	defaultProposalTypes,
 	encode,
-	mlsExporter,
+	isDefaultProposal,
 	mlsMessageDecoder,
 	mlsMessageEncoder,
 	processMessage,
 	unsafeTestingAuthenticationService,
 	type ClientState,
-	type IncomingMessageCallback
+	type IncomingMessageCallback,
+	type ProposalWithSender
 } from 'ts-mls';
-import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { concatBytes, randomBytes } from '@noble/ciphers/utils.js';
 import { SvelteSet } from 'svelte/reactivity';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
+import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 
 import { ChatKinds, SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import {
@@ -25,8 +26,10 @@ import {
 	listGroupMembers
 } from '$lib/services/chatAdminPolicy';
 import {
+	decodeKeyPackageIdentity,
 	getCordnCipherSuite,
 	getCordnGroupMetadataExtension,
+	getCordnGroupMetadataFromExtensions,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
 import { normalizePubKey } from '$lib/utils';
@@ -40,10 +43,6 @@ export interface StoredChatMessage {
 	kind: UnsignedEvent['kind'];
 	tags: UnsignedEvent['tags'];
 	content: string;
-	/** True when this message arrived (inbound) or was sent (outbound) as a
-	 *  sealed spec/03 payload. Carried through to the message-info dialog so
-	 *  the rollout can be inspected per-message. */
-	encrypted?: boolean;
 	/** For media-bearing messages (`imeta` tag): the per-epoch media key
 	 *  (base64) captured at ingest/send time, when the processing state holds
 	 *  the correct epoch's exporter secret. Stashed rather than re-derived at
@@ -92,10 +91,6 @@ export interface RawChatGroupMessage {
 	cursor: number;
 	createdAt: number;
 	opaqueMessageBase64: string;
-	/** Opaque sealed payload (spec/03). The ingest funnel decrypts before
-	 *  MLS processing; pending own-commits and already-seen cursors short-circuit
-	 *  before the decrypt branch, so this flag only gates genuine new inbound. */
-	encrypted?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -209,57 +204,6 @@ export async function processMessageBase64(params: {
 	});
 }
 
-/** spec/03 §4 — exporter parameters for the per-epoch content-protection key. */
-const GROUP_PAYLOAD_EXPORTER_LABEL = 'cordn';
-const GROUP_PAYLOAD_EXPORTER_CONTEXT = 'group-payload';
-const GROUP_PAYLOAD_KEY_BYTES = 32;
-const GROUP_PAYLOAD_NONCE_BYTES = 12;
-const GROUP_PAYLOAD_TAG_BYTES = 16;
-
-async function deriveGroupPayloadKey(state: ClientState): Promise<Uint8Array> {
-	const cipherSuite = await getCordnCipherSuite();
-	return mlsExporter(
-		state.keySchedule.exporterSecret,
-		GROUP_PAYLOAD_EXPORTER_LABEL,
-		encoder.encode(GROUP_PAYLOAD_EXPORTER_CONTEXT),
-		GROUP_PAYLOAD_KEY_BYTES,
-		cipherSuite
-	);
-}
-
-/** Seal a serialized MLS message (base64) under the current epoch's exporter
- *  secret using ChaCha20-Poly1305 with empty AAD (spec/03 §4-§5). Wire format:
- *  base64(12-byte nonce || ciphertext-with-16-byte tag). */
-export async function encryptGroupPayloadBase64(params: {
-	state: ClientState;
-	opaqueMessageBase64: string;
-}): Promise<{ encryptedBase64: string }> {
-	const key = await deriveGroupPayloadKey(params.state);
-	const nonce = randomBytes(GROUP_PAYLOAD_NONCE_BYTES);
-	const ciphertext = chacha20poly1305(key, nonce, new Uint8Array(0)).encrypt(
-		base64ToBytes(params.opaqueMessageBase64)
-	);
-	return { encryptedBase64: bytesToBase64(concatBytes(nonce, ciphertext)) };
-}
-
-/** Unseal a spec/03 payload back to the serialized MLS message (base64) for
- *  downstream MLS processing. Throws on payloads shorter than the
- *  nonce+tag minimum or on AEAD verification failure (spec/03 §7). */
-export async function decryptGroupPayloadBase64(params: {
-	state: ClientState;
-	encryptedBase64: string;
-}): Promise<{ opaqueMessageBase64: string }> {
-	const payload = base64ToBytes(params.encryptedBase64);
-	if (payload.length < GROUP_PAYLOAD_NONCE_BYTES + GROUP_PAYLOAD_TAG_BYTES) {
-		throw new Error('Sealed payload too short');
-	}
-	const key = await deriveGroupPayloadKey(params.state);
-	const nonce = payload.subarray(0, GROUP_PAYLOAD_NONCE_BYTES);
-	const ciphertext = payload.subarray(GROUP_PAYLOAD_NONCE_BYTES);
-	const serialized = chacha20poly1305(key, nonce, new Uint8Array(0)).decrypt(ciphertext);
-	return { opaqueMessageBase64: bytesToBase64(serialized) };
-}
-
 /**
  * Extract unprotected MLS envelope metadata for diagnostic logging.
  * Returns epoch, contentType, and wireformat without requiring decryption.
@@ -324,6 +268,21 @@ function isRatchetTreeInvariantIssue(detail: string): boolean {
 	return detail.includes('non-blank intermediate node must list leaf node in its unmerged_leaves');
 }
 
+/**
+ * Sentinel for the §10 sibling-skip: an incoming Commit was authored by this
+ * identity's own shared leaf (a sibling device). Ingesting it would adopt the
+ * sibling's new public keys without the matching private keys → ts-mls
+ * self-removes us. Thrown before the UpdatePath applies so the loop skips the
+ * Commit (advance cursor, await the group document) instead. Detection is
+ * exact: in the shared-leaf model only our identity occupies our leaf index.
+ */
+class SiblingCommitSkippedError extends Error {
+	constructor() {
+		super('Skipped sibling commit (own shared leaf); awaiting group-document fast-forward');
+		this.name = 'SiblingCommitSkippedError';
+	}
+}
+
 function isRemovedFromGroupState(state: ClientState): boolean {
 	return state.groupActiveState?.kind === 'removedFromGroup';
 }
@@ -343,6 +302,32 @@ function buildSystemMessageId(
 
 function buildSystemMessageContent(data: StoredChatSystemMessageData): string {
 	return JSON.stringify(data);
+}
+
+/**
+ * Build an inbound system message (presentation-only) from the varying parts.
+ * Centralizes the boilerplate (cursor/createdAt/direction/sender/kind/tags) and
+ * derives both id and content from `systemKind` + optional target/detail, so the
+ * state-diff path and the sibling-commit-proposal path can't drift apart on id
+ * or content parity (fleet presentation consistency, spec §10).
+ */
+function buildInboundSystemMessage(
+	cursor: number,
+	createdAt: number,
+	committer: string | undefined,
+	systemKind: StoredChatSystemMessageData['systemKind'],
+	variants: { target?: string; detail?: string } = {}
+): StoredChatMessage {
+	return {
+		cursor,
+		createdAt,
+		direction: 'inbound',
+		sender: committer ?? '',
+		id: buildSystemMessageId(cursor, systemKind, variants.target),
+		kind: SYSTEM_MESSAGE_KIND,
+		tags: [],
+		content: buildSystemMessageContent({ systemKind, committer, ...variants })
+	};
 }
 
 function describeMetadataChanges(
@@ -381,7 +366,6 @@ export function createSystemMessagesFromStateChange(input: {
 	oldMetadata?: CordnGroupMetadata;
 	newMetadata?: CordnGroupMetadata;
 	committerPubkey?: string;
-	encrypted?: boolean;
 }): StoredChatMessage[] {
 	const messages: StoredChatMessage[] = [];
 	const committer = input.committerPubkey ? normalizePubKey(input.committerPubkey) : undefined;
@@ -397,60 +381,94 @@ export function createSystemMessagesFromStateChange(input: {
 
 	for (const member of addedMembers) {
 		const target = normalizePubKey(member.stablePubkey);
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'member-added', target),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'member-added',
-				target,
-				committer
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-added', {
+				target
 			})
-		});
+		);
 	}
 
 	for (const member of removedMembers) {
 		const target = normalizePubKey(member.stablePubkey);
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'member-removed', target),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'member-removed',
-				target,
-				committer
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-removed', {
+				target
 			})
-		});
+		);
 	}
 
 	const metadataChanges = describeMetadataChanges(input.oldMetadata, input.newMetadata);
 	if (metadataChanges.length > 0) {
-		messages.push({
-			cursor: input.cursor,
-			createdAt: input.createdAt,
-			direction: 'inbound',
-			sender: committer ?? '',
-			id: buildSystemMessageId(input.cursor, 'metadata-changed'),
-			kind: SYSTEM_MESSAGE_KIND,
-			tags: [],
-			content: buildSystemMessageContent({
-				systemKind: 'metadata-changed',
-				committer,
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
 				detail: metadataChanges.join(', ')
 			})
-		});
+		);
 	}
 
-	if (input.encrypted) {
-		for (const message of messages) message.encrypted = true;
+	return messages;
+}
+
+/**
+ * Synthesize system messages for a sibling Commit that was skipped (spec §10).
+ * The Commit's UpdatePath can't be applied on a sibling device (private keys
+ * live only on the committer), so the normal state-diff synthesis never runs.
+ * But the Commit's proposals are authenticated data — not path secrets — so
+ * reading them is MLS-safe and carries the member/metadata changes. Produces
+ * the same message ids + content the committer's own device generates via
+ * `createSystemMessagesFromStateChange`, so presentation stays consistent
+ * across the fleet without re-ingesting the Commit.
+ */
+export function createSystemMessagesFromCommitProposals(input: {
+	cursor: number;
+	createdAt: number;
+	proposals: ProposalWithSender[];
+	oldState: ClientState;
+	oldMetadata?: CordnGroupMetadata;
+	committerPubkey?: string;
+}): StoredChatMessage[] {
+	const messages: StoredChatMessage[] = [];
+	const committer = input.committerPubkey ? normalizePubKey(input.committerPubkey) : undefined;
+
+	for (const { proposal } of input.proposals) {
+		if (!isDefaultProposal(proposal)) continue;
+		switch (proposal.proposalType) {
+			case defaultProposalTypes.add: {
+				const target = normalizePubKey(decodeKeyPackageIdentity(proposal.add.keyPackage));
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-added', {
+						target
+					})
+				);
+				break;
+			}
+			case defaultProposalTypes.remove: {
+				const member = listGroupMembers(input.oldState).find(
+					(m) => m.leafIndex === proposal.remove.removed
+				);
+				if (!member) break;
+				const target = normalizePubKey(member.stablePubkey);
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'member-removed', {
+						target
+					})
+				);
+				break;
+			}
+			case defaultProposalTypes.group_context_extensions: {
+				const newMetadata = getCordnGroupMetadataFromExtensions(
+					proposal.groupContextExtensions.extensions
+				);
+				const changes = describeMetadataChanges(input.oldMetadata, newMetadata);
+				if (changes.length === 0) break;
+				messages.push(
+					buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
+						detail: changes.join(', ')
+					})
+				);
+				break;
+			}
+		}
 	}
 
 	return messages;
@@ -461,6 +479,10 @@ export async function ingestChatGroupMessages(params: {
 	messages: RawChatGroupMessage[];
 	hasPendingEpochOperation?: (opaqueMessageBase64: string) => boolean;
 	localStablePubkey?: string;
+	/** MD active: the group document can resolve epochs this device can't derive
+	 * (sibling Commits / pre-reconcile). Such messages skip + await instead of
+	 * poisoning (§8/§10). */
+	mdActive?: boolean;
 }): Promise<{
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
@@ -497,37 +519,37 @@ export async function ingestChatGroupMessages(params: {
 			continue;
 		}
 
-		// Sealed spec/03 payloads: decrypt to recover the serialized MLS
-		// message before processing. Pending own-commits and already-seen
-		// cursors short-circuit above, so we only reach here for genuine
-		// inbound sealed traffic. A decrypt failure (wrong epoch / corruption)
-		// advances the cursor and records an issue rather than poisoning.
-		let processableBase64 = message.opaqueMessageBase64;
-		if (message.encrypted) {
-			try {
-				processableBase64 = (
-					await decryptGroupPayloadBase64({
-						state: group.state,
-						encryptedBase64: message.opaqueMessageBase64
-					})
-				).opaqueMessageBase64;
-			} catch (error) {
-				const detail = error instanceof Error ? error.message : String(error);
-				group.fetchCursor = message.cursor;
-				group.lastCursor = Math.max(group.lastCursor, message.cursor);
-				const issue = {
-					cursor: message.cursor,
-					createdAt: message.createdAt,
-					detail: `Sealed payload decrypt failed: ${detail}`
-				};
-				group.syncIssues.push(issue);
-				issues.push(issue);
-				continue;
-			}
+		// Encrypted-only delivery (spec/03): every inbound message is a sealed
+		// payload — decrypt to recover the serialized MLS message before
+		// processing. Pending own-commits and already-seen cursors short-circuit
+		// above, so we only reach here for genuine new inbound. A decrypt failure
+		// (wrong epoch / pre-join traffic / corruption) advances the cursor and
+		// records an issue rather than poisoning.
+		let processableBase64: string;
+		try {
+			processableBase64 = (
+				await decryptGroupPayloadBase64({
+					state: group.state,
+					encryptedBase64: message.opaqueMessageBase64
+				})
+			).opaqueMessageBase64;
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			const issue = {
+				cursor: message.cursor,
+				createdAt: message.createdAt,
+				detail: `Sealed payload decrypt failed: ${detail}`
+			};
+			group.syncIssues.push(issue);
+			issues.push(issue);
+			continue;
 		}
 
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
 		let commitSenderPubkey: string | undefined;
+		let commitProposals: ProposalWithSender[] = [];
 
 		try {
 			const adminCallback = createAdminAuthorizationCallback({
@@ -543,14 +565,76 @@ export async function ingestChatGroupMessages(params: {
 							(member) => member.leafIndex === incoming.senderLeafIndex
 						);
 						commitSenderPubkey = sender?.stablePubkey;
+						commitProposals = incoming.proposals ?? [];
+						// Sibling-skip (spec multi-device §10): a Commit from our own
+						// shared leaf cannot be ingested (UpdatePath private keys live
+						// only on the committer). The authorization callback fires
+						// before the UpdatePath is applied, so throwing here skips the
+						// Commit instead of self-removing. Detection is exact in the
+						// shared-leaf model: only our identity occupies our leaf index.
+						if (
+							params.localStablePubkey &&
+							sender &&
+							normalizePubKey(sender.stablePubkey) === params.localStablePubkey
+						) {
+							throw new SiblingCommitSkippedError();
+						}
 					}
 					return adminCallback(incoming);
 				}
 			});
 		} catch (error) {
+			// Sibling-skip (§10): the callback detected a Commit from our own shared
+			// leaf before the UpdatePath applied. Advance the cursor and await the
+			// group document; do NOT process (self-removes) or poison.
+			if (error instanceof SiblingCommitSkippedError) {
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				const issue = {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: error.message
+				};
+				group.syncIssues.push(issue);
+				issues.push(issue);
+				// Sibling Commit skipped (§10): the group document owns the MLS state,
+				// but the presentation-layer system messages would be lost without the
+				// state-diff synthesis (which never ran). Rebuild them from the Commit's
+				// proposals — authenticated data, MLS-safe to read without the path.
+				// Best-effort: this is presentation-only, so it must never throw — ingest
+				// runs inside catchUpGroupFromChain's unguarded replay loop, where a throw
+				// would abort gap recovery and silently lose the offline message window.
+				try {
+					const systemMessages = createSystemMessagesFromCommitProposals({
+						cursor: message.cursor,
+						createdAt: message.createdAt,
+						proposals: commitProposals,
+						oldState: group.state,
+						oldMetadata: getCordnGroupMetadataExtension(group.state),
+						committerPubkey: commitSenderPubkey
+					});
+					if (systemMessages.length > 0) {
+						seenCursors.add(message.cursor);
+						for (const systemMessage of systemMessages) {
+							if (seenMessageIds.has(systemMessage.id)) continue;
+							seenMessageIds.add(systemMessage.id);
+							group.messages.push(systemMessage);
+							received.push(systemMessage);
+						}
+					}
+				} catch (synthesisError) {
+					console.warn('[MLS] sibling-commit system-message synthesis failed', {
+						cursor: message.cursor,
+						error: synthesisError instanceof Error ? synthesisError.message : String(synthesisError)
+					});
+				}
+				continue;
+			}
+
 			const detail = error instanceof Error ? error.message : String(error);
 			const envelope = extractMlsEnvelopeMetadata(processableBase64);
 			const localEpoch = group.state.groupContext.epoch;
+			const epochAhead = envelope?.epoch !== undefined && envelope.epoch > localEpoch;
 
 			console.warn('[MLS] processMessageBase64 error', {
 				groupId: group.metadata?.name ?? 'unknown',
@@ -559,15 +643,43 @@ export async function ingestChatGroupMessages(params: {
 				detail,
 				envelope,
 				localEpoch: localEpoch.toString(),
-				epochComparison:
-					envelope?.epoch !== undefined
-						? envelope.epoch > localEpoch
-							? 'message-ahead'
-							: envelope.epoch < localEpoch
-								? 'message-behind'
-								: 'same-epoch'
-						: 'unknown'
+				epochComparison: epochAhead
+					? 'message-ahead'
+					: envelope?.epoch !== undefined && envelope.epoch < localEpoch
+						? 'message-behind'
+						: envelope?.epoch !== undefined
+							? 'same-epoch'
+							: 'unknown'
 			});
+
+			// Multi-device §10/§10.6: an app message at a newer epoch is undecryptable
+			// when this device is behind a sibling's Commit (skipped on the stream) —
+			// the group document owns that epoch (it carries the leaf private keys the
+			// stream cannot). Skip + await fast-forward; never poison for an epoch the
+			// document resolves (would fork the device out). The §10.6 gate
+			// (awaitMultiDeviceReconciled) reconciles before the stream opens at cold
+			// start; this gate is the safety net for the mid-session window (sibling
+			// Commits after the gate ran). Poison only when MD is off — no rescue then.
+			if (params.mdActive && epochAhead) {
+				// Do NOT advance fetchCursor/lastCursor: this message is undecryptable
+				// only because the device is behind a sibling's Commit the session
+				// document owns. Leaving the cursor at the decrypt frontier lets a
+				// chained catch-up (spec §8.5) re-fetch this message once the chain
+				// state arrives — advancing here makes it unrecoverable (the
+				// coordinator never resends by cursor). Dedup the advisory issue: the
+				// same ahead-of-epoch cursor re-delivers on each backlog re-fetch
+				// until catch-up resolves it, so one issue per cursor is enough.
+				if (!group.syncIssues.some((i) => i.cursor === message.cursor)) {
+					const issue = {
+						cursor: message.cursor,
+						createdAt: message.createdAt,
+						detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
+					};
+					group.syncIssues.push(issue);
+					issues.push(issue);
+				}
+				continue;
+			}
 
 			if (
 				isFormerEpochIssue(detail) ||
@@ -653,7 +765,6 @@ export async function ingestChatGroupMessages(params: {
 				kind: event.kind,
 				tags: event.tags,
 				content: event.content,
-				encrypted: message.encrypted,
 				mediaKeyBase64: findImetaTag(event.tags)
 					? bytesToBase64(await deriveMediaKey(group.state))
 					: undefined
@@ -692,8 +803,7 @@ export async function ingestChatGroupMessages(params: {
 				newState: processed.newState,
 				oldMetadata,
 				newMetadata: group.metadata,
-				committerPubkey: commitSenderPubkey,
-				encrypted: message.encrypted
+				committerPubkey: commitSenderPubkey
 			});
 
 			if (systemMessages.length > 0) {

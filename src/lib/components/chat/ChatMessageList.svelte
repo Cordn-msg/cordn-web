@@ -14,6 +14,7 @@
 		onReact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
+		onRetrySend = () => {},
 		onVisibleUnreadReference = () => {},
 		onOpenRich = () => {},
 		onPin = () => {}
@@ -23,6 +24,7 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
+		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		onVisibleUnreadReference?: (message: ChatMessage) => void;
 		onOpenRich?: (eventId: string) => void;
 		onPin?: (message: ChatMessage) => void;
@@ -275,6 +277,7 @@
 								{onReact}
 								{onEdit}
 								{onDelete}
+								{onRetrySend}
 								onNavigateToMessage={navigateToMessage}
 								{onOpenRich}
 								{onPin}

@@ -123,14 +123,14 @@
 				{/if}
 			</div>
 
-			<p class="mt-4 text-sm whitespace-pre-wrap text-muted-foreground">
+			<p class="mt-4 text-sm wrap-anywhere whitespace-pre-wrap text-muted-foreground">
 				{profile?.about || 'No profile description available.'}
 			</p>
 		</div>
 	</div>
 {:else if isInline}
 	<span
-		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium break-words text-current"
+		class="inline-flex max-w-full items-center gap-1.5 align-baseline text-sm font-medium wrap-break-word text-current"
 	>
 		{#if showInlineAvatar}
 			{@render pfp(pubkey, profile?.picture, 'inline')}

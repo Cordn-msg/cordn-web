@@ -3,8 +3,10 @@
 	import * as Card from '$lib/components/ui/card';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import { toast } from 'svelte-sonner';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -20,15 +22,20 @@
 	import { refreshAvailableKeyPackagesAction } from '$lib/services/chatUiActions.svelte';
 	import {
 		createChatKeyPackage,
+		ensureLastResortPublished,
 		listChatKeyPackages,
 		listZombieKeyPackageRefs,
 		publishChatKeyPackage,
-		removeChatKeyPackage
+		removeChatKeyPackage,
+		takeOverLastResort
 	} from '$lib/services/chatKeyPackages.svelte';
+	import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
 	import { getCoordinatorLabel, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import KeyRound from '@lucide/svelte/icons/key-round';
+	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -41,6 +48,7 @@
 	}
 
 	let loading = $state(false);
+	let rotating = $state(false);
 	let error = $state('');
 	let label = $state('');
 	let publishCoordinatorKey = $state('');
@@ -49,6 +57,7 @@
 	let removingKeyPackageRef = $state('');
 	let remoteKeyPackageError = $state('');
 	let removingRemoteKey = $state('');
+	const ensureMode = $derived(isLastResort && publishCoordinatorKey.trim().length > 0);
 
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const chatGroups = $derived.by(() => listChatGroups());
@@ -99,11 +108,18 @@
 		try {
 			loading = true;
 			error = '';
-			await createChatKeyPackage({
-				label,
-				isLastResort,
-				publishCoordinatorKey
-			});
+			if (isLastResort && publishCoordinatorKey.trim()) {
+				const result = await ensureLastResortPublished(publishCoordinatorKey);
+				if (result.kind === 'foreign') {
+					if (!(await promptForeignLastResort(publishCoordinatorKey))) return;
+				}
+			} else {
+				await createChatKeyPackage({
+					label,
+					isLastResort,
+					publishCoordinatorKey
+				});
+			}
 			label = '';
 			publishCoordinatorKey = '';
 			isLastResort = false;
@@ -111,6 +127,28 @@
 			error = err instanceof Error ? err.message : 'Failed to create key package';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function handleRotate() {
+		const coordinatorKey = publishCoordinatorKey.trim();
+		if (!coordinatorKey) return;
+		if (
+			!confirm(
+				'Rotate the last-resort key package on this coordinator? This replaces the current one; pending invites that referenced it may need to be resent.'
+			)
+		) {
+			return;
+		}
+		try {
+			rotating = true;
+			error = '';
+			await takeOverLastResort(coordinatorKey);
+			toast.success('Last-resort rotated');
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to rotate last-resort';
+		} finally {
+			rotating = false;
 		}
 	}
 
@@ -255,14 +293,56 @@
 								<p class="text-sm text-destructive">{error}</p>
 							{/if}
 
+							{#if ensureMode}
+								<p class="text-xs text-muted-foreground">
+									Reuses your existing last-resort if one is already published to this coordinator;
+									only mints a new one if none exists.
+								</p>
+							{/if}
+
 							<div class="flex justify-end">
 								<Button type="button" onclick={handleCreate} disabled={loading}>
 									{#if loading}
 										<Spinner class="mr-2 size-4" />
 									{/if}
-									{loading ? 'Generating…' : 'Generate key package'}
+									{loading
+										? ensureMode
+											? 'Ensuring…'
+											: 'Generating…'
+										: ensureMode
+											? 'Ensure reachable'
+											: 'Generate key package'}
 								</Button>
 							</div>
+
+							<Collapsible.Root>
+								<Collapsible.Trigger
+									class="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+								>
+									<ChevronDown class="size-3.5" />
+									Advanced
+								</Collapsible.Trigger>
+								<Collapsible.Content>
+									<div class="space-y-2">
+										<p class="text-xs text-muted-foreground">
+											Rotation publishes a fresh last-resort, replacing the current one on the
+											selected coordinator. Pending invites that referenced the old one may need to
+											be resent; use it only if it is compromised or was published by a device you
+											no longer control.
+										</p>
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											disabled={!publishCoordinatorKey.trim() || rotating}
+											onclick={handleRotate}
+										>
+											<RefreshCw class="mr-2 size-4" />
+											{rotating ? 'Rotating…' : 'Rotate last-resort'}
+										</Button>
+									</div>
+								</Collapsible.Content>
+							</Collapsible.Root>
 						</div>
 					{/if}
 				</Card.Content>
@@ -342,7 +422,7 @@
 											{/each}
 										</div>
 									{/if}
-									{#if coordinators.length > 0}
+									{#if coordinators.length > 0 && !keyPackage.isLastResort}
 										<div class="flex flex-wrap gap-2 pt-1">
 											{#each coordinators as coordinator (coordinator.pubkey)}
 												<Button
@@ -360,6 +440,12 @@
 												</Button>
 											{/each}
 										</div>
+									{:else if keyPackage.isLastResort}
+										<p class="pt-1 text-xs text-muted-foreground">
+											Last-resort reachability is managed via "Ensure reachable" or rotation under
+											Advanced. A casual publish here would silently replace another device's
+											last-resort.
+										</p>
 									{/if}
 									<div class="flex justify-end pt-1">
 										<Button

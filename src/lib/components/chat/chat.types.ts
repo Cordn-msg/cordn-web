@@ -26,7 +26,6 @@ export interface ChatMessage {
 		deleted?: boolean;
 	};
 	cursor?: number;
-	encrypted?: boolean;
 	/** Confirmed-message event tags (carries `imeta` for media). */
 	tags?: string[][];
 	/** Per-epoch media key for decrypting this message's `imeta` media. */

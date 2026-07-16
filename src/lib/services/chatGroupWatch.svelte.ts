@@ -22,6 +22,10 @@ import {
 	setChatReconnectStatus
 } from '$lib/services/chatReconnectStatus.svelte';
 import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
+import {
+	awaitMultiDeviceReconciled,
+	resetMultiDeviceSession
+} from '$lib/services/multiDevice.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import {
@@ -92,7 +96,6 @@ type WatchIncomingMessage = {
 	cursor: number;
 	createdAt: number;
 	opaqueMessageBase64: string;
-	encrypted?: boolean;
 };
 
 type WatchFetchedMessage = WatchIncomingMessage & {
@@ -137,6 +140,10 @@ if (browser) {
 		void stopWatchingGroup(undefined, 'active account changed').then(async () => {
 			await groupLoadPromise;
 			pruneChatGroupPresence();
+			// Multi-device tip subscription follows the active account: reset the
+			// previous owner's reconcile promise + subscription, then let the watch's
+			// §10.6 gate re-reconcile for this owner (it's a no-op when MD is off).
+			resetMultiDeviceSession();
 			if (account) {
 				// Account switches converge on the same delta-based starter as the
 				// steady-state layout effect instead of a stop-the-world resume, so the
@@ -393,7 +400,6 @@ type WatchableGroup = {
 	coordinatorKey: string;
 	gid: string;
 	after?: number;
-	sinceEpoch?: string;
 };
 
 function toWatchableGroup(groupId: string): WatchableGroup | null {
@@ -413,8 +419,6 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 
 	if (hasCursor) {
 		watchable.after = group.fetchCursor;
-	} else if (group.joinEpoch > 0n) {
-		watchable.sinceEpoch = group.joinEpoch.toString();
 	}
 
 	return watchable;
@@ -513,8 +517,7 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 		groupMessages.push({
 			cursor: message.cursor,
 			createdAt: message.createdAt,
-			opaqueMessageBase64: message.opaqueMessageBase64,
-			encrypted: message.encrypted
+			opaqueMessageBase64: message.opaqueMessageBase64
 		});
 		messagesByGroupId.set(group.id, groupMessages);
 	}
@@ -551,8 +554,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			{
 				groups: input.groups.map((group) => ({
 					gid: group.gid,
-					after: group.after,
-					since_epoch: group.sinceEpoch
+					after: group.after
 				}))
 			},
 			{ timeout: BACKLOG_FETCH_TIMEOUT_MS }
@@ -566,8 +568,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			gid: message.gid,
 			cursor: message.cursor,
 			createdAt: message.at,
-			opaqueMessageBase64: message.msg_64,
-			encrypted: message.encrypted
+			opaqueMessageBase64: message.msg_64
 		}))
 	);
 }
@@ -677,8 +678,7 @@ async function startWatchingCoordinatorGroups(
 				client.SubscribeManyGroupMessages({
 					groups: subscriptionGroups.map((group) => ({
 						gid: group.gid,
-						after: group.after,
-						since_epoch: group.sinceEpoch
+						after: group.after
 					}))
 				})
 			);
@@ -743,8 +743,7 @@ async function startWatchingCoordinatorGroups(
 							await buffer.push({
 								cursor: message.cursor,
 								createdAt: message.at,
-								opaqueMessageBase64: message.msg_64,
-								encrypted: message.encrypted
+								opaqueMessageBase64: message.msg_64
 							})
 						) {
 							return;
@@ -798,6 +797,10 @@ let startAllRequestedDuringRun = false;
 
 async function runStartWatchingAllGroups(options: { skipBacklogSync?: boolean }) {
 	try {
+		// §10.6: reconcile the tip before any delivery stream opens so cold-start
+		// backlog fetches see a fast-forwarded state. Idempotent + a no-op when MD
+		// is off; runs even for an empty group set since the reconcile may seed.
+		await awaitMultiDeviceReconciled();
 		const groupsToWatch = getWatchableGroups({ includeCurrentWatches: false });
 		if (groupsToWatch.length === 0) {
 			chatGroupWatchStore.startup = 'ready';

@@ -8,6 +8,7 @@ import {
 	blossomAuthHeader,
 	buildBlossomAuth,
 	BlossomUploadError,
+	deleteBlob,
 	ephemeralBlossomSigner,
 	fetchBlob,
 	uploadBlob,
@@ -198,6 +199,64 @@ describe('uploadBlob (BUD-02)', () => {
 			expect((error as BlossomUploadError).status).toBe(413);
 			expect((error as BlossomUploadError).message).toContain('413');
 		}
+	});
+});
+
+describe('deleteBlob (BUD-12)', () => {
+	test('DELETEs /<sha256> with Nostr auth and returns ok on 204', async () => {
+		const sha = bytesToHex(sha256(new Uint8Array([9])));
+		let captured: { url: string; method: string; headers: Record<string, string> } | null = null;
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			captured = {
+				url: String(input),
+				method: init?.method ?? 'GET',
+				headers: Object.fromEntries(new Headers(init?.headers)) as Record<string, string>
+			};
+			return new Response(null, { status: 204 });
+		}) as typeof fetch;
+
+		const result = await deleteBlob({ serverUrl: SERVER, sha256Hex: sha, signer: stubSigner() });
+
+		expect(result.ok).toBe(true);
+		expect(result.status).toBe(204);
+		expect(captured!.url).toBe(`${SERVER.replace(/\/+$/, '')}/${sha}`);
+		expect(captured!.method).toBe('DELETE');
+		expect(captured!.headers['authorization']).toMatch(/^Nostr /);
+	});
+
+	test('treats 404 as idempotent success (already gone)', async () => {
+		globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof fetch;
+		const result = await deleteBlob({
+			serverUrl: SERVER,
+			sha256Hex: 'a'.repeat(64),
+			signer: stubSigner()
+		});
+		expect(result.ok).toBe(true);
+		expect(result.status).toBe(404);
+	});
+
+	test('reports 402/403 as not-ok without throwing (hygiene, never fatal)', async () => {
+		globalThis.fetch = (async () => new Response('pay up', { status: 402 })) as typeof fetch;
+		const result = await deleteBlob({
+			serverUrl: SERVER,
+			sha256Hex: 'a'.repeat(64),
+			signer: stubSigner()
+		});
+		expect(result.ok).toBe(false);
+		expect(result.status).toBe(402);
+	});
+
+	test('reports a network/CORS block as status 0 without throwing', async () => {
+		globalThis.fetch = (async () => {
+			throw new Error('CORS blocked');
+		}) as typeof fetch;
+		const result = await deleteBlob({
+			serverUrl: SERVER,
+			sha256Hex: 'a'.repeat(64),
+			signer: stubSigner()
+		});
+		expect(result.ok).toBe(false);
+		expect(result.status).toBe(0);
 	});
 });
 

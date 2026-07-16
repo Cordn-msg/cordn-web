@@ -30,6 +30,7 @@ import {
 	setJoinRequestSubmitting
 } from '$lib/services/chatJoinRequests.svelte';
 import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
+import { softDeleteGroup, isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { getChatGroupResumePromise } from '$lib/services/chatGroupWatchStatus.svelte';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -128,7 +129,14 @@ export async function deleteGroupAction(groupId: string | undefined) {
 	chatGroupInfoActionsStore.error = '';
 	try {
 		await stopWatchingGroup(groupId, 'group deleted locally');
-		deleteChatGroup(groupId);
+		if (isMultiDeviceActive()) {
+			// Soft-delete (spec §8/§10): drop locally AND propagate a tombstone so
+			// siblings stop tracking it too. The next republish carries it in the
+			// §10.5 union. `softDeleteGroup` performs the local drop internally.
+			await softDeleteGroup(groupId);
+		} else {
+			deleteChatGroup(groupId);
+		}
 		removeChatGroupPresence(groupId);
 		await goto(resolve('/chat'));
 		return true;

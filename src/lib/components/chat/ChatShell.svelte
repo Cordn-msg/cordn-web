@@ -140,7 +140,6 @@
 			kind: message.kind,
 			createdAt: message.createdAt,
 			cursor: message.cursor,
-			encrypted: message.encrypted === true,
 			timeLabel: formatUnixTimestamp(message.createdAt, true, false),
 			dayLabel: formatUnixTimestamp(message.createdAt, false, true),
 			isOwn: normalizePubKey(message.sender) === activePubkey,
@@ -469,6 +468,37 @@
 			});
 	}
 
+	async function handleRetrySend(message: ChatMessage) {
+		if (!message.id.startsWith('optimistic:') || !group) return;
+		// Rebuild the full reply target from the stored replied-to message: the
+		// optimistic preview only carries {id,author,text}, but the send path
+		// needs {id,pubkey,kind,content,tags}. If the original was deleted in
+		// the meantime, drop the reply and resend as plain text.
+		let replyTarget: ChatMessageReplyTarget | undefined;
+		if (message.replyTo) {
+			const stored = listChatGroupMessages(groupId).find(
+				(entry) => entry.id === message.replyTo!.id
+			);
+			if (stored) {
+				replyTarget = {
+					id: stored.id,
+					pubkey: stored.sender,
+					kind: stored.kind,
+					content: stored.content,
+					tags: stored.tags
+				};
+			}
+		}
+		updateOptimisticMessage(message.id, (entry) => ({ ...entry, deliveryState: 'sending' }));
+		const sent = await sendGroupMessageAction(groupId, message.text, replyTarget, undefined, []);
+		sendError = chatComposerActionsStore.error;
+		if (sent) {
+			removeOptimisticMessage(message.id);
+		} else {
+			updateOptimisticMessage(message.id, (entry) => ({ ...entry, deliveryState: 'error' }));
+		}
+	}
+
 	function handleReply(message: ChatMessage) {
 		if (message.deleted) return;
 
@@ -656,6 +686,7 @@
 				onReact={handleReact}
 				onEdit={handleEdit}
 				onDelete={handleDelete}
+				onRetrySend={handleRetrySend}
 				onVisibleUnreadReference={handleVisibleUnreadReference}
 				onOpenRich={handleOpenRich}
 				onPin={handlePin}

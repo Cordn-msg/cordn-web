@@ -63,11 +63,11 @@ export async function syncChatGroupMessages(params: {
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}>;
 	pendingEpochOperations: GroupPendingEpochStore;
 	coordinatorClient: Pick<cordnClient, 'StoreWelcome'>;
 	localStablePubkey?: string;
+	mdActive?: boolean;
 }): Promise<{
 	workingGroup: WorkingChatGroupSession;
 	received: StoredChatMessage[];
@@ -79,7 +79,8 @@ export async function syncChatGroupMessages(params: {
 		messages: params.messages,
 		hasPendingEpochOperation: (opaqueMessageBase64) =>
 			hasPendingEpochOperation(params.pendingEpochOperations, params.group.id, opaqueMessageBase64),
-		localStablePubkey: params.localStablePubkey
+		localStablePubkey: params.localStablePubkey,
+		mdActive: params.mdActive
 	});
 
 	await reconcilePendingEpochOperations({
@@ -88,6 +89,14 @@ export async function syncChatGroupMessages(params: {
 		client: params.coordinatorClient,
 		ingestion: sync
 	});
+
+	// Multi-device re-publish on an own-Commit is NOT fired here. It is fired
+	// unconditionally at the end of `runOutboundGroupOperation` (the chokepoint
+	// invite/remove/metadata route through) — see chatGroups.svelte.ts. Firing it
+	// here was contingent on detecting the self-echo
+	// (`appliedPendingCommitMessages.size > 0`), which is fragile: the pending-op
+	// marker is an in-memory Map lost on reload, and the self-echo needs the watch
+	// to be running. The read-path divergence diff (§10.5) is the backstop.
 
 	return {
 		workingGroup: params.workingGroup,

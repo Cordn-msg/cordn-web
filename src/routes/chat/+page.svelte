@@ -22,7 +22,12 @@
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
-	import { createChatKeyPackage, listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
+	import {
+		createChatKeyPackage,
+		ensureLastResortPublished,
+		listChatKeyPackages
+	} from '$lib/services/chatKeyPackages.svelte';
+	import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
 	import {
 		useAvailableKeyPackages,
 		type AvailableKeyPackageWithCoordinator
@@ -129,10 +134,13 @@
 				});
 			}
 
-			await createChatKeyPackage({
-				isLastResort: true,
-				publishCoordinatorKey: defaultCoordinator?.pubkey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
-			});
+			const bootstrapResult = await ensureLastResortPublished(
+				defaultCoordinator?.pubkey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY
+			);
+			if (bootstrapResult.kind === 'foreign') {
+				void promptForeignLastResort(bootstrapResult.coordinatorKey);
+				return;
+			}
 		} catch (error) {
 			keyPackageActionError = error instanceof Error ? error.message : 'Failed to finish bootstrap';
 		} finally {
@@ -152,15 +160,23 @@
 		try {
 			creatingKeyPackage = true;
 			keyPackageActionError = '';
-			await createChatKeyPackage({
-				isLastResort,
-				publishCoordinatorKey: coordinatorKey
-			});
-			toast.success('Key package created', {
-				description: isLastResort
-					? 'Last resort — always reachable for invites and join requests.'
-					: 'Regular — consumed on first use.'
-			});
+			if (isLastResort) {
+				const result = await ensureLastResortPublished(coordinatorKey);
+				if (result.kind === 'foreign') {
+					if (!(await promptForeignLastResort(result.coordinatorKey))) return false;
+				}
+				toast.success('Key package ready', {
+					description: 'Last resort: always reachable for invites and join requests.'
+				});
+			} else {
+				await createChatKeyPackage({
+					isLastResort: false,
+					publishCoordinatorKey: coordinatorKey
+				});
+				toast.success('Key package created', {
+					description: 'Regular: consumed on first use.'
+				});
+			}
 			return true;
 		} catch (error) {
 			keyPackageActionError =

@@ -15,9 +15,7 @@ import {
 	consumeKeyPackageOutputSchema,
 	COORDINATOR_METHODS,
 	type FetchManyGroupMessagesInput,
-	type FetchGroupMessagesInput,
 	fetchManyGroupMessagesOutputSchema,
-	fetchGroupMessagesOutputSchema,
 	fetchPendingWelcomesOutputSchema,
 	listAvailableKeyPackagesOutputSchema,
 	type PostGroupMessageInput,
@@ -26,9 +24,7 @@ import {
 	publishKeyPackageOutputSchema,
 	storeWelcomeOutputSchema,
 	subscribeManyGroupMessagesOutputSchema,
-	subscribeGroupMessagesOutputSchema,
 	type ConsumeKeyPackageOutput,
-	type FetchGroupMessagesOutput,
 	type FetchManyGroupMessagesOutput,
 	type FetchManyPendingJoinRequestsInput,
 	type FetchManyPendingJoinRequestsOutput,
@@ -45,8 +41,6 @@ import {
 	type StoreJoinRequestInput,
 	type StoreJoinRequestOutput,
 	storeJoinRequestOutputSchema,
-	type SubscribeGroupMessagesInput,
-	type SubscribeGroupMessagesOutput,
 	type SubscribeManyGroupMessagesInput,
 	type SubscribeManyGroupMessagesOutput,
 	type StoreWelcomeInput,
@@ -86,19 +80,10 @@ export type coordinatorClient = {
 		input: FetchManyPendingJoinRequestsInput
 	) => Promise<FetchManyPendingJoinRequestsOutput>;
 	PostGroupMessage: (input: PostGroupMessageInput) => Promise<PostGroupMessageOutput>;
-	FetchGroupMessages: (
-		input: FetchGroupMessagesInput,
-		options?: { timeout?: number }
-	) => Promise<FetchGroupMessagesOutput>;
 	FetchManyGroupMessages: (
 		input: FetchManyGroupMessagesInput,
 		options?: { timeout?: number }
 	) => Promise<FetchManyGroupMessagesOutput>;
-	SubscribeGroupMessages: (input: SubscribeGroupMessagesInput) => Promise<{
-		stream: AsyncIterable<GroupMessage>;
-		result: Promise<SubscribeGroupMessagesOutput>;
-		abort: (reason?: string) => Promise<void>;
-	}>;
 	SubscribeManyGroupMessages: (input: SubscribeManyGroupMessagesInput) => Promise<{
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeManyGroupMessagesOutput>;
@@ -426,26 +411,14 @@ export class cordnClient implements coordinatorClient {
 			'ephemeral',
 			COORDINATOR_METHODS.postGroupMessage,
 			input,
-			postGroupMessageOutputSchema
-		);
-	}
-
-	/**
-	 * Fetch queued MLS opaque group messages by group and optional cursor.
-	 * @param {string} gid The group id parameter
-	 * @param {number} after [optional] The after cursor parameter
-	 * @returns {Promise<FetchGroupMessagesOutput>} The result of the msg_fetch operation
-	 */
-	async FetchGroupMessages(
-		input: FetchGroupMessagesInput,
-		options: { timeout?: number } = {}
-	): Promise<FetchGroupMessagesOutput> {
-		return this.call(
-			'ephemeral',
-			COORDINATOR_METHODS.fetchGroupMessages,
-			input,
-			fetchGroupMessagesOutputSchema,
-			options
+			postGroupMessageOutputSchema,
+			// ponytail: explicit 8s beats the MCP 60s default. On mobile
+			// background-return a dead socket otherwise hangs the optimistic
+			// "Sending…" state for a full minute before the transient-retry +
+			// client-rebuild in withCoordinatorClient gets a chance to recover
+			// it. 8s is generous for a coordinator queue op (ms steady-state);
+			// only a stuck socket hits it, which is exactly when we bail+retry.
+			{ timeout: 8_000 }
 		);
 	}
 
@@ -460,43 +433,6 @@ export class cordnClient implements coordinatorClient {
 			fetchManyGroupMessagesOutputSchema,
 			options
 		);
-	}
-
-	async SubscribeGroupMessages(input: SubscribeGroupMessagesInput): Promise<{
-		stream: AsyncIterable<GroupMessage>;
-		result: Promise<SubscribeGroupMessagesOutput>;
-		abort: (reason?: string) => Promise<void>;
-	}> {
-		await this.ephemeralConnected;
-
-		const call = await callToolStream<CallToolResult>({
-			client: this.ephemeralClient,
-			transport: this.ephemeralTransport,
-			name: COORDINATOR_METHODS.subscribeGroupMessages,
-			arguments: { ...input }
-		});
-		const stream: AsyncIterable<GroupMessage> = {
-			async *[Symbol.asyncIterator]() {
-				for await (const chunk of call.stream) {
-					yield groupMessageSchema.parse(JSON.parse(chunk.value));
-				}
-			}
-		};
-
-		return {
-			stream,
-			result: call.result.then((result) =>
-				subscribeGroupMessagesOutputSchema.parse(result.structuredContent)
-			),
-			abort: async (reason?: string) => {
-				void call.stream.closed.catch(() => undefined);
-				try {
-					await call.abort(reason);
-				} catch {
-					return;
-				}
-			}
-		};
 	}
 
 	async SubscribeManyGroupMessages(input: SubscribeManyGroupMessagesInput): Promise<{

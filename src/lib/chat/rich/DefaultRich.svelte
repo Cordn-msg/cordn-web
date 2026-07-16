@@ -331,12 +331,6 @@
 							</p>
 							<p>{isOwn ? 'Sent' : 'Received'}</p>
 						</div>
-						<div class="space-y-1">
-							<p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-								Encryption
-							</p>
-							<p>{subject.encrypted ? 'Sealed (spec/03)' : 'Plaintext'}</p>
-						</div>
 					</div>
 
 					<Collapsible.Root bind:open={rawEnvelopeOpen}>

@@ -8,6 +8,12 @@ import {
 	type ClientState
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import {
+	onGroupStateAdvance,
+	isMultiDeviceActive,
+	reconcileMultiDeviceNow,
+	reconcileTipForOutbound
+} from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
@@ -26,10 +32,10 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
-	encryptGroupPayloadBase64,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import {
 	resolveOutboundMessage,
@@ -65,7 +71,8 @@ import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getCoordinatorClient,
 	requireActiveAccount,
-	withCoordinatorClient
+	withCoordinatorClient,
+	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
 import {
 	getChatStorage,
@@ -116,22 +123,17 @@ const groupOperationChains = new SvelteMap<string, Promise<unknown>>();
 const pendingEpochOperations = createGroupPendingEpochStore();
 
 /** Seal an outbound MLS message under the current epoch's exporter secret
- *  (spec/03 §4-§5). Sealing is always on. Returns the base64 to post, the
- *  `encrypted` flag for PostGroupMessage, and the delivery `gid` the
- *  coordinator needs to route an opaque payload without MLS-decoding it (the
- *  coordinator gates its opaque path on `gid` being present, NOT on the
- *  `encrypted` flag — omitting `gid` forces the legacy decode path and the
- *  sealed blob fails MLS framing). Inbound traffic is still decrypted
- *  transparently when `encrypted` is absent (legacy plaintext from
- *  mixed-version groups). */
+ *  (spec/03 §4-§5). Sealing is always on: the posted `msg_64` is the sealed
+ *  wrapper and `gid` lets the coordinator route an opaque payload without
+ *  MLS-decoding it. Inbound traffic is always decrypted (encrypted-only
+ *  delivery — see ingestChatGroupMessages). */
 async function sealForPosting(params: {
 	state: ClientState;
 	opaqueMessageBase64: string;
-}): Promise<{ msg_64: string; encrypted: true; gid: string }> {
+}): Promise<{ msg_64: string; gid: string }> {
 	const { encryptedBase64 } = await encryptGroupPayloadBase64(params);
 	return {
 		msg_64: encryptedBase64,
-		encrypted: true,
 		gid: getProtocolGroupId(params.state)
 	};
 }
@@ -399,17 +401,19 @@ async function catchUpGroupBeforeOutboundOperation(
 
 	const account = requireActiveAccount('You must be logged in to catch up group messages');
 	const hasCursor = group.fetchCursor > 0;
-	const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 
 	let result: {
-		messages: Array<{ cursor: number; at: number; msg_64: string; encrypted?: boolean }>;
+		messages: Array<{ cursor: number; at: number; msg_64: string }>;
 	};
 	try {
 		result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid,
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid,
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 	} catch (error) {
@@ -428,8 +432,7 @@ async function catchUpGroupBeforeOutboundOperation(
 			result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			}))
 		);
 	}
@@ -515,8 +518,18 @@ function requireChatGroup(groupId: string): StoredChatGroup {
 	return group;
 }
 
-function persistGroup(group: StoredChatGroup) {
-	chatGroupsStore.groups = [...chatGroupsStore.groups, group];
+/**
+ * Upsert a group into the reactive store by id (add-or-replace) and persist it.
+ * Matches IDB's keyed `putGroup`: idempotent, so a concurrent seed of the same
+ * gid (multi-device publish lane ⊕ live subscription) replaces instead of
+ * leaving a duplicate record. Callers pass genuinely-new groups; the replace
+ * branch only fires under a race, where replace is the lesser evil.
+ */
+export function persistGroup(group: StoredChatGroup) {
+	const exists = chatGroupsStore.groups.some((g) => g.id === group.id);
+	chatGroupsStore.groups = exists
+		? chatGroupsStore.groups.map((g) => (g.id === group.id ? group : g))
+		: [...chatGroupsStore.groups, group];
 	void persistSingleGroup(group);
 }
 
@@ -527,7 +540,10 @@ export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	void persistSingleGroup(nextGroup);
 }
 
-async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>): Promise<T> {
+export async function runGroupOperation<T>(
+	groupId: string,
+	operation: () => Promise<T>
+): Promise<T> {
 	const previous = groupOperationChains.get(groupId) ?? Promise.resolve();
 	let release!: () => void;
 	const current = new Promise<void>((resolve) => {
@@ -547,6 +563,40 @@ async function runGroupOperation<T>(groupId: string, operation: () => Promise<T>
 			groupOperationChains.delete(groupId);
 		}
 	}
+}
+
+/**
+ * Run an epoch-advancing outbound operation (invite / remove / metadata).
+ * Reconciles the multi-device tip FIRST (§10 mitigation #1), then takes the
+ * per-group lock. The order is load-bearing: `reconcileTipForOutbound` may
+ * fast-forward THIS group, and `fastForwardGroup` re-enters `runGroupOperation`
+ * — reconciling from inside the lock would deadlock the chain mutex on the same
+ * group (the inner acquire awaits the outer's `release()`, which only fires
+ * after the outer op completes). Reconciling before the lock lets the
+ * fast-forward acquire + release cleanly; the guard then re-reads fresh state.
+ * Application messages advance no epoch and bypass this via
+ * `prepareGroupForApplicationMessage`.
+ */
+async function runOutboundGroupOperation<T>(
+	groupId: string,
+	operation: () => Promise<T>
+): Promise<T> {
+	await reconcileTipForOutbound();
+	const result = await runGroupOperation(groupId, operation);
+	// Multi-device re-publish (spec §10): an epoch-advancing outbound Commit
+	// (invite / remove / metadata) just completed and persisted new local state
+	// (`replaceGroup` is the last step of each op, so by here the store holds the
+	// post-Commit state). Siblings cannot ingest the Commit from the stream
+	// (shared-leaf UpdatePath) and need a fresh group document to fast-forward.
+	// Fired here — the single chokepoint all three ops route through —
+	// UNCONDITIONALLY on success, not contingent on self-echo confirmation, so a
+	// missed self-echo (watch not running, tab closed mid-op, in-memory
+	// `pendingEpochOperations` lost on reload) can't strand the new epoch locally.
+	// Fire-and-forget; a no-op when MD is disabled. The read-path divergence diff
+	// (§10.5 "local ahead of tip", in handleTipEvent) is the correctness backstop
+	// that catches any trigger this eager hook misses.
+	onGroupStateAdvance(groupId);
+	return result;
 }
 
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
@@ -618,6 +668,9 @@ export async function createChatGroup(input: {
 
 	persistGroup(group);
 	void pruneConsumedKeyPackagesForActiveGroups();
+	// spec multi-device §10: a new group must reach siblings so they can seed it.
+	// Fire-and-forget; a no-op when multi-device is disabled.
+	onGroupStateAdvance(group.id);
 	return group;
 }
 
@@ -628,10 +681,24 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 		throw new Error('Stored welcome not found');
 	}
 
-	const group = await acceptWelcomeToGroup({
-		welcome,
-		encodeState
-	});
+	let group: StoredChatGroup;
+	try {
+		group = await acceptWelcomeToGroup({ welcome, encodeState });
+	} catch (error) {
+		// A linked device may receive a welcome for the identity's last-resort
+		// before that material has replicated here. Pull the meta document once
+		// (which loads the last-resort private key package) and retry.
+		if (
+			isMultiDeviceActive(normalizePubKey(account.pubkey)) &&
+			error instanceof Error &&
+			error.message.startsWith('Missing local key package for welcome')
+		) {
+			await reconcileMultiDeviceNow();
+			group = await acceptWelcomeToGroup({ welcome, encodeState });
+		} else {
+			throw error;
+		}
+	}
 	group.coordinatorKey = normalizePubKey(group.coordinatorKey);
 	group.ownerPubkey = normalizePubKey(account.pubkey);
 	group.metadata = toPersistedGroupMetadata(group.metadata);
@@ -673,6 +740,11 @@ export async function acceptChatWelcome(input: { welcomeId: string }): Promise<S
 	removeSentJoinRequest(group.id);
 	void pruneConsumedKeyPackagesForActiveGroups();
 
+	// spec multi-device §10: a freshly-joined group (via Welcome) must reach
+	// siblings so they can seed the shared leaf. Fire-and-forget; a no-op when
+	// multi-device is disabled. (Group creation fires the same hook itself.)
+	onGroupStateAdvance(group.id);
+
 	return group;
 }
 
@@ -705,7 +777,7 @@ export async function inviteChatGroupMember(input: {
 	groupId: string;
 	identifier: string;
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
@@ -726,7 +798,9 @@ export async function inviteChatGroupMember(input: {
 		});
 
 		if (!consumeResult.keyPackage) {
-			throw new Error(`No published key package found for ${input.identifier}`);
+			throw new Error(
+				'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
+			);
 		}
 
 		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);
@@ -774,7 +848,7 @@ export async function inviteChatGroupMember(input: {
 		};
 		enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedAddCommit)
 		);
 
@@ -790,12 +864,14 @@ export async function inviteChatGroupMember(input: {
 				group.metadata
 		};
 		const hasCursor = group.fetchCursor > 0;
-		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid: groupIdDecoder.decode(state.groupContext.groupId),
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid: groupIdDecoder.decode(state.groupContext.groupId),
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 
@@ -806,12 +882,12 @@ export async function inviteChatGroupMember(input: {
 			messages: result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			})),
 			pendingEpochOperations,
 			coordinatorClient: getCoordinatorClient(account, group.coordinatorKey),
-			localStablePubkey: normalizePubKey(account.pubkey)
+			localStablePubkey: normalizePubKey(account.pubkey),
+			mdActive: isMultiDeviceActive(normalizePubKey(account.pubkey))
 		});
 
 		const inviteSystemMessages = createSystemMessagesFromStateChange({
@@ -879,7 +955,7 @@ export async function removeChatGroupMember(input: {
 	groupId: string;
 	targetStablePubkey: string;
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to remove a member');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
@@ -915,7 +991,7 @@ export async function removeChatGroupMember(input: {
 			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedRemoveCommit)
 		);
 
@@ -974,7 +1050,7 @@ export async function updateChatGroupMetadata(input: {
 	imageUrl?: string;
 	adminPubkeys?: string[];
 }): Promise<StoredChatGroup> {
-	return runGroupOperation(input.groupId, async () => {
+	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to update group metadata');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
 		assertCanAdministerGroup({
@@ -1007,7 +1083,7 @@ export async function updateChatGroupMetadata(input: {
 			commitMessageBase64: sealedMetadataCommit.msg_64
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedMetadataCommit)
 		);
 
@@ -1079,7 +1155,6 @@ async function applyIncomingChatGroupMessages(
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}>
 ): Promise<{
 	group: StoredChatGroup;
@@ -1099,7 +1174,8 @@ async function applyIncomingChatGroupMessages(
 		messages,
 		pendingEpochOperations,
 		coordinatorClient,
-		localStablePubkey: normalizePubKey(account.pubkey)
+		localStablePubkey: normalizePubKey(account.pubkey),
+		mdActive: isMultiDeviceActive(normalizePubKey(account.pubkey))
 	});
 
 	const nextGroup = buildPersistedChatGroup({
@@ -1140,6 +1216,12 @@ async function applyIncomingChatGroupMessages(
 
 	replaceGroup(group.id, nextGroup);
 
+	// Multi-device re-publish is NOT fired on ingestion. Own-Commit republish
+	// fires unconditionally at the end of `runOutboundGroupOperation` (the
+	// invite/remove/metadata chokepoint), before the self-echo reaches ingestion
+	// — see `runOutboundGroupOperation` above. The read-path divergence diff is
+	// the backstop.
+
 	// If ingestion poisoned the group, throw so the caller aborts
 	if (sync.ingestion.poisoned) {
 		throw new Error('Group became poisoned during message ingestion');
@@ -1167,12 +1249,14 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
 		const hasCursor = group.fetchCursor > 0;
-		const sinceEpoch = !hasCursor && group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchGroupMessages({
-				gid,
-				after: hasCursor ? group.fetchCursor : undefined,
-				since_epoch: sinceEpoch
+			client.FetchManyGroupMessages({
+				groups: [
+					{
+						gid,
+						after: hasCursor ? group.fetchCursor : undefined
+					}
+				]
 			})
 		);
 
@@ -1181,8 +1265,7 @@ export async function fetchChatGroupMessages(groupId: string): Promise<{
 			result.messages.map((message) => ({
 				cursor: message.cursor,
 				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64,
-				encrypted: message.encrypted
+				opaqueMessageBase64: message.msg_64
 			}))
 		);
 	});
@@ -1194,7 +1277,6 @@ export async function ingestIncomingChatGroupMessages(
 		cursor: number;
 		createdAt: number;
 		opaqueMessageBase64: string;
-		encrypted?: boolean;
 	}>
 ): Promise<{
 	group: StoredChatGroup;
@@ -1258,7 +1340,7 @@ export async function sendChatGroupMessage(input: {
 			opaqueMessageBase64: outbound.opaqueMessageBase64
 		});
 
-		const posted = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedOutbound)
 		);
 
@@ -1271,7 +1353,6 @@ export async function sendChatGroupMessage(input: {
 			kind: outbound.event.kind,
 			tags: outbound.event.tags,
 			content: outbound.event.content,
-			encrypted: true,
 			// Use the caller-provided key when present (media sends pin it to the
 			// encryption epoch); otherwise derive from the current send state.
 			mediaKeyBase64: findImetaTag(outbound.event.tags)
@@ -1300,7 +1381,7 @@ export async function sendChatGroupMessage(input: {
  * Algorithm:
  * 1. Find newest healthy snapshot
  * 2. Restore state from snapshot
- * 3. Fetch messages using since_epoch from snapshot
+ * 3. Fetch messages from snapshot cursor
  * 4. Replay through ingestion pipeline
  * 5. Clear poisoned status if successful, keep it if failed
  *
@@ -1343,14 +1424,16 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 		// Fetch messages from snapshot epoch
 		const state = decodeStoredGroupState(restoredGroup);
 		const gid = groupIdDecoder.decode(state.groupContext.groupId);
-		const sinceEpoch = healthySnapshot.epoch;
 
 		try {
 			const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-				client.FetchGroupMessages({
-					gid,
-					after: healthySnapshot.cursor,
-					since_epoch: sinceEpoch
+				client.FetchManyGroupMessages({
+					groups: [
+						{
+							gid,
+							after: healthySnapshot.cursor
+						}
+					]
 				})
 			);
 
@@ -1360,8 +1443,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 				result.messages.map((message) => ({
 					cursor: message.cursor,
 					createdAt: message.at,
-					opaqueMessageBase64: message.msg_64,
-					encrypted: message.encrypted
+					opaqueMessageBase64: message.msg_64
 				}))
 			);
 
