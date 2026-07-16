@@ -34,9 +34,9 @@
 		</div>
 	</header>
 
-	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
+	<div class="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
 		<div class="lg:grid-cols mx-auto grid max-w-4xl gap-6">
-			<div class="space-y-6">
+			<div class="min-w-0 space-y-6">
 				<Card.Root>
 					<Card.Header>
 						<Card.Title>Identity</Card.Title>

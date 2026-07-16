@@ -7,7 +7,11 @@
 	 */
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import type { MultiDeviceOwnerConfig, ReconcileCounts } from '$lib/services/multiDevice.svelte';
+	import type {
+		MultiDeviceOwnerConfig,
+		ReconcileCounts,
+		TipTransition
+	} from '$lib/services/multiDevice.svelte';
 	import {
 		probeRelayTips,
 		probeBlossomBlobs,
@@ -16,6 +20,10 @@
 	} from '$lib/services/multiDeviceDev.svelte';
 	import Radio from '@lucide/svelte/icons/radio';
 	import HardDriveDownload from '@lucide/svelte/icons/hard-drive-download';
+	import Copy from '@lucide/svelte/icons/copy';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import { toast } from 'svelte-sonner';
 
 	let { config }: { config: MultiDeviceOwnerConfig } = $props();
 
@@ -25,6 +33,9 @@
 	let blobRows = $state<BlobProbe[] | null>(null);
 	let relayRunning = $state(false);
 	let blobRunning = $state(false);
+	// ponytail: single-open expand — inspect one transition at a time. Click
+	// another row to switch, click the same to collapse.
+	let expandedKey = $state<string | null>(null);
 
 	const tip = $derived(config.lastSeenTip);
 	const history = $derived(config.tipHistory ?? []);
@@ -72,6 +83,63 @@
 		if (bytes < 1024) return `${bytes} B`;
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	}
+
+	type RowTone = 'meta' | 'add' | 'chg' | 'rm';
+	type HashRow = { label: string; address: string; tone: RowTone };
+
+	function toggleExpand(key: string): void {
+		expandedKey = expandedKey === key ? null : key;
+	}
+
+	/** First configured Blossom host + sha256 = the BUD-01 GET URL for the blob. */
+	function inspectUrl(address: string): string {
+		const host = (config.blossomServers[0] ?? '').replace(/\/+$/, '');
+		return `${host}/${address}`;
+	}
+
+	async function copyHash(address: string): Promise<void> {
+		try {
+			await navigator.clipboard.writeText(address);
+			toast.success('Address copied');
+		} catch {
+			toast.error('Could not copy — select manually');
+		}
+	}
+
+	/** Open the blob's GET URL in a new tab for server-side inspection. */
+	function openOnServer(address: string): void {
+		window.open(inspectUrl(address), '_blank', 'noopener,noreferrer');
+	}
+
+	/** Rows for an expanded transition: the content address of every sealed
+	 * document this tip move touched (meta + each added/changed/removed group).
+	 * `removed` carries the address that just left the tip — still inspectable. */
+	function rowsFor(h: TipTransition): HashRow[] {
+		const meta = h.metaChanged ? (h.metaAddress ?? config.lastSeenTip?.metaAddress) : undefined;
+		return [
+			...(meta ? [{ label: 'meta', address: meta, tone: 'meta' as const }] : []),
+			...h.added.map((g) => ({ label: short(g.gid, 8), address: g.address, tone: 'add' as const })),
+			...h.changed.map((g) => ({
+				label: short(g.gid, 8),
+				address: g.address,
+				tone: 'chg' as const
+			})),
+			...h.removed.map((g) => ({ label: short(g.gid, 8), address: g.address, tone: 'rm' as const }))
+		];
+	}
+
+	function toneClass(tone: RowTone): string {
+		switch (tone) {
+			case 'meta':
+				return 'text-amber-600 dark:text-amber-400';
+			case 'add':
+				return 'text-emerald-600 dark:text-emerald-400';
+			case 'chg':
+				return 'text-blue-600 dark:text-blue-400';
+			case 'rm':
+				return 'text-red-600 dark:text-red-400';
+		}
 	}
 	// Compact counts summary — only non-zero buckets, so a clean reconcile renders
 	// nothing instead of five zeroes.
@@ -130,44 +198,85 @@
 		{:else}
 			<ul class="max-h-64 space-y-2 overflow-y-auto pr-1">
 				{#each history as h (h.eventId + h.at)}
+					{@const rowKey = h.eventId + h.at}
+					{@const expanded = expandedKey === rowKey}
 					{@const nonzero = h.counts
 						? (Object.entries(h.counts) as [keyof ReconcileCounts, number][]).filter(
 								([, v]) => v > 0
 							)
 						: []}
 					<li class="rounded-md border border-border bg-background p-2 text-xs">
-						<div class="flex flex-wrap items-center gap-2">
-							<span class="font-mono text-[10px] text-muted-foreground">
-								{fmtTime(h.at)}
-							</span>
-							<span
-								class={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${h.source === 'read' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'}`}
-							>
-								{h.source === 'read' ? 'ingest' : 'publish'}
-							</span>
-							{#if h.metaChanged}
-								<span
-									class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400"
-								>
-									meta↻
-								</span>
-							{/if}
-							{#each nonzero as [key, v] (key)}
+						<button
+							type="button"
+							class="flex w-full flex-col gap-1 text-left"
+							onclick={() => toggleExpand(rowKey)}
+							aria-expanded={expanded}
+						>
+							<div class="flex flex-wrap items-center gap-2">
 								<span class="font-mono text-[10px] text-muted-foreground">
-									{countLabels[key]}:{v}
+									{fmtTime(h.at)}
 								</span>
-							{/each}
-						</div>
-						{#if h.added.length || h.removed.length || h.changed.length}
-							<div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px]">
-								{#each h.added as g (g.gid)}
-									<span class="text-emerald-600 dark:text-emerald-400">+{short(g.gid, 8)}</span>
+								<span
+									class={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${h.source === 'read' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'}`}
+								>
+									{h.source === 'read' ? 'ingest' : 'publish'}
+								</span>
+								{#if h.metaChanged}
+									<span
+										class="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400"
+									>
+										meta↻
+									</span>
+								{/if}
+								{#each nonzero as [key, v] (key)}
+									<span class="font-mono text-[10px] text-muted-foreground">
+										{countLabels[key]}:{v}
+									</span>
 								{/each}
-								{#each h.changed as g (g.gid)}
-									<span class="text-blue-600 dark:text-blue-400">~{short(g.gid, 8)}</span>
-								{/each}
-								{#each h.removed as g (g.gid)}
-									<span class="text-red-600 dark:text-red-400">-{short(g.gid, 8)}</span>
+								<ChevronRight
+									class={`ml-auto size-3 shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}
+								/>
+							</div>
+							{#if h.added.length || h.removed.length || h.changed.length}
+								<div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px]">
+									{#each h.added as g (g.gid)}
+										<span class="text-emerald-600 dark:text-emerald-400">+{short(g.gid, 8)}</span>
+									{/each}
+									{#each h.changed as g (g.gid)}
+										<span class="text-blue-600 dark:text-blue-400">~{short(g.gid, 8)}</span>
+									{/each}
+									{#each h.removed as g (g.gid)}
+										<span class="text-red-600 dark:text-red-400">-{short(g.gid, 8)}</span>
+									{/each}
+								</div>
+							{/if}
+						</button>
+						{#if expanded}
+							{@const rows = rowsFor(h)}
+							<div class="mt-2 space-y-1 border-t border-dashed border-border pt-2">
+								{#each rows as r (r.label + r.address)}
+									<div class="flex items-center gap-2 font-mono text-[10px]">
+										<span class="w-14 shrink-0 truncate {toneClass(r.tone)}">{r.label}</span>
+										<span class="flex-1 truncate text-muted-foreground">{r.address}</span>
+										<button
+											type="button"
+											class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+											onclick={() => copyHash(r.address)}
+											title="Copy address"
+											aria-label="Copy address"
+										>
+											<Copy class="size-3" />
+										</button>
+										<button
+											type="button"
+											class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+											onclick={() => openOnServer(r.address)}
+											title="Open on server"
+											aria-label="Open on server"
+										>
+											<ExternalLink class="size-3" />
+										</button>
+									</div>
 								{/each}
 							</div>
 						{/if}

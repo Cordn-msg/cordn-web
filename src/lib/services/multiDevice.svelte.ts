@@ -1066,7 +1066,8 @@ function setLastSeenTip(
 			added: diff.added,
 			removed: diff.removed,
 			changed: diff.changed,
-			metaChanged
+			metaChanged,
+			metaAddress: pointer.metaAddress
 		};
 		config.tipHistory = [entry, ...(config.tipHistory ?? [])].slice(0, 20);
 	}
@@ -1603,6 +1604,11 @@ export interface TipTransition {
 	removed: TipGroupPointer[];
 	changed: TipGroupPointer[];
 	metaChanged: boolean;
+	/** Meta document content address recorded in this transition — the address
+	 * published/ingested here when `metaChanged`. Lets the dev panel surface the
+	 * exact hash to inspect on a Blossom host. Absent on transitions logged
+	 * before this field existed. */
+	metaAddress?: string;
 }
 
 /** Read-order server list: the tip's advertised hosts first, then the configured fallbacks. */
