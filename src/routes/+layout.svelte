@@ -7,12 +7,19 @@
 	import { queryClient } from '$lib/query-client';
 	import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
 	import { onMount } from 'svelte';
-	import { initNativeShell } from '$lib/services/nativeBridge';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { initNativeShell, isNativePlatform } from '$lib/services/nativeBridge';
 
 	let { children } = $props();
 
-	// Bootstrap the native shell (status bar, splash hide, notification taps). No-op on web.
+	// Native: skip the landing page — open straight to /chat (mirrors the PWA start_url).
+	// Web is a no-op. Deep links (e.g. notification taps to /chat/[id]) are preserved.
 	onMount(() => {
+		if (isNativePlatform() && page.url.pathname === '/') {
+			void goto(resolve('/chat'), { replaceState: true });
+		}
 		void initNativeShell();
 	});
 </script>

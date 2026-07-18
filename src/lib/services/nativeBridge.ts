@@ -8,13 +8,8 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { CordnBackground, type PollGroup } from 'cordn-background';
 import { manager } from '$lib/services/accountManager.svelte';
-import {
-	getChatCoordinator
-} from '$lib/services/chatCoordinators.svelte';
-import {
-	ingestIncomingChatGroupMessages,
-	listChatGroups
-} from '$lib/services/chatGroups.svelte';
+import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+import { ingestIncomingChatGroupMessages, listChatGroups } from '$lib/services/chatGroups.svelte';
 import { defaultRelays } from '$lib/services/relay-pool';
 
 /**
@@ -44,6 +39,13 @@ function groupToNotificationId(groupId: string): number {
 }
 
 let initialized = false;
+
+/**
+ * Whether the app is foregrounded on native. Defaults true (foreground at load); updated by the
+ * appStateChange listener. Foreground notifications are suppressed — the in-app title badge /
+ * unread dots already surface attention, so a system toast is just noise (roadmap UX note).
+ */
+let appActive = true;
 
 /**
  * One-time native-shell bootstrap. No-op on web. Idempotent.
@@ -91,6 +93,7 @@ export async function initNativeShell(): Promise<void> {
 
 	try {
 		await App.addListener('appStateChange', ({ isActive }) => {
+			appActive = isActive;
 			// Background → seed the poll set with the latest cursors.
 			// Foreground → drain staged bytes (catch-up) then re-seed.
 			if (isActive) {
@@ -133,6 +136,8 @@ export async function ensureNotificationPermission(): Promise<boolean> {
 export async function showLocalNotification(n: ChatLocalNotification): Promise<void> {
 	if (!browser) return;
 	if (isNativePlatform()) {
+		// Suppress while foregrounded — the in-app UI already surfaces attention (title badge, unread dots).
+		if (appActive) return;
 		try {
 			await LocalNotifications.schedule({
 				notifications: [
