@@ -1,6 +1,6 @@
 # Cordn multi-device design & roadmap
 
-**Status:** Design locked · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-03
+**Status:** Design locked · **Phase 0 validated (GO)** · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-07
 
 > TL;DR — We go native by **wrapping the existing SvelteKit SPA in Capacitor** (zero adapter changes — `adapter-static` is already configured). Notifications use **polling only** (no FCM, no push service, no coordinator-as-push-trigger), made reliable by the cursor/idempotent protocol (worst case is latency, never loss) and made low-latency by event-driven polls + adaptive bursts. The background poller is **key-less** (throwaway ContextVM key, unauthenticated message fetch only) and **never decrypts MLS** (single-consumer rule). It talks to the **Nostr-only coordinator through the canonical ContextVM Rust SDK via UniFFI Kotlin bindings** — no Quartz, no Kotlin rewrite, no HTTP. A native **sidecar** stages fetched bytes so opening the app never re-fetches. The web app deploys unchanged.
 
@@ -148,29 +148,35 @@ For Android we do **not** rewrite the transport in Kotlin and do **not** pull in
 
 ### 7.2 The native call shape
 
-Grounded in the FFI's C surface — keys (`cvm_keys_generate`), a channel client (`cvm_client_ch_new` → `cvm_client_ch_send` → `cvm_client_ch_recv_timeout` → `cvm_client_ch_close`) — and the [stateless client flow](https://docs.contextvm.org):
+Confirmed against the **actual UniFFI Kotlin surface** emitted by the Phase-0 Android cross-compile (not the C ABI). `contextvm-ffi`'s proc-macro UniFFI generates idiomatic objects — `Keys` (`Keys.generate()` for a throwaway), `ClientConfig`, and `Client` / `Proxy` / `Gateway` (`Disposable, AutoCloseable`, each `constructor(keys, config)`) exposing `send(payloadJson)` / `recvTimeout(secs): JsonRpcMessage` / `recvTry()`. The C header's `cvm_*` functions exist for direct C/JNI binding, but UniFFI's object API is what Kotlin consumes. Protocol/reference: [ContextVM docs](https://docs.contextvm.org) · [draft NIP #2246](https://github.com/nostr-protocol/nips/pull/2246):
 
 ```kotlin
 // In the WorkManager worker, on a background thread (FFI is blocking)
-val keys   = cvmKeysGenerate()                         // throwaway signer — key-less poller
-val client = cvmClientChNew(keys, CvmClientConfig(
+val keys   = Keys.generate()                         // throwaway signer — key-less poller
+val client = Client(keys, ClientConfig(
                serverPubkey   = coordinatorServerPubkey,         // Nostr-only — no DNS/IP
                relayUrls      = configuredOrEmpty,               // empty → CEP-17 kind:10002 discovery
-               encryptionMode = CVM_ENCRYPTION_OPTIONAL,         // mirror the JS ephemeral client
-               giftWrapMode   = matchJsClientPolicy,             //   (match @contextvm/sdk)
+               encryptionMode = EncryptionMode.OPTIONAL,         // mirror the JS ephemeral client
+               giftWrapMode   = GiftWrapMode.EPHEMERAL,             //   (match @contextvm/sdk)
                isStateless    = true,                            // skip initialize handshake — fast one-shot
                timeoutSecs    = 30))
-cvmClientChSend(client, jsonRpcToolsCall(                        // the ONE method
+client.send(jsonRpcToolsCall(                        // the ONE method
                "msg_fetch_many", mapOf("groups" to gidsWithCursors)))
-val resp   = cvmClientChRecvTimeout(client, 30)                   // e-tag correlation + gift-wrap unwrap
+val resp   = client.recvTimeout(30u)                   // e-tag correlation + gift-wrap unwrap
                                                                  //   + CEP-22 oversized reassembly — all internal
-// parse resp.payloadJson → {messages:[{cursor,at,msg_64}]}
+// parse resp.payloadJson → result.structuredContent → {messages:[{cursor,at,msg_64}]}
+//   (msg_fetch_many returns data in structuredContent; the content array is empty —
+//    the web client reads result.structuredContent at coordinatorClient.ts:237)
 //   → stage to sidecar, advance nativeCursor, emit local notification
-cvmClientChClose(client)
+client.close()
 ```
 
-Key properties:
-- **`is_stateless = true`** skips the MCP `initialize` round-trip (stateless client mode) — minimal overhead per poll.
+Key properties (all confirmed in the Phase-0 host spike — see §7.3):
+- **`is_stateless = true`** works and skips the MCP `initialize` round-trip (stateless client mode) — minimal overhead per poll.
+- **The result lives in MCP `structuredContent`, not `content`.** `msg_fetch_many` returns `{messages:[{cursor,at,gid,msg_64}]}` as structured data; the `content` array is empty by design. Parsing `content` (or only the text items) silently returns zero messages — the #1 gotcha for the Kotlin binding.
+- **Throwaway key (unauthed) returns full message data** — the key-less poller design is validated; no recipient-scoping, no auth requirement.
+- **`after` is a positive-int cursor** (`0` is rejected); omit it for a full fetch, or pass the last-seen cursor (e.g. `after:1` returns cursors `>1`).
+- **Working transport config** maps onto the generated `ClientConfig` data class (matches the web client): `GiftWrapMode.EPHEMERAL`, `EncryptionMode.OPTIONAL`, `isStateless=true`, `timeoutSecs`, plus relay fields `relayUrls` / `discoveryRelayUrls` / `fallbackOperationalRelayUrls` (CEP-17). `openStream` + CEP-22 oversized transfer are on by default.
 - **CEP-22 oversized transfer** is automatic, so a group with many messages won't hit relay event limits.
 - **Relay resolution** can run via the coordinator's published `kind:10002` (CEP-17) — no hardcoded hosts.
 
@@ -182,7 +188,7 @@ Key properties:
 | APK size | The `.so` adds a few MB/ABI → mitigate with per-ABI APKs (F-Droid supports multiple) or a universal build. |
 | UniFFI version pin | bindgen must match runtime `uniffi = "0.31"` (embedded checksums). Pin; regenerate on SDK bumps. |
 | Threading | FFI blocks over an internal Tokio runtime → call from the WorkManager thread, never main. |
-| Phase-0 validation | Confirm the FFI cross-compiles + UniFFI Kotlin links on Android (UniFFI is proven in Firefox Android; verify for this crate). |
+| Phase-0 validation | **Done (✅✅).** Transport round-trip validated on host (throwaway key + `is_stateless=true` → real `msg_fetch_many` bytes), AND `contextvm-ffi` cross-compiles to Android (`aarch64-linux-android` via NDK r27c + cargo-ndk) with idiomatic UniFFI Kotlin bindings (`Client`/`Proxy`/`ClientConfig`/`Keys`) generated — the `.so` is a valid ARM64 Android ELF. |
 
 ---
 
@@ -270,9 +276,9 @@ These are the load-bearing rules. Any future change that violates one must be ch
 ### Phase 0 — Spike (validate the risky unknowns first)
 - Bootstrap Capacitor in this repo (`capacitor.config.ts`, `npx cap add android`), prove the existing build runs in the Android emulator with live reload.
 - Verify `ts-mls` + `@noble` + IndexedDB + `crypto.subtle` work end-to-end in Android WebView (MLS group create/join/send).
-- **Cross-compile `contextvm-ffi` to Android ABIs; confirm it links and UniFFI Kotlin bindings generate.**
-- Prove a **stateless** `msg_fetch_many` round-trip from Kotlin against the coordinator via the Rust SDK (throwaway key).
-- *Exit criterion:* one background fetch → bytes returned → parseable. Go/no-go on the transport decision.
+- **Cross-compile `contextvm-ffi` to Android ABIs; confirm it links and UniFFI Kotlin bindings generate.** *(✅ done — NDK r27c + cargo-ndk; `aarch64-linux-android` `.so` builds, UniFFI Kotlin `Client`/`Proxy`/`ClientConfig`/`Keys` surface generates)*
+- Prove a **stateless** `msg_fetch_many` round-trip from Kotlin against the coordinator via the Rust SDK (throwaway key). *(✅ validated on host via a Rust spike: throwaway key + `is_stateless=true` returns real message bytes; data is in MCP `structuredContent`. Re-confirm from Kotlin on-device at cross-compile time.)*
+- *Exit criterion:* one background fetch → bytes returned → parseable. Go/no-go on the transport decision. *(✅✅ GO — transport logic AND Android cross-compile/binding generation both validated)*
 
 ### Phase 1 — Native shell + foreground parity
 - `@capacitor/app` (lifecycle), `@capacitor/status-bar`, `@capacitor/splash-screen`, deep-link handling for notification taps (route into [`/chat/[id]`](src/routes/chat/[id]) like [`chatAttention`](src/lib/services/chatAttention.svelte.ts) does).
