@@ -1,0 +1,17 @@
+{
+  "name": "cordn-background",
+  "version": "0.0.1",
+  "description": "Cordn native background message polling — ContextVM via the Rust SDK UniFFI Kotlin bindings.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "files": ["src", "android"],
+  "dependencies": {
+    "@capacitor/core": "^8.4.2"
+  }
+}

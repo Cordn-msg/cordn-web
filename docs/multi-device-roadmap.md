@@ -1,6 +1,6 @@
 # Cordn multi-device design & roadmap
 
-**Status:** Design locked · **Phase 0 validated (GO)** · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-07
+**Status:** Design locked · **Phase 0–2 validated (on-device GO)** · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-07
 
 > TL;DR — We go native by **wrapping the existing SvelteKit SPA in Capacitor** (zero adapter changes — `adapter-static` is already configured). Notifications use **polling only** (no FCM, no push service, no coordinator-as-push-trigger), made reliable by the cursor/idempotent protocol (worst case is latency, never loss) and made low-latency by event-driven polls + adaptive bursts. The background poller is **key-less** (throwaway ContextVM key, unauthenticated message fetch only) and **never decrypts MLS** (single-consumer rule). It talks to the **Nostr-only coordinator through the canonical ContextVM Rust SDK via UniFFI Kotlin bindings** — no Quartz, no Kotlin rewrite, no HTTP. A native **sidecar** stages fetched bytes so opening the app never re-fetches. The web app deploys unchanged.
 
@@ -174,6 +174,7 @@ client.close()
 Key properties (all confirmed in the Phase-0 host spike — see §7.3):
 - **`is_stateless = true`** works and skips the MCP `initialize` round-trip (stateless client mode) — minimal overhead per poll.
 - **The result lives in MCP `structuredContent`, not `content`.** `msg_fetch_many` returns `{messages:[{cursor,at,gid,msg_64}]}` as structured data; the `content` array is empty by design. Parsing `content` (or only the text items) silently returns zero messages — the #1 gotcha for the Kotlin binding.
+- **`recvTimeout()` returns the whole `#[serde(untagged)]` message.** `JsonRpcMessage.payloadJson` is `serde_json::to_string(msg)` of the untagged enum — i.e. `{"jsonrpc","id","result":{"content":[],"structuredContent":{…}}}` with *no* variant wrapper. Parse: `JSONObject(payloadJson).optJSONObject("result").optJSONObject("structuredContent")`. (The higher-level `client.tools().call()` API hides this; the raw `send`/`recvTimeout` channel exposes it.)
 - **Throwaway key (unauthed) returns full message data** — the key-less poller design is validated; no recipient-scoping, no auth requirement.
 - **`after` is a positive-int cursor** (`0` is rejected); omit it for a full fetch, or pass the last-seen cursor (e.g. `after:1` returns cursors `>1`).
 - **Working transport config** maps onto the generated `ClientConfig` data class (matches the web client): `GiftWrapMode.EPHEMERAL`, `EncryptionMode.OPTIONAL`, `isStateless=true`, `timeoutSecs`, plus relay fields `relayUrls` / `discoveryRelayUrls` / `fallbackOperationalRelayUrls` (CEP-17). `openStream` + CEP-22 oversized transfer are on by default.
@@ -281,18 +282,22 @@ These are the load-bearing rules. Any future change that violates one must be ch
 - *Exit criterion:* one background fetch → bytes returned → parseable. Go/no-go on the transport decision. *(✅✅ GO — transport logic AND Android cross-compile/binding generation both validated)*
 
 ### Phase 1 — Native shell + foreground parity
-- `@capacitor/app` (lifecycle), `@capacitor/status-bar`, `@capacitor/splash-screen`, deep-link handling for notification taps (route into [`/chat/[id]`](src/routes/chat/[id]) like [`chatAttention`](src/lib/services/chatAttention.svelte.ts) does).
-- Route foreground notifications through `Capacitor.isNativePlatform()` so [`chatAttention`](src/lib/services/chatAttention.svelte.ts) uses the native local-notification path when applicable.
-- App-store groundwork: icons, signing config, bundle ID.
+- ✅ `@capacitor/app` / `status-bar` / `splash-screen` / `local-notifications` installed + synced; local-notification tap routing into [`/chat/[id]`](src/routes/chat/[id]) lives in [`nativeBridge.ts`](src/lib/services/nativeBridge.ts) (the single native-aware seam, roadmap §11.2).
+- ✅ Foreground notifications routed through `isNativePlatform()` — [`chatAttention`](src/lib/services/chatAttention.svelte.ts) dispatches via `showLocalNotification` (native → Capacitor local notification; web → Notification API). Fixes the latent WebView bug where `'Notification' in window` is false.
+- ⏳ App-store groundwork: icons (needs source asset → `@capacitor/assets`), release signing config + keystore, dedicated `ic_stat_*` smallIcon. Deferred to Phase 4.
 
 ### Phase 2 — Background polling + sidecar + no-refetch
-- WorkManager periodic (~15 min) + `BroadcastReceiver`s (boot, network reconnect).
-- Kotlin poll worker → Rust `msg_fetch_many` → sidecar staging → `nativeCursor` advance → local notification (group name/icon/count from local cache).
-- The TS seam: drain sidecar in the foreground catch-up behind `Capacitor.isNativePlatform()`; `nativeCursor`↔`fetchCursor` handoff.
-- *Exit criterion:* a closed app reliably notifies on new messages within ~15 min; opening from a notification shows the message with no redundant fetch.
+- ✅ Capacitor plugin workspace package `packages/cordn-background/` ([`src/index.ts`](packages/cordn-background/src/index.ts)) — the single TS↔Kotlin seam: `configure` / `seed` / `drain`.
+- ✅ Kotlin: `MessageFetchWorker` (CoroutineWorker, ~15 min periodic, per-coordinator throwaway-key stateless `Client` → `msg_fetch_many` → parse `structuredContent` → stage sidecar → advance `nativeCursor` → count notification), `BackgroundStore` (SQLite sidecar + `nativeCursor` watermark, namespaced per account), `BootReceiver` (re-schedule after reboot), `PollScheduler`.
+- ✅ Rust `.so` + UniFFI Kotlin bindings bundled in the plugin module; full debug APK builds (`libcontextvm_ffi.so` packaged, plugin + bindings dexed).
+- ✅ TS seam wired in [`nativeBridge.ts`](src/lib/services/nativeBridge.ts): `configure`/`seed`/`drain` on init + `App.appStateChange` (background→seed, foreground→drain+seed); drain feeds `ingestIncomingChatGroupMessages` (the single MLS path).
+- ✅ **On-device validated.** The `.so` loads via JNA in-process (`libjnidispatch.so … : ok` mid-worker), a real background `msg_fetch_many` returns and parses (`structuredContent` → 5 msgs / 3 groups in the test), count-only notifications fire, and the sidecar drains on open. A poll completes in <1 s — the ~15-min floor is purely WorkManager cadence, not FFI cost. Zero `FfiException`/crashes across the run.
+- *Exit criterion:* a closed app reliably notifies on new messages within ~15 min; opening from a notification shows the message with no redundant fetch. *(✅ MET — closed-app count-only notifications within the ~15-min cycle; messages appear on open via sidecar drain; advance-on-notify prevents double-notify.)*
+
+> **Regeneration note (must read before re-running `uniffi-bindgen-cli`):** the generated `contextvm_ffi.kt` carries a one-time patch — the SDK's own FFI `close()` collides with UniFFI's Disposable/AutoCloseable boilerplate `close()` in exactly the `Client` and `Server` classes (two `override fun close()`). The patch removes the boilerplate `close()` from those two classes only (the UniFFI Cleaner still releases the handle on GC). Regeneration re-introduces the collision; re-apply via `packages/cordn-background/android/src/main/java/uniffi/contextvm_ffi/` (drop the `@Synchronized override fun close() { this.destroy() }` block where an FFI `override fun \`close\`()` also exists). The plugin module also pins **Kotlin 1.9.25** in its own buildscript (UniFFI 0.31 bindings target the 1.9.x era).
 
 ### Phase 3 — Felt-latency bursts
-- Expedited WorkManager one-shots on post-background, post-send, post-new-message-found.
+- Expedited WorkManager one-shots on post-background, post-send, post-new-message-found. *(A one-shot already ships, fired on `seed` — i.e. every background/foreground transition; Phase 3 narrows it to post-background + post-send/post-new-message-found and tunes the average-budget tradeoff.)*
 - Measure real-world latency/battery; tune.
 
 ### Phase 4 — Packaging & release

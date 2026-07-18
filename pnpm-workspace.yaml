@@ -1,2 +1,2 @@
-patchedDependencies:
-  ts-mls@2.0.0-rc.13: patches/ts-mls@2.0.0-rc.13.patch
+packages:
+  - 'packages/*'

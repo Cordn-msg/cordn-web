@@ -7,11 +7,6 @@ settings:
 overrides:
   nostr-tools: ^2.23.9
 
-patchedDependencies:
-  ts-mls@2.0.0-rc.13:
-    hash: 07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c
-    path: patches/ts-mls@2.0.0-rc.13.patch
-
 importers:
 
   .:
@@ -19,9 +14,21 @@ importers:
       '@capacitor/android':
         specifier: ^8.4.2
         version: 8.4.2(@capacitor/core@8.4.2)
+      '@capacitor/app':
+        specifier: ^8.1.1
+        version: 8.1.1(@capacitor/core@8.4.2)
       '@capacitor/core':
         specifier: ^8.4.2
         version: 8.4.2
+      '@capacitor/local-notifications':
+        specifier: ^8.2.1
+        version: 8.2.1(@capacitor/core@8.4.2)
+      '@capacitor/splash-screen':
+        specifier: ^8.0.2
+        version: 8.0.2(@capacitor/core@8.4.2)
+      '@capacitor/status-bar':
+        specifier: ^8.0.3
+        version: 8.0.3(@capacitor/core@8.4.2)
       '@contextvm/mcp-sdk':
         specifier: ^1.30
         version: 1.30.0(zod@4.4.3)
@@ -58,6 +65,9 @@ importers:
       applesauce-signers:
         specifier: ^6
         version: 6.0.1(@capacitor/core@8.4.2)(typescript@6.0.3)
+      cordn-background:
+        specifier: workspace:*
+        version: link:packages/cordn-background
       lean-qr:
         specifier: ^2.7.1
         version: 2.7.1
@@ -75,7 +85,7 @@ importers:
         version: 1.1.1(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       ts-mls:
         specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)
+        version: 2.0.0-rc.13(@noble/ciphers@2.2.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -192,6 +202,12 @@ importers:
         specifier: ^2.1.0
         version: 2.1.1(svelte@5.55.5(@typescript-eslint/types@8.59.3))(vitest@4.1.6)
 
+  packages/cordn-background:
+    dependencies:
+      '@capacitor/core':
+        specifier: ^8.4.2
+        version: 8.4.2
+
 packages:
 
   '@blazediff/core@1.9.1':
@@ -202,6 +218,11 @@ packages:
     peerDependencies:
       '@capacitor/core': ^8.4.0
 
+  '@capacitor/app@8.1.1':
+    resolution: {integrity: sha512-xM2ZTX5jK60tFtmjsmJv+Cdj1Qsb6NcavkqmdEnCPQBeya9oKhamZJxYOnQNj1ZvcJM7sWfG6BEtSLx42pisbA==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
   '@capacitor/cli@8.4.2':
     resolution: {integrity: sha512-hE4HmpMdr5T8eQ++kGa1BKkdG2JLEvo1y1cj1kmFK78VB9dBp538oe1EZvzwupNGOl0ZueALotzL5wcXRD9w1Q==}
     engines: {node: '>=22.0.0'}
@@ -209,6 +230,21 @@ packages:
 
   '@capacitor/core@8.4.2':
     resolution: {integrity: sha512-fQPRb3JXRaU2pnufDUvqOjhsrYxDQeFRZyaj/sHydIUxD2NxOGHKMpmKUdI+U4OOmKuGZyvRpi7TSJU+7Bjbmg==}
+
+  '@capacitor/local-notifications@8.2.1':
+    resolution: {integrity: sha512-Bkim+MGl7UrDTjDferV4ECq0aWciTsa0k15+MX2jnx2PeWgEPvlBy5yrqzBlwEZPrtHFUvPVxPi5V66MPGHkAw==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/splash-screen@8.0.2':
+    resolution: {integrity: sha512-0C6rYScr13WfAE9nPl4ScOQynmjFv9NT3Th+RZkD4ezYHmER6mcl1/lDYsv7jg3Rj3FOvLrlTlmNkUrr83kZzQ==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/status-bar@8.0.3':
+    resolution: {integrity: sha512-csSpfNeN49Hx9JaQBSJEIiEbOLtXg3kcc2IpScq2fu5L520h3AWEvsxoH8Srk1jxfRKepaJ4S4sqSC3foI4AgA==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
 
   '@contextvm/mcp-sdk@1.30.0':
     resolution: {integrity: sha512-Z4xyxxxtKnczEgVzLagaUdT1EtoVzc1bjr6kpIfTlw7mP5ESAzXeDUAMO9leIwituphz2ELE6ad9BjW7blDjjw==}
@@ -2326,6 +2362,10 @@ snapshots:
     dependencies:
       '@capacitor/core': 8.4.2
 
+  '@capacitor/app@8.1.1(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
   '@capacitor/cli@8.4.2':
     dependencies:
       '@ionic/cli-framework-output': 2.2.8
@@ -2351,6 +2391,18 @@ snapshots:
   '@capacitor/core@8.4.2':
     dependencies:
       tslib: 2.8.1
+
+  '@capacitor/local-notifications@8.2.1(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
+  '@capacitor/splash-screen@8.0.2(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
+  '@capacitor/status-bar@8.0.3(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
 
   '@contextvm/mcp-sdk@1.30.0(zod@4.4.3)':
     dependencies:
@@ -4139,7 +4191,7 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.13(@noble/ciphers@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
