@@ -11,18 +11,49 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Schedules the periodic background poll. Idempotent (unique work, KEEP) so it is safe to
- * call from both the plugin (on app launch) and the boot receiver (after reboot).
+ * Delivery-mode orchestration (roadmap §4.2). Applies the stored mode: schedules/cancels the
+ * WorkManager periodic backstop (~15 min, hard WorkManager floor) and starts/stops the
+ * [CordnNotificationService] foreground service for sub-15-min polling.
+ *
+ * Safe to call repeatedly (unique work KEEP; service start/stop is idempotent).
  */
 internal object PollScheduler {
     const val WORK_NAME = "cordn_bg_poll"
     private const val ONESHOT_NAME = "cordn_bg_poll_oneshot"
 
-    fun schedule(context: Context) {
-        val intervalMinutes = BackgroundStore(context).getPollIntervalMinutes(15)
-        val request = PeriodicWorkRequestBuilder<MessageFetchWorker>(
-            intervalMinutes, TimeUnit.MINUTES
-        )
+    /** Apply the stored delivery mode. Called on app launch, mode change, and boot. */
+    fun applyDeliveryMode(context: Context) {
+        val mode = BackgroundStore.get(context).getDeliveryMode("fast")
+        when (mode) {
+            "off" -> {
+                cancelPeriodic(context)
+                CordnNotificationService.stop(context)
+            }
+            "standard" -> {
+                schedulePeriodic(context)
+                CordnNotificationService.stop(context)
+            }
+            else -> {
+                // "fast" — WM-15 backstop + foreground service at the user interval.
+                schedulePeriodic(context)
+                startServiceSafe(context)
+            }
+        }
+    }
+
+    private fun startServiceSafe(context: Context) {
+        try {
+            CordnNotificationService.start(context)
+        } catch (t: Throwable) {
+            // Android 12+ may reject a background foreground-service start (e.g. straight after
+            // boot). The WM-15 backstop still delivers; the app re-applies the mode on next launch.
+            android.util.Log.w("CordnBg", "fg-service start rejected (WM backstop covers it)", t)
+        }
+    }
+
+    /** The ~15-min reliability backstop (always-on for standard + fast). */
+    fun schedulePeriodic(context: Context) {
+        val request = PeriodicWorkRequestBuilder<MessageFetchWorker>(15, TimeUnit.MINUTES)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -33,10 +64,13 @@ internal object PollScheduler {
             .enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request)
     }
 
+    fun cancelPeriodic(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+    }
+
     /**
-     * One immediate poll per app open (KEEP'd so only one is outstanding). Pulled forward from
-     * Phase 3 — it both de-risks the first FFI round-trip (seconds, not the 15-min periodic floor)
-     * and gives an instant catch-up on launch. Phase 3 will refine the trigger (post-background).
+     * One immediate poll per app open (KEEP'd so only one is outstanding). De-risks the first FFI
+     * round-trip (seconds, not the 15-min floor) and gives an instant catch-up on launch.
      */
     fun scheduleOneShot(context: Context) {
         val request = OneTimeWorkRequestBuilder<MessageFetchWorker>()

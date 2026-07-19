@@ -6,14 +6,17 @@ import { registerPlugin } from '@capacitor/core';
  * on web — the app guards every call with `isNativePlatform()` (nativeBridge.ts), so they
  * never execute outside the Android shell.
  *
- * Design (roadmap §5, §6, §8, §11):
- *  - `configure` → schedule the WorkManager periodic worker.
- *  - `seed`      → push the group set + the app's `fetchCursor` watermark + display names
- *                  + per-coordinator routing; native seeds/resyncs `nativeCursor` to it
- *                  (nativeCursor = max(existing, fetchCursor), so it never moves backward).
- *  - `drain`     → pull staged coordinator wire-format bytes (the sidecar) and clear them;
- *                  the foreground catch-up maps them to the ingestion shape and feeds them
- *                  to `ingestIncomingChatGroupMessages` (the single MLS ingestion path).
+ * Design (roadmap §4.2, §5, §6, §8, §11):
+ *  - `configure`         → schedule the WorkManager periodic worker (15-min reliability backstop).
+ *  - `configureDelivery` → set the delivery mode (off / standard / fast) + fast interval; starts
+ *                           or stops the foreground service and reschedules WorkManager.
+ *  - `seed`              → push the group set + the app's watermark + display names + per-coordinator
+ *                           routing; native seeds/resyncs `nativeCursor` to it (max(existing, watermark),
+ *                           so it never moves backward).
+ *  - `upsertGroupMeta`   → refresh one group's cached display title + icon bytes (rendered by the
+ *                           WebView) so the key-less worker can render a rich notification.
+ *  - `drain`             → pull staged coordinator wire-format bytes (the sidecar) and clear them;
+ *                           the foreground catch-up feeds them to `ingestIncomingChatGroupMessages`.
  *
  * The sidecar is a replay buffer of the wire format, never a parallel data model.
  */
@@ -32,15 +35,43 @@ export interface PollGroup {
 	relayUrls: string[];
 }
 
-export interface CordnBackgroundConfigureOptions {
-	/** Poll interval in minutes (Android WorkManager floors this at 15). Default 15. */
-	pollIntervalMinutes?: number;
+/** Delivery mode spectrum (roadmap §4.2). `live` is deferred (Phase 3C, spike-gated). */
+export type DeliveryMode = 'off' | 'standard' | 'fast';
+
+export interface CordnBackgroundDeliveryOptions {
+	/** off = no background polling; standard = WorkManager ~15 min only; fast = foreground service. */
+	mode: DeliveryMode;
+	/** Minutes between foreground-service polls. Only meaningful for `fast`. Default 5. */
+	intervalMinutes: number;
 }
 
 export interface CordnBackgroundSeedOptions {
 	/** Active account pubkey — the sidecar is namespaced per account. */
 	accountPubkey: string;
 	groups: PollGroup[];
+}
+
+export interface CordnBackgroundMetaOptions {
+	gid: string;
+	/** Best display title (group name, member names, etc.) — null/undefined clears it. */
+	title?: string;
+	/** Base64 PNG bytes of the rendered group icon (no data: prefix). null/undefined clears it. */
+	iconBytes?: string;
+}
+
+export interface CordnBackgroundPostNotificationOptions {
+	/** Coordinator group id — the per-group notification key (a burst coalesces; latest wins). */
+	gid: string;
+	/** Group display title. Falls back to the cached title (or "Cordn") on native. */
+	title?: string;
+	/** Message body — decrypted preview from the live path, or a count from the worker. */
+	body?: string;
+}
+
+export interface CordnBackgroundAdvanceCursorOptions {
+	gid: string;
+	/** The cursor to advance the worker's nativeCursor to (MAX-clamped; never moves backward). */
+	cursor: number;
 }
 
 /** A staged coordinator wire-format row (encrypted MLS ciphertext, undecrypted). */
@@ -58,13 +89,27 @@ export interface CordnBackgroundDrainResult {
 	messages: StagedMessage[];
 }
 
+export interface CordnBackgroundBatteryResult {
+	exempted: boolean;
+}
+
 export interface CordnBackgroundPlugin {
-	/** Schedule the periodic worker. Idempotent (unique work, KEEP). */
-	configure(options: CordnBackgroundConfigureOptions): Promise<void>;
+	/** Set the delivery mode + fast interval; starts/stops the foreground service accordingly. */
+	configureDelivery(options: CordnBackgroundDeliveryOptions): Promise<void>;
 	/** Push the group set + cursors + routing. Call on account/group change and backgrounding. */
 	seed(options: CordnBackgroundSeedOptions): Promise<void>;
+	/** Refresh one group's cached title + icon bytes (rendered by the WebView). */
+	upsertGroupMeta(options: CordnBackgroundMetaOptions): Promise<void>;
+	/** Post a unified native message notification (title + body; icon from the native cache). */
+	postMessageNotification(options: CordnBackgroundPostNotificationOptions): Promise<void>;
+	/** Advance the worker's nativeCursor so it skips messages the live path already handled. */
+	advanceNativeCursor(options: CordnBackgroundAdvanceCursorOptions): Promise<void>;
 	/** Pull staged sidecar rows (wire format) and clear them. Call on foreground catch-up. */
 	drain(): Promise<CordnBackgroundDrainResult>;
+	/** Whether this app is exempt from battery optimization (Doze). */
+	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
+	/** Launch the system "disable battery optimization for Cordn" prompt. */
+	requestBatteryExemption(): Promise<void>;
 }
 
 export const CordnBackground = registerPlugin<CordnBackgroundPlugin>('CordnBackground');

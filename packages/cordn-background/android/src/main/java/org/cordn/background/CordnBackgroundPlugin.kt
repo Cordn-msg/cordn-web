@@ -1,28 +1,39 @@
 package org.cordn.background
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
-import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.CapacitorPlugin
 import org.json.JSONArray
 
 /**
- * The only TS↔Kotlin boundary for background polling (roadmap §8, §11.2). Exposes the three
- * seam methods consumed by `nativeBridge.ts` (guarded there by `isNativePlatform()`):
- *  - `configure` → store poll interval + schedule the WorkManager periodic worker,
- *  - `seed`      → push the group set + fetchCursor + per-coordinator routing,
- *  - `drain`     → pull+clear the sidecar for the foreground catch-up.
+ * The only TS↔Kotlin boundary for background polling (roadmap §4.2, §8, §11.2). Exposes the seam
+ * methods consumed by `nativeBridge.ts` (guarded there by `isNativePlatform()`):
+ *  - `configure`         → re-apply the stored delivery mode (backstop schedule),
+ *  - `configureDelivery` → set mode + interval, then apply (start/stop service + reschedule WM),
+ *  - `seed`              → push the group set + watermark + per-coordinator routing,
+ *  - `upsertGroupMeta`   → refresh one group's cached title + icon bytes,
+ *  - `drain`             → pull+clear the sidecar for the foreground catch-up,
+ *  - `isBatteryExempted` / `requestBatteryExemption` → Doze-exemption UX.
  */
 @CapacitorPlugin(name = "CordnBackground")
 class CordnBackgroundPlugin : Plugin() {
 
     @PluginMethod
-    fun configure(call: PluginCall) {
-        val minutes = call.getLong("pollIntervalMinutes", 15L) ?: 15L
-        BackgroundStore(getContext()).setPollIntervalMinutes(minutes)
-        PollScheduler.schedule(getContext())
+    fun configureDelivery(call: PluginCall) {
+        val mode = call.getString("mode", "fast") ?: "fast"
+        val interval = call.getData().optLong("intervalMinutes", 5L)
+        val store = BackgroundStore.get(getContext())
+        store.setDeliveryMode(mode)
+        store.setDeliveryIntervalMinutes(interval)
+        PollScheduler.applyDeliveryMode(getContext())
         call.resolve()
     }
 
@@ -45,17 +56,58 @@ class CordnBackgroundPlugin : Plugin() {
                 fetchCursor = g.getLong("fetchCursor")
             )
         }
-        BackgroundStore(getContext()).seedGroups(accountPubkey, seeds)
+        BackgroundStore.get(getContext()).seedGroups(accountPubkey, seeds)
         // A poll right after seeding (background/foreground) — KEEP'd so only one is outstanding.
-        // Pulled forward from Phase 3: de-risks the first FFI round-trip in seconds (the one-shot
-        // fires on the next background transition, not the 15-min periodic floor) + instant catch-up.
+        // De-risks the first FFI round-trip in seconds (not the 15-min floor) + instant catch-up.
         if (seeds.isNotEmpty()) PollScheduler.scheduleOneShot(getContext())
         call.resolve()
     }
 
     @PluginMethod
+    fun upsertGroupMeta(call: PluginCall) {
+        val gid = call.getString("gid")
+        if (gid.isNullOrEmpty()) {
+            call.reject("gid is required")
+            return
+        }
+        val title = call.getString("title") // nullable when absent
+        val iconBytes = call.getString("iconBytes") // nullable
+        BackgroundStore.get(getContext()).upsertMeta(gid, title, iconBytes)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun postMessageNotification(call: PluginCall) {
+        val gid = call.getString("gid")
+        if (gid.isNullOrEmpty()) {
+            call.reject("gid is required")
+            return
+        }
+        // Icon + title fallback come from the native cache (kept fresh by NativeGroupMetaSync),
+        // so the live TS path doesn't need to ship bytes across the bridge.
+        val (cachedTitle, iconBytes) = BackgroundStore.get(getContext()).getGroupMeta(gid)
+        val title = call.getString("title")?.takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
+        val body = call.getString("body", "New message") ?: "New message"
+        Notifications.postMessageNotification(getContext(), gid, title, body, iconBytes)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun advanceNativeCursor(call: PluginCall) {
+        val gid = call.getString("gid")
+        if (gid.isNullOrEmpty()) {
+            call.reject("gid is required")
+            return
+        }
+        val cursor = call.getData().optLong("cursor", 0L)
+        // MAX-clamp — only ever moves forward, so a live-path advance never rewinds the worker.
+        BackgroundStore.get(getContext()).advanceNativeCursor(gid, cursor)
+        call.resolve()
+    }
+
+    @PluginMethod
     fun drain(call: PluginCall) {
-        val store = BackgroundStore(getContext())
+        val store = BackgroundStore.get(getContext())
         val account = store.getCurrentAccount()
         val messages = JSArray()
         if (account != null) {
@@ -72,6 +124,21 @@ class CordnBackgroundPlugin : Plugin() {
         ret.put("accountPubkey", account)
         ret.put("messages", messages)
         call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun isBatteryExempted(call: PluginCall) {
+        val pm = getContext().getSystemService(Context.POWER_SERVICE) as PowerManager
+        val exempted = pm.isIgnoringBatteryOptimizations(getContext().packageName)
+        call.resolve(JSObject().put("exempted", exempted))
+    }
+
+    @PluginMethod
+    fun requestBatteryExemption(call: PluginCall) {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        intent.data = Uri.parse("package:${getContext().packageName}")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        getContext().startActivity(intent)
     }
 }
 

@@ -1,6 +1,6 @@
 # Cordn multi-device design & roadmap
 
-**Status:** Design locked · **Phase 0–2 validated (on-device GO)** · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-07
+**Status:** Phase 0–2 validated (emulator + real device) · **Phase 3 in progress — configurable delivery + notification quality** · **Scope:** Android native (F-Droid + zap.store); iOS served by the existing PWA · **Last updated:** 2026-07
 
 > TL;DR — We go native by **wrapping the existing SvelteKit SPA in Capacitor** (zero adapter changes — `adapter-static` is already configured). Notifications use **polling only** (no FCM, no push service, no coordinator-as-push-trigger), made reliable by the cursor/idempotent protocol (worst case is latency, never loss) and made low-latency by event-driven polls + adaptive bursts. The background poller is **key-less** (throwaway ContextVM key, unauthenticated message fetch only) and **never decrypts MLS** (single-consumer rule). It talks to the **Nostr-only coordinator through the canonical ContextVM Rust SDK via UniFFI Kotlin bindings** — no Quartz, no Kotlin rewrite, no HTTP. A native **sidecar** stages fetched bytes so opening the app never re-fetches. The web app deploys unchanged.
 
@@ -58,21 +58,30 @@ The Cordn message model is **cursor-based and idempotent**: [`FetchManyGroupMess
 
 The reliability bar is **"eventually deliver, never lose, never dupe"**, and the protocol guarantees that for free. ~15 min polling is acceptable *precisely because* the cost of a missed poll is a delay, not data loss. The **foreground catch-up** ([`catchUpGroupBeforeOutboundOperation`](src/lib/services/chatGroups.svelte.ts) and the open-app flow) is the reliability anchor: even if every background poll were killed, the user never *misses* a message — they just don't get a notification until they open the app.
 
-### 4.2 Polling layers
+### 4.2 Delivery modes (user-configurable latency/battery tradeoff)
 
-| Layer | Mechanism | Role |
-|---|---|---|
-| **Steady-state floor** | WorkManager periodic, **~15 min**, on all installs | Always works; guarantees eventual delivery. (15 min is WorkManager's hard minimum.) |
-| **Felt-latency bursts** | WorkManager *expedited* one-shots on: post-background, post-send, post-new-message-found | Cuts latency in the moments users feel it; same average budget. |
-| **Free well-timed polls** | `BroadcastReceiver`-triggered on: **network reconnect**, app **foreground/resume**, **boot-completed** | Zero steady-state battery; fires at the moments fresh data matters. |
-| **Reliability anchor** | Foreground catch-up (existing) hardened | No permanent miss even if all background polls die. |
+Cordn exposes the latency/battery tradeoff as a **user setting**, not a fixed decision. All modes share one idempotent fetch path (cursor-based → never double-deliver) and one count-only notification renderer.
 
-**Explicitly rejected:**
-- **Exact alarms** — unnecessary given the above; would add complexity for marginal promptness. (Also Play-policy-restricted, though we're not on Play.)
-- **Silent-audio keep-alive / "live mode" tricks** — being deprecated (Android 17 hardens background audio) and aggressively killed by OEM battery "optimizations." We build it right and accept the tradeoffs instead.
-- **Always-on foreground service with persistent WebSocket** — OEM-killer bait; battery-hostile. Not used.
+| Mode | Mechanism | Latency | Battery | Persistent notif |
+|---|---|---|---|---|
+| **Off** | nothing | on-open only | zero | no |
+| **Standard (15 min)** | WorkManager periodic *(always-on fallback)* | ≤15 min (Doze may stretch) | lowest | no |
+| **Fast (1 / 5 / 10 min)** | Foreground service + coroutine timer, reusing the fetch loop | ~the interval, Doze-exempt | medium | yes (low-priority) |
+| **Live (instant)** | Foreground service + persistent ContextVM subscription | seconds | highest | yes |
 
-**OEM killers** (see dontkillmyapp.com): Xiaomi/Huawei/Oppo/Vivo/Samsung aggressively kill background apps. WorkManager periodic is comparatively OEM-tolerant (it looks "normal"). Optional in-app guidance to disable battery optimization for Cordn improves real-world reliability (F-Droid users will comply); not required.
+**Default:** foreground service at **5 min** + WorkManager periodic at **15 min**, both running. The dual-run is safe — both share one `nativeCursor` (idempotent advance-on-notify) and one sidecar (`UNIQUE(account,gid,cursor)`), so whoever polls first moves the watermark and the other finds nothing. WorkManager-15 is the reliability backstop if an OEM kills the service.
+
+**Why a foreground service for sub-15-min:** WorkManager's periodic floor is ~15 min and Doze stretches it further. Reliable faster polling needs a long-running process, which on Android means a foreground service (background services die in seconds post-Android-8; exact alarms are battery-hostile + OEM-killed + need a permission). Our fast-poll service is far lighter than a live websocket — it connects for a few seconds every N min and sleeps between, so "foreground service" ≠ "Armada's always-on battery cost."
+
+**Event-driven free polls (all modes):** `BroadcastReceiver`/`ConnectivityManager.NetworkCallback`-triggered on **network reconnect** (while the process is alive), **boot-completed**, and app **foreground/resume** — zero steady-state battery, fire when fresh data matters. *(Fully-closed-app reconnect still waits for the periodic — no foreground-service-free way to run instantly on reconnect.)*
+
+**The cost of Fast/Live:** a mandatory persistent notification ("Cordn is syncing") on a low-priority channel, plus baseline process drain. Users opt in via settings; Standard (15 min) stays the battery-light default.
+
+**Live mode is deferred** (Phase 3C, spike-gated): it needs the native ContextVM *streaming/subscription* path — we've only used request-response `send`/`recvTimeout` so far. Key-less count-only (the sub receives encrypted bytes, counts, notifies). Spike before building.
+
+**Still rejected:** exact alarms (battery-hostile, OEM-killed); silent-audio keep-alive (deprecated by Android 17, OEM-killed); *forced* always-on foreground service as the only option (now opt-in instead).
+
+**OEM killers** (dontkillmyapp.com): Xiaomi/Huawei/Oppo/Vivo/Samsung aggressively kill background apps — even foreground services without a battery-optimization exemption. A **battery-optimization exemption prompt** (borrowed from Armada) gates the aggressive modes and improves Standard-mode reliability under Doze too. Not a silver bullet; the worst OEMs may still need user guidance ("enable Autostart").
 
 ### 4.3 The single-MLS-consumer rule
 
@@ -80,13 +89,18 @@ The reliability bar is **"eventually deliver, never lose, never dupe"**, and the
 
 **Consequence:** background notifications are **count-based**, not content-based. This is a deliberate UX trade, not a fallback.
 
-### 4.4 Notification richness (cheap, no background crypto)
+### 4.4 Notification richness (cached metadata, still no background crypto)
 
-Group name + icon + count are derivable **without decryption**:
-- **Group name/icon** live in local storage ([`chatStorage`](src/lib/storage/chatStorage.ts) → `group.metadata.name`), surfaced by [`getChatGroupDisplayTitle`](src/lib/components/chat/chatGroupDisplay.ts) / `getChatGroupNotificationIcon`.
-- **Count** is the cursor delta: messages returned with `cursor > nativeCursor`. Counting ciphertexts needs no decryption.
+Group name + icon + count are derivable **without the worker decrypting anything** — because the **WebView (which already decrypted the metadata) caches it** into native SQLite as bytes the worker just reads:
+- **Display title** — [`getChatGroupDisplayTitle`](src/lib/components/chat/chatGroupDisplay.ts) (group name, else member names for unnamed groups).
+- **Icon bytes** — [`getChatGroupNotificationIcon`](src/lib/components/chat/chatGroupDisplay.ts) normalized to PNG bytes by a new `renderGroupIconBytes`: emoji branch reuses the existing canvas render (`emojiToNotificationIcon` → decode data URL); image-URL / member-picture branches fetch → draw to canvas (rounded, ~96–128 px) → bytes. Uniform output regardless of source.
+- **Count** — the cursor delta (`cursor > nativeCursor`). Counting ciphertexts needs no decryption.
 
-So a background notification is `"N new in <GroupName>"` with the cached group icon — genuinely rich, zero background crypto. Sender/preview (which need decryption) are foreground-only. The existing foreground notification logic ([`notifyForUnreadChatMessages`](src/lib/services/chatAttention.svelte.ts)) is reused verbatim for the foreground path.
+**Cache freshness (no staleness):** the native `groups` table holds `title`, `icon_bytes`, `meta_hash`. A debounced reactive `$effect` derives `(title, iconBytes)` per group, diffs against a last-sent map, and pushes only changed groups via `upsertGroupMeta`; the native side hash-skips redundant writes. Bulk re-upsert on every `seed` (bg/fg transition) is the backstop. So the cache tracks the app within seconds while foregrounded.
+
+**Rendering split:** `smallIcon` (status bar) = a static monochrome `ic_stat_cordn` mask (Android requirement); `largeIcon` (expanded view) = the cached per-group bytes (emoji or picture, full color). All rendering happens in the alive WebView (during seed/sync), never in the worker.
+
+The ceiling: sender name, message text, and avatar **picture at send time** need decryption → foreground-only. The cached icon/title is the rich-background ceiling by design (single-MLS-consumer rule, §4.3). Foreground notifications (when not suppressed) reuse [`notifyForUnreadChatMessages`](src/lib/services/chatAttention.svelte.ts) verbatim.
 
 ---
 
@@ -110,10 +124,9 @@ Without a sidecar, the bytes the background poll already downloaded (to count) g
 | Event | Action |
 |---|---|
 | Background poll finds new messages | `nativeCursor[gid] = max(returned cursors)` (**advance on notify**) |
-| App backgrounding | seed `nativeCursor[gid] = group.fetchCursor` |
-| App foreground / while open | resync `nativeCursor[gid] = group.fetchCursor` |
+| App backgrounding / foregrounding | seed `nativeCursor[gid] = max(group.fetchCursor, group.lastCursor)` |
 
-The app always queries `after: fetchCursor` (its own watermark) and ingests everything regardless of native state; `nativeCursor` only suppresses *re-notification*, never blocks ingestion. The two watermarks are independent and reconcile at handoff. (Advance-on-notify is mandatory — without it, repeated background polls double-notify.)
+**Why `max(fetchCursor, lastCursor)`, not `fetchCursor` alone:** sends advance `lastCursor` ([`sendChatGroupMessage`](src/lib/services/chatGroups.svelte.ts)) but **not** `fetchCursor`. Seeding `fetchCursor` alone leaves the user's own just-sent message above the native watermark → the worker re-fetches and **self-notifies** (the bug seen in the first real-device test). `lastCursor` covers own sends; `fetchCursor` covers received; the max is the true local high-watermark. No data-loss risk: anything skipped in the `(fetchCursor, lastCursor]` gap is recovered by the app's own foreground `after: fetchCursor` fetch on open. (Advance-on-notify is still mandatory — without it, repeated background polls double-notify.)
 
 The sidecar is namespaced per account (matching the cross-account isolation principle behind our query keys).
 
@@ -265,7 +278,7 @@ These are the load-bearing rules. Any future change that violates one must be ch
 
 1. **Single MLS consumer.** MLS decryption happens only in the WebView ([`applyIncomingChatGroupMessages`](src/lib/services/chatGroups.svelte.ts)). The native layer never decrypts — it counts.
 2. **Sidecar behind one seam.** The sidecar is drained in exactly one place (the foreground catch-up), guarded by `Capacitor.isNativePlatform()`. It is a replay buffer of the wire format, not a parallel data model.
-3. **`nativeCursor` advances on notify** and resyncs to `fetchCursor` on foreground; the app always queries `after: fetchCursor` so native never blocks ingestion.
+3. **`nativeCursor` advances on notify** and seeds to `max(fetchCursor, lastCursor)` on background/foreground (own sends advance `lastCursor` but not `fetchCursor` — seeding only `fetchCursor` self-notifies). The app always queries `after: fetchCursor`, so native never blocks ingestion.
 4. **Background = unauthenticated message fetch only.** Throwaway key, no user secrets, no signer. Authed endpoints (welcomes, join-requests, news) are foreground-only.
 5. **Coordinator stays Nostr-only (ContextVM).** No HTTP endpoint. Native speaks ContextVM via the Rust SDK + UniFFI — no Quartz, no Kotlin transport rewrite.
 6. **Web deploys unchanged.** No native code path executes on web; the app builds and ships as today.
@@ -284,7 +297,8 @@ These are the load-bearing rules. Any future change that violates one must be ch
 ### Phase 1 — Native shell + foreground parity
 - ✅ `@capacitor/app` / `status-bar` / `splash-screen` / `local-notifications` installed + synced; local-notification tap routing into [`/chat/[id]`](src/routes/chat/[id]) lives in [`nativeBridge.ts`](src/lib/services/nativeBridge.ts) (the single native-aware seam, roadmap §11.2).
 - ✅ Foreground notifications routed through `isNativePlatform()` — [`chatAttention`](src/lib/services/chatAttention.svelte.ts) dispatches via `showLocalNotification` (native → Capacitor local notification; web → Notification API). Fixes the latent WebView bug where `'Notification' in window` is false.
-- ⏳ App-store groundwork: icons (needs source asset → `@capacitor/assets`), release signing config + keystore, dedicated `ic_stat_*` smallIcon. Deferred to Phase 4.
+- ✅ Branded launcher icon generated (`favicon.svg` → all `mipmap-*` densities + adaptive, via `@capacitor/assets`); foreground notifications gated to **background-only** (no noise while the app is open, via an `appActive` flag in [`nativeBridge.ts`](src/lib/services/nativeBridge.ts)); native entry point redirected to **`/chat`** (mirrors the PWA `start_url`).
+- ⏳ Remaining app-store groundwork: release signing config + keystore; dedicated `ic_stat_cordn` notification smallIcon arrives in Phase 3A.
 
 ### Phase 2 — Background polling + sidecar + no-refetch
 - ✅ Capacitor plugin workspace package `packages/cordn-background/` ([`src/index.ts`](packages/cordn-background/src/index.ts)) — the single TS↔Kotlin seam: `configure` / `seed` / `drain`.
@@ -292,17 +306,35 @@ These are the load-bearing rules. Any future change that violates one must be ch
 - ✅ Rust `.so` + UniFFI Kotlin bindings bundled in the plugin module; full debug APK builds (`libcontextvm_ffi.so` packaged, plugin + bindings dexed).
 - ✅ TS seam wired in [`nativeBridge.ts`](src/lib/services/nativeBridge.ts): `configure`/`seed`/`drain` on init + `App.appStateChange` (background→seed, foreground→drain+seed); drain feeds `ingestIncomingChatGroupMessages` (the single MLS path).
 - ✅ **On-device validated.** The `.so` loads via JNA in-process (`libjnidispatch.so … : ok` mid-worker), a real background `msg_fetch_many` returns and parses (`structuredContent` → 5 msgs / 3 groups in the test), count-only notifications fire, and the sidecar drains on open. A poll completes in <1 s — the ~15-min floor is purely WorkManager cadence, not FFI cost. Zero `FfiException`/crashes across the run.
+- ✅ **Real-device validated (overnight).** Installed on physical Android; closed-app count-only notifications delivered reliably across an overnight test — Phase 2's reliability claim holds outside the emulator. The test surfaced three follow-ups → Phase 3: (a) **self-message notifications** (root cause: `fetchCursor`-only seeding; fixed via `max(fetchCursor, lastCursor)` — §5); (b) **generic icon + no group name** (→ icon/metadata cache, §4.4); (c) **no network-reconnect trigger** (→ event-driven polls, §4.2).
 - *Exit criterion:* a closed app reliably notifies on new messages within ~15 min; opening from a notification shows the message with no redundant fetch. *(✅ MET — closed-app count-only notifications within the ~15-min cycle; messages appear on open via sidecar drain; advance-on-notify prevents double-notify.)*
 
 > **Regeneration note (must read before re-running `uniffi-bindgen-cli`):** the generated `contextvm_ffi.kt` carries a one-time patch — the SDK's own FFI `close()` collides with UniFFI's Disposable/AutoCloseable boilerplate `close()` in exactly the `Client` and `Server` classes (two `override fun close()`). The patch removes the boilerplate `close()` from those two classes only (the UniFFI Cleaner still releases the handle on GC). Regeneration re-introduces the collision; re-apply via `packages/cordn-background/android/src/main/java/uniffi/contextvm_ffi/` (drop the `@Synchronized override fun close() { this.destroy() }` block where an FFI `override fun \`close\`()` also exists). The plugin module also pins **Kotlin 1.9.25** in its own buildscript (UniFFI 0.31 bindings target the 1.9.x era).
 
-### Phase 3 — Felt-latency bursts
-- Expedited WorkManager one-shots on post-background, post-send, post-new-message-found. *(A one-shot already ships, fired on `seed` — i.e. every background/foreground transition; Phase 3 narrows it to post-background + post-send/post-new-message-found and tunes the average-budget tradeoff.)*
-- Measure real-world latency/battery; tune.
+### Phase 3 — Configurable delivery & notification quality
+
+Redefined after the first real-device test. 3A is mode-agnostic quality (reused by every delivery mode); 3B adds configurable polling; 3C is the optional live extreme.
+
+#### Phase 3A — Quality + presentation cache (mode-agnostic)
+- **Self-message fix** — seed `max(fetchCursor, lastCursor)` (§5). One line; kills the most-reported annoyance.
+- **Icon/metadata cache** — `renderGroupIconBytes` (reuse the web canvas/emoji path) → bytes + hash; native `groups` table gains `title`/`icon_bytes`/`meta_hash`; hash-gated `upsertGroupMeta`; debounced reactive sync `$effect` + bulk-on-seed backstop (§4.4).
+- **Notification presentation** — dedicated monochrome `ic_stat_cordn` smallIcon + brand color + named channel; worker renders `largeIcon` (cached bytes) + `contentTitle` (cached title).
+- **`pnpm android:apk`** build script (build → sync → `assembleDebug` → print APK path).
+- **Battery-optimization exemption prompt** (borrowed from Armada) — gates aggressive modes; improves Standard-mode Doze reliability too.
+
+#### Phase 3B — Configurable polling
+- Extract `MessageFetcher.run()` shared by the worker and the new service.
+- `CordnNotificationService` foreground service (coroutine loop, 1/5/10-min).
+- Settings UI (mode + interval); `configure(mode, interval)` → start/stop service; WorkManager-15 always-on as fallback (dual-run, idempotent — §4.2).
+- BootReceiver restarts in the chosen mode.
+
+#### Phase 3C — Live mode (deferred, spike-gated)
+- Native ContextVM persistent subscription (key-less, count-only). Verify the streaming API works unauthed before building.
 
 ### Phase 4 — Packaging & release
-- F-Droid reproducible-build metadata; zap.store publishing via `zsp`.
-- Per-ABI APK sizing; final battery/latency field testing.
+- From-source `.so` build (drop the vendored 49 MB binary; required for F-Droid reproducible).
+- Per-ABI APK splits / ABB; release signing config + keystore; F-Droid reproducible-build metadata; zap.store via `zsp`.
+- Final battery/latency field testing across delivery modes.
 
 ---
 
@@ -310,11 +342,12 @@ These are the load-bearing rules. Any future change that violates one must be ch
 
 | Tradeoff | Accepted because |
 |---|---|
-| Up to ~15 min notification latency when idle | Cursor/idempotent → latency never loss; foreground catch-up never misses. |
-| Count-only (not content) notifications | Single-MLS-consumer rule protects group state from ratchet desync. |
+| Default ~15 min latency when idle (Standard mode) | Cursor/idempotent → latency never loss; foreground catch-up never misses. Users who want less can opt into Fast (1/5/10 min) or Live at a battery cost (§4.2). |
+| Count-only notifications (with cached group name + icon) | Single-MLS-consumer rule protects group state from ratchet desync. Cached metadata closes most of the richness gap without background crypto (§4.4). |
+| Fast/Live modes show a mandatory persistent notification | Required by Android for foreground services; low-priority channel, user-opted-in. |
 | No background notifications for welcomes/join-requests/news | Authed endpoints can't run backgrounded for NIP-46 users; these are lower-frequency, caught on open. |
 | Rust cross-compile pipeline + APK size | One-time setup cost; avoids permanent dual-language transport maintenance. |
-| OEM killers may defer polls | WorkManager is OEM-tolerant; optional user guidance; reliability anchor is foreground catch-up. |
+| OEM killers may defer/kill polls | WorkManager-15 always-on as backstop; battery-optimization exemption prompt + user guidance for aggressive modes; reliability anchor is foreground catch-up. |
 
 ---
 
@@ -322,9 +355,9 @@ These are the load-bearing rules. Any future change that violates one must be ch
 
 - **React Native** — rejected: full UI rewrite, permanent two-codebase maintenance.
 - **FCM / UnifiedPush / APNs (any push)** — rejected: adds a dependency (Google/Apple/distributor app) and/or forces the coordinator into a push-trigger role; conflicts with privacy/no-third-party principles. Polling suffices given the cursor guarantee.
-- **Exact-alarm scheduler (<15 min)** — rejected: unnecessary with adaptive + event-driven polling; Play-policy-restricted (moot, we're not on Play).
+- **Exact-alarm scheduler (<15 min)** — rejected: battery-hostile + OEM-killed + needs a permission. Sub-15-min is achieved via an *opt-in foreground service* instead (§4.2).
 - **Silent-audio "live mode" / keep-WebView-alive** — rejected: deprecated by Android 17 and OEM-killed; we don't build on disappearing primitives.
-- **Always-on foreground service + persistent WebSocket** — rejected: battery-hostile, OEM-killer bait.
+- **Forced always-on foreground service + persistent WebSocket as the only option** — rejected *as a default*: battery-hostile, OEM-killer bait. **Revised:** an *opt-in* foreground service for sub-15-min polling is accepted (Phase 3B), and a persistent-subscription *Live* mode is a future opt-in (Phase 3C, spike-gated). The default stays WorkManager-15.
 - **Background MLS decryption** — rejected: would create two ratchet consumers and risk bricking group decryption.
 - **HTTP coordinator endpoint** — rejected: defeats ContextVM's no-DNS/no-IP raison d'être.
 - **Quartz + Kotlin transport rewrite** — rejected: permanent dual-language transport maintenance; the Rust SDK + UniFFI reuses the canonical implementation instead.
@@ -334,6 +367,8 @@ These are the load-bearing rules. Any future change that violates one must be ch
 
 ## 15. Open questions / future
 
+- **Live mode (Phase 3C)** — native ContextVM persistent subscription for instant count-only notifications; deferred until Fast polling (3B) is stable, and spike-gated on the unauthed streaming API.
+- **Warm connection for very-fast polling** — at 1-min intervals, a persistent relay connection may beat connect/disconnect 1440×/day; revisit once 3B is measured on real devices.
 - **NIP-9a / federated push** (draft) — watch as a future opt-in "fast notifications" mode for users who *choose* to run a push distributor; not on the v1 path.
 - **iOS** — revisit APNs only if iOS demand justifies standing up a server-side push trigger (the one thing that conflicts with the "coordinator stays dumb" principle).
 - **`ctxcn`-style typed native client** — if the ContextVM ecosystem grows a Kotlin client generator, the `msg_fetch_many` glue could shrink further; not required today.

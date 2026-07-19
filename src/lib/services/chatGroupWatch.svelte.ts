@@ -34,6 +34,7 @@ import {
 } from '$lib/services/chatGroupPresence.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
+import { advanceNativeCursor, groupFetchWatermark, isNativePlatform } from '$lib/services/nativeBridge';
 import {
 	markAllGroupsUnwatched,
 	markGroupUnwatched,
@@ -473,6 +474,13 @@ function createWatchBuffer(input: {
 					return true;
 				}
 
+				// Consolidation: keep the worker's nativeCursor in lockstep with what the live path
+				// just ingested, so it never re-notifies these messages as a count (the old
+				// double-notify). No-op off-native; MAX-clamped on the native side.
+				if (isNativePlatform()) {
+					void advanceNativeCursor(input.groupId, groupFetchWatermark(result.group));
+				}
+
 				return false;
 			})
 			.catch((error) => {
@@ -528,6 +536,11 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 			// Mark as failed if group became poisoned
 			if (isChatGroupPoisoned(result.group)) {
 				failedGroupIds.add(groupId);
+			}
+			// Consolidation: advance the worker's nativeCursor past what we just ingested so the
+			// background poller doesn't re-notify these as a count (double-notify fix).
+			if (isNativePlatform()) {
+				void advanceNativeCursor(groupId, groupFetchWatermark(result.group));
 			}
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);

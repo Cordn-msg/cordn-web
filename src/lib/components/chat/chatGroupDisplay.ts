@@ -177,3 +177,53 @@ export function getChatGroupNotificationIcon(
 	const representative = getRepresentativeMemberPubkey(group, ctx);
 	return representative ? ctx.profileHints?.[representative]?.picture : undefined;
 }
+
+function loadImageEl(src: string): Promise<HTMLImageElement> {
+	return new Promise((resolve, reject) => {
+		const img = new Image();
+		img.crossOrigin = 'anonymous';
+		img.onload = () => resolve(img);
+		img.onerror = () => reject(new Error('image load failed'));
+		img.src = src;
+	});
+}
+
+function rasterizePngBase64(img: HTMLImageElement, size: number): string {
+	const canvas = document.createElement('canvas');
+	canvas.width = size;
+	canvas.height = size;
+	const ctx = canvas.getContext('2d')!;
+	// Cover-fit the source into the square (Android masks largeIcon to a circle automatically).
+	const sw = img.naturalWidth || size;
+	const sh = img.naturalHeight || size;
+	const scale = Math.max(size / sw, size / sh);
+	const dw = sw * scale;
+	const dh = sh * scale;
+	ctx.drawImage(img, (size - dw) / 2, (size - dh) / 2, dw, dh);
+	return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
+}
+
+/**
+ * Render a group's notification icon to uniform PNG bytes (base64, no `data:` prefix) for the
+ * native notification `largeIcon` cache. Returns `null` when no icon source is available or the
+ * render fails (e.g. a cross-origin image without CORS). All rendering happens here, in the
+ * alive WebView — the key-less background worker only decodes the bytes (roadmap §4.4).
+ */
+export async function renderGroupNotificationIconBytes(
+	group: StoredChatGroup,
+	ctx: ChatGroupNotificationIconContext = {}
+): Promise<string | null> {
+	return renderNotificationIconFromSrc(getChatGroupNotificationIcon(group, ctx));
+}
+
+/** Rasterize a resolved icon source URL/data-URL to PNG base64 bytes. */
+export async function renderNotificationIconFromSrc(
+	src: string | undefined
+): Promise<string | null> {
+	if (!src) return null;
+	try {
+		return rasterizePngBase64(await loadImageEl(src), 96);
+	} catch {
+		return null;
+	}
+}

@@ -6,11 +6,17 @@ import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CordnBackground, type PollGroup } from 'cordn-background';
+import { CordnBackground, type DeliveryMode, type PollGroup } from 'cordn-background';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
-import { ingestIncomingChatGroupMessages, listChatGroups } from '$lib/services/chatGroups.svelte';
+import {
+	ingestIncomingChatGroupMessages,
+	listChatGroups,
+	listChatGroupMembers
+} from '$lib/services/chatGroups.svelte';
+import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 import { defaultRelays } from '$lib/services/relay-pool';
+import { normalizePubKey } from '$lib/utils';
 
 /**
  * Native-shell seam. Web is a no-op everywhere here; the native branches run only inside the
@@ -28,14 +34,6 @@ import { defaultRelays } from '$lib/services/relay-pool';
 /** True only inside the Capacitor native shell (Android). Web/PWA → false. */
 export function isNativePlatform(): boolean {
 	return browser && Capacitor.isNativePlatform();
-}
-
-function groupToNotificationId(groupId: string): number {
-	let h = 0;
-	for (let i = 0; i < groupId.length; i++) {
-		h = (Math.imul(31, h) + groupId.charCodeAt(i)) | 0;
-	}
-	return Math.abs(h) + 1;
 }
 
 let initialized = false;
@@ -77,17 +75,8 @@ export async function initNativeShell(): Promise<void> {
 		// permission re-requested lazily on first showLocalNotification
 	}
 
-	try {
-		await LocalNotifications.addListener('localNotificationActionPerformed', (event) => {
-			const groupId = event.notification.extra?.groupId as string | undefined;
-			if (groupId) goto(resolve('/chat/[id]', { id: groupId }));
-		});
-	} catch {
-		// listener unavailable — taps fall back to just opening the app
-	}
-
-	// --- Phase 2: background poll + sidecar ---
-	void configureBackground();
+	// --- Phase 2/3: background delivery + sidecar ---
+	void applyDeliveryConfig();
 	void drainBackgroundSidecar(); // ingest anything staged while the app was closed
 	void seedBackground();
 
@@ -112,7 +101,7 @@ export async function initNativeShell(): Promise<void> {
 export interface ChatLocalNotification {
 	title: string;
 	body: string;
-	/** Web only: group/favicon icon URL. Native smallIcon is deferred (Phase 4). */
+	/** Web only: group/favicon icon URL. Native reads its icon from the cache (NativeGroupMetaSync). */
 	icon?: string;
 	/** Stable group id — dedup tag (web) and coalescing id (native). */
 	groupId: string;
@@ -138,21 +127,11 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 	if (isNativePlatform()) {
 		// Suppress while foregrounded — the in-app UI already surfaces attention (title badge, unread dots).
 		if (appActive) return;
-		try {
-			await LocalNotifications.schedule({
-				notifications: [
-					{
-						id: groupToNotificationId(n.groupId),
-						title: n.title || 'Cordn',
-						body: n.body,
-						// ponytail: smallIcon drawable deferred to Phase 4 (icon pass).
-						extra: { groupId: n.groupId }
-					}
-				]
-			});
-		} catch {
-			// never block chat on a failed notification
-		}
+		// Unified native renderer (same icon/channel/format as the background worker). The icon comes
+		// from the native cache (NativeGroupMetaSync), not passed here — Capacitor LocalNotifications
+		// ignored the web `icon` field anyway, which is why live-path notifications used to have no
+		// icon. Web stays on the browser Notification API below.
+		void postMessageNotification(n.groupId, n.title || 'Cordn', n.body);
 		return;
 	}
 	if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -167,30 +146,148 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 	};
 }
 
+// ───────────────────────────── unified native poster + dedupe (notification consolidation) ─────────────────────────────
+
+/**
+ * Post a native message notification via the unified native renderer — identical icon/channel/
+ * format to the background worker. Native-only; web stays on the browser Notification API. The
+ * icon is read from the native cache (kept fresh by NativeGroupMetaSync), so no icon crosses the
+ * bridge here. Collapses the old two-renderer drift (live path via Capacitor LocalNotifications,
+ * worker via NotificationCompat) into one.
+ */
+export async function postMessageNotification(
+	gid: string,
+	title: string,
+	body: string
+): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.postMessageNotification({ gid, title, body });
+	} catch {
+		// never block chat on a failed notification
+	}
+}
+
+/**
+ * Advance the worker's nativeCursor to [cursor] so it skips messages the live ingestion path
+ * already handled. Kills the double-notify: a message that arrives in the grace period used to
+ * be posted by the live path (decrypted) and then again ~one cycle later by the worker (count)
+ * because nativeCursor lagged behind fetchCursor. MAX-clamped on the native side.
+ */
+export async function advanceNativeCursor(gid: string, cursor: number): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.advanceNativeCursor({ gid, cursor });
+	} catch {
+		// best-effort — a missed advance just risks one redundant worker notification
+	}
+}
+
 // ───────────────────────────── background poll + sidecar (Phase 2) ─────────────────────────────
+
+/**
+ * The app's true local high-watermark for a group. Outbound sends advance `lastCursor` but not
+ * `fetchCursor` (roadmap §5), so the fetch watermark alone leaves own messages above it and the
+ * worker would re-notify on them. Shared by the seed (`gatherPollGroups`) and the live-path dedupe.
+ */
+export function groupFetchWatermark(group: {
+	fetchCursor: number;
+	lastCursor: number;
+}): number {
+	return Math.max(group.fetchCursor, group.lastCursor);
+}
 
 /** Gather the poll set: per group, its coordinator routing + the app's fetchCursor watermark. */
 function gatherPollGroups(): PollGroup[] {
+	const activePubkey = manager.active?.pubkey;
 	return listChatGroups().map((group) => {
 		const coordinator = getChatCoordinator(group.coordinatorKey);
 		const relayUrls = coordinator?.relays?.length ? coordinator.relays : defaultRelays;
+		const memberPubkeys = listChatGroupMembers(group.id)
+			.map((m) => normalizePubKey(m.stablePubkey))
+			.filter((p): p is string => Boolean(p));
 		return {
 			gid: group.id,
-			fetchCursor: group.fetchCursor,
-			title: group.metadata?.name,
+			fetchCursor: groupFetchWatermark(group),
+			title: getChatGroupDisplayTitle({ group, activePubkey, memberPubkeys }),
 			coordinatorServerPubkey: group.coordinatorKey, // the coordinatorKey *is* the server pubkey
 			relayUrls
 		};
 	});
 }
 
-/** Schedule the WorkManager periodic worker. Idempotent. */
-export async function configureBackground(): Promise<void> {
+// ───────────────────────────── delivery mode (Phase 3B) ─────────────────────────────
+
+const DELIVERY_MODE_KEY = 'cordn.deliveryMode';
+
+/** Default = Fast @ 5 min (foreground service) + WorkManager 15-min backstop (roadmap §4.2). */
+export const DEFAULT_DELIVERY: DeliveryConfig = { mode: 'fast', intervalMinutes: 5 };
+
+export interface DeliveryConfig {
+	mode: DeliveryMode;
+	/** Minutes between foreground-service polls. Only meaningful for `fast`. */
+	intervalMinutes: number;
+}
+
+/** Read the stored choice (sync, localStorage). Off-web → default. */
+export function getDeliveryConfig(): DeliveryConfig {
+	if (!browser) return { ...DEFAULT_DELIVERY };
+	try {
+		const raw = localStorage.getItem(DELIVERY_MODE_KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw);
+			if (parsed?.mode === 'off' || parsed?.mode === 'standard' || parsed?.mode === 'fast') {
+				return { mode: parsed.mode, intervalMinutes: parsed.intervalMinutes ?? 5 };
+			}
+		}
+	} catch {
+		// corrupt entry — fall through to default
+	}
+	return { ...DEFAULT_DELIVERY };
+}
+
+/** Persist the choice + push it to native (start/stop the service, reschedule WorkManager). */
+export async function setDeliveryConfig(cfg: DeliveryConfig): Promise<void> {
+	if (!browser) return;
+	localStorage.setItem(DELIVERY_MODE_KEY, JSON.stringify(cfg));
 	if (!isNativePlatform()) return;
 	try {
-		await CordnBackground.configure({ pollIntervalMinutes: 15 });
+		await CordnBackground.configureDelivery({
+			mode: cfg.mode,
+			intervalMinutes: cfg.intervalMinutes
+		});
 	} catch {
 		// plugin unavailable — foreground-only mode
+	}
+}
+
+/** Re-apply the stored mode (called on app launch). */
+export async function applyDeliveryConfig(): Promise<void> {
+	if (!isNativePlatform()) return;
+	await setDeliveryConfig(getDeliveryConfig());
+}
+
+// ───────────────────────────── group metadata cache (Phase 3A) ─────────────────────────────
+
+/**
+ * Refresh one group's cached display title + icon bytes (rendered by the WebView) so the
+ * key-less background worker can render a rich notification. Hash-gated by the caller
+ * (NativeGroupMetaSync) to avoid spamming the bridge on profile re-emits.
+ */
+export async function syncGroupMeta(
+	gid: string,
+	title: string | undefined,
+	iconBytes: string | null
+): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.upsertGroupMeta({
+			gid,
+			title,
+			iconBytes: iconBytes ?? undefined
+		});
+	} catch {
+		// best-effort — a missed sync self-corrects on the next change
 	}
 }
 

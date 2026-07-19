@@ -11,6 +11,8 @@
 	import Server from '@lucide/svelte/icons/server';
 	import Images from '@lucide/svelte/icons/images';
 	import Smartphone from '@lucide/svelte/icons/smartphone';
+	import Bell from '@lucide/svelte/icons/bell';
+	import { isNativePlatform } from '$lib/services/nativeBridge';
 </script>
 
 <svelte:head>
@@ -135,6 +137,24 @@
 									</p>
 								</div>
 							</a>
+
+							{#if isNativePlatform()}
+								<a href={resolve('/chat/config/notifications')} class="block">
+									<div
+										class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
+									>
+										<div
+											class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
+										>
+											<Bell class="size-4" />
+										</div>
+										<p class="font-medium">Notifications</p>
+										<p class="mt-1 text-sm text-muted-foreground">
+											How Cordn checks for new messages in the background.
+										</p>
+									</div>
+								</a>
+							{/if}
 
 							<a href={resolve('/chat/config/media')} class="block">
 								<div
