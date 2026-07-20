@@ -1,0 +1,96 @@
+name: android
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (typecheck + test + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      # lint has pre-existing violations in untouched code; report without blocking the gate.
+      - run: pnpm lint
+        continue-on-error: true
+
+  release-apk:
+    name: build & publish signed APK
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - run: pnpm install --frozen-lockfile
+
+      - name: Provision signing keystore (no-op without secrets → unsigned release)
+        env:
+          CORDN_KEYSTORE_BASE64: ${{ secrets.CORDN_KEYSTORE_BASE64 }}
+          CORDN_KEYSTORE_PASSWORD: ${{ secrets.CORDN_KEYSTORE_PASSWORD }}
+          CORDN_KEY_ALIAS: ${{ secrets.CORDN_KEY_ALIAS }}
+          CORDN_KEY_PASSWORD: ${{ secrets.CORDN_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CORDN_KEYSTORE_BASE64" ]; then
+            echo "No signing secrets found; release APK will be unsigned."
+            exit 0
+          fi
+          echo "$CORDN_KEYSTORE_BASE64" | base64 -d > android/app/cordn-release.keystore
+          printf 'storeFile=cordn-release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$CORDN_KEYSTORE_PASSWORD" "$CORDN_KEY_ALIAS" "$CORDN_KEY_PASSWORD" \
+            > android/keystore.properties
+
+      - run: pnpm android:release
+
+      - name: Detect lane (tag has a hyphen → internal/prerelease, else release)
+        id: lane
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.ref_name }}
+          path: android/app/build/outputs/apk/**/*.apk
+
+      - name: Create GitHub release with the APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/**/*.apk
+          prerelease: ${{ steps.lane.outputs.prerelease }}
+          generate_release_notes: true

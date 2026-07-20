@@ -23,6 +23,15 @@ try {
     appVersionCode = 1
 }
 
+// Release signing config. keystore.properties is generated in CI from GitHub secrets; absent
+// locally → release builds skip signing (use android:apk for debug-signed local builds).
+// See docs/versioning.md.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "org.cordn.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -39,13 +48,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+            }
+        }
+    }
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
             // AGP (8.13+) dropped `proguard-android.txt` (it forces -dontoptimize, blocking R8).
-            // The `-optimize` variant is the supported default; minify is off for now, but AGP still
-            // validates the reference at config time.
+            // The `-optimize` variant is the supported default. R8 is on for release; keep rules
+            // for UniFFI JNI bindings + Capacitor plugin reflection live in proguard-rules.pro.
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
