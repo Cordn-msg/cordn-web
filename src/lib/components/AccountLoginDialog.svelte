@@ -6,6 +6,12 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { manager } from '$lib/services/accountManager.svelte';
+	import {
+		getInstalledSignerApps,
+		connectAndroidSigner,
+		isAndroidNative,
+		type InstalledSignerApp
+	} from '$lib/services/nativeBridge';
 	import { ExtensionSigner, NostrConnectSigner } from 'applesauce-signers/signers';
 	import {
 		ExtensionAccount,
@@ -44,6 +50,9 @@
 	let remoteSignerStep = $state<'generate' | 'connecting' | 'manual'>('generate');
 	let showPrivateKey = $state(false);
 	let displayName = $state('');
+	let androidSignerApps = $state<InstalledSignerApp[] | null>(null);
+	let connectingPkg = $state<string | null>(null);
+	let androidSignerError = $state('');
 	let username = $state('');
 	let about = $state('');
 	let profileExpanded = $state(false);
@@ -286,6 +295,33 @@
 			selectedTab = 'simple';
 		}
 	});
+
+	// Probe for installed Android signer apps (Amber, etc.) via NIP-55 when the dialog opens on
+	// the native Android shell. Web/iOS -> null so the section never renders. Best-effort: a
+	// missing plugin or zero installed signers resolves to [] and the section is hidden.
+	$effect(() => {
+		if (!open || !isAndroidNative()) return;
+		let cancelled = false;
+		getInstalledSignerApps().then((apps) => {
+			if (!cancelled) androidSignerApps = apps;
+		});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	async function handleAndroidSignerLogin(app: InstalledSignerApp) {
+		connectingPkg = app.packageName;
+		androidSignerError = '';
+		try {
+			await connectAndroidSigner(app);
+			open = false;
+		} catch (err) {
+			androidSignerError = err instanceof Error ? err.message : 'Failed to connect signer app';
+		} finally {
+			connectingPkg = null;
+		}
+	}
 </script>
 
 <Dialog.Root bind:open onOpenChange={() => (dialogState.dialogId = null)}>
@@ -297,6 +333,35 @@
 		</Dialog.Header>
 
 		<div class="grid gap-4 py-4">
+			{#if isAndroidNative() && androidSignerApps && androidSignerApps.length > 0}
+				<!-- Native Android signer apps (Amber, etc.) via NIP-55. Top of the dialog on Android
+				     because it's the best UX on-device; falls through to the tabs below for nsec/NIP-46. -->
+				<div class="space-y-2">
+					{#if androidSignerError}
+						<p class="text-sm text-destructive">{androidSignerError}</p>
+					{/if}
+					{#each androidSignerApps as app (app.packageName)}
+						<Button
+							class="w-full justify-start"
+							disabled={connectingPkg !== null}
+							onclick={() => handleAndroidSignerLogin(app)}
+						>
+							{#if connectingPkg === app.packageName}
+								<Spinner class="mr-2 size-4" />
+								Connecting…
+							{:else}
+								Log in with {app.name}
+							{/if}
+						</Button>
+					{/each}
+					<div class="flex items-center gap-3 py-1">
+						<div class="h-px flex-1 bg-border"></div>
+						<span class="text-xs tracking-wider text-muted-foreground uppercase">or</span>
+						<div class="h-px flex-1 bg-border"></div>
+					</div>
+				</div>
+			{/if}
+
 			<!-- Tab Navigation -->
 			<div class="flex space-x-1 rounded-lg bg-muted p-1">
 				{#if typeof window !== 'undefined' && 'nostr' in window}

@@ -7,19 +7,14 @@
 	import { queryClient } from '$lib/query-client';
 	import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
 	import { onMount } from 'svelte';
-	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { initNativeShell, isNativePlatform } from '$lib/services/nativeBridge';
+	import { initNativeShell } from '$lib/services/nativeBridge';
 
 	let { children } = $props();
 
-	// Native: skip the landing page — open straight to /chat (mirrors the PWA start_url).
-	// Web is a no-op. Deep links (e.g. notification taps to /chat/[id]) are preserved.
+	// Native cold-start lands on /chat via capacitor.config.ts `server.appStartPath` (the
+	// WebView's first URL is https://localhost/chat), so no client redirect is needed here.
+	// Deep links and notification taps override it via their launch URL.
 	onMount(() => {
-		if (isNativePlatform() && page.url.pathname === '/') {
-			void goto(resolve('/chat'), { replaceState: true });
-		}
 		void initNativeShell();
 	});
 </script>

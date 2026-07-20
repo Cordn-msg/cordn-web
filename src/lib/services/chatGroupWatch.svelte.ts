@@ -34,7 +34,11 @@ import {
 } from '$lib/services/chatGroupPresence.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
-import { advanceNativeCursor, groupFetchWatermark, isNativePlatform } from '$lib/services/nativeBridge';
+import {
+	advanceNativeCursor,
+	groupFetchWatermark,
+	isNativePlatform
+} from '$lib/services/nativeBridge';
 import {
 	markAllGroupsUnwatched,
 	markGroupUnwatched,

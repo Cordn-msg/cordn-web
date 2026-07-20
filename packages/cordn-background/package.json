@@ -1,6 +1,7 @@
 {
   "name": "cordn-background",
   "version": "0.0.1",
+  "private": true,
   "description": "Cordn native background message polling — ContextVM via the Rust SDK UniFFI Kotlin bindings.",
   "type": "module",
   "main": "src/index.ts",

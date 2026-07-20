@@ -1,4 +1,27 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+// Single source of truth for versioning (bumped via `pnpm version`, see docs/versioning.md).
+// versionName  <- package.json `version` (e.g. 0.2.0, 0.2.0-next.1).
+// versionCode  <- git commit count: monotonically increasing across stable AND prerelease builds
+//                without needing CI. ponytail: switch to a CI counter if git history is ever
+//                rewritten regressively, or for store requirements that want smaller gaps.
+def appVersionName = new JsonSlurper().parseText(file('../../package.json').text).version
+
+def appVersionCode
+try {
+    def out = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'rev-list', '--count', 'HEAD'
+        standardOutput out
+        ignoreExitValue true
+    }
+    def count = out.toString().trim().toInteger()
+    appVersionCode = count > 0 ? count : 1
+} catch (Exception ignored) {
+    appVersionCode = 1
+}
 
 android {
     namespace = "org.cordn.app"
@@ -7,8 +30,8 @@ android {
         applicationId "org.cordn.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -19,7 +42,10 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // AGP (8.13+) dropped `proguard-android.txt` (it forces -dontoptimize, blocking R8).
+            // The `-optimize` variant is the supported default; minify is off for now, but AGP still
+            // validates the reference at config time.
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }

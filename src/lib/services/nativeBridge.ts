@@ -7,6 +7,7 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { CordnBackground, type DeliveryMode, type PollGroup } from 'cordn-background';
+import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import {
@@ -94,6 +95,54 @@ export async function initNativeShell(): Promise<void> {
 	} catch {
 		// lifecycle listener unavailable — init-time seed/drain still covers cold start
 	}
+}
+
+// ───────────────────────────── android native signer (NIP-55) ─────────────────────────────
+
+/**
+ * Installed Android signer app (Amber, etc.) discovered via NIP-55. `import type` keeps the
+ * capacitor plugin out of the web bundle — the runtime import lives inside the native guard.
+ */
+export type InstalledSignerApp = AppInfo;
+
+/**
+ * True inside the Capacitor Android shell specifically (not iOS, not web). NIP-55 is
+ * Android-only, so UI gates on this rather than the broader `isNativePlatform()`.
+ */
+export function isAndroidNative(): boolean {
+	return isNativePlatform() && Capacitor.getPlatform() === 'android';
+}
+
+/**
+ * Enumerate signer apps installed on the device that can serve NIP-55 sign requests. Web/iOS →
+ * empty. Best-effort: a missing plugin or zero installed signers resolves to `[]` so the caller
+ * can treat "no signer apps" the same as "not native" and hide the section.
+ */
+export async function getInstalledSignerApps(): Promise<InstalledSignerApp[]> {
+	if (!isAndroidNative()) return [];
+	try {
+		const { AndroidNativeAccount } =
+			await import('applesauce-accounts/accounts/android-native-account');
+		return await AndroidNativeAccount.getSignerApps();
+	} catch (error) {
+		console.warn('[native] failed to enumerate Android signer apps', error);
+		return [];
+	}
+}
+
+/**
+ * Pair with an installed Android signer app via NIP-55: prompts the signer (Amber) for the
+ * user's pubkey, builds an `AndroidNativeAccount`, and activates it. The account persists via
+ * the manager's toJSON/fromJSON (just `{ packageName }` — no secret crosses the bridge), so
+ * relaunch re-binds to the signer lazily on the next sign/decrypt without re-prompting.
+ */
+export async function connectAndroidSigner(app: InstalledSignerApp): Promise<void> {
+	if (!isAndroidNative()) return;
+	const { AndroidNativeAccount } =
+		await import('applesauce-accounts/accounts/android-native-account');
+	const account = await AndroidNativeAccount.fromApp(app);
+	manager.addAccount(account);
+	manager.setActive(account);
 }
 
 // ───────────────────────────── foreground notifications ─────────────────────────────
@@ -190,10 +239,7 @@ export async function advanceNativeCursor(gid: string, cursor: number): Promise<
  * `fetchCursor` (roadmap §5), so the fetch watermark alone leaves own messages above it and the
  * worker would re-notify on them. Shared by the seed (`gatherPollGroups`) and the live-path dedupe.
  */
-export function groupFetchWatermark(group: {
-	fetchCursor: number;
-	lastCursor: number;
-}): number {
+export function groupFetchWatermark(group: { fetchCursor: number; lastCursor: number }): number {
 	return Math.max(group.fetchCursor, group.lastCursor);
 }
 

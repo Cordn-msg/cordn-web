@@ -19,6 +19,7 @@
 		"format": "prettier --write ./src",
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run",
+		"version": "node scripts/changelog.mjs",
 		"android": "pnpm build && npx cap sync android && npx cap open android",
 		"android:apk": "pnpm build && npx cap sync android && cd android && ./gradlew assembleDebug && echo 'APK: android/app/build/outputs/apk/debug/app-debug.apk'"
 	},
@@ -84,6 +85,7 @@
 		"cordn-background": "workspace:*",
 		"lean-qr": "^2.7.1",
 		"mode-watcher": "^1.1.0",
+		"nostr-signer-capacitor-plugin": "^0.0.5",
 		"nostr-tools": "^2.23.9",
 		"qr-scanner": "^1.4.2",
 		"svelte-sonner": "^1.1.1",
@@ -94,6 +96,12 @@
 		"overrides": {
 			"nostr-tools": "^2.23.9"
 		},
-		"onlyBuiltDependencies": ["sharp"]
+		"onlyBuiltDependencies": [
+			"sharp"
+		],
+		"patchedDependencies": {
+			"nostr-signer-capacitor-plugin@0.0.5": "patches/nostr-signer-capacitor-plugin@0.0.5.patch",
+			"applesauce-accounts@6.0.0": "patches/applesauce-accounts@6.0.0.patch"
+		}
 	}
 }

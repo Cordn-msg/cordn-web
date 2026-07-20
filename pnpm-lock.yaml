@@ -7,6 +7,14 @@ settings:
 overrides:
   nostr-tools: ^2.23.9
 
+patchedDependencies:
+  applesauce-accounts@6.0.0:
+    hash: 793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165
+    path: patches/applesauce-accounts@6.0.0.patch
+  nostr-signer-capacitor-plugin@0.0.5:
+    hash: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
+    path: patches/nostr-signer-capacitor-plugin@0.0.5.patch
+
 importers:
 
   .:
@@ -49,7 +57,7 @@ importers:
         version: 3.13.25(svelte@5.55.5(@typescript-eslint/types@8.59.3))
       applesauce-accounts:
         specifier: ^6
-        version: 6.0.0(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.0(patch_hash=793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165)(@capacitor/core@8.4.2)(typescript@6.0.3)
       applesauce-common:
         specifier: ^6
         version: 6.0.2(typescript@6.0.3)
@@ -74,6 +82,9 @@ importers:
       mode-watcher:
         specifier: ^1.1.0
         version: 1.1.0(svelte@5.55.5(@typescript-eslint/types@8.59.3))
+      nostr-signer-capacitor-plugin:
+        specifier: ^0.0.5
+        version: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
       nostr-tools:
         specifier: ^2.23.9
         version: 2.23.9(typescript@6.0.3)
@@ -4460,14 +4471,14 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  applesauce-accounts@6.0.0(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-accounts@6.0.0(patch_hash=793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165)(@capacitor/core@8.4.2)(typescript@6.0.3):
     dependencies:
       applesauce-core: 6.2.0(typescript@6.0.3)
       applesauce-signers: 6.0.1(@capacitor/core@8.4.2)(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
     optionalDependencies:
-      nostr-signer-capacitor-plugin: 0.0.5(@capacitor/core@8.4.2)
+      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
     transitivePeerDependencies:
       - '@capacitor/core'
       - supports-color
@@ -4536,7 +4547,7 @@ snapshots:
       nanoid: 5.1.11
       rxjs: 7.8.2
     optionalDependencies:
-      nostr-signer-capacitor-plugin: 0.0.5(@capacitor/core@8.4.2)
+      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
     transitivePeerDependencies:
       - '@capacitor/core'
       - supports-color
@@ -5630,10 +5641,9 @@ snapshots:
       semver: 7.8.0
       validate-npm-package-license: 3.0.4
 
-  nostr-signer-capacitor-plugin@0.0.5(@capacitor/core@8.4.2):
+  nostr-signer-capacitor-plugin@0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2):
     dependencies:
       '@capacitor/core': 8.4.2
-    optional: true
 
   nostr-tools@2.23.9(typescript@6.0.3):
     dependencies:

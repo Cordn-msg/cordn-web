@@ -64,7 +64,15 @@
 			for (const m of listChatGroupMembers(g.id)) {
 				const p = normalizePubKey(m.stablePubkey);
 				const h = p ? profileHints[p] : undefined;
-				sig += (p ?? '') + ',' + (h?.picture ?? '') + ',' + (h?.name ?? '') + ',' + (h?.displayName ?? '') + ';';
+				sig +=
+					(p ?? '') +
+					',' +
+					(h?.picture ?? '') +
+					',' +
+					(h?.name ?? '') +
+					',' +
+					(h?.displayName ?? '') +
+					';';
 			}
 		}
 		return sig;
