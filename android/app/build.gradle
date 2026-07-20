@@ -48,6 +48,14 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
+    // Name APK outputs with the semver + build type so successive prereleases don't overwrite
+    // each other. e.g. cordn-0.2.0-next.1-debug.apk. versionName comes from package.json (see top).
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            output.outputFileName = "cordn-${variant.versionName}-${variant.buildType.name}.apk"
+        }
+    }
 }
 
 repositories {
