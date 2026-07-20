@@ -6,19 +6,25 @@ import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 /**
- * Resolve the build version baked into the client bundle. This must match the
- * version written to `static/version.json` by `scripts/write-version.mjs`
- * (both derive from `git rev-parse --short HEAD`). At build time `prebuild`
- * runs first, so we prefer the file it wrote; in `pnpm dev` we fall back to
- * reading git directly.
+ * Build-time version stamps injected via Vite `define`. Two distinct values (see docs/versioning.md):
+ *  - `appSha`    → `__APP_VERSION__`: per-build git SHA. Drives web deploy-change detection in
+ *                  appUpdate.svelte.ts (must change on every deploy; semver is too coarse).
+ *  - `appSemver` → `__APP_SEMVER__`: product version from package.json, for user-facing display.
+ * Both prefer `static/version.json` (written by scripts/write-version.mjs at prebuild) and fall
+ * back to git / package.json directly so `pnpm dev` works before prebuild has run.
  */
-function resolveAppVersion(): string {
+function readVersionJson(): { version?: unknown; semver?: unknown } {
 	try {
-		const parsed = JSON.parse(readFileSync('static/version.json', 'utf8')) as { version?: unknown };
-		if (parsed && typeof parsed.version === 'string') return parsed.version;
+		return JSON.parse(readFileSync('static/version.json', 'utf8'));
 	} catch {
-		// file not present (e.g. dev before prebuild) — fall through to git
+		return {};
 	}
+}
+
+const versionJson = readVersionJson();
+
+function resolveAppSha(): string {
+	if (typeof versionJson.version === 'string') return versionJson.version;
 	try {
 		return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
 			.toString()
@@ -28,11 +34,24 @@ function resolveAppVersion(): string {
 	}
 }
 
-const appVersion = resolveAppVersion();
+function resolveAppSemver(): string {
+	if (typeof versionJson.semver === 'string') return versionJson.semver;
+	try {
+		const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version?: unknown };
+		if (typeof pkg.version === 'string') return pkg.version;
+	} catch {
+		// package.json unreadable — fall through
+	}
+	return '0.0.0';
+}
+
+const appSha = resolveAppSha();
+const appSemver = resolveAppSemver();
 
 export default defineConfig({
 	define: {
-		__APP_VERSION__: JSON.stringify(appVersion)
+		__APP_VERSION__: JSON.stringify(appSha),
+		__APP_SEMVER__: JSON.stringify(appSemver)
 	},
 	plugins: [tailwindcss(), sveltekit()],
 	test: {
