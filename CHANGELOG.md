@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-next.4 — 2026-07-21
+
+### Fixes
+
+- **ci:** use JDK 21 — capacitor-android compiles to Java 21 bytecode
+
 ## 0.2.0-next.3 — 2026-07-21
 
 ### Fixes
