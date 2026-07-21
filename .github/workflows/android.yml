@@ -67,7 +67,10 @@ jobs:
             echo "No signing secrets found; release APK will be unsigned."
             exit 0
           fi
-          echo "$CORDN_KEYSTORE_BASE64" | base64 -d > android/app/cordn-release.keystore
+          # Strip ALL whitespace (terminal wrapping / stray spaces / CR from paste) before decode.
+          printf '%s' "$CORDN_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/cordn-release.keystore
+          test -s android/app/cordn-release.keystore || { echo 'Decoded keystore is empty — CORDN_KEYSTORE_BASE64 is not valid base64.'; exit 1; }
+          echo "Keystore decoded ($(wc -c < android/app/cordn-release.keystore) bytes)."
           printf 'storeFile=cordn-release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "$CORDN_KEYSTORE_PASSWORD" "$CORDN_KEY_ALIAS" "$CORDN_KEY_PASSWORD" \
             > android/keystore.properties
