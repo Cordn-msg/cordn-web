@@ -13,8 +13,11 @@ overrides:
 
 patchedDependencies:
   applesauce-accounts@6.0.0:
-    hash: 793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165
+    hash: c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab
     path: patches/applesauce-accounts@6.0.0.patch
+  applesauce-signers@6.0.1:
+    hash: c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545
+    path: patches/applesauce-signers@6.0.1.patch
   nostr-signer-capacitor-plugin@0.0.5:
     hash: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
     path: patches/nostr-signer-capacitor-plugin@0.0.5.patch
@@ -61,7 +64,7 @@ importers:
         version: 3.13.25(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       applesauce-accounts:
         specifier: ^6
-        version: 6.0.0(patch_hash=793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165)(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3)
       applesauce-common:
         specifier: ^6
         version: 6.0.2(typescript@6.0.3)
@@ -76,7 +79,7 @@ importers:
         version: 6.2.0(typescript@6.0.3)
       applesauce-signers:
         specifier: ^6
-        version: 6.0.1(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
       cordn-background:
         specifier: workspace:*
         version: link:packages/cordn-background
@@ -4451,10 +4454,10 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  applesauce-accounts@6.0.0(patch_hash=793cc07c1b578c2f80f430817c9d5e194ccc2288ba8a6d4eb7f25b673f0a3165)(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-accounts@6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3):
     dependencies:
       applesauce-core: 6.2.0(typescript@6.0.3)
-      applesauce-signers: 6.0.1(@capacitor/core@8.4.2)(typescript@6.0.3)
+      applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
     optionalDependencies:
@@ -4519,7 +4522,7 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-signers@6.0.1(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-signers@6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3):
     dependencies:
       '@noble/secp256k1': 1.7.2
       applesauce-core: 6.2.0(typescript@6.0.3)
