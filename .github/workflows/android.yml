@@ -52,7 +52,8 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          # Capacitor 8's capacitor-android module compiles to Java 21 bytecode.
+          java-version: 21
           cache: gradle
       - run: pnpm install --frozen-lockfile
 
