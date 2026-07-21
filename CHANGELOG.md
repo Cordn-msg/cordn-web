@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-next.3 — 2026-07-21
+
+### Fixes
+
+- **ci:** tolerate whitespace in keystore base64 secret
+
 ## 0.2.0-next.2 — 2026-07-21
 
 ### Fixes
