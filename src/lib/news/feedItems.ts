@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-22-live-connection-resilience',
+		createdAt: Date.UTC(2026, 6, 22),
+		version: 1,
+		title: 'Live chats recover on their own',
+		body: '- 🔄 Returning to the app after it was in the background now restores your live chats on every device — until now this recovery only ran on mobile, so a backgrounded desktop tab could silently stop receiving new messages until you refreshed.\n- 🐛 When a live connection dies while the app is backgrounded, returning now rebuilds it for you instead of leaving it quiet — anything you missed is pulled in at the same time.\n- 🐛 A live connection the coordinator closed on its own no longer leaves a group silently stuck with no new messages until you switched away and back; it restarts on its own.'
+	},
+	{
 		id: 'cordn-news-2026-07-16-multi-device',
 		createdAt: Date.UTC(2026, 6, 16),
 		version: 1,

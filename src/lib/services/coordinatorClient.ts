@@ -88,6 +88,7 @@ export type coordinatorClient = {
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeManyGroupMessagesOutput>;
 		abort: (reason?: string) => Promise<void>;
+		isStale: (marginMs?: number) => boolean;
 	}>;
 };
 
@@ -439,6 +440,7 @@ export class cordnClient implements coordinatorClient {
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeManyGroupMessagesOutput>;
 		abort: (reason?: string) => Promise<void>;
+		isStale: (marginMs?: number) => boolean;
 	}> {
 		await this.ephemeralConnected;
 
@@ -468,7 +470,11 @@ export class cordnClient implements coordinatorClient {
 				} catch {
 					return;
 				}
-			}
+			},
+			// Only a still-active stream is a rebuild candidate: once finalized
+			// (abort/close/fail) its own error path drives the resume, so gate on
+			// isActive to skip streams already tearing down.
+			isStale: (marginMs?: number) => call.stream.isActive && call.stream.isStale(marginMs)
 		};
 	}
 }
