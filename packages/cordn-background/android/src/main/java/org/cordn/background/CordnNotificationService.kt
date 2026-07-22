@@ -74,6 +74,15 @@ class CordnNotificationService : Service() {
         }
     }
 
+    // Android 15+ (API 35) caps dataSync foreground services at ~6h cumulative per 24h. When the
+    // cap is hit the system calls onTimeout(); not calling stopSelf() within a few seconds ANRs
+    // the app. Stop gracefully — the WorkManager 15-min backstop keeps delivering, and the service
+    // restarts on the next app launch (applyDeliveryMode) or boot (BootReceiver).
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        android.util.Log.w("CordnBg", "FGS dataSync timeout reached — stopping service (WM backstop covers)")
+        stopSelf(startId)
+    }
+
     override fun onDestroy() {
         scope.cancel()
         loopJob = null
