@@ -70,11 +70,9 @@ export async function initNativeShell(): Promise<void> {
 		// no splash configured — ignore
 	}
 
-	try {
-		await LocalNotifications.requestPermissions();
-	} catch {
-		// permission re-requested lazily on first showLocalNotification
-	}
+	// Ask for notification permission once at launch through the check-first helper, so an earlier
+	// denial isn't re-prompted every cold start. Later notify attempts gate on the same helper.
+	void ensureNotificationPermission();
 
 	// --- Phase 2/3: background delivery + sidecar ---
 	void applyDeliveryConfig();
@@ -162,8 +160,13 @@ export async function ensureNotificationPermission(): Promise<boolean> {
 	if (!browser) return false;
 	if (isNativePlatform()) {
 		try {
-			const { display } = await LocalNotifications.requestPermissions();
-			return display === 'granted';
+			// Check first: requestPermissions() re-shows the system prompt on Android whenever the
+			// state isn't 'granted', which would re-prompt on every unread message. Only ask when the
+			// user has never been prompted ('prompt'); respect an explicit 'denied'.
+			const { display } = await LocalNotifications.checkPermissions();
+			if (display !== 'prompt') return display === 'granted';
+			const after = await LocalNotifications.requestPermissions();
+			return after.display === 'granted';
 		} catch {
 			return false;
 		}
