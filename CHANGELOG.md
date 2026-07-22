@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-next.5 — 2026-07-22
+
+### Fixes
+
+- **android:** keep JNA + signer plugin classes from R8 so background fetch works in release
+- **chat:** make open-stream subscriptions resilient to backgrounding + silent close
+
 ## 0.2.0-next.4 — 2026-07-21
 
 ### Fixes
