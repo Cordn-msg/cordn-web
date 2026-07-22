@@ -29,9 +29,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
-      # lint has pre-existing violations in untouched code; report without blocking the gate.
       - run: pnpm lint
-        continue-on-error: true
 
   release-apk:
     name: build & publish signed APK
@@ -87,14 +85,25 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: apk-${{ github.ref_name }}
-          path: android/app/build/outputs/apk/**/*.apk
+      - name: Compose release notes (CHANGELOG section + signing cert fingerprint)
+        run: |
+          APK="$(find android/app/build/outputs/apk -name 'cordn-*-release.apk' | head -1)"
+          {
+            awk '/^## /{c++} c==1{print} c==2{exit}' CHANGELOG.md
+            if [ -n "$APK" ]; then
+              APKSIGNER="$(ls /usr/local/lib/android/sdk/build-tools/*/apksigner 2>/dev/null | tail -1)"
+              if [ -n "$APKSIGNER" ]; then
+                echo; echo '---'; echo
+                echo '### Verify this APK (signing cert SHA-256)'
+                "$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -i 'SHA-256' || true
+              fi
+            fi
+          } > release_notes.md
+          cat release_notes.md
 
       - name: Create GitHub release with the APK
         uses: softprops/action-gh-release@v2
         with:
           files: android/app/build/outputs/apk/**/*.apk
           prerelease: ${{ steps.lane.outputs.prerelease }}
-          generate_release_notes: true
+          body_path: release_notes.md
