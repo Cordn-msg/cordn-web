@@ -11,6 +11,13 @@
 # generated package verbatim so the FFI object/converter registry resolves at runtime.
 -keep class uniffi.contextvm_ffi.** { *; }
 
+# JNA (Java Native Access): UniFFI bridges into the Rust .so via com.sun.jna, which resolves
+# native methods + callbacks by reflection on these exact class names. R8 renaming/stripping
+# them silently breaks the background worker's fetch (per-coordinator try/catch swallows it),
+# while the pure-JS live path keeps working. Keep verbatim.
+-keep class com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+
 # JNI native method symbols (defensive — proguard-android-optimize.txt also covers this).
 -keepclasseswithmembernames class * {
     native <methods>;
@@ -20,3 +27,13 @@
 # framework surface and our CordnBackground plugin package.
 -keep class com.getcapacitor.** { *; }
 -keep class org.cordn.background.** { *; }
+
+# nostr-signer Capacitor plugin: discovered via the same Capacitor reflection as CordnBackground.
+# Keep so the native signer (NIP-55) still resolves after R8 obfuscation.
+-keep class social.nostr.signer.** { *; }
+
+# UniFFI loads the Rust FFI by Class.forName + JNA; keep the forName-referenced surface + the
+# native-callback naming intact (defensive — uniffi.** + com.sun.jna.** above cover the bulk).
+-keepclasseswithmembers class * {
+    @com.sun.jna.* <methods>;
+}
