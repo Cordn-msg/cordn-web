@@ -80,6 +80,7 @@ export async function initNativeShell(): Promise<void> {
 	void applyDeliveryConfig();
 	void drainBackgroundSidecar(); // ingest anything staged while the app was closed
 	void seedBackground();
+	void routeLaunchGid(); // deep-link if launched from a notification tap
 
 	try {
 		await App.addListener('appStateChange', ({ isActive }) => {
@@ -88,6 +89,7 @@ export async function initNativeShell(): Promise<void> {
 			// Foreground → drain staged bytes (catch-up) then re-seed.
 			if (isActive) {
 				void drainBackgroundSidecar().then(() => void seedBackground());
+				void routeLaunchGid();
 			} else {
 				void seedBackground();
 			}
@@ -230,6 +232,19 @@ export async function advanceNativeCursor(gid: string, cursor: number): Promise<
 	} catch {
 		// best-effort — a missed advance just risks one redundant worker notification
 	}
+}
+
+/**
+ * Consume a group id captured from a notification-tap launch (native deep link) and open that
+ * conversation. No-op on web. Called on cold start and on resume so tapping a background
+ * notification opens the right chat instead of the default /chat.
+ */
+export async function routeLaunchGid(): Promise<void> {
+	if (!isNativePlatform()) return;
+	const gid = await CordnBackground.consumeLaunchGid()
+		.then((r) => r.gid)
+		.catch(() => null);
+	if (gid) goto(resolve('/chat/[id]', { id: gid }));
 }
 
 // ───────────────────────────── background poll + sidecar (Phase 2) ─────────────────────────────

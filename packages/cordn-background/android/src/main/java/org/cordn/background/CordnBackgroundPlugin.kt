@@ -16,7 +16,6 @@ import org.json.JSONArray
 /**
  * The only TS↔Kotlin boundary for background polling (roadmap §4.2, §8, §11.2). Exposes the seam
  * methods consumed by `nativeBridge.ts` (guarded there by `isNativePlatform()`):
- *  - `configure`         → re-apply the stored delivery mode (backstop schedule),
  *  - `configureDelivery` → set mode + interval, then apply (start/stop service + reschedule WM),
  *  - `seed`              → push the group set + watermark + per-coordinator routing,
  *  - `upsertGroupMeta`   → refresh one group's cached title + icon bytes,
@@ -25,6 +24,11 @@ import org.json.JSONArray
  */
 @CapacitorPlugin(name = "CordnBackground")
 class CordnBackgroundPlugin : Plugin() {
+
+    // Group id captured from a notification-tap launch (deep-link target). Filled from the launch
+    // intent (cold start) or handleOnNewIntent (warm start); drained by the WebView via
+    // consumeLaunchGid so a tap opens the right conversation instead of the default /chat.
+    @Volatile private var pendingLaunchGid: String? = null
 
     @PluginMethod
     fun configureDelivery(call: PluginCall) {
@@ -139,6 +143,34 @@ class CordnBackgroundPlugin : Plugin() {
         intent.data = Uri.parse("package:${getContext().packageName}")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         getContext().startActivity(intent)
+    }
+
+    /**
+     * Drain the group id captured from a notification-tap launch (if any). Returns null when the
+     * app wasn't opened from a notification. Consumed once — a later cold start without a tap
+     * returns null (the launch intent extra is cleared; the warm-start cache is reset).
+     */
+    @PluginMethod
+    fun consumeLaunchGid(call: PluginCall) {
+        var gid = pendingLaunchGid
+        pendingLaunchGid = null
+        if (gid == null) {
+            val launchIntent = (getContext() as? android.app.Activity)?.intent
+            gid = launchIntent?.getStringExtra(EXTRA_GID)
+            if (gid != null) launchIntent?.removeExtra(EXTRA_GID)
+        }
+        call.resolve(JSObject().put("gid", gid))
+    }
+
+    // Warm start: a tap while the app is backgrounded delivers the PendingIntent to the existing
+    // activity via onNewIntent. Capture the gid so the WebView can route on the next resume.
+    override fun handleOnNewIntent(intent: Intent) {
+        val gid = intent.getStringExtra(EXTRA_GID)
+        if (gid != null) pendingLaunchGid = gid
+    }
+
+    companion object {
+        const val EXTRA_GID = "cordn_gid"
     }
 }
 

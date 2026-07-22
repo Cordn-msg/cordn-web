@@ -7,7 +7,6 @@ import { registerPlugin } from '@capacitor/core';
  * never execute outside the Android shell.
  *
  * Design (roadmap §4.2, §5, §6, §8, §11):
- *  - `configure`         → schedule the WorkManager periodic worker (15-min reliability backstop).
  *  - `configureDelivery` → set the delivery mode (off / standard / fast) + fast interval; starts
  *                           or stops the foreground service and reschedules WorkManager.
  *  - `seed`              → push the group set + the app's watermark + display names + per-coordinator
@@ -104,6 +103,8 @@ export interface CordnBackgroundPlugin {
 	postMessageNotification(options: CordnBackgroundPostNotificationOptions): Promise<void>;
 	/** Advance the worker's nativeCursor so it skips messages the live path already handled. */
 	advanceNativeCursor(options: CordnBackgroundAdvanceCursorOptions): Promise<void>;
+	/** Consume + return the group id captured from a notification-tap launch (deep-link routing). */
+	consumeLaunchGid(): Promise<{ gid: string | null }>;
 	/** Pull staged sidecar rows (wire format) and clear them. Call on foreground catch-up. */
 	drain(): Promise<CordnBackgroundDrainResult>;
 	/** Whether this app is exempt from battery optimization (Doze). */

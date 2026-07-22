@@ -113,6 +113,8 @@ internal object Notifications {
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
         val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
         if (tapIntent != null) {
+            // Carry the group id so a tap deep-links into the conversation (routeLaunchGid on resume).
+            tapIntent.putExtra(CordnBackgroundPlugin.EXTRA_GID, gid)
             builder.setContentIntent(
                 PendingIntent.getActivity(
                     ctx,
