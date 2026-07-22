@@ -72,7 +72,7 @@
 		"@capacitor/splash-screen": "^8.0.2",
 		"@capacitor/status-bar": "^8.0.3",
 		"@contextvm/mcp-sdk": "^1.30",
-		"@contextvm/sdk": "^0.13.9",
+		"@contextvm/sdk": "^0.13.10",
 		"@noble/ciphers": "2.2.0",
 		"@noble/hashes": "2.0.1",
 		"@tanstack/svelte-query": "^6.1.33",

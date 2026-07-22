@@ -56,6 +56,12 @@ type GroupWatchTask = {
 	discard: () => void;
 	ready: Promise<void>;
 	task: Promise<void>;
+	/**
+	 * Reads the SDK session's staleness once the subscription is live.
+	 * Undefined until the subscription resolves; the foreground handler treats
+	 * undefined as "not stale" so a watch mid-start is never rebuilt.
+	 */
+	isStale?: () => boolean;
 };
 
 export const chatGroupWatchStore = $state<{
@@ -76,6 +82,13 @@ const RESUME_DEBOUNCE_MS = 500;
 const MIN_RESUME_INTERVAL_MS = 5000;
 /** Bounds graceful teardowns so an abort publish on an unhealthy socket can't hang forever. */
 const CLOSE_WATCH_TIMEOUT_MS = 3000;
+/**
+ * Extra slack over the SDK keepalive window (idle + probe) before a
+ * still-active subscription is treated as a server-killed zombie. Background
+ * tabs throttle the keepalive timers so the session never reaches its own
+ * abort; the foreground handler uses this via `isStale` to rebuild it.
+ */
+const STALE_STREAM_MARGIN_MS = 10_000;
 /** Hides the "Updating chats…" banner for rebuilds that finish quickly. */
 const RECONNECT_BANNER_DELAY_MS = 500;
 /** Per-call timeout for backlog fetches (msg_fetch_many). The default MCP
@@ -162,23 +175,32 @@ if (browser) {
 		}
 	});
 
-	const likelyMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+	// Foreground recovery runs on every platform, not just touch devices: a
+	// backgrounded/throttled tab can leave a server-killed stream as a
+	// locally-active zombie (isActive true, keepalive timers never fired), so on
+	// return to foreground we rebuild stale coordinators and catch up the rest.
+	const onForeground = (reason: string) => {
+		if (!warmed) return;
+		const staleCoordinators = new SvelteSet<string>();
+		for (const handle of currentWatches.values()) {
+			if (handle.isStale?.()) staleCoordinators.add(handle.coordinatorKey);
+		}
+		// Promise.all([]) resolves immediately, so an all-healthy foreground is
+		// just the catch-up in the scheduled resume with no discarded rebuilds.
+		const discardStale = Promise.all(
+			[...staleCoordinators].map((coordinatorKey) =>
+				stopCoordinatorWatches(coordinatorKey, 'stream stale', { local: true })
+			)
+		);
+		void discardStale.then(() => scheduleChatGroupResume(reason));
+	};
 
 	window.addEventListener('online', () => scheduleChatGroupResume('browser online'));
-	window.addEventListener('pageshow', () => {
-		if (warmed) scheduleChatGroupResume('page show');
+	window.addEventListener('pageshow', () => onForeground('page show'));
+	window.addEventListener('focus', () => onForeground('window focus'));
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'visible') onForeground('page visible');
 	});
-
-	if (likelyMobile) {
-		window.addEventListener('focus', () => {
-			if (warmed) scheduleChatGroupResume('window focus');
-		});
-		document.addEventListener('visibilitychange', () => {
-			if (warmed && document.visibilityState === 'visible') {
-				scheduleChatGroupResume('page visible');
-			}
-		});
-	}
 }
 
 async function closeWatch(
@@ -733,6 +755,7 @@ async function startWatchingCoordinatorGroups(
 					});
 				});
 			};
+			handle.isStale = () => subscription.isStale(STALE_STREAM_MARGIN_MS);
 
 			handle.task = (async () => {
 				void subscription.result.catch((error) => {
@@ -750,6 +773,7 @@ async function startWatchingCoordinatorGroups(
 					});
 				});
 
+				let streamEndedCleanly = false;
 				try {
 					for await (const message of subscription.stream) {
 						const group = groupsByGid.get(message.gid);
@@ -766,6 +790,7 @@ async function startWatchingCoordinatorGroups(
 							return;
 						}
 					}
+					streamEndedCleanly = true;
 				} catch (error) {
 					if (closing) return;
 					throw error;
@@ -777,6 +802,13 @@ async function startWatchingCoordinatorGroups(
 						buffer.clearFlushTimer();
 					}
 					clearCurrentWatch(handle);
+					// A clean stream end (server `close` frame, transport teardown)
+					// resolves the iterator without throwing, so neither the catch
+					// above nor the `.catch` below fires. Restart this coordinator so
+					// delivery resumes instead of silently going dark.
+					if (streamEndedCleanly && !closing) {
+						scheduleChatGroupResume('subscription ended', coordinatorKey);
+					}
 				}
 			})();
 
