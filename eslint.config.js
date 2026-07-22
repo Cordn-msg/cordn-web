@@ -22,7 +22,16 @@ export default defineConfig(
 		rules: {
 			// typescript-eslint strongly recommend that you do not use the no-undef lint rule on TypeScript projects.
 			// see: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-global-variables-not-being-defined-even-though-there-are-no-typescript-errors
-			'no-undef': 'off'
+			'no-undef': 'off',
+			// `_`-prefixed identifiers are intentionally unused (needed for {#each array as _, i}).
+			'@typescript-eslint/no-unused-vars': [
+				'error',
+				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }
+			],
+			// svelte/prefer-svelte-reactivity only fires on transient local Set/Map accumulators here
+			// (dedup sets, $derived.by locals) — never on actual reactive state. Re-enable if the
+			// codebase adopts SvelteSet/SvelteMap for real $state-backed collections.
+			'svelte/prefer-svelte-reactivity': 'off'
 		}
 	},
 	{

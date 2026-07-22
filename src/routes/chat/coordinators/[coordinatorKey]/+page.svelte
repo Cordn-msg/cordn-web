@@ -348,7 +348,7 @@
 												</p>
 											{/if}
 											{#if serverInfo.website}
-												<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+												<!-- eslint-disable svelte/no-navigation-without-resolve -->
 												<a
 													href={serverInfo.website}
 													target="_blank"
@@ -357,6 +357,7 @@
 												>
 													{serverInfo.website}
 												</a>
+												<!-- eslint-enable svelte/no-navigation-without-resolve -->
 											{/if}
 											{#if serverInfo.picture}
 												<img
