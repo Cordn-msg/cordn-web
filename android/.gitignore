@@ -89,6 +89,9 @@ lint/tmp/
 # Android Profiling
 *.hprof
 
+# Logcat test captures
+*.logcat
+
 # Cordova plugins for Capacitor
 capacitor-cordova-android-plugins
 

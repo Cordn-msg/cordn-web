@@ -32,8 +32,3 @@
 # Keep so the native signer (NIP-55) still resolves after R8 obfuscation.
 -keep class social.nostr.signer.** { *; }
 
-# UniFFI loads the Rust FFI by Class.forName + JNA; keep the forName-referenced surface + the
-# native-callback naming intact (defensive — uniffi.** + com.sun.jna.** above cover the bulk).
--keepclasseswithmembers class * {
-    @com.sun.jna.* <methods>;
-}

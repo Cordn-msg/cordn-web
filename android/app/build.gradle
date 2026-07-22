@@ -68,6 +68,12 @@ android {
             if (keystorePropertiesFile.exists()) {
                 signingConfig signingConfigs.release
             }
+            // Ship only ABIs real devices + x86_64 emulators use. x86 (32-bit) is near-dead and each
+            // ABI carries its own ~9–14MB Rust .so, so dropping it cuts a full copy. Debug builds keep
+            // all ABIs (release-only) so local emulator dogfooding is unaffected.
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            }
         }
     }
 
@@ -100,11 +106,3 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
-    }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
-}
