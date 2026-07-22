@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0-next.6 — 2026-07-22
+
+### Features
+
+- **native:** deep-link a notification tap to its conversation
+
+### Fixes
+
+- **native:** stop re-prompting notification permission on every message
+- **android:** disable full backup to protect chat history and keys
+- **native:** stop Android 15+ from force-stopping the FGS on its dataSync cap
+
+### Chore
+
+- clear pre-existing lint violations
+- **android:** trim dead config and shrink the release APK
+
+### Other
+
+- **android:** publish changelog + signing-cert fingerprint; gate on lint
+
 ## 0.2.0-next.5 — 2026-07-22
 
 ### Fixes
