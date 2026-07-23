@@ -27,11 +27,13 @@
 	import { relayPool, metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { copyToClipboard } from '$lib/utils';
+	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import { toast } from 'svelte-sonner';
 	import Eye from '@lucide/svelte/icons/eye';
 	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Copy from '@lucide/svelte/icons/copy';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Gem from '@lucide/svelte/icons/gem';
 
 	let open = $state(false);
 
@@ -41,7 +43,7 @@
 		}
 	});
 
-	let selectedTab = $state<'extension' | 'simple' | 'remote'>('extension');
+	let selectedTab = $state<'extension' | 'simple' | 'remote' | 'signer'>('extension');
 	let privateKey = $state('');
 	let bunkerUri = $state('');
 	let nostrConnectUri = $state('');
@@ -190,8 +192,8 @@
 			// Generate nostr connect URI with app metadata and permissions
 			const uri = signer.getNostrConnectURI({
 				name: 'Cordn-web',
-				url: window.location.origin,
-				image: `${window.location.origin}/favicon.svg`
+				url: publicWebOrigin(),
+				image: `${publicWebOrigin()}/favicon.svg`
 			});
 
 			nostrConnectUri = uri;
@@ -289,18 +291,27 @@
 		}
 	});
 
+	// Auto-select the best login method when the dialog opens: installed signer app (Android,
+	// recommended) → browser extension → sign up. Re-evaluates if signer apps resolve after open
+	// (rare); it won't yank a manual choice because the deps (open, androidSignerApps) don't
+	// change once the user starts clicking tabs.
 	$effect(() => {
-		// Check if extension is available
-		if (typeof window !== 'undefined' && !('nostr' in window)) {
+		if (!open) return;
+		if (isAndroidNative() && androidSignerApps && androidSignerApps.length > 0) {
+			selectedTab = 'signer';
+		} else if (typeof window !== 'undefined' && 'nostr' in window) {
+			selectedTab = 'extension';
+		} else {
 			selectedTab = 'simple';
 		}
 	});
 
-	// Probe for installed Android signer apps (Amber, etc.) via NIP-55 when the dialog opens on
-	// the native Android shell. Web/iOS -> null so the section never renders. Best-effort: a
-	// missing plugin or zero installed signers resolves to [] and the section is hidden.
+	// Probe once for installed Android signer apps (Amber, etc.) via NIP-55 on mount of the native
+	// shell, so the result is resolved before the dialog opens — avoids a tab flash when the
+	// recommended signer tab becomes the default. Web/iOS never probe (-> null, tab hidden).
+	// Best-effort: a missing plugin or zero installed signers resolves to [] and the tab is hidden.
 	$effect(() => {
-		if (!open || !isAndroidNative()) return;
+		if (!isAndroidNative()) return;
 		let cancelled = false;
 		getInstalledSignerApps().then((apps) => {
 			if (!cancelled) androidSignerApps = apps;
@@ -333,37 +344,19 @@
 		</Dialog.Header>
 
 		<div class="grid gap-4 py-4">
-			{#if isAndroidNative() && androidSignerApps && androidSignerApps.length > 0}
-				<!-- Native Android signer apps (Amber, etc.) via NIP-55. Top of the dialog on Android
-				     because it's the best UX on-device; falls through to the tabs below for nsec/NIP-46. -->
-				<div class="space-y-2">
-					{#if androidSignerError}
-						<p class="text-sm text-destructive">{androidSignerError}</p>
-					{/if}
-					{#each androidSignerApps as app (app.packageName)}
-						<Button
-							class="w-full justify-start"
-							disabled={connectingPkg !== null}
-							onclick={() => handleAndroidSignerLogin(app)}
-						>
-							{#if connectingPkg === app.packageName}
-								<Spinner class="mr-2 size-4" />
-								Connecting…
-							{:else}
-								Log in with {app.name}
-							{/if}
-						</Button>
-					{/each}
-					<div class="flex items-center gap-3 py-1">
-						<div class="h-px flex-1 bg-border"></div>
-						<span class="text-xs tracking-wider text-muted-foreground uppercase">or</span>
-						<div class="h-px flex-1 bg-border"></div>
-					</div>
-				</div>
-			{/if}
-
 			<!-- Tab Navigation -->
 			<div class="flex space-x-1 rounded-lg bg-muted p-1">
+				{#if isAndroidNative() && androidSignerApps && androidSignerApps.length > 0}
+					<button
+						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
+						'signer'
+							? 'bg-background shadow-sm'
+							: 'hover:bg-muted-foreground/10'}"
+						onclick={() => (selectedTab = 'signer')}
+					>
+						Signer app
+					</button>
+				{/if}
 				{#if typeof window !== 'undefined' && 'nostr' in window}
 					<button
 						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
@@ -394,6 +387,33 @@
 					Remote Signer
 				</button>
 			</div>
+
+			<!-- Signer app Tab (Android NIP-55) -->
+			{#if selectedTab === 'signer'}
+				<div class="space-y-2">
+					<p class="text-sm text-muted-foreground">
+						Connect with an installed signer app via NIP-55 — your keys never leave the signer.
+					</p>
+					{#if androidSignerError}
+						<p class="text-sm text-destructive">{androidSignerError}</p>
+					{/if}
+					{#each androidSignerApps as app (app.packageName)}
+						<Button
+							class="w-full justify-start"
+							disabled={connectingPkg !== null}
+							onclick={() => handleAndroidSignerLogin(app)}
+						>
+							{#if connectingPkg === app.packageName}
+								<Spinner class="mr-2 size-4" />
+								Connecting…
+							{:else}
+								<Gem class="mr-2 size-4" />
+								Log in with {app.name}
+							{/if}
+						</Button>
+					{/each}
+				</div>
+			{/if}
 
 			<!-- Extension Tab -->
 			{#if selectedTab === 'extension'}
@@ -619,8 +639,10 @@
 			>
 				Cancel
 			</Button>
-			{#if selectedTab === 'remote' && remoteSignerStep === 'connecting'}
-				<!-- No connect button when waiting for remote signer -->
+			{#if (selectedTab === 'remote' && remoteSignerStep === 'connecting') || selectedTab ===
+				'signer'}
+				<!-- No submit button: the signer-app tab uses direct per-app CTAs; remote-connecting
+				     waits for the signer. -->
 			{:else}
 				<Button
 					onclick={handleSubmit}
