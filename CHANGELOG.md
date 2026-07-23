@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0-next.7 — 2026-07-23
+
+### Features
+
+- **auth:** add the Amber signer app as a first-class login tab
+- **native:** share into a conversation and open cordn.net links in-app
+- **chat:** support multiple media attachments in composer
+
+### Fixes
+
+- **native:** flush the background sidecar when messages arrive in the foreground
+
+### Chore
+
+- refresh app icon, splash, and PWA assets
+
 ## 0.2.0-next.6 — 2026-07-22
 
 ### Features
