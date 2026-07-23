@@ -79,10 +79,10 @@
 				<!-- resolving the transport, or redirecting to /chat (nothing to share) -->
 			{:else}
 				<div class="rounded-2xl border border-border bg-muted/30 p-4">
-					<p class="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+					<p class="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
 						Sharing
 					</p>
-					<p class="line-clamp-6 break-words whitespace-pre-wrap text-sm text-foreground">
+					<p class="line-clamp-6 text-sm break-words whitespace-pre-wrap text-foreground">
 						{shareText}
 					</p>
 				</div>

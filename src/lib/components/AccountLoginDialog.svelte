@@ -639,8 +639,7 @@
 			>
 				Cancel
 			</Button>
-			{#if (selectedTab === 'remote' && remoteSignerStep === 'connecting') || selectedTab ===
-				'signer'}
+			{#if (selectedTab === 'remote' && remoteSignerStep === 'connecting') || selectedTab === 'signer'}
 				<!-- No submit button: the signer-app tab uses direct per-app CTAs; remote-connecting
 				     waits for the signer. -->
 			{:else}

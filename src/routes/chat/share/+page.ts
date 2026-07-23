@@ -14,7 +14,7 @@ function combineShare(text?: string, url?: string, title?: string): string | nul
 	const u = url?.trim();
 	const titleT = title?.trim();
 	if (t && u && !t.includes(u)) return `${t}\n${u}`;
-	return (t || u || titleT) || null;
+	return t || u || titleT || null;
 }
 
 export const load: PageLoad = ({ url }) => {
