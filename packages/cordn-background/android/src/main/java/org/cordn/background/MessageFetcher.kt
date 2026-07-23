@@ -54,6 +54,14 @@ internal object MessageFetcher {
                 android.util.Log.w("CordnBg", "poll failed for coordinator $serverPubkey", t)
             }
         }
+        if (notifiedAny) {
+            // Tell a foregrounded WebView to drain the sidecar now — closes the gap where a
+            // stale/rebuilding live client missed the real-time delivery. The worker only stages
+            // what the live path's nativeCursor lagged, so this never fires when the live path
+            // already ingested the message (no redundant drain). Backgrounded → null/suspended;
+            // the foreground-transition drain then covers recovery.
+            CordnBackgroundPlugin.instance?.emitSidecarUpdated()
+        }
         return notifiedAny
     }
 

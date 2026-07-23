@@ -1,4 +1,4 @@
-import { registerPlugin } from '@capacitor/core';
+import { type PluginListenerHandle, registerPlugin } from '@capacitor/core';
 
 /**
  * TS↔Kotlin bridge for background message polling. The *only* boundary between the
@@ -124,6 +124,11 @@ export interface CordnBackgroundPlugin {
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */
 	requestBatteryExemption(): Promise<void>;
+	/** Fired when the background worker stages new sidecar bytes while the app is foregrounded. */
+	addListener(
+		eventName: 'sidecarUpdated',
+		listener: () => void
+	): Promise<PluginListenerHandle>;
 }
 
 export const CordnBackground = registerPlugin<CordnBackgroundPlugin>('CordnBackground');

@@ -169,8 +169,38 @@ class CordnBackgroundPlugin : Plugin() {
         if (gid != null) pendingLaunchGid = gid
     }
 
+    /**
+     * Signal the foregrounded WebView that the background worker staged sidecar bytes, so the live
+     * TS layer drains immediately — closes the foregrounded live-path gap (a stale/rebuilding client
+     * missed the real-time delivery). Public so the shared [MessageFetcher] can reach it via
+     * [instance] (`Plugin.notifyListeners` is protected, hence this wrapper). No-op when no JS
+     * listener is attached (WebView suspended/backgrounded): the foreground-transition drain in
+     * nativeBridge.ts then covers recovery.
+     */
+    fun emitSidecarUpdated() {
+        notifyListeners(EVENT_SIDECAR_UPDATED, JSObject())
+    }
+
+    // Bridge handle for the background fetcher (runs from the foreground service / WorkManager,
+    // same app process). Set in load() (bridge alive), cleared in handleOnDestroy(). Null when the
+    // app is cold-started by the background worker before the user opens it — then the
+    // foreground-transition drain covers recovery.
+    override fun load() {
+        super.load()
+        instance = this
+    }
+
+    override fun handleOnDestroy() {
+        if (instance === this) instance = null
+        super.handleOnDestroy()
+    }
+
     companion object {
         const val EXTRA_GID = "cordn_gid"
+        const val EVENT_SIDECAR_UPDATED = "sidecarUpdated"
+
+        @Volatile
+        var instance: CordnBackgroundPlugin? = null
     }
 }
 

@@ -120,6 +120,19 @@ export async function initNativeShell(): Promise<void> {
 	} catch {
 		// appUrlOpen unavailable — links fall back to opening in the browser
 	}
+
+	// Event-driven sidecar drain: when the background worker stages new bytes while the app is
+	// foregrounded (detected via nativeCursor lag — i.e. the live path missed them), drain
+	// immediately instead of waiting for the next foreground transition. Backgrounded staging is
+	// still caught by the cold-start / foreground-transition drain above; this only closes the
+	// foregrounded gap, firing exactly when there are confirmed un-ingested bytes.
+	try {
+		await CordnBackground.addListener('sidecarUpdated', () => {
+			void drainBackgroundSidecar();
+		});
+	} catch {
+		// plugin unavailable — foreground-transition drain still covers recovery
+	}
 }
 
 // ───────────────────────────── android native signer (NIP-55) ─────────────────────────────
