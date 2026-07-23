@@ -1,0 +1,8 @@
+# Gradle/Android build output (the plugin module compiles to .class/.dex here)
+android/build/
+android/.gradle/
+android/local.properties
+
+# IDE
+.idea/
+*.iml

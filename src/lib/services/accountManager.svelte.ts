@@ -1,5 +1,5 @@
 import { AccountManager } from 'applesauce-accounts';
-import { registerCommonAccountTypes } from 'applesauce-accounts/accounts';
+import { registerAndroidAccounts } from 'applesauce-accounts/accounts/android-native-account';
 import { NostrConnectSigner } from 'applesauce-signers/signers';
 import { browser } from '$app/environment';
 import { relayPool } from './relay-pool';
@@ -8,8 +8,10 @@ import { relayPool } from './relay-pool';
 export const manager = new AccountManager();
 
 export const activeAccount = manager.active$;
-// register common account types
-registerCommonAccountTypes(manager);
+// register account types. registerAndroidAccounts is a superset of the common set
+// (it calls registerCommonAccountTypes) and additionally wires AndroidNativeAccount so a
+// NIP-55 (Amber) login persisted to localStorage can rehydrate on relaunch.
+registerAndroidAccounts(manager);
 
 // Setup Nostr connect signer
 NostrConnectSigner.subscriptionMethod = relayPool.subscription.bind(relayPool);
@@ -22,9 +24,14 @@ if (browser) {
 	if (json.length) {
 		manager.fromJSON(json);
 
-		// load active account from storage
+		// load active account from storage. A stale `active` id (account that failed to rehydrate
+		// or was removed) must not throw here and blank the whole app — drop the pointer and fall
+		// through to the logged-out UI instead.
 		const active = localStorage.getItem('active');
-		if (active) manager.setActive(active);
+		if (active) {
+			if (manager.getAccount(active)) manager.setActive(active);
+			else localStorage.removeItem('active');
+		}
 
 		// subscribe to active changes
 	}

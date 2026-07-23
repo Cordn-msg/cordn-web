@@ -1,0 +1,108 @@
+import groovy.json.JsonSlurper
+
+apply plugin: 'com.android.application'
+
+// Single source of truth for versioning (bumped via `pnpm version`, see docs/versioning.md).
+// versionName  <- package.json `version` (e.g. 0.2.0, 0.2.0-next.1).
+// versionCode  <- git commit count: monotonically increasing across stable AND prerelease builds
+//                without needing CI. ponytail: switch to a CI counter if git history is ever
+//                rewritten regressively, or for store requirements that want smaller gaps.
+def appVersionName = new JsonSlurper().parseText(file('../../package.json').text).version
+
+def appVersionCode
+try {
+    def out = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'rev-list', '--count', 'HEAD'
+        standardOutput out
+        ignoreExitValue true
+    }
+    def count = out.toString().trim().toInteger()
+    appVersionCode = count > 0 ? count : 1
+} catch (Exception ignored) {
+    appVersionCode = 1
+}
+
+// Release signing config. keystore.properties is generated in CI from GitHub secrets; absent
+// locally → release builds skip signing (use android:apk for debug-signed local builds).
+// See docs/versioning.md.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace = "org.cordn.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "org.cordn.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode appVersionCode
+        versionName appVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            // AGP (8.13+) dropped `proguard-android.txt` (it forces -dontoptimize, blocking R8).
+            // The `-optimize` variant is the supported default. R8 is on for release; keep rules
+            // for UniFFI JNI bindings + Capacitor plugin reflection live in proguard-rules.pro.
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            // Ship only ABIs real devices + x86_64 emulators use. x86 (32-bit) is near-dead and each
+            // ABI carries its own ~9–14MB Rust .so, so dropping it cuts a full copy. Debug builds keep
+            // all ABIs (release-only) so local emulator dogfooding is unaffected.
+            ndk {
+                abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            }
+        }
+    }
+
+    // Name APK outputs with the semver + build type so successive prereleases don't overwrite
+    // each other. e.g. cordn-0.2.0-next.1-debug.apk. versionName comes from package.json (see top).
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            output.outputFileName = "cordn-${variant.versionName}-${variant.buildType.name}.apk"
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+

@@ -1,0 +1,57 @@
+ext {
+    capacitorVersion = System.getenv('CAPACITOR_VERSION')
+}
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Match the host app (android/build.gradle + variables.gradle).
+        classpath 'com.android.tools.build:gradle:8.13.0'
+        // UniFFI library-mode bindings are Kotlin, generated for the 1.9.x era (UniFFI 0.31).
+        // 2.x tightens overload resolution and rejects the Disposable+AutoCloseable `close()` diamond.
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25'
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace = "org.cordn.background"
+    compileSdk = rootProject.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+
+    defaultConfig {
+        minSdkVersion rootProject.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+        targetSdkVersion rootProject.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = "21"
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    if (System.getenv("CAP_PLUGIN_PUBLISH") == "true") {
+        implementation "com.capacitorjs:core:$capacitorVersion"
+    } else {
+        implementation project(':capacitor-android')
+    }
+
+    // WorkManager: periodic background poll + expedited one-shots (Phase 3).
+    implementation 'androidx.work:work-runtime-ktx:2.10.0'
+    // UniFFI library-mode Kotlin bindings call into the .so via JNA.
+    implementation 'net.java.dev.jna:jna:5.16.0@aar'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+}

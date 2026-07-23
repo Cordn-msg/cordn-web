@@ -4,4 +4,5 @@
 /manifest.webmanifest /manifest.webmanifest 200
 /robots.txt /robots.txt 200
 /service-worker.js /service-worker.js 200
+/.well-known/* /.well-known/:splat 200
 /* /index.html 200

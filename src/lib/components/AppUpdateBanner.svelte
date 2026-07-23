@@ -15,6 +15,9 @@
 		startAppUpdateWatcher();
 		return () => stopAppUpdateWatcher();
 	});
+
+	// Product version when known, else the SHA. Display only — the comparison key stays the SHA.
+	const displayVersion = $derived(appUpdateStore.latestSemver ?? appUpdateStore.latestVersion);
 </script>
 
 {#if appUpdateStore.available}
@@ -26,8 +29,8 @@
 		<RefreshCw class="size-4 shrink-0" />
 		<span class="min-w-0 truncate">
 			A new version of Cordn is available
-			{#if appUpdateStore.latestVersion}
-				<span class="opacity-70">({appUpdateStore.latestVersion})</span>
+			{#if displayVersion}
+				<span class="opacity-70">({displayVersion})</span>
 			{/if}
 		</span>
 		<Button variant="secondary" size="sm" onclick={reloadForUpdate}>Reload</Button>

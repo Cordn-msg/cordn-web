@@ -1,0 +1,16 @@
+diff --git a/dist/accounts/android-native-account.js b/dist/accounts/android-native-account.js
+index 315cd5714101c1899c7d07309cbcca6d80d31e65..3ff6acc38219d87871cb27d54ce31d30d47f089e 100644
+--- a/dist/accounts/android-native-account.js
++++ b/dist/accounts/android-native-account.js
+@@ -13,8 +13,9 @@ export class AndroidNativeAccount extends BaseAccount {
+         });
+     }
+     static fromJSON(json) {
+-        const signer = new AndroidNativeSigner(json.signer.packageName);
+-        return new AndroidNativeAccount(json.pubkey, signer);
++        const signer = new AndroidNativeSigner(json.signer.packageName, json.pubkey);
++        const account = new AndroidNativeAccount(json.pubkey, signer);
++        return super.loadCommonFields(account, json);
+     }
+     static async fromApp(app) {
+         const signer = new AndroidNativeSigner(app.packageName);

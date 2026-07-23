@@ -2,6 +2,8 @@
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
 	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
 	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
+	import NativeGroupMetaSync from '$lib/components/chat/NativeGroupMetaSync.svelte';
+	import { isNativePlatform } from '$lib/services/nativeBridge';
 	import { untrack } from 'svelte';
 	import {
 		createChatLayoutContext,
@@ -138,4 +140,7 @@
 
 	<MediaLightbox />
 	<LastResortConflictDialog />
+	{#if isNativePlatform()}
+		<NativeGroupMetaSync />
+	{/if}
 </div>

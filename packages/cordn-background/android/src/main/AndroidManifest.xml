@@ -1,0 +1,31 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Re-schedule the periodic poll after device reboot and re-apply the delivery mode
+             (restart the foreground service if the user chose Fast). -->
+        <receiver
+            android:name="org.cordn.background.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Fast-delivery foreground service (roadmap §4.2). Polls on a coroutine timer at the
+             user-chosen interval; Doze-exempt. Mandatory persistent notification on CHANNEL_SYNC. -->
+        <service
+            android:name="org.cordn.background.CordnNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+: required because the service declares foregroundServiceType="dataSync". -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Prompt the user to exempt Cordn from battery optimization (improves Doze reliability). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+</manifest>

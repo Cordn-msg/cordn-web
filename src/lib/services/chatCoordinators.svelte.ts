@@ -96,6 +96,10 @@ function saveCoordinators() {
 	if (!browser) return;
 	const payload: PersistedCoordinators = { coordinators: chatCoordinatorsStore.coordinators };
 	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+	// Re-seed the native background poll set so worker routing tracks relay changes. Dynamic
+	// import dodges the nativeBridge→chatCoordinators cycle; seedBackground is a no-op on web and
+	// when no account is active yet (cold-start hydration calls through here too).
+	void import('$lib/services/nativeBridge').then(({ seedBackground }) => seedBackground());
 }
 
 function loadCoordinators() {

@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
+import { isNativePlatform } from '$lib/services/nativeBridge';
 
 /**
  * Update detection.
@@ -24,10 +25,16 @@ const DISMISS_KEY = 'cordn-app-update-dismissed';
 const LAST_SEEN_VERSION_KEY = 'cordn-app-last-seen-version';
 
 const CURRENT_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+const CURRENT_SEMVER = typeof __APP_SEMVER__ === 'string' ? __APP_SEMVER__ : '0.0.0';
 
-export const appUpdateStore = $state<{ available: boolean; latestVersion: string | null }>({
+export const appUpdateStore = $state<{
+	available: boolean;
+	latestVersion: string | null; // SHA — the comparison key
+	latestSemver: string | null; // product version, display only
+}>({
 	available: false,
-	latestVersion: null
+	latestVersion: null,
+	latestSemver: null
 });
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -70,7 +77,7 @@ function notifyAppVersionOnStartup() {
 	if (!browser || !import.meta.env.PROD) return;
 	const previous = getLastSeenVersion();
 	if (previous && previous !== CURRENT_VERSION) {
-		toast.success('Cordn updated', { description: `Now running v${CURRENT_VERSION}` });
+		toast.success('Cordn updated', { description: `Now running v${CURRENT_SEMVER}` });
 	}
 	setLastSeenVersion(CURRENT_VERSION);
 }
@@ -84,8 +91,9 @@ async function pollVersion() {
 	try {
 		const response = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' });
 		if (!response.ok) return;
-		const data = (await response.json()) as { version?: unknown };
+		const data = (await response.json()) as { version?: unknown; semver?: unknown };
 		const remote = typeof data?.version === 'string' ? data.version : null;
+		const remoteSemver = typeof data?.semver === 'string' ? data.semver : null;
 		if (!remote || remote === CURRENT_VERSION) {
 			appUpdateStore.available = false;
 			return;
@@ -95,6 +103,7 @@ async function pollVersion() {
 			return;
 		}
 		appUpdateStore.latestVersion = remote;
+		appUpdateStore.latestSemver = remoteSemver;
 		appUpdateStore.available = true;
 	} catch {
 		// network or parse error — ignore; the next interval retries
@@ -106,7 +115,11 @@ async function pollVersion() {
 /** Start polling. Mount once via `AppUpdateBanner.svelte` in the root layout. */
 export function startAppUpdateWatcher() {
 	if (!browser) return;
+	// One-shot startup toast runs on both platforms — native fires it once after an APK update.
 	notifyAppVersionOnStartup();
+	// Polling is web-only: native assets are bundled + frozen in the APK, so the served SHA always
+	// equals the bundled SHA and the 10-min poll would never fire (the toast above already covers APK updates).
+	if (isNativePlatform()) return;
 	void pollVersion();
 	pollTimer = setInterval(pollVersion, POLL_INTERVAL_MS);
 }

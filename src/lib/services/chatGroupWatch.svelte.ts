@@ -14,6 +14,7 @@ import {
 	disconnectCoordinatorClients,
 	isTransientCoordinatorError,
 	requireActiveAccount,
+	replaceCoordinatorClient,
 	withCoordinatorClient
 } from '$lib/services/chatRuntime';
 import {
@@ -34,6 +35,11 @@ import {
 } from '$lib/services/chatGroupPresence.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
+import {
+	advanceNativeCursor,
+	groupFetchWatermark,
+	isNativePlatform
+} from '$lib/services/nativeBridge';
 import {
 	markAllGroupsUnwatched,
 	markGroupUnwatched,
@@ -57,6 +63,13 @@ type GroupWatchTask = {
 	 * undefined as "not stale" so a watch mid-start is never rebuilt.
 	 */
 	isStale?: () => boolean;
+	/**
+	 * Wall-clock ms of the last delivered *chunk* (not any keepalive frame).
+	 * Undefined until the first message arrives. The gap detector pairs a
+	 * catch-up miss with `isDeliveryStale` to prove a keepalive-green zombie —
+	 * the one failure mode no timer can catch (server pings flow, chunks don't).
+	 */
+	lastChunkAt?: number;
 };
 
 export const chatGroupWatchStore = $state<{
@@ -84,6 +97,22 @@ const CLOSE_WATCH_TIMEOUT_MS = 3000;
  * abort; the foreground handler uses this via `isStale` to rebuild it.
  */
 const STALE_STREAM_MARGIN_MS = 10_000;
+/**
+ * Same window as `isStale` but measured from the last delivered *chunk*, not
+ * any keepalive frame. A stream whose pings still flow but whose chunks
+ * stopped is invisible to every timer-based signal; the gap detector pairs a
+ * catch-up miss with this to prove it's a zombie.
+ */
+const DELIVERY_STALE_MS = 30_000 + 20_000 + STALE_STREAM_MARGIN_MS;
+/**
+ * Foreground-only sweep. Lifecycle events and SDK timers cover the common
+ * deaths, but a continuously-foregrounded session in which a keepalive-green
+ * zombie develops has no trigger at all. This runs the resume's catch-up —
+ * whose cursor gap check is the only signal that can prove that class — but
+ * only when some stream is chunk-silent, so an actively-chatting session pays
+ * nothing.
+ */
+const FOREGROUND_WATCHDOG_INTERVAL_MS = 180_000;
 /** Hides the "Updating chats…" banner for rebuilds that finish quickly. */
 const RECONNECT_BANNER_DELAY_MS = 500;
 /** Per-call timeout for backlog fetches (msg_fetch_many). The default MCP
@@ -117,6 +146,19 @@ type WatchFetchedMessage = WatchIncomingMessage & {
 
 function getCurrentWatch(groupId: string) {
 	return currentWatches.get(groupId);
+}
+
+function findWatchHandleByCoordinator(coordinatorKey: string): GroupWatchTask | undefined {
+	for (const handle of currentWatches.values()) {
+		if (handle.coordinatorKey === coordinatorKey) return handle;
+	}
+	return undefined;
+}
+
+/** True when the stream hasn't delivered a chunk within the keepalive window. */
+function isDeliveryStale(handle: GroupWatchTask): boolean {
+	if (!handle.lastChunkAt) return true;
+	return Date.now() - handle.lastChunkAt > DELIVERY_STALE_MS;
 }
 
 function clearCurrentWatch(handle?: GroupWatchTask | null) {
@@ -180,14 +222,28 @@ if (browser) {
 		for (const handle of currentWatches.values()) {
 			if (handle.isStale?.()) staleCoordinators.add(handle.coordinatorKey);
 		}
-		// Promise.all([]) resolves immediately, so an all-healthy foreground is
-		// just the catch-up in the scheduled resume with no discarded rebuilds.
-		const discardStale = Promise.all(
-			[...staleCoordinators].map((coordinatorKey) =>
-				stopCoordinatorWatches(coordinatorKey, 'stream stale', { local: true })
-			)
-		);
-		void discardStale.then(() => scheduleChatGroupResume(reason));
+		if (staleCoordinators.size === 0) {
+			// All healthy: just schedule the catch-up (cheap, no churn). The
+			// resume's catch-up is also where keepalive-green zombies get proven
+			// and rebuilt via the gap detector.
+			scheduleChatGroupResume(reason);
+			return;
+		}
+		// Stale = the server likely still holds state for these identities. A
+		// pre-.10 writer never aborts on a stuck publish, so a dead stream can
+		// outlive the client and poison any resubscribe that reuses the key.
+		// Discard the watches AND rebuild each coordinator's client so the delta
+		// restart re-opens on a fresh ephemeral identity — the one thing a page
+		// refresh does that a plain restart doesn't. Forced because we just
+		// discarded watches; they must re-open even if a resume landed inside
+		// MIN_RESUME_INTERVAL_MS.
+		const account = manager.getActive();
+		void Promise.all(
+			[...staleCoordinators].map(async (coordinatorKey) => {
+				await stopCoordinatorWatches(coordinatorKey, 'stream stale', { local: true });
+				if (account) await replaceCoordinatorClient(coordinatorKey, account);
+			})
+		).then(() => scheduleChatGroupResume(reason, undefined, { force: true }));
 	};
 
 	window.addEventListener('online', () => scheduleChatGroupResume('browser online'));
@@ -196,6 +252,25 @@ if (browser) {
 	document.addEventListener('visibilitychange', () => {
 		if (document.visibilityState === 'visible') onForeground('page visible');
 	});
+
+	// Slow foreground watchdog. Lifecycle events and SDK timers cover the common
+	// deaths, but a continuously-foregrounded session in which a keepalive-green
+	// zombie develops (server producer dead, pings alive) has no trigger at all.
+	// This runs the resume's catch-up — whose cursor gap check is the only signal
+	// that can prove that class — but only when some stream is chunk-silent, so
+	// an actively-chatting session pays nothing. Background sweeps are skipped
+	// (throttled timers + battery); the next foreground handles that gap.
+	setInterval(() => {
+		if (document.visibilityState !== 'visible' || !warmed) return;
+		let needsSweep = false;
+		for (const handle of currentWatches.values()) {
+			if (isDeliveryStale(handle)) {
+				needsSweep = true;
+				break;
+			}
+		}
+		if (needsSweep) onForeground('watchdog');
+	}, FOREGROUND_WATCHDOG_INTERVAL_MS);
 }
 
 async function closeWatch(
@@ -238,14 +313,21 @@ async function closeWatch(
 	void handle.task.catch(() => undefined);
 }
 
-function scheduleChatGroupResume(reason: string, coordinatorKey?: string) {
+type ResumeOptions = {
+	/** Bypass the MIN_RESUME_INTERVAL throttle (used after discarding watches). */
+	force?: boolean;
+	/** Rebuild the coordinator client (fresh ephemeral identity) before restart. */
+	rebuildClient?: boolean;
+};
+
+function scheduleChatGroupResume(reason: string, coordinatorKey?: string, options?: ResumeOptions) {
 	if (resumeTimer) {
 		clearTimeout(resumeTimer);
 	}
 
 	resumeTimer = setTimeout(() => {
 		resumeTimer = null;
-		void resumeChatGroupWatching(reason, coordinatorKey);
+		void resumeChatGroupWatching(reason, coordinatorKey, options);
 	}, RESUME_DEBOUNCE_MS);
 }
 
@@ -317,7 +399,11 @@ async function stopCoordinatorWatches(
 	await Promise.all([...handlesToStop].map((handle) => closeWatch(handle, reason, options)));
 }
 
-async function runResumeChatGroupWatching(reason: string, coordinatorKey?: string) {
+async function runResumeChatGroupWatching(
+	reason: string,
+	coordinatorKey?: string,
+	options?: ResumeOptions
+) {
 	const account = manager.getActive();
 	if (!account) {
 		return;
@@ -346,18 +432,18 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 
 	try {
 		if (coordinatorKey) {
-			// Scoped resume: that coordinator's subscription emitted a transient
-			// error. Locally discard its watches (no abort publish — those hang on
-			// an unhealthy relay) so the delta restart below re-opens them. We do
-			// NOT rebuild the client: a transient stream error (timeout, momentary
-			// close) does not mean the socket is dead, and forcing a full relay
-			// reconnect + health reset here makes time-to-"Connected" scale with
-			// group count on flaky mobile networks. `withCoordinatorClient` already
-			// rebuilds lazily (via `replaceCoordinatorClient`) only if the restart's
-			// backlog fetch actually fails on the current client, so a genuinely
-			// dead socket is still recovered — without paying a reconnect on every
-			// harmless blip.
+			// Scoped resume: that coordinator's subscription died. Locally discard
+			// its watches (no abort publish — those hang on an unhealthy relay) so
+			// the delta restart below re-opens them.
 			await stopCoordinatorWatches(coordinatorKey, RUNTIME_RESUME_REASON, { local: true });
+			if (options?.rebuildClient) {
+				// A stream death means the server may hold zombie state for this
+				// ephemeral identity (a pre-.10 writer never aborts on a stuck
+				// publish, so a dead stream can outlive the client and poison any
+				// resubscribe that reuses the key). Reconnect with a fresh identity —
+				// the one thing a page refresh does that a plain restart doesn't.
+				await replaceCoordinatorClient(coordinatorKey, account);
+			}
 		}
 		// Snapshot already-watched groups before the delta restart: these had live
 		// subscriptions during the likely connectivity gap (background/online
@@ -372,7 +458,22 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 		// those; healthy subscriptions are left untouched.
 		await startWatchingAllGroups({ skipBacklogSync: false });
 		if (watchedBefore.length > 0) {
-			await catchUpWatchedGroupBacklogs(watchedBefore);
+			const zombieCoordinators = await catchUpWatchedGroupBacklogs(watchedBefore);
+			if (zombieCoordinators.size > 0) {
+				// Keepalive-green zombies: the catch-up found messages the live
+				// stream should have delivered while its keepalive was healthy — the
+				// one failure mode no timer can detect. Discard + rebuild those
+				// identities and re-open on fresh clients so delivery resumes.
+				await Promise.all(
+					[...zombieCoordinators].map(async (coordinatorKey) => {
+						await stopCoordinatorWatches(coordinatorKey, 'delivery gap detected', {
+							local: true
+						});
+						await replaceCoordinatorClient(coordinatorKey, account);
+					})
+				);
+				await startWatchingAllGroups({ skipBacklogSync: false });
+			}
 		}
 		lastSuccessfulResumeAt = Date.now();
 		chatGroupWatchStore.startup = 'ready';
@@ -393,12 +494,17 @@ async function runResumeChatGroupWatching(reason: string, coordinatorKey?: strin
 	}
 }
 
-export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordinatorKey?: string) {
+export function resumeChatGroupWatching(
+	reason = RUNTIME_RESUME_REASON,
+	coordinatorKey?: string,
+	options?: ResumeOptions
+) {
 	if (resumePromise) {
 		return resumePromise;
 	}
 
 	if (
+		!options?.force &&
 		Date.now() - lastSuccessfulResumeAt < MIN_RESUME_INTERVAL_MS &&
 		reason !== 'active account changed'
 	) {
@@ -406,7 +512,7 @@ export function resumeChatGroupWatching(reason = RUNTIME_RESUME_REASON, coordina
 	}
 
 	const epoch = ++resumeEpoch;
-	resumePromise = runResumeChatGroupWatching(reason, coordinatorKey).finally(() => {
+	resumePromise = runResumeChatGroupWatching(reason, coordinatorKey, options).finally(() => {
 		if (resumeEpoch === epoch) {
 			resumePromise = null;
 			setChatGroupResumePromise(null);
@@ -495,6 +601,13 @@ function createWatchBuffer(input: {
 					return true;
 				}
 
+				// Consolidation: keep the worker's nativeCursor in lockstep with what the live path
+				// just ingested, so it never re-notifies these messages as a count (the old
+				// double-notify). No-op off-native; MAX-clamped on the native side.
+				if (isNativePlatform()) {
+					void advanceNativeCursor(input.groupId, groupFetchWatermark(result.group));
+				}
+
 				return false;
 			})
 			.catch((error) => {
@@ -551,6 +664,11 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 			if (isChatGroupPoisoned(result.group)) {
 				failedGroupIds.add(groupId);
 			}
+			// Consolidation: advance the worker's nativeCursor past what we just ingested so the
+			// background poller doesn't re-notify these as a count (double-notify fix).
+			if (isNativePlatform()) {
+				void advanceNativeCursor(groupId, groupFetchWatermark(result.group));
+			}
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			console.warn('[watch] failed to ingest coordinator backlog for group', {
@@ -569,7 +687,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 	account: ReturnType<typeof requireActiveAccount>;
 	coordinatorKey: string;
 	groups: WatchableGroup[];
-}): Promise<Set<string>> {
+}): Promise<{ failedGroupIds: Set<string>; ingestedCount: number }> {
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await withCoordinatorClient(input.account, input.coordinatorKey, (client) =>
 		client.FetchManyGroupMessages(
@@ -582,9 +700,9 @@ async function fetchCoordinatorGroupBacklog(input: {
 			{ timeout: BACKLOG_FETCH_TIMEOUT_MS }
 		)
 	);
-	if (result.messages.length === 0) return new Set<string>();
+	if (result.messages.length === 0) return { failedGroupIds: new Set(), ingestedCount: 0 };
 
-	return ingestGroupMessagesFromCoordinatorFetch(
+	const failedGroupIds = await ingestGroupMessagesFromCoordinatorFetch(
 		groupsByGid,
 		result.messages.map((message) => ({
 			gid: message.gid,
@@ -593,6 +711,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 			opaqueMessageBase64: message.msg_64
 		}))
 	);
+	return { failedGroupIds, ingestedCount: result.messages.length };
 }
 
 /**
@@ -606,10 +725,16 @@ async function fetchCoordinatorGroupBacklog(input: {
  * gap from the CEP-41 keepalive). This explicit catch-up closes it. The cursor
  * dedup in `ingestChatGroupMessages` makes it idempotent, and the per-group
  * operation lock serializes it against the live subscription's buffer flush.
+ *
+ * Returns the coordinators proven to be keepalive-green zombies: the catch-up
+ * ingested messages their live stream should have delivered AND that stream was
+ * chunk-silent past the keepalive window. The chunk-silence guard avoids false
+ * positives from the natural race where a message lands in the debounce window
+ * between live delivery and the catch-up fetch.
  */
-async function catchUpWatchedGroupBacklogs(groupIds: string[]) {
+async function catchUpWatchedGroupBacklogs(groupIds: string[]): Promise<Set<string>> {
 	const account = manager.getActive();
-	if (!account || groupIds.length === 0) return;
+	if (!account || groupIds.length === 0) return new Set();
 
 	const groupsByCoordinator = new SvelteMap<string, WatchableGroup[]>();
 	for (const groupId of groupIds) {
@@ -620,16 +745,28 @@ async function catchUpWatchedGroupBacklogs(groupIds: string[]) {
 		groupsByCoordinator.set(watchable.coordinatorKey, list);
 	}
 
+	const zombieCoordinators = new SvelteSet<string>();
 	await Promise.all(
-		[...groupsByCoordinator.entries()].map(([coordinatorKey, groups]) =>
-			fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups }).catch((error) => {
+		[...groupsByCoordinator.entries()].map(async ([coordinatorKey, groups]) => {
+			const { ingestedCount } = await fetchCoordinatorGroupBacklog({
+				account,
+				coordinatorKey,
+				groups
+			}).catch((error) => {
 				console.warn('[watch] foreground backlog catch-up failed', {
 					coordinatorKey,
 					detail: error instanceof Error ? error.message : String(error)
 				});
-			})
-		)
+				return { failedGroupIds: new Set<string>(), ingestedCount: 0 };
+			});
+			if (ingestedCount === 0) return;
+			const handle = findWatchHandleByCoordinator(coordinatorKey);
+			if (!handle || isDeliveryStale(handle)) {
+				zombieCoordinators.add(coordinatorKey);
+			}
+		})
 	);
+	return zombieCoordinators;
 }
 
 async function startWatchingCoordinatorGroups(
@@ -680,7 +817,8 @@ async function startWatchingCoordinatorGroups(
 		try {
 			let failedGroupIds = new Set<string>();
 			if (!options.skipBacklogSync && !closing) {
-				failedGroupIds = await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+				const backlog = await fetchCoordinatorGroupBacklog({ account, coordinatorKey, groups });
+				failedGroupIds = backlog.failedGroupIds;
 			}
 			// Aborted during the backlog fetch — never open a subscription.
 			if (closing) {
@@ -746,7 +884,9 @@ async function startWatchingCoordinatorGroups(
 					const detail = error instanceof Error ? error.message : String(error);
 					if (isTransientCoordinatorError(error)) {
 						markCoordinatorDegraded(coordinatorKey, detail);
-						scheduleChatGroupResume('coordinator subscription result failed', coordinatorKey);
+						scheduleChatGroupResume('coordinator subscription result failed', coordinatorKey, {
+							rebuildClient: true
+						});
 						return;
 					}
 
@@ -762,6 +902,7 @@ async function startWatchingCoordinatorGroups(
 						const group = groupsByGid.get(message.gid);
 						const buffer = group ? buffers.get(group.id) : undefined;
 						if (!buffer) continue;
+						handle.lastChunkAt = Date.now();
 
 						if (
 							await buffer.push({
@@ -798,17 +939,26 @@ async function startWatchingCoordinatorGroups(
 			void handle.task.catch((error) => {
 				if (closing) return;
 				const detail = error instanceof Error ? error.message : String(error);
-				if (isTransientCoordinatorError(error)) {
+				const transient = isTransientCoordinatorError(error);
+				if (transient) {
 					markCoordinatorDegraded(coordinatorKey, detail);
-					scheduleChatGroupResume('coordinator subscription stream failed', coordinatorKey);
-					return;
+				} else {
+					console.warn('[watch] coordinator subscription stream failed (non-transient)', {
+						coordinatorKey,
+						detail
+					});
 				}
-
-				console.warn('[watch] coordinator subscription stream failed', {
+				// Any unexpected termination restarts delivery. `clearCurrentWatch`
+				// already ran in the finally above; the delta restart re-opens the
+				// groups. Transient failures rebuild the identity (possible zombie);
+				// non-transient ones (sequence/parse glitches) just restart, and the
+				// gap detector escalates if delivery stays dead. MIN_RESUME_INTERVAL
+				// throttles any persistent failure into a bounded retry.
+				scheduleChatGroupResume(
+					'coordinator subscription stream failed',
 					coordinatorKey,
-					detail
-				});
-				clearCurrentWatch(handle);
+					transient ? { rebuildClient: true } : undefined
+				);
 			});
 		} catch (error) {
 			// Backlog fetch or subscribe threw. If we were torn down mid-start

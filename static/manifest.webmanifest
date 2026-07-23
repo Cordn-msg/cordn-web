@@ -26,5 +26,14 @@
 			"type": "image/png",
 			"purpose": "maskable"
 		}
-	]
+	],
+	"share_target": {
+		"action": "/chat/share",
+		"method": "GET",
+		"params": {
+			"title": "title",
+			"text": "text",
+			"url": "url"
+		}
+	}
 }

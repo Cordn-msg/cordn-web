@@ -1,0 +1,109 @@
+name: android
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (typecheck + test + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm lint
+
+  release-apk:
+    name: build & publish signed APK
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Capacitor 8's capacitor-android module compiles to Java 21 bytecode.
+          java-version: 21
+          cache: gradle
+      - run: pnpm install --frozen-lockfile
+
+      - name: Provision signing keystore (no-op without secrets → unsigned release)
+        env:
+          CORDN_KEYSTORE_BASE64: ${{ secrets.CORDN_KEYSTORE_BASE64 }}
+          CORDN_KEYSTORE_PASSWORD: ${{ secrets.CORDN_KEYSTORE_PASSWORD }}
+          CORDN_KEY_ALIAS: ${{ secrets.CORDN_KEY_ALIAS }}
+          CORDN_KEY_PASSWORD: ${{ secrets.CORDN_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CORDN_KEYSTORE_BASE64" ]; then
+            echo "No signing secrets found; release APK will be unsigned."
+            exit 0
+          fi
+          # Strip ALL whitespace (terminal wrapping / stray spaces / CR from paste) before decode.
+          printf '%s' "$CORDN_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/cordn-release.keystore
+          test -s android/app/cordn-release.keystore || { echo 'Decoded keystore is empty — CORDN_KEYSTORE_BASE64 is not valid base64.'; exit 1; }
+          echo "Keystore decoded ($(wc -c < android/app/cordn-release.keystore) bytes)."
+          printf 'storeFile=cordn-release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$CORDN_KEYSTORE_PASSWORD" "$CORDN_KEY_ALIAS" "$CORDN_KEY_PASSWORD" \
+            > android/keystore.properties
+
+      - run: pnpm android:release
+
+      - name: Detect lane (tag has a hyphen → internal/prerelease, else release)
+        id: lane
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compose release notes (CHANGELOG section + signing cert fingerprint)
+        run: |
+          APK="$(find android/app/build/outputs/apk -name 'cordn-*-release.apk' | head -1)"
+          {
+            awk '/^## /{c++} c==1{print} c==2{exit}' CHANGELOG.md
+            if [ -n "$APK" ]; then
+              APKSIGNER="$(ls /usr/local/lib/android/sdk/build-tools/*/apksigner 2>/dev/null | tail -1)"
+              if [ -n "$APKSIGNER" ]; then
+                echo; echo '---'; echo
+                echo '### Verify this APK (signing cert SHA-256)'
+                "$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -i 'SHA-256' || true
+              fi
+            fi
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: Create GitHub release with the APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/**/*.apk
+          prerelease: ${{ steps.lane.outputs.prerelease }}
+          body_path: release_notes.md

@@ -3,6 +3,7 @@ import { nip19 } from 'nostr-tools';
 import { bytesToBase64, base64ToBytes } from 'ts-mls';
 import { normalizePubKey } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+import { isAppOrigin } from './appOrigin';
 
 export interface GroupShareMetadata {
 	name: string;
@@ -222,7 +223,7 @@ export async function gotoShareTarget(target: ParsedShareTarget): Promise<void> 
 	if (typeof window !== 'undefined') {
 		try {
 			const url = new URL(target.url);
-			if (url.origin === window.location.origin) {
+			if (isAppOrigin(url.origin)) {
 				// Runtime-resolved path from pasted input; resolve() cannot apply.
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto(healShareQuery(`${url.pathname}${url.search}${url.hash}`));

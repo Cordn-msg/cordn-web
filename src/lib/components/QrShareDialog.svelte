@@ -7,6 +7,7 @@
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
+	import { isAppOrigin } from '$lib/utils/appOrigin';
 	import Copy from '@lucide/svelte/icons/copy';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import ScanLine from '@lucide/svelte/icons/scan-line';
@@ -84,7 +85,7 @@
 				return;
 			}
 
-			if (target.origin === window.location.origin) {
+			if (isAppOrigin(target.origin)) {
 				const path = target.pathname + target.search + target.hash;
 				closeAfterNavigate();
 				// Path comes from a scanned QR code at runtime, so resolve() cannot apply.

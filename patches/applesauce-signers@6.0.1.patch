@@ -1,0 +1,53 @@
+diff --git a/dist/signers/android-native-signer.d.ts b/dist/signers/android-native-signer.d.ts
+index 5c48bd33ffb0554abb1005a0d90a9c1d2f5fadcd..8d4c45467606af7faa6f8966eb2cfd9a270eca83 100644
+--- a/dist/signers/android-native-signer.d.ts
++++ b/dist/signers/android-native-signer.d.ts
+@@ -15,7 +15,7 @@ export declare class AndroidNativeSigner implements ISigner {
+         encrypt: (pubkey: string, plaintext: string) => Promise<string>;
+         decrypt: (pubkey: string, ciphertext: string) => Promise<string>;
+     };
+-    constructor(packageName: string);
++    constructor(packageName: string, pubkey?: string);
+     static getSignerApps(): Promise<import("nostr-signer-capacitor-plugin").AppInfo[]>;
+     setup(): Promise<void>;
+     getPublicKey(): Promise<string>;
+diff --git a/dist/signers/android-native-signer.js b/dist/signers/android-native-signer.js
+index 2bc3fff824a82c6f55f85515bb46c324b58d7775..ac4ced823a09227c7f27785ca02f34a5e950c846 100644
+--- a/dist/signers/android-native-signer.js
++++ b/dist/signers/android-native-signer.js
+@@ -9,8 +9,12 @@ export class AndroidNativeSigner {
+     verifyEvent = verifyEvent;
+     nip04;
+     nip44;
+-    constructor(packageName) {
++    // Optional pubkey seed: when supplied (e.g. rehydrated from a persisted
++    // account via fromJSON), setup() skips the getPublicKey() round-trip to
++    // the signer app so relaunch doesn't re-prompt Amber for the pubkey.
++    constructor(packageName, pubkey) {
+         this.packageName = packageName;
++        this.pubkey = pubkey ?? null;
+         this.nip04 = {
+             encrypt: this.nip04Encrypt.bind(this),
+             decrypt: this.nip04Decrypt.bind(this),
+@@ -27,11 +31,16 @@ export class AndroidNativeSigner {
+         if (this.connected)
+             return;
+         await NostrSignerPlugin.setPackageName(this.packageName);
+-        const result = await NostrSignerPlugin.getPublicKey(this.packageName, this.permissions);
+-        const pubkey = normalizeToPubkey(result.npub);
+-        if (!pubkey)
+-            throw new Error("Invalid public key");
+-        this.pubkey = pubkey;
++        // Skip the getPublicKey() intent when the pubkey was seeded at
++        // construction (persisted account rehydration). setPackageName still
++        // runs (idempotent, no UI) so the plugin targets the right signer app.
++        if (!this.pubkey) {
++            const result = await NostrSignerPlugin.getPublicKey(this.packageName, this.permissions);
++            const pubkey = normalizeToPubkey(result.npub);
++            if (!pubkey)
++                throw new Error("Invalid public key");
++            this.pubkey = pubkey;
++        }
+         this.connected = true;
+     }
+     async getPublicKey() {

@@ -10,7 +10,14 @@ const ASSETS = [...build, ...files];
 
 const worker = self as unknown as ServiceWorkerGlobalScope;
 
+// Capacitor serves the app shell from the local bundle, so the SW's caching is
+// redundant there and would serve stale assets after a `cap sync` update. On the
+// native WebView origin (https://localhost) the SW still registers but stays a
+// no-op. (Dev uses http://localhost:<port>, prod web a real domain — neither matches.)
+const isNativeCapacitor = worker.location.origin === 'https://localhost';
+
 worker.addEventListener('install', (event) => {
+	if (isNativeCapacitor) return;
 	event.waitUntil(
 		caches
 			.open(CACHE_NAME)
@@ -20,6 +27,7 @@ worker.addEventListener('install', (event) => {
 });
 
 worker.addEventListener('activate', (event) => {
+	if (isNativeCapacitor) return;
 	event.waitUntil(
 		caches
 			.keys()
@@ -35,6 +43,7 @@ worker.addEventListener('activate', (event) => {
 });
 
 worker.addEventListener('fetch', (event) => {
+	if (isNativeCapacitor) return;
 	if (event.request.method !== 'GET') {
 		return;
 	}

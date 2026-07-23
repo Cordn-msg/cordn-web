@@ -1,7 +1,6 @@
 import { browser } from '$app/environment';
-import { goto } from '$app/navigation';
-import { resolve } from '$app/paths';
 import { page } from '$app/state';
+import { ensureNotificationPermission, showLocalNotification } from '$lib/services/nativeBridge';
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
@@ -31,7 +30,6 @@ const DEFAULT_TITLE = 'Cordn';
 const DEFAULT_FAVICON = '/favicon.svg';
 
 const notificationState = {
-	permissionRequested: false,
 	lastProcessedCursorByGroup: new Map<string, number>(),
 	notifiedMessageIds: new Set<string>()
 };
@@ -98,18 +96,6 @@ export function syncChatAttention() {
 	ensureFaviconLink().href = DEFAULT_FAVICON;
 }
 
-async function requestBrowserNotificationPermission() {
-	if (!browser || !('Notification' in window)) return;
-	if (Notification.permission !== 'default') return;
-	if (notificationState.permissionRequested) return;
-	notificationState.permissionRequested = true;
-	try {
-		await Notification.requestPermission();
-	} catch {
-		// ignore unsupported/request failures
-	}
-}
-
 function getNotificationBody(sender: string, content: string) {
 	const trimmed = content.trim();
 	if (trimmed) return trimmed;
@@ -158,8 +144,7 @@ async function resolveProfileHint(pubkey: string): Promise<ProfileContent | unde
 
 export async function notifyForUnreadChatMessages() {
 	if (!browser) return;
-	await requestBrowserNotificationPermission();
-	if (!('Notification' in window) || Notification.permission !== 'granted') return;
+	if (!(await ensureNotificationPermission())) return;
 
 	const activePubkey = manager.active?.pubkey;
 	for (const group of listChatGroups()) {
@@ -200,15 +185,12 @@ export async function notifyForUnreadChatMessages() {
 			if (notificationState.notifiedMessageIds.has(message.id)) continue;
 
 			notificationState.notifiedMessageIds.add(message.id);
-			const notification = new Notification(title || 'Cordn', {
+			await showLocalNotification({
+				title: title || 'Cordn',
 				body: getNotificationBody(message.sender, message.content),
 				icon,
-				tag: `cordn-group-${group.id}`
+				groupId: group.id
 			});
-			notification.onclick = () => {
-				window.focus();
-				goto(resolve('/chat/[id]', { id: group.id }));
-			};
 		}
 	}
 }

@@ -6,6 +6,12 @@
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { manager } from '$lib/services/accountManager.svelte';
+	import {
+		getInstalledSignerApps,
+		connectAndroidSigner,
+		isAndroidNative,
+		type InstalledSignerApp
+	} from '$lib/services/nativeBridge';
 	import { ExtensionSigner, NostrConnectSigner } from 'applesauce-signers/signers';
 	import {
 		ExtensionAccount,
@@ -21,11 +27,13 @@
 	import { relayPool, metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { copyToClipboard } from '$lib/utils';
+	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import { toast } from 'svelte-sonner';
 	import Eye from '@lucide/svelte/icons/eye';
 	import EyeOff from '@lucide/svelte/icons/eye-off';
 	import Copy from '@lucide/svelte/icons/copy';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Gem from '@lucide/svelte/icons/gem';
 
 	let open = $state(false);
 
@@ -35,7 +43,7 @@
 		}
 	});
 
-	let selectedTab = $state<'extension' | 'simple' | 'remote'>('extension');
+	let selectedTab = $state<'extension' | 'simple' | 'remote' | 'signer'>('extension');
 	let privateKey = $state('');
 	let bunkerUri = $state('');
 	let nostrConnectUri = $state('');
@@ -44,6 +52,9 @@
 	let remoteSignerStep = $state<'generate' | 'connecting' | 'manual'>('generate');
 	let showPrivateKey = $state(false);
 	let displayName = $state('');
+	let androidSignerApps = $state<InstalledSignerApp[] | null>(null);
+	let connectingPkg = $state<string | null>(null);
+	let androidSignerError = $state('');
 	let username = $state('');
 	let about = $state('');
 	let profileExpanded = $state(false);
@@ -181,8 +192,8 @@
 			// Generate nostr connect URI with app metadata and permissions
 			const uri = signer.getNostrConnectURI({
 				name: 'Cordn-web',
-				url: window.location.origin,
-				image: `${window.location.origin}/favicon.svg`
+				url: publicWebOrigin(),
+				image: `${publicWebOrigin()}/favicon.svg`
 			});
 
 			nostrConnectUri = uri;
@@ -280,12 +291,48 @@
 		}
 	});
 
+	// Auto-select the best login method when the dialog opens: installed signer app (Android,
+	// recommended) → browser extension → sign up. Re-evaluates if signer apps resolve after open
+	// (rare); it won't yank a manual choice because the deps (open, androidSignerApps) don't
+	// change once the user starts clicking tabs.
 	$effect(() => {
-		// Check if extension is available
-		if (typeof window !== 'undefined' && !('nostr' in window)) {
+		if (!open) return;
+		if (isAndroidNative() && androidSignerApps && androidSignerApps.length > 0) {
+			selectedTab = 'signer';
+		} else if (typeof window !== 'undefined' && 'nostr' in window) {
+			selectedTab = 'extension';
+		} else {
 			selectedTab = 'simple';
 		}
 	});
+
+	// Probe once for installed Android signer apps (Amber, etc.) via NIP-55 on mount of the native
+	// shell, so the result is resolved before the dialog opens — avoids a tab flash when the
+	// recommended signer tab becomes the default. Web/iOS never probe (-> null, tab hidden).
+	// Best-effort: a missing plugin or zero installed signers resolves to [] and the tab is hidden.
+	$effect(() => {
+		if (!isAndroidNative()) return;
+		let cancelled = false;
+		getInstalledSignerApps().then((apps) => {
+			if (!cancelled) androidSignerApps = apps;
+		});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	async function handleAndroidSignerLogin(app: InstalledSignerApp) {
+		connectingPkg = app.packageName;
+		androidSignerError = '';
+		try {
+			await connectAndroidSigner(app);
+			open = false;
+		} catch (err) {
+			androidSignerError = err instanceof Error ? err.message : 'Failed to connect signer app';
+		} finally {
+			connectingPkg = null;
+		}
+	}
 </script>
 
 <Dialog.Root bind:open onOpenChange={() => (dialogState.dialogId = null)}>
@@ -299,6 +346,17 @@
 		<div class="grid gap-4 py-4">
 			<!-- Tab Navigation -->
 			<div class="flex space-x-1 rounded-lg bg-muted p-1">
+				{#if isAndroidNative() && androidSignerApps && androidSignerApps.length > 0}
+					<button
+						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
+						'signer'
+							? 'bg-background shadow-sm'
+							: 'hover:bg-muted-foreground/10'}"
+						onclick={() => (selectedTab = 'signer')}
+					>
+						Signer app
+					</button>
+				{/if}
 				{#if typeof window !== 'undefined' && 'nostr' in window}
 					<button
 						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
@@ -329,6 +387,33 @@
 					Remote Signer
 				</button>
 			</div>
+
+			<!-- Signer app Tab (Android NIP-55) -->
+			{#if selectedTab === 'signer'}
+				<div class="space-y-2">
+					<p class="text-sm text-muted-foreground">
+						Connect with an installed signer app via NIP-55 — your keys never leave the signer.
+					</p>
+					{#if androidSignerError}
+						<p class="text-sm text-destructive">{androidSignerError}</p>
+					{/if}
+					{#each androidSignerApps as app (app.packageName)}
+						<Button
+							class="w-full justify-start"
+							disabled={connectingPkg !== null}
+							onclick={() => handleAndroidSignerLogin(app)}
+						>
+							{#if connectingPkg === app.packageName}
+								<Spinner class="mr-2 size-4" />
+								Connecting…
+							{:else}
+								<Gem class="mr-2 size-4" />
+								Log in with {app.name}
+							{/if}
+						</Button>
+					{/each}
+				</div>
+			{/if}
 
 			<!-- Extension Tab -->
 			{#if selectedTab === 'extension'}
@@ -554,8 +639,9 @@
 			>
 				Cancel
 			</Button>
-			{#if selectedTab === 'remote' && remoteSignerStep === 'connecting'}
-				<!-- No connect button when waiting for remote signer -->
+			{#if (selectedTab === 'remote' && remoteSignerStep === 'connecting') || selectedTab === 'signer'}
+				<!-- No submit button: the signer-app tab uses direct per-app CTAs; remote-connecting
+				     waits for the signer. -->
 			{:else}
 				<Button
 					onclick={handleSubmit}
