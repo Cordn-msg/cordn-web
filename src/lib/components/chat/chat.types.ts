@@ -50,6 +50,11 @@ export interface ChatMessage {
 		sizeBytes?: number;
 		previewUrl?: string;
 		uploading?: boolean;
+		/** Upload progress: a `number` (0–100) renders a determinate progress bar;
+		 *  `null` renders an indeterminate spinner (connecting, fallback retry, and
+		 *  the verify + MLS-seal tail after the bar fills). Only meaningful while
+		 *  `uploading` is true. */
+		uploadProgress?: number | null;
 	};
 }
 

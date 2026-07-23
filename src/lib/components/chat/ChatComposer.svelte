@@ -49,18 +49,24 @@
 		selectedMentions?: ChatMentionReference[];
 		unreadReferenceCount?: number;
 		onNavigateToReference?: () => void | Promise<void>;
-		/** Send a media file (with the current draft as caption). */
-		onSendMedia?: (file: File, caption: string) => void;
+		/** Send media files (with the current draft as caption). */
+		onSendMedia?: (files: File[], caption: string) => void;
 	} = $props();
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
 	let expanded = $state(false);
 
-	// Staged media attachment: picked via the `+` menu, sent on submit (with the
-	// current draft as caption). Stored as a File; a preview URL is derived for
-	// the in-composer chip and revoked on send/remove.
-	let pendingAttachment = $state<File | null>(null);
-	let attachmentPreviewUrl = $state('');
+	// Staged media attachments: picked via the `+` menu (multiple selection
+	// enabled), sent on submit with the current draft as caption. Each holds a
+	// File plus a preview object URL for images; URLs are revoked on remove/send
+	// so they never leak. Each staged file becomes its own message at send time
+	// (one `imeta` per MLS message is the existing model).
+	interface StagedAttachment {
+		readonly id: string;
+		readonly file: File;
+		readonly previewUrl: string;
+	}
+	let pendingAttachments = $state<StagedAttachment[]>([]);
 	let imageInputRef: HTMLInputElement | null = $state(null);
 	let documentInputRef: HTMLInputElement | null = $state(null);
 	let mentionQuery = $state('');
@@ -125,11 +131,11 @@
 	// attachment is honored by BOTH paths — otherwise Enter with text + an image
 	// would silently send only the text.
 	function dispatchSubmit() {
-		if (pendingAttachment) {
-			const file = pendingAttachment;
+		if (pendingAttachments.length > 0) {
+			const files = pendingAttachments.map((attachment) => attachment.file);
 			const caption = value;
-			clearAttachment();
-			onSendMedia(file, caption);
+			clearAttachments();
+			onSendMedia(files, caption);
 			return;
 		}
 		onSubmit();
@@ -222,18 +228,36 @@
 
 	function handleFileSelected(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
+		// Snapshot the File objects BEFORE clearing the input: `input.files` is a
+		// LIVE FileList, so `input.value = ''` empties it. `File` objects themselves
+		// survive the reset, hence `Array.from` first (mirrors the old
+		// `input.files?.[0]` read-then-clear order).
+		const files = input.files ? Array.from(input.files) : [];
 		input.value = '';
-		if (!file) return;
-		if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
-		pendingAttachment = file;
-		attachmentPreviewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
+		if (files.length === 0) return;
+		for (const file of files) {
+			pendingAttachments = [
+				...pendingAttachments,
+				{
+					id: crypto.randomUUID(),
+					file,
+					previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : ''
+				}
+			];
+		}
 	}
 
-	function clearAttachment() {
-		if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
-		pendingAttachment = null;
-		attachmentPreviewUrl = '';
+	function removeAttachment(id: string) {
+		const attachment = pendingAttachments.find((entry) => entry.id === id);
+		if (attachment?.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+		pendingAttachments = pendingAttachments.filter((entry) => entry.id !== id);
+	}
+
+	function clearAttachments() {
+		for (const attachment of pendingAttachments) {
+			if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+		}
+		pendingAttachments = [];
 	}
 
 	function resizeTextarea() {
@@ -340,42 +364,53 @@
 			bind:this={imageInputRef}
 			type="file"
 			accept="image/*"
+			multiple
 			class="hidden"
 			onchange={handleFileSelected}
 		/>
-		<input bind:this={documentInputRef} type="file" class="hidden" onchange={handleFileSelected} />
+		<input
+			bind:this={documentInputRef}
+			type="file"
+			multiple
+			class="hidden"
+			onchange={handleFileSelected}
+		/>
 
-		{#if pendingAttachment}
-			<div
-				class="mb-3 flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2"
-			>
-				<div class="flex min-w-0 items-center gap-3">
-					{#if attachmentPreviewUrl}
-						<img
-							src={attachmentPreviewUrl}
-							alt={pendingAttachment.name}
-							class="size-12 shrink-0 rounded-lg object-cover"
-						/>
-					{:else}
-						<Paperclip class="size-5 shrink-0 text-muted-foreground" />
-					{/if}
-					<div class="min-w-0">
-						<p class="truncate text-sm font-medium">{pendingAttachment.name}</p>
-						<p class="text-xs text-muted-foreground">
-							{Math.round(pendingAttachment.size / 1024)} KB · add a caption or send
-						</p>
+		{#if pendingAttachments.length > 0}
+			<div class="mb-3 flex flex-wrap gap-2">
+				{#each pendingAttachments as attachment (attachment.id)}
+					<div
+						class="flex max-w-[16rem] items-center gap-2 rounded-xl border border-border bg-card py-1.5 pr-1 pl-1.5"
+					>
+						{#if attachment.previewUrl}
+							<img
+								src={attachment.previewUrl}
+								alt={attachment.file.name}
+								class="size-10 shrink-0 rounded-lg object-cover"
+							/>
+						{:else}
+							<div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+								<Paperclip class="size-4 text-muted-foreground" />
+							</div>
+						{/if}
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-xs font-medium">{attachment.file.name}</p>
+							<p class="text-[11px] text-muted-foreground">
+								{Math.round(attachment.file.size / 1024)} KB
+							</p>
+						</div>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							class="h-7 w-7 shrink-0 rounded-lg"
+							onclick={() => removeAttachment(attachment.id)}
+							aria-label="Remove attachment"
+						>
+							<X class="size-4" />
+						</Button>
 					</div>
-				</div>
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon"
-					class="h-8 w-8 shrink-0 rounded-lg"
-					onclick={clearAttachment}
-					aria-label="Remove attachment"
-				>
-					<X class="size-4" />
-				</Button>
+				{/each}
 			</div>
 		{/if}
 
@@ -443,7 +478,7 @@
 			<Button
 				type="submit"
 				class="h-11 shrink-0 rounded-xl px-4"
-				disabled={disabled || (!value.trim() && !pendingAttachment)}
+				disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
 			>
 				<SendHorizontal class="size-4" />
 			</Button>

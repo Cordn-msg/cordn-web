@@ -6,6 +6,7 @@ import { base64ToBytes, bytesToBase64 } from 'ts-mls';
 
 import { DEFAULT_BLOSSOM_SERVER, BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
+	BlossomUploadError,
 	ephemeralBlossomSigner,
 	fetchBlob,
 	uploadBlob,
@@ -131,28 +132,52 @@ const BLOSSOM_SERVERS_PRESET = new Set<string>(
 	[...BLOSSOM_SERVERS]
 );
 
-export interface PendingMediaAttachment {
-	readonly kind: 'image' | 'file';
-	readonly mime: string;
-	readonly filename: string;
-	readonly sizeBytes: number;
-	/** Local object URL of the plaintext, shown immediately during upload.
-	 *  Revoked once the confirmed message renders. */
-	readonly previewUrl?: string;
+//
+// In-flight upload cancellation registry
+//
+// Keyed by optimistic message id (the id the uploading message renders with).
+// `sendOneMedia` registers/unregisters around the send; the uploading message's
+// cancel button calls `cancelMediaUpload(id)`. ponytail: a plain object, not a
+// SvelteMap — this is a non-reactive imperative registry of controllers, not
+// UI state (mirrors `mediaObjectUrlCache` below). The svelte/reactivity rule
+// flags Map in .svelte.ts; a Record dodges it. Button visibility is driven by
+// the message's `uploading` field, so this just holds the AbortController so
+// the leaf render component can reach the in-flight request without
+// prop-drilling through the message list. Entries are removed in a `finally`,
+// so the map never leaks across settled sends.
+const mediaUploadControllers: Record<string, AbortController> = {};
+
+export function registerMediaUpload(id: string, controller: AbortController): void {
+	mediaUploadControllers[id] = controller;
+}
+
+export function unregisterMediaUpload(id: string): void {
+	delete mediaUploadControllers[id];
+}
+
+export function cancelMediaUpload(id: string): void {
+	mediaUploadControllers[id]?.abort();
 }
 
 /**
  * Upload to the configured Blossom server, falling back through the preset
  * list on failure. The blob is AEAD ciphertext, so its Content-Type is the
- * truthful `application/octet-stream` (fetch's default for a byte body) and the
- * real MIME stays sealed in the `imeta`. A single, server-agnostic request is
- * sent to each store — no per-server content-type logic. We don't mirror (one
- * copy is enough; the `imeta` URL resolves wherever it lives); add mirroring
- * when redundancy against store churn-out is wanted.
+ * truthful `application/octet-stream` and the real MIME stays sealed in the
+ * `imeta`. A single, server-agnostic request is sent to each store — no
+ * per-server content-type logic. We don't mirror (one copy is enough; the
+ * `imeta` URL resolves wherever it lives); add mirroring when redundancy
+ * against store churn-out is wanted.
+ *
+ * `onProgress` carries a `number | null`: real byte percent (0–100) while
+ * `uploadBlob` is actively sending (drives the progress bar), or `null` for an
+ * indeterminate spinner during connect, fallback retries, and the verify-GET +
+ * MLS-seal tail after the bar fills.
  */
 async function uploadBlobWithFallback(
 	blob: Uint8Array,
-	signer: BlossomSigner
+	signer: BlossomSigner,
+	onProgress?: (progress: number | null) => void,
+	signal?: AbortSignal
 ): Promise<{ url: string }> {
 	const configured = getBlossomServer();
 	// Configured server first, then the remaining presets — deduped by normalized URL
@@ -166,7 +191,15 @@ async function uploadBlobWithFallback(
 	let lastError: unknown;
 	for (const server of order) {
 		try {
-			const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
+			// `null` = indeterminate → spinner while connecting. Reported before each
+			// attempt so a fallback retry shows a spinner (not the bar jumping back to
+			// 0); the bar only appears once `uploadBlob` reports real bytes.
+			onProgress?.(null);
+			const uploaded = await uploadBlob({ serverUrl: server, blob, signer, onProgress, signal });
+			// `null` again → finalizing spinner. `uploadBlob` pinned the bar to 100%
+			// just before resolving; now flip to a spinner for the verify-roundtrip
+			// GET + the MLS seal, which can lag on large files.
+			onProgress?.(null);
 			// Guard against media-optimizer servers that accept the PUT then silently
 			// re-encode: served bytes would differ from the stored blob and AEAD
 			// decryption would fail for every recipient. A mismatch throws here, so
@@ -174,6 +207,8 @@ async function uploadBlobWithFallback(
 			await verifyBlobRoundtrip(uploaded.url, uploaded.sha256);
 			return { url: uploaded.url };
 		} catch (error) {
+			// A user cancel stops the whole upload — don't fall back to another server.
+			if (signal?.aborted) throw error;
 			lastError = error;
 			console.warn(`Blossom upload to ${server} failed:`, error);
 		}
@@ -195,8 +230,14 @@ export async function sendChatMediaMessage(params: {
 	file: File;
 	text: string;
 	replyTo?: ChatMessageReplyTarget;
+	/** Upload-progress reporter: a number (0–100) shows a determinate bar; `null`
+	 *  shows an indeterminate spinner (connecting / verify + seal tail). */
+	onProgress?: (progress: number | null) => void;
+	/** Abort the in-flight upload and skip the final MLS send. The caller can
+	 *  detect a cancel via its own `signal.aborted` (no special error type). */
+	signal?: AbortSignal;
 }): Promise<void> {
-	const { groupId, file, text, replyTo } = params;
+	const { groupId, file, text, replyTo, onProgress, signal } = params;
 	// Fail fast before the upload: the final MLS send needs an account, and
 	// surfacing it here beats encrypting + uploading first.
 	requireActiveAccount('You must be logged in to send media');
@@ -219,15 +260,21 @@ export async function sendChatMediaMessage(params: {
 	let key = await deriveMediaKey(state);
 	let enc = encryptMedia({ key, plaintext, metadata });
 	const signer = ephemeralBlossomSigner();
-	let { url } = await uploadBlobWithFallback(enc.blob, signer);
+	let { url } = await uploadBlobWithFallback(enc.blob, signer, onProgress, signal);
 
 	const latest = getChatGroup(groupId);
 	if (latest && decodeStoredGroupState(latest).groupContext.epoch !== state.groupContext.epoch) {
 		state = decodeStoredGroupState(latest);
 		key = await deriveMediaKey(state);
 		enc = encryptMedia({ key, plaintext, metadata });
-		({ url } = await uploadBlobWithFallback(enc.blob, signer));
+		// ponytail: the epoch-race re-upload is rare and fast; let progress restart
+		// from the new upload rather than tracking a high-water mark across calls.
+		({ url } = await uploadBlobWithFallback(enc.blob, signer, onProgress, signal));
 	}
+
+	// A cancel that landed during the verify-roundtrip / epoch re-check tail
+	// (after the PUT bytes finished) must still skip the sealed send.
+	if (signal?.aborted) throw new BlossomUploadError('Upload aborted');
 
 	const imeta = buildImetaTag({
 		url,

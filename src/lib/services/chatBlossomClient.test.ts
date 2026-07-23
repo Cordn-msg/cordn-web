@@ -37,9 +37,15 @@ function stubSigner(pubkey = '00'.repeat(32)): BlossomSigner & { last: EventTemp
 }
 
 const originalFetch = globalThis.fetch;
+// jsdom ships XMLHttpRequest; a plain-node env may not. Capture whichever
+// (possibly undefined) so uploadBlob's XHR mock is restored after each test.
+const originalXhr = (globalThis as unknown as { XMLHttpRequest?: typeof XMLHttpRequest })
+	.XMLHttpRequest;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+	(globalThis as unknown as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest =
+		originalXhr;
 });
 
 describe('BUD-11 auth token', () => {
@@ -135,62 +141,141 @@ describe('ephemeralBlossomSigner', () => {
 	});
 });
 
+/**
+ * Minimal XMLHttpRequest fake for uploadBlob: captures the request and lets a
+ * test responder return a canned { status, body }. Responds via queueMicrotask
+ * so uploadBlob's Promise resolves like a real async XHR. `status: 0` simulates
+ * a network/CORS block (fires onerror instead of onload). Progress events can
+ * be fired synchronously from the responder since `upload.onprogress` is set
+ * before `send()` runs.
+ */
+interface FakeXhr {
+	method: string;
+	url: string;
+	headers: Record<string, string>;
+	body: unknown;
+	responseType: string;
+	status: number;
+	responseText: string;
+	upload: { onprogress: ((e: ProgressEvent) => void) | null };
+	onload: (() => void) | null;
+	onerror: (() => void) | null;
+	onabort: (() => void) | null;
+	open(method: string, url: string): void;
+	setRequestHeader(name: string, value: string): void;
+	send(body: unknown): void;
+	abort(): void;
+}
+
+function installXhrMock(responder: (req: FakeXhr) => { status: number; body?: string }): FakeXhr[] {
+	const calls: FakeXhr[] = [];
+	class Xhr {
+		method = '';
+		url = '';
+		headers: Record<string, string> = {};
+		body: unknown = null;
+		responseType = '';
+		status = 0;
+		responseText = '';
+		upload = { onprogress: null };
+		onload: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		onabort: (() => void) | null = null;
+		open(method: string, url: string) {
+			this.method = method;
+			this.url = url;
+		}
+		setRequestHeader(name: string, value: string) {
+			this.headers[name.toLowerCase()] = value;
+		}
+		abort() {
+			this.onabort?.();
+		}
+		send(body: unknown) {
+			this.body = body;
+			calls.push(this);
+			queueMicrotask(() => {
+				const res = responder(this);
+				this.status = res.status;
+				this.responseText = res.body ?? '';
+				if (res.status === 0) this.onerror?.();
+				else this.onload?.();
+			});
+		}
+	}
+	(globalThis as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest =
+		Xhr as unknown as typeof XMLHttpRequest;
+	return calls;
+}
+
 describe('uploadBlob (BUD-02)', () => {
 	test('PUTs the raw blob with X-SHA-256 + Nostr auth and returns the descriptor url', async () => {
 		const blob = new Uint8Array([1, 2, 3, 4, 5]);
 		const expectedSha = bytesToHex(sha256(blob));
 
-		let captured: {
-			url: string;
-			method: string;
-			headers: Record<string, string>;
-			body: Uint8Array;
-		} | null = null;
-
-		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-			captured = {
-				url: String(input),
-				method: init?.method ?? 'GET',
-				headers: Object.fromEntries(new Headers(init?.headers)) as Record<string, string>,
-				body: new Uint8Array((init?.body as Uint8Array) ?? [])
-			};
-			return new Response(
-				JSON.stringify({
-					url: `${SERVER}${expectedSha}.bin`,
-					sha256: expectedSha,
-					size: blob.length
-				}),
-				{ status: 201, headers: { 'Content-Type': 'application/json' } }
-			);
-		}) as typeof fetch;
+		const calls = installXhrMock(() => ({
+			status: 201,
+			body: JSON.stringify({
+				url: `${SERVER}${expectedSha}.bin`,
+				sha256: expectedSha,
+				size: blob.length
+			})
+		}));
 
 		const result = await uploadBlob({ serverUrl: SERVER, blob, signer: stubSigner() });
+		const req = calls[0]!;
 
 		expect(result.url).toBe(`${SERVER}${expectedSha}.bin`);
 		expect(result.sha256).toBe(expectedSha);
-		expect(captured!.url).toBe(`${SERVER}upload`);
-		expect(captured!.method).toBe('PUT');
+		expect(req.url).toBe(`${SERVER}upload`);
+		expect(req.method).toBe('PUT');
 		// X-SHA-256 carries the blob hash (BUD-02). Content-Type is the truthful
 		// application/octet-stream for AEAD ciphertext; the real MIME stays sealed
 		// in the imeta.
-		expect(captured!.headers['x-sha-256']).toBe(expectedSha);
-		expect(captured!.headers['content-type']).toBe('application/octet-stream');
-		expect(captured!.headers['authorization'].startsWith('Nostr ')).toBe(true);
-		expect(Array.from(captured!.body)).toEqual([1, 2, 3, 4, 5]);
+		expect(req.headers['x-sha-256']).toBe(expectedSha);
+		expect(req.headers['content-type']).toBe('application/octet-stream');
+		expect(req.headers['authorization'].startsWith('Nostr ')).toBe(true);
+		expect(Array.from(req.body as Uint8Array)).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	test('reports real byte progress via the onProgress callback', async () => {
+		const blob = new Uint8Array([1, 2, 3, 4, 5]);
+		const expectedSha = bytesToHex(sha256(blob));
+		installXhrMock((req) => {
+			// Fire progress events before completing — the XHR-backed upload surfaces
+			// real bytes (loaded/total), not a timer.
+			req.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 5 } as ProgressEvent);
+			req.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 5 } as ProgressEvent);
+			return {
+				status: 201,
+				body: JSON.stringify({ url: `${SERVER}${expectedSha}.bin`, sha256: expectedSha })
+			};
+		});
+
+		const seen: number[] = [];
+		await uploadBlob({
+			serverUrl: SERVER,
+			blob,
+			signer: stubSigner(),
+			onProgress: (p) => seen.push(p)
+		});
+
+		expect(seen).toContain(40);
+		expect(seen).toContain(100);
 	});
 
 	test('throws when the descriptor sha256 does not match the uploaded body', async () => {
-		globalThis.fetch = (async () =>
-			new Response(JSON.stringify({ url: 'https://x/abc', sha256: '0'.repeat(64) }), {
-				status: 201
-			})) as typeof fetch;
+		installXhrMock(() => ({
+			status: 201,
+			body: JSON.stringify({ url: 'https://x/abc', sha256: '0'.repeat(64) })
+		}));
 		await expect(
 			uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1, 2, 3]), signer: stubSigner() })
 		).rejects.toThrow('unexpected descriptor');
 	});
 
 	test('throws BlossomUploadError carrying the HTTP status on a non-ok response', async () => {
-		globalThis.fetch = (async () => new Response('too big', { status: 413 })) as typeof fetch;
+		installXhrMock(() => ({ status: 413, body: 'too big' }));
 		try {
 			await uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() });
 			expect.fail('should have thrown');
@@ -198,6 +283,59 @@ describe('uploadBlob (BUD-02)', () => {
 			expect(error).toBeInstanceOf(BlossomUploadError);
 			expect((error as BlossomUploadError).status).toBe(413);
 			expect((error as BlossomUploadError).message).toContain('413');
+		}
+	});
+
+	test('throws BlossomUploadError with no status on a network/CORS block', async () => {
+		installXhrMock(() => ({ status: 0 }));
+		try {
+			await uploadBlob({ serverUrl: SERVER, blob: new Uint8Array([1]), signer: stubSigner() });
+			expect.fail('should have thrown');
+		} catch (error) {
+			expect(error).toBeInstanceOf(BlossomUploadError);
+			expect((error as BlossomUploadError).status).toBeUndefined();
+		}
+	});
+
+	test('rejects with an abort error when the signal is already aborted', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		installXhrMock(() => ({
+			status: 201,
+			body: JSON.stringify({ url: 'https://x/a', sha256: 'a'.repeat(64) })
+		}));
+		await expect(
+			uploadBlob({
+				serverUrl: SERVER,
+				blob: new Uint8Array([1]),
+				signer: stubSigner(),
+				signal: controller.signal
+			})
+		).rejects.toThrow('aborted');
+	});
+
+	test('rejects with an abort error when the signal fires mid-upload', async () => {
+		const controller = new AbortController();
+		// Abort from inside the responder tick — the in-flight path: the signal's
+		// abort listener calls xhr.abort(), which fires onabort → reject.
+		installXhrMock(() => {
+			controller.abort();
+			return {
+				status: 201,
+				body: JSON.stringify({ url: 'https://x/a', sha256: 'a'.repeat(64) })
+			};
+		});
+		try {
+			await uploadBlob({
+				serverUrl: SERVER,
+				blob: new Uint8Array([1, 2, 3]),
+				signer: stubSigner(),
+				signal: controller.signal
+			});
+			expect.fail('should have thrown');
+		} catch (error) {
+			expect(error).toBeInstanceOf(BlossomUploadError);
+			expect((error as BlossomUploadError).message).toContain('aborted');
 		}
 	});
 });
