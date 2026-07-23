@@ -1,13 +1,31 @@
-# cordn-web
+# Cordn
 
-[`cordn-web`](package.json) is the web client for Cordn.
+> Private group messaging you can own.
 
-It is built with SvelteKit, Svelte 5, TypeScript, and Tailwind CSS, and currently includes:
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/web-cordn.net-blue.svg)](https://cordn.net)
+[![Get it on Zapstore](https://cordn.net/get-it-on-zapstore.svg)](https://zap.store)
 
-- a landing page at [`/`](src/routes/+page.svelte)
-- a browser chat UI at [`/chat`](src/routes/chat/+page.svelte)
-- route-based group navigation under [`src/routes/chat/[id]`](src/routes/chat/[id])
-- a profile page under [`src/routes/p/[identifier]/+page.svelte`](src/routes/p/[identifier]/+page.svelte) for hex pubkeys, `npub`, or `nprofile` identifiers
+Cordn is a protocol for private group messaging. **cordn-web** is its open-source
+client — a fully functional app combining MLS end-to-end encryption, Nostr-based
+identity, and coordinator-based delivery you can use as a hosted service or run
+yourself. No emails or phone numbers, just keys.
+
+- **MLS end-to-end encryption** — forward secrecy with clear per-group ordering.
+- **Nostr-native identity** — identity is a key, not an account on a platform.
+- **Self-hostable coordinators** — hosted service or run your own; a real path to move later.
+- **Open source** — inspectable protocol and clients.
+
+**Links:** [cordn.net](https://cordn.net) · [Open the app](https://cordn.net/chat) · [Protocol & server](https://github.com/Cordn-msg/cordn)
+
+## Overview
+
+Built with SvelteKit, Svelte 5, TypeScript, and Tailwind CSS. The app includes a
+landing page at [`/`](src/routes/+page.svelte), a chat UI at
+[`/chat`](src/routes/chat/+page.svelte), route-based group navigation under
+[`src/routes/chat/[id]`](src/routes/chat/[id]), and a profile page at
+[`src/routes/p/[identifier]/+page.svelte`](src/routes/p/[identifier]/+page.svelte)
+for hex pubkeys, `npub`, or `nprofile`.
 
 ## Chat storage model
 
@@ -96,4 +114,9 @@ To prompt users to reload after a new deploy, the app compares a build-time vers
 
 ## Related project
 
-The protocol and server implementation lives in the nested [`cordn/`](cordn) workspace.
+The protocol specification and the reference coordinator/server implementation
+live in the main repository: [`Cordn-msg/cordn`](https://github.com/Cordn-msg/cordn).
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright © 2026 the Cordn contributors.

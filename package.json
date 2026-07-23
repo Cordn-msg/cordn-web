@@ -2,6 +2,13 @@
 	"name": "cordn-web",
 	"private": true,
 	"version": "0.2.0-next.8",
+	"license": "MIT",
+	"description": "Private group messaging you can own. Open-source Cordn client with MLS end-to-end encryption and Nostr-based identity.",
+	"homepage": "https://cordn.net",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Cordn-msg/cordn-web.git"
+	},
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
