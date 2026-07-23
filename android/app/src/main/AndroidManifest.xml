@@ -22,6 +22,28 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Receive text shares from other apps (Android share sheet → /chat/share picker).
+                 text/plain covers URLs and selected text. Media/files (EXTRA_STREAM) are a future
+                 additive intent-filter; this one is text-only for v1. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- Deep links: a chooser candidate for cordn.net /chat (group shares) and /p
+                 (profile shares). We deliberately skip App Links verification (no assetlinks.json),
+                 so tapping one shows a disambiguation dialog and the app opens once the user picks
+                 Cordn; the appUrlOpen listener then routes the path in-app. pathPrefix scopes capture
+                 so non-app paths (e.g. /blog) stay in the browser. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="cordn.net" android:pathPrefix="/chat" />
+                <data android:scheme="https" android:host="cordn.net" android:pathPrefix="/p" />
+            </intent-filter>
+
         </activity>
 
         <provider

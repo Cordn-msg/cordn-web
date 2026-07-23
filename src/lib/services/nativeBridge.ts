@@ -6,7 +6,7 @@ import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CordnBackground, type DeliveryMode, type PollGroup } from 'cordn-background';
+import { CordnBackground, ShareTarget, type DeliveryMode, type PollGroup } from 'cordn-background';
 import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
@@ -18,6 +18,7 @@ import {
 import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 import { defaultRelays } from '$lib/services/relay-pool';
 import { normalizePubKey } from '$lib/utils';
+import { isAppOrigin } from '$lib/utils/appOrigin';
 
 /**
  * Native-shell seam. Web is a no-op everywhere here; the native branches run only inside the
@@ -79,6 +80,7 @@ export async function initNativeShell(): Promise<void> {
 	void drainBackgroundSidecar(); // ingest anything staged while the app was closed
 	void seedBackground();
 	void routeLaunchGid(); // deep-link if launched from a notification tap
+	routeSharedContent(); // group-picker if launched/resumed from an Android share
 
 	try {
 		await App.addListener('appStateChange', ({ isActive }) => {
@@ -88,12 +90,35 @@ export async function initNativeShell(): Promise<void> {
 			if (isActive) {
 				void drainBackgroundSidecar().then(() => void seedBackground());
 				void routeLaunchGid();
+				void routeSharedContent();
 			} else {
 				void seedBackground();
 			}
 		});
 	} catch {
 		// lifecycle listener unavailable — init-time seed/drain still covers cold start
+	}
+
+	// Deep links (https://cordn.net/… App Links): route the path in-app instead of letting the OS
+	// open a browser. Fires on cold start (after the WebView boots at appStartPath) and on warm
+	// start via singleTask's onNewIntent. Recognizes our origin even though window.location.origin
+	// is https://localhost inside the native shell.
+	try {
+		await App.addListener('appUrlOpen', ({ url }) => {
+			let parsed: URL;
+			try {
+				parsed = new URL(url);
+			} catch {
+				return;
+			}
+			if (!isAppOrigin(parsed.origin)) return;
+			const path = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+			// Runtime deep-link path; resolve() cannot apply.
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			void goto(path);
+		});
+	} catch {
+		// appUrlOpen unavailable — links fall back to opening in the browser
 	}
 }
 
@@ -248,6 +273,48 @@ export async function routeLaunchGid(): Promise<void> {
 		.then((r) => r.gid)
 		.catch(() => null);
 	if (gid) goto(resolve('/chat/[id]', { id: gid }));
+}
+
+// ───────────────────────────── share target (Android SEND intent) ─────────────────────────────
+
+/** A share captured from another app (Android SEND intent), staged for the /chat/share picker. */
+export interface PendingShare {
+	kind: 'text';
+	text: string;
+}
+
+/**
+ * In-memory handoff from the native router (`routeSharedContent`) to the `/chat/share` route. The
+ * router drains the SEND intent on cold start / resume and navigates there; the route drains this
+ * stash on mount. Web's `share_target` GET params bypass it entirely (read in +page.ts load).
+ */
+let stashedShare: PendingShare | null = null;
+
+/** Drain the staged share (native). Returns null when the app wasn't opened from a share. */
+export function consumeStashedShare(): PendingShare | null {
+	const share = stashedShare;
+	stashedShare = null;
+	return share;
+}
+
+/**
+ * Consume a pending Android SEND share and route to the group picker. No-op on web. Called on
+ * cold start and resume (alongside `routeLaunchGid`). The SEND intent is not surfaced by
+ * `@capacitor/app`'s `appUrlOpen` (VIEW deep links only), so this plugin owns the capture.
+ */
+export async function routeSharedContent(): Promise<void> {
+	if (!isNativePlatform()) return;
+	let text: string | undefined;
+	try {
+		text = (await ShareTarget.consumePendingShare()).text;
+	} catch {
+		return;
+	}
+	const trimmed = text?.trim();
+	if (trimmed) {
+		stashedShare = { kind: 'text', text: trimmed };
+		goto(resolve('/chat/share'));
+	}
 }
 
 // ───────────────────────────── background poll + sidecar (Phase 2) ─────────────────────────────

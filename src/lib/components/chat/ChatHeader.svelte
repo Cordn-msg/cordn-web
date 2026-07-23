@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
@@ -31,6 +30,7 @@
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
 	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
+	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
@@ -94,7 +94,7 @@
 			relays: coordinator?.relays,
 			metadata
 		});
-		return browser ? new URL(path, page.url).toString() : path;
+		return browser ? new URL(path, publicWebOrigin()).toString() : path;
 	});
 
 	const inviteKeyPackageProfileHints = useProfileHints(

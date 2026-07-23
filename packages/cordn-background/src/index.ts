@@ -92,6 +92,19 @@ export interface CordnBackgroundBatteryResult {
 	exempted: boolean;
 }
 
+// ───────────────────────────── share target (Android SEND intent) ─────────────────────────────
+
+/** A share captured from the Android SEND intent (another app → Cordn). Text-only in v1. */
+export interface ShareTargetPendingShare {
+	/** Shared text/URL payload from Intent.EXTRA_TEXT. Absent when nothing is pending. */
+	text?: string;
+}
+
+export interface ShareTargetPlugin {
+	/** Drain + return the text captured from an Android SEND intent, if any. Consumed once. */
+	consumePendingShare(): Promise<ShareTargetPendingShare>;
+}
+
 export interface CordnBackgroundPlugin {
 	/** Set the delivery mode + fast interval; starts/stops the foreground service accordingly. */
 	configureDelivery(options: CordnBackgroundDeliveryOptions): Promise<void>;
@@ -114,3 +127,6 @@ export interface CordnBackgroundPlugin {
 }
 
 export const CordnBackground = registerPlugin<CordnBackgroundPlugin>('CordnBackground');
+
+/** Android SEND share-target plugin (auto-discovered via the `ShareTarget` @CapacitorPlugin name). */
+export const ShareTarget = registerPlugin<ShareTargetPlugin>('ShareTarget');

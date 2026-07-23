@@ -20,6 +20,7 @@
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
 		getUnreadWelcomeNotificationCount,
@@ -101,7 +102,7 @@
 	}
 
 	function toAbsoluteProfileUrl(path: string): string {
-		return browser ? new URL(path, page.url).toString() : path;
+		return browser ? new URL(path, publicWebOrigin()).toString() : path;
 	}
 
 	// Coordinators the active account can actually be reached on: those with a
