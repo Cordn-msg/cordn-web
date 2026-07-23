@@ -1,0 +1,16 @@
+repository: https://github.com/Cordn-msg/cordn-web
+description: Private group messaging you can own. Open-source Cordn client with MLS end-to-end encryption and Nostr-based identity.
+summary: Private group messaging you can own. Open-source Cordn client with MLS end-to-end encryption and Nostr-based identity.
+tags:
+    - privacy
+    - messaging
+    - decentralized
+    - self-hosted
+    - mls
+    - e2ee
+    - nostr
+license: MIT
+website: https://cordn.net
+metadata_sources:
+    - github
+pubkey: npub1c0rdnwectlvz0n7mghvn8g0genefqklrq3n328k4lc6k5y99yh5s640tlv
