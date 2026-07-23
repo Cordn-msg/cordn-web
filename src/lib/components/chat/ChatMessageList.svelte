@@ -161,6 +161,16 @@
 		}
 	}
 
+	// Ongoing per-row measurement: the virtualizer's built-in `measureElement`
+	// observes each row, so when a row resizes after mount — a media image
+	// finishing its async load, or a progress bar appearing — `totalSize` updates.
+	// The batch `measureVisibleItems` above is a one-shot; this adds the continuous
+	// ResizeObserver that keeps the layout honest post-scroll (one shared RO for
+	// all rows, as tanstack ships it).
+	function measureItem(node: HTMLDivElement) {
+		$virtualizer.measureElement(node);
+	}
+
 	onMount(() => {
 		void tick().then(() => {
 			untrack(() => {
@@ -199,6 +209,22 @@
 			}
 			updateBottomState();
 			markVisibleUnreadReferences();
+		});
+	});
+
+	// Re-pin to the bottom when content resizes while stuck there. Catches async
+	// media loads (local blob previews, decrypted fetches) that grow a row AFTER
+	// the new-message scroll already ran — the source of the "need to scroll down a
+	// bit" gap on media. Guarded by `wasAtBottom` (never yank someone reading
+	// history) and `suppressNextAutoScroll` (don't fight a navigate-to-message).
+	$effect(() => {
+		void totalSize;
+		if (!browser || !container) return;
+		if (!wasAtBottom || suppressNextAutoScroll) return;
+		void tick().then(() => {
+			if (wasAtBottom && !suppressNextAutoScroll && container) {
+				container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+			}
 		});
 	});
 
@@ -267,6 +293,7 @@
 							data-message-id={entry.message.id}
 							class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
 							style={`transform: translateY(${virtualItem.start}px);`}
+							use:measureItem
 						>
 							<ChatMessageItem
 								message={entry.message}
