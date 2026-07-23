@@ -90,6 +90,7 @@ import {
 	replaceTentativeSnapshot,
 	type ChatGroupStateSnapshot
 } from '$lib/services/chatGroupSnapshots';
+import { advanceNativeCursor, groupFetchWatermark } from '$lib/services/nativeBridge';
 
 const groupIdDecoder = new TextDecoder();
 
@@ -596,6 +597,14 @@ async function runOutboundGroupOperation<T>(
 	// (§10.5 "local ahead of tip", in handleTipEvent) is the correctness backstop
 	// that catches any trigger this eager hook misses.
 	onGroupStateAdvance(groupId);
+	// Keep the key-less background worker's nativeCursor in lockstep with the
+	// app's processed watermark. Without this, a foreground-service poll landing
+	// between our outbound Commit and the next background seed re-stages our own
+	// message and pushes "$1 new message" for an action we just performed. The
+	// seed clamps nativeCursor to this same watermark on background transitions;
+	// this closes the foreground window. MAX-clamped + no-op off-native.
+	const persistedGroup = getChatGroup(groupId);
+	if (persistedGroup) void advanceNativeCursor(groupId, groupFetchWatermark(persistedGroup));
 	return result;
 }
 
@@ -1371,6 +1380,11 @@ export async function sendChatGroupMessage(input: {
 		});
 
 		replaceGroup(group.id, nextGroup);
+		// Same foreground-window fix as runOutboundGroupOperation: our own just-sent
+		// application message sits above the worker's nativeCursor until the next
+		// background seed, so a foreground poll would re-stage + push it. Advance
+		// to the persisted watermark now. MAX-clamped + no-op off-native.
+		void advanceNativeCursor(group.id, groupFetchWatermark(nextGroup));
 		return stored;
 	});
 }
