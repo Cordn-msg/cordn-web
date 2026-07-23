@@ -181,6 +181,13 @@ export const newsReleases: NewsRelease[] = [
 		align: 'center',
 		title: 'Welcome to Cordn updates',
 		body: 'This feed is where we will share release notes, new features, and product updates as Cordn evolves. Thanks for following along!'
+	},
+	{
+		id: 'cordn-news-2026-07-23-native-android',
+		createdAt: Date.UTC(2026, 6, 23),
+		version: 1,
+		title: 'Cordn native Android app is here',
+		body: "The native Cordn app is now available on [ZapStore](https://zapstore.dev/apps/naddr1qqxk7un89e3k7unydchxzursqyv8wumn8ghj7un9d3shjtn6v9c8xar0wfjjuer9wcpzps7xmxansh7cyl8ak3wexws73n8jjpd7xpr8z50dtl34dgg22f0fqvzqqqr7pv6zvfm6). This has been a long-requested feature, and it is finally here for everyone.\n\nThe headline reason to install it: **push notifications.** You no longer have to keep a tab open or keep checking the app to stay on top of your groups. And for the nerds — there is no third-party push server and no notification service sitting in the middle. Everything runs on your phone through efficient coordinator fetching, so this is as private and secure as the rest of Cordn.\n\nIt also ships with:\n\n- ✨ **Amber login**, alongside every other login method Cordn already supports, so you can sign in with your preferred Nostr signer.\n- ✨ A **share intent handler**, so sharing a link, image, or piece of text straight into a Cordn group is now a single tap from anywhere on your phone.\n\nPrefer the web or a PWA? Nothing changes — you can keep using Cordn in the browser or installed as a PWA exactly as before. The native app is an addition, not a replacement, and it is what finally unblocks reliable notifications, a real requirement these days to not lose a beat in your groups.\n\nThis is the first official release and the first milestone in Cordn's native evolution. We tried our best to iron out every bug and edge case, but this is software, so please report anything you find. Feature requests are welcome too, and the full release notes live at [cordn.net/chat/news](https://cordn.net/chat/news).\n\nNot using Cordn yet? [Start chatting](https://cordn.net/). If you like the project and want to see it grow, consider contributing in any way you can — report a bug, contribute your expertise, send some sats. We are building this together in the open 💛"
 	}
 ];
 
