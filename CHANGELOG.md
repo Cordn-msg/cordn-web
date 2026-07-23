@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-07-23
+
+### Chore
+
+- add MIT license, public README, and NIP-05 domain verification
+
 ## 0.2.0-next.8 — 2026-07-23
 
 ### Fixes
