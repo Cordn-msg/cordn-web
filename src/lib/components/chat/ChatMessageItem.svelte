@@ -908,8 +908,10 @@
 						<button
 							type="button"
 							class="inline-flex items-center text-destructive hover:text-destructive/80"
-							aria-label="Retry send"
-							title="Failed to send — click to retry"
+							aria-label={message.media ? 'Remove failed upload' : 'Retry send'}
+							title={message.media
+								? 'Upload failed — tap to remove'
+								: 'Failed to send — click to retry'}
 							onclick={() => onRetrySend(message)}
 						>
 							<X class="size-3" />

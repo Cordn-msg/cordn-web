@@ -19,7 +19,11 @@
 		chatComposerActionsStore,
 		sendGroupMessageAction
 	} from '$lib/services/chatUiActions.svelte';
-	import { sendChatMediaMessage } from '$lib/services/chatMediaStorage.svelte';
+	import {
+		sendChatMediaMessage,
+		registerMediaUpload,
+		unregisterMediaUpload
+	} from '$lib/services/chatMediaStorage.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
 		buildAnnotationIndex,
@@ -410,9 +414,24 @@
 		updateOptimisticMessage(optimisticId, (message) => ({ ...message, deliveryState: 'error' }));
 	}
 
-	function handleSendMedia(file: File, caption: string) {
-		if (!group) return;
+	function handleSendMedia(files: File[], caption: string) {
+		if (!group || files.length === 0) return;
 		const trimmed = caption.trim();
+		// Fan out one optimistic message per file: one `imeta` per MLS message is
+		// the existing model, so each file uploads + sends independently — a slow
+		// or large file never blocks the others, and partial failures are
+		// per-message. The caption (if any) rides on the first file's message so
+		// single-file send keeps today's behavior (caption under the image) and a
+		// batch gets one descriptive line on its first item.
+		files.forEach((file, index) => sendOneMedia(file, index === 0 ? trimmed : ''));
+
+		// Consume the caption + draft so the composer is immediately free for the
+		// next message (mirrors the text-send reset).
+		draft = '';
+		selectedMentions = [];
+	}
+
+	function sendOneMedia(file: File, text: string) {
 		const isImage = file.type.startsWith('image/');
 		const createdAt = Date.now();
 		const optimisticId = `optimistic:${crypto.randomUUID()}`;
@@ -422,7 +441,7 @@
 			id: optimisticId,
 			eventId: optimisticId,
 			author: activePubkey,
-			text: trimmed,
+			text,
 			kind: ChatKinds.Text,
 			createdAt,
 			timeLabel: formatUnixTimestamp(createdAt, true, false),
@@ -435,28 +454,48 @@
 				filename: file.name,
 				sizeBytes: file.size,
 				previewUrl,
-				uploading: true
+				uploading: true,
+				uploadProgress: null
 			}
 		});
 
 		void messageListRef?.scrollToBottom();
 
-		// Consume the caption: the optimistic message now owns the text, and the
-		// background send carries it. Mirror the text-send draft reset so the
-		// composer is immediately free for the next message.
-		draft = '';
-		selectedMentions = [];
+		// One AbortController per upload, registered so the uploading message's
+		// cancel button (in ChatMessageMedia) can abort it by optimistic id
+		// without a callback drilled through the message list.
+		const controller = new AbortController();
+		registerMediaUpload(optimisticId, controller);
 
 		// Fire-and-forget: the upload + sealed send runs in the background so the
 		// composer stays free. The optimistic item shows the local preview + a
-		// spinner (deliveryState 'sending'); on success it's replaced by the
+		// progress bar (driven by `onProgress`); on success it's replaced by the
 		// confirmed message, on failure it flips to 'error' (preview retained).
-		sendChatMediaMessage({ groupId, file, text: trimmed, replyTo: undefined })
+		sendChatMediaMessage({
+			groupId,
+			file,
+			text,
+			replyTo: undefined,
+			onProgress: (progress) =>
+				updateOptimisticMessage(optimisticId, (message) => ({
+					...message,
+					media: message.media ? { ...message.media, uploadProgress: progress } : message.media
+				})),
+			signal: controller.signal
+		})
 			.then(() => {
 				removeOptimisticMessage(optimisticId);
 				if (previewUrl) URL.revokeObjectURL(previewUrl);
 			})
 			.catch((error) => {
+				// User cancelled: drop the optimistic bubble silently (no error state,
+				// no toast). The file is already gone from the composer, so retrying
+				// means re-picking — same as any major messenger's cancel.
+				if (controller.signal.aborted) {
+					removeOptimisticMessage(optimisticId);
+					if (previewUrl) URL.revokeObjectURL(previewUrl);
+					return;
+				}
 				console.error('Failed to send media:', error);
 				chatComposerActionsStore.error =
 					error instanceof Error ? error.message : 'Failed to send media';
@@ -465,11 +504,23 @@
 					deliveryState: 'error',
 					media: message.media ? { ...message.media, uploading: false } : message.media
 				}));
-			});
+			})
+			.finally(() => unregisterMediaUpload(optimisticId));
 	}
 
 	async function handleRetrySend(message: ChatMessage) {
 		if (!message.id.startsWith('optimistic:') || !group) return;
+
+		// Media sends can't be retried from the bubble: the original File isn't
+		// retained (only a preview URL), so a text-path retry would fire an empty
+		// or caption-only message with the media dropped. Remove the failed bubble
+		// instead — re-pick to retry, same exit as cancel-during-upload.
+		if (message.media) {
+			if (message.media.previewUrl) URL.revokeObjectURL(message.media.previewUrl);
+			removeOptimisticMessage(message.id);
+			return;
+		}
+
 		// Rebuild the full reply target from the stored replied-to message: the
 		// optimistic preview only carries {id,author,text}, but the send path
 		// needs {id,pubkey,kind,content,tags}. If the original was deleted in

@@ -121,6 +121,12 @@ export interface UploadedBlob {
  * `BLOSSOM_SERVERS` was verified to accept octet-stream; media-optimizer stores
  * that reject it or sniff/re-encode uploads are kept out of the list.
  *
+ * Uses `XMLHttpRequest`, not `fetch`: `xhr.upload.onprogress` is the only
+ * shipping browser API that reports REAL upload byte progress (fetch
+ * request-body streaming progress isn't widely available), so `onProgress`
+ * reflects true bytes sent — large files advance proportionally slower than
+ * small ones, and nothing stalls at an artificial ceiling.
+ *
  * Failures throw `BlossomUploadError` carrying the HTTP `status` (or
  * `undefined` for a network/CORS block).
  */
@@ -128,10 +134,14 @@ export async function uploadBlob(params: {
 	serverUrl: string;
 	blob: Uint8Array;
 	signer: BlossomSigner;
+	/** Real upload-progress reporter (0–100), driven by `xhr.upload.onprogress`. */
+	onProgress?: (percent: number) => void;
+	/** Abort the in-flight PUT (xhr.abort()). Rejects with a `BlossomUploadError`. */
+	signal?: AbortSignal;
 }): Promise<UploadedBlob> {
 	const server = params.serverUrl.replace(/\/+$/, '');
 	const sha256Hex = bytesToHex(sha256(params.blob));
-	const event = await buildBlossomAuth({
+	const authEvent = await buildBlossomAuth({
 		signer: params.signer,
 		action: 'upload',
 		serverUrl: server,
@@ -139,49 +149,78 @@ export async function uploadBlob(params: {
 		content: 'Upload encrypted media'
 	});
 
-	let res: Response;
-	try {
-		res = await fetch(`${server}/upload`, {
-			method: 'PUT',
-			headers: {
-				'X-SHA-256': sha256Hex,
-				'Content-Type': 'application/octet-stream',
-				Authorization: blossomAuthHeader(event)
-			},
-			// params.blob is ArrayBuffer-backed (fresh from encryptMedia); cast to
-			// BufferSource so TS 6's Uint8Array<ArrayBufferLike> widening is accepted
-			// by BodyInit. Local cast, not an MLS-library import.
-			body: params.blob as BufferSource
-		});
-	} catch {
-		// fetch threw before any response — network failure or a CORS preflight
-		// rejection. Either way the server is unreachable from the browser; surface
-		// it with no status so the caller can fall back to another server.
-		throw new BlossomUploadError(`Could not reach ${server} (network or CORS blocked)`);
-	}
+	// `responseType: 'text'` (not 'json') so both the success descriptor AND the
+	// error body are readable as text cross-origin — matching the old fetch path's
+	// `res.text()` reason extraction. JSON.parse runs on the 2xx body below.
+	return new Promise<UploadedBlob>((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('PUT', `${server}/upload`, true);
+		xhr.responseType = 'text';
+		xhr.setRequestHeader('X-SHA-256', sha256Hex);
+		xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+		xhr.setRequestHeader('Authorization', blossomAuthHeader(authEvent));
 
-	if (!res.ok) {
-		let reason = res.statusText;
-		try {
-			const text = await res.text();
-			if (text) reason = text.slice(0, 200);
-		} catch {
-			/* body already consumed or not text; keep statusText */
+		if (params.onProgress) {
+			const report = params.onProgress;
+			xhr.upload.onprogress = (e) => {
+				if (e.lengthComputable) {
+					report(Math.round((e.loaded / e.total) * 100));
+				}
+			};
 		}
-		throw new BlossomUploadError(
-			`Blossom upload to ${server} failed (${res.status}): ${reason}`,
-			res.status
-		);
-	}
-	const descriptor = (await res.json()) as { url?: string; sha256?: string; size?: number };
-	if (!descriptor.url || descriptor.sha256 !== sha256Hex) {
-		throw new Error('Blossom upload returned an unexpected descriptor');
-	}
-	return {
-		url: descriptor.url,
-		sha256: descriptor.sha256,
-		size: descriptor.size ?? params.blob.length
-	};
+
+		xhr.onerror = () =>
+			reject(new BlossomUploadError(`Could not reach ${server} (network or CORS blocked)`));
+
+		// User cancel: xhr.abort() fires `onabort` (NOT `onerror`), so without this
+		// handler an abort would leave the promise pending forever.
+		xhr.onabort = () => reject(new BlossomUploadError('Upload aborted'));
+
+		xhr.onload = () => {
+			if (xhr.status < 200 || xhr.status >= 300) {
+				let reason = xhr.statusText;
+				const text = xhr.responseText;
+				if (text) reason = text.slice(0, 200);
+				reject(
+					new BlossomUploadError(
+						`Blossom upload to ${server} failed (${xhr.status}): ${reason}`,
+						xhr.status
+					)
+				);
+				return;
+			}
+			let descriptor: { url?: string; sha256?: string; size?: number };
+			try {
+				descriptor = JSON.parse(xhr.responseText);
+			} catch {
+				reject(new Error('Blossom upload returned a non-JSON descriptor'));
+				return;
+			}
+			if (!descriptor.url || descriptor.sha256 !== sha256Hex) {
+				reject(new Error('Blossom upload returned an unexpected descriptor'));
+				return;
+			}
+			// Pin the bar to 100% before resolving so the caller can flip to a
+			// finalizing spinner — the last progress event may land just under 100.
+			params.onProgress?.(100);
+			resolve({
+				url: descriptor.url,
+				sha256: descriptor.sha256,
+				size: descriptor.size ?? params.blob.length
+			});
+		};
+
+		// params.blob is ArrayBuffer-backed (fresh from encryptMedia); cast to
+		// BufferSource so TS accepts it as an XHR body (ArrayBufferView).
+		if (params.signal) {
+			if (params.signal.aborted) {
+				reject(new BlossomUploadError('Upload aborted'));
+				return;
+			}
+			params.signal.addEventListener('abort', () => xhr.abort(), { once: true });
+		}
+		xhr.send(params.blob as BufferSource);
+	});
 }
 
 /**

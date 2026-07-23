@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-23-multi-file-uploads',
+		createdAt: Date.UTC(2026, 6, 23),
+		version: 1,
+		title: 'Send several files at once',
+		body: "- ✨ Add several photos or documents to a message and send them together — each uploads and sends on its own, so one large file never holds up the rest.\n- ✨ Uploads now show real progress as bytes leave your device, with a spinner while connecting and finishing, so a big file is clearly on its way instead of sitting at a static preview.\n- ✨ Cancel any upload with one tap — on a photo's corner or beside a file — and it clears right away if you change your mind.\n- 🐛 A media message that failed to send no longer retries as an empty message; tap to remove it and pick the file again."
+	},
+	{
 		id: 'cordn-news-2026-07-22-live-connection-resilience',
 		createdAt: Date.UTC(2026, 6, 22),
 		version: 1,

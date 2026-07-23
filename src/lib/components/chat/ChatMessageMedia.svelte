@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import {
+		cancelMediaUpload,
 		peekMessageMedia,
 		resolveMessageMedia,
 		getMediaAutoLoad,
@@ -15,6 +16,7 @@
 	import Download from '@lucide/svelte/icons/download';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import ImageIcon from '@lucide/svelte/icons/image';
+	import X from '@lucide/svelte/icons/x';
 	import type { ChatMessage } from './chat.types';
 
 	/**
@@ -105,6 +107,7 @@
 			(optimistic ? optimistic.mime.startsWith('image/') : Boolean(ref?.mime.startsWith('image/')))
 	);
 	const uploading = $derived(Boolean(optimistic?.uploading));
+	const uploadProgress = $derived(optimistic?.uploadProgress ?? null);
 	const isFailed = $derived(Boolean(message.deliveryState === 'error') || failed);
 	const mediaLabel = $derived(mediaExtLabel(ref?.filename, ref?.mime));
 </script>
@@ -136,18 +139,68 @@
 						<div
 							class="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/40 backdrop-blur-[1px]"
 						>
-							<Spinner class="size-6" />
+							{#if uploadProgress === null}
+								<Spinner class="size-6" />
+							{:else}
+								<div class="h-1.5 w-2/3 overflow-hidden rounded-full bg-foreground/20">
+									<div
+										class="h-full rounded-full bg-foreground transition-[width] duration-200 ease-out"
+										style={`width: ${uploadProgress}%`}
+									></div>
+								</div>
+							{/if}
 						</div>
+						<button
+							type="button"
+							class="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-background"
+							aria-label="Cancel upload"
+							title="Cancel upload"
+							onclick={(event) => {
+								event.stopPropagation();
+								cancelMediaUpload(messageId);
+							}}
+						>
+							<X class="size-4" />
+						</button>
 					{/if}
 				</div>
 			{:else}
-				<div
-					class="flex items-center gap-2 rounded-xl border border-border/60 bg-background/50 px-2.5 py-2"
-				>
+				<div class="rounded-xl border border-border/60 bg-background/50 px-2.5 py-2">
+					<div class="mb-1 flex items-center justify-between gap-2">
+						<span class="min-w-0 flex-1 truncate text-xs">{optimistic.filename}</span>
+						{#if uploading}
+							<div class="flex shrink-0 items-center gap-1.5">
+								{#if uploadProgress !== null}
+									<span class="text-[10px] text-muted-foreground tabular-nums">
+										{uploadProgress}%
+									</span>
+								{/if}
+								<button
+									type="button"
+									class="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+									aria-label="Cancel upload"
+									title="Cancel upload"
+									onclick={() => cancelMediaUpload(messageId)}
+								>
+									<X class="size-3.5" />
+								</button>
+							</div>
+						{/if}
+					</div>
 					{#if uploading}
-						<Spinner class="size-4 shrink-0" />
+						{#if uploadProgress === null}
+							<div class="flex items-center justify-center py-0.5">
+								<Spinner class="size-3.5 text-muted-foreground" />
+							</div>
+						{:else}
+							<div class="h-1 w-full overflow-hidden rounded-full bg-foreground/15">
+								<div
+									class="h-full rounded-full bg-foreground transition-[width] duration-200 ease-out"
+									style={`width: ${uploadProgress}%`}
+								></div>
+							</div>
+						{/if}
 					{/if}
-					<span class="min-w-0 flex-1 truncate text-xs">{optimistic.filename}</span>
 				</div>
 			{/if}
 		{:else if loading}
