@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-next.8 — 2026-07-23
+
+### Fixes
+
+- **native:** suppress push notifications triggered by your own actions
+- **chat:** recover silent delivery failures and stale stream identities
+
 ## 0.2.0-next.7 — 2026-07-23
 
 ### Features
