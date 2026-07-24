@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — 2026-07-24
+
+### Fixes
+
+- **ci:** force git unshallow so versionCode isn't 1 on tag builds
+
 ## 0.2.2 — 2026-07-24
 
 ### Fixes
