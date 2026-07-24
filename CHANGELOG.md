@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4 — 2026-07-24
+
+### Fixes
+
+- **android:** compute versionCode via ProcessBuilder (exec threw -> versionCode 1)
+
 ## 0.2.3 — 2026-07-24
 
 ### Fixes
