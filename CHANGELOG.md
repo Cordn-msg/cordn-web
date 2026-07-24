@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1 — 2026-07-24
+
+### Features
+
+- **news:** add 0.2.1 release notes
+- add NIP-05/shortname profile links and join-group onboarding
+- **android:** enable app links verification for cordn.net deep links
+- close native/web gaps, add migration banner, refresh landing
+- announce native Android app and update Zapstore badge link
+
+### Other
+
+- wrap long lines for readability
+
 ## 0.2.0 — 2026-07-23
 
 ### Chore
