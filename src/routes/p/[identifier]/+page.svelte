@@ -518,7 +518,8 @@
 								{profileIdentifierError}
 							</p>
 							<p class="text-sm text-muted-foreground">
-								Use a hex pubkey, npub, nprofile, NIP-05 address (user@domain), or a cordn.net shortname.
+								Use a hex pubkey, npub, nprofile, NIP-05 address (user@domain), or a cordn.net
+								shortname.
 							</p>
 						</div>
 					</Card.Content>
