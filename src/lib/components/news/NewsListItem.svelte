@@ -1,7 +1,6 @@
 <script lang="ts">
 	import Megaphone from '@lucide/svelte/icons/megaphone';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
-	import ChatGroupUnreadChips from '$lib/components/chat/ChatGroupUnreadChips.svelte';
 
 	let {
 		href,
@@ -48,7 +47,12 @@
 		>
 			<Megaphone class={isSidebar ? 'size-4' : 'size-5'} />
 		</div>
-		<ChatGroupUnreadChips {unreadCount} />
+		{#if unreadCount > 0}
+			<span
+				class="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 ring-2 ring-background"
+				aria-hidden="true"
+			></span>
+		{/if}
 	</div>
 
 	{#if !collapsed}

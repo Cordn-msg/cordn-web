@@ -343,6 +343,36 @@ export type EnsureLastResortResult =
 	| { kind: 'foreign'; keyPackageRef: string; coordinatorKey: string };
 
 /**
+ * Read-only probe for the new-device migration banner: does `coordinatorKey` hold ANY available key
+ * package for the active identity that THIS device did not publish? That is the "you've used Cordn
+ * on another device" heuristic. Broader than ensureLastResortPublished's 'foreign' (which is
+ * last-resort-only, since only last-resorts conflict by eviction): the banner is a friendly nudge,
+ * not a conflict check, so any available key package you don't hold counts. Compares by kp_ref so
+ * a package this device published itself never counts as foreign. Never publishes.
+ */
+export async function detectForeignKeyPackage(coordinatorKey: string): Promise<boolean> {
+	const ownerPubkey = normalizePubKey(getActivePubkey());
+	const normalizedCoordinator = normalizePubKey(coordinatorKey);
+	const heldRefs = new Set(
+		chatKeyPackagesStore.keyPackages
+			.filter(
+				(entry) =>
+					normalizePubKey(entry.ownerPubkey) === ownerPubkey &&
+					entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
+			)
+			.map((entry) => entry.keyPackageRef)
+	);
+	const available = await queryClient.fetchQuery({
+		queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, normalizedCoordinator),
+		queryFn: () => fetchCoordinatorAvailableKeyPackages(normalizedCoordinator),
+		staleTime: 30 * 1000
+	});
+	return available.some(
+		(entry) => normalizePubKey(entry.pk) === ownerPubkey && !heldRefs.has(entry.kp_ref)
+	);
+}
+
+/**
  * Ensure the active account has a last-resort key package published to
  * `coordinatorKey`, reusing existing material instead of minting a new one.
  *

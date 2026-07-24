@@ -8,6 +8,7 @@
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
 	import { isAppOrigin } from '$lib/utils/appOrigin';
+	import { copyText, openExternal } from '$lib/services/nativeShims';
 	import Copy from '@lucide/svelte/icons/copy';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import ScanLine from '@lucide/svelte/icons/scan-line';
@@ -61,7 +62,7 @@
 
 	async function copyLink() {
 		if (!effectiveData || !browser) return;
-		await navigator.clipboard.writeText(effectiveData);
+		await copyText(effectiveData);
 		copied = true;
 		setTimeout(() => (copied = false), 1500);
 	}
@@ -92,7 +93,7 @@
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto(path);
 			} else {
-				window.open(target.toString(), '_blank', 'noopener,noreferrer');
+				await openExternal(target.toString());
 			}
 		} finally {
 			resolving = false;

@@ -32,12 +32,24 @@ importers:
       '@capacitor/app':
         specifier: ^8.1.1
         version: 8.1.1(@capacitor/core@8.4.2)
+      '@capacitor/browser':
+        specifier: ^8.0.4
+        version: 8.0.4(@capacitor/core@8.4.2)
+      '@capacitor/clipboard':
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.4.2)
       '@capacitor/core':
         specifier: ^8.4.2
         version: 8.4.2
+      '@capacitor/filesystem':
+        specifier: ^8.1.2
+        version: 8.1.2(@capacitor/core@8.4.2)
       '@capacitor/local-notifications':
         specifier: ^8.2.1
         version: 8.2.1(@capacitor/core@8.4.2)
+      '@capacitor/share':
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.4.2)
       '@capacitor/splash-screen':
         specifier: ^8.0.2
         version: 8.0.2(@capacitor/core@8.4.2)
@@ -257,6 +269,11 @@ packages:
     engines: {node: '>=10.3.0'}
     hasBin: true
 
+  '@capacitor/browser@8.0.4':
+    resolution: {integrity: sha512-ORZ4u/y+7aMuu6yVuk6SP529fUZyqcbnuHB1q5McpA3o2SYfVoi28iB8rsQjI2ad1qlKJd29ZUuGtspXLBDlWg==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
   '@capacitor/cli@5.7.8':
     resolution: {integrity: sha512-qN8LDlREMhrYhOvVXahoJVNkP8LP55/YPRJrzTAFrMqlNJC18L3CzgWYIblFPnuwfbH/RxbfoZT/ydkwgVpMrw==}
     engines: {node: '>=16.0.0'}
@@ -267,11 +284,26 @@ packages:
     engines: {node: '>=22.0.0'}
     hasBin: true
 
+  '@capacitor/clipboard@8.0.1':
+    resolution: {integrity: sha512-iOlbTi8MojKyLnYE+M27priXid7vHd0PlDwyHohPzkuQ8Rkp6q7ykwZmPEUD+OnU/Ink7Qw/pUOfKgraKmA6Eg==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
   '@capacitor/core@8.4.2':
     resolution: {integrity: sha512-fQPRb3JXRaU2pnufDUvqOjhsrYxDQeFRZyaj/sHydIUxD2NxOGHKMpmKUdI+U4OOmKuGZyvRpi7TSJU+7Bjbmg==}
 
+  '@capacitor/filesystem@8.1.2':
+    resolution: {integrity: sha512-doaaMfGoFR2hWU6aV6u83I+5ZsGyJVq+Gz4r9lMpJzUKMm1eMu0hLnFdV1aXZlU9FlK/RndFrVD8oRZfNOqWgQ==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
   '@capacitor/local-notifications@8.2.1':
     resolution: {integrity: sha512-Bkim+MGl7UrDTjDferV4ECq0aWciTsa0k15+MX2jnx2PeWgEPvlBy5yrqzBlwEZPrtHFUvPVxPi5V66MPGHkAw==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/share@8.0.1':
+    resolution: {integrity: sha512-3cSBKBCJVon54rKDROP2rqGyeGks4pBh9TbaEk9S375Kbek/ZHe72N50zIa0Vn9Eac/SuhwgehO/mmA4CsUOiw==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
 
@@ -284,6 +316,9 @@ packages:
     resolution: {integrity: sha512-csSpfNeN49Hx9JaQBSJEIiEbOLtXg3kcc2IpScq2fu5L520h3AWEvsxoH8Srk1jxfRKepaJ4S4sqSC3foI4AgA==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/synapse@1.0.4':
+    resolution: {integrity: sha512-/C1FUo8/OkKuAT4nCIu/34ny9siNHr9qtFezu4kxm6GY1wNFxrCFWjfYx5C1tUhVGz3fxBABegupkpjXvjCHrw==}
 
   '@contextvm/mcp-sdk@1.30.0':
     resolution: {integrity: sha512-Z4xyxxxtKnczEgVzLagaUdT1EtoVzc1bjr6kpIfTlw7mP5ESAzXeDUAMO9leIwituphz2ELE6ad9BjW7blDjjw==}
@@ -3499,6 +3534,10 @@ snapshots:
       - supports-color
       - typescript
 
+  '@capacitor/browser@8.0.4(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
   '@capacitor/cli@5.7.8':
     dependencies:
       '@ionic/cli-framework-output': 2.2.8
@@ -3543,11 +3582,24 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@capacitor/clipboard@8.0.1(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
   '@capacitor/core@8.4.2':
     dependencies:
       tslib: 2.8.1
 
+  '@capacitor/filesystem@8.1.2(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+      '@capacitor/synapse': 1.0.4
+
   '@capacitor/local-notifications@8.2.1(@capacitor/core@8.4.2)':
+    dependencies:
+      '@capacitor/core': 8.4.2
+
+  '@capacitor/share@8.0.1(@capacitor/core@8.4.2)':
     dependencies:
       '@capacitor/core': 8.4.2
 
@@ -3558,6 +3610,8 @@ snapshots:
   '@capacitor/status-bar@8.0.3(@capacitor/core@8.4.2)':
     dependencies:
       '@capacitor/core': 8.4.2
+
+  '@capacitor/synapse@1.0.4': {}
 
   '@contextvm/mcp-sdk@1.30.0(zod@4.4.3)':
     dependencies:

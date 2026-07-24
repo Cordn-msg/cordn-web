@@ -13,6 +13,7 @@
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import MultiDeviceDevPanel from '$lib/components/chat/MultiDeviceDevPanel.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { copyText } from '$lib/services/nativeShims';
 	import { page } from '$app/state';
 	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
 	import {
@@ -186,7 +187,7 @@
 
 	async function handleCopy() {
 		try {
-			await navigator.clipboard.writeText(connectionString);
+			await copyText(connectionString);
 			toast.success('Connection string copied');
 		} catch {
 			toast.error('Could not copy — select and copy manually');

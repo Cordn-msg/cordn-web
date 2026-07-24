@@ -4,6 +4,7 @@ import { bytesToBase64, base64ToBytes } from 'ts-mls';
 import { normalizePubKey } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import { isAppOrigin } from './appOrigin';
+import { openExternal } from '$lib/services/nativeShims';
 
 export interface GroupShareMetadata {
 	name: string;
@@ -232,6 +233,6 @@ export async function gotoShareTarget(target: ParsedShareTarget): Promise<void> 
 		} catch {
 			// Fall through to opening externally.
 		}
-		window.open(target.url, '_blank', 'noopener,noreferrer');
+		await openExternal(target.url);
 	}
 }

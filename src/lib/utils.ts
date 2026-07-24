@@ -3,6 +3,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { toast } from 'svelte-sonner';
 import { isHex } from 'applesauce-core/helpers';
+import { copyText, shareBlob } from '$lib/services/nativeShims';
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -50,29 +51,12 @@ export function pubkeyToHexColor(pubkey: string): string {
 }
 
 /**
- * Copy data to clipboard
+ * Copy text to clipboard. Delegates to `copyText` so it works inside the Capacitor WebView
+ * (where `navigator.clipboard` is unreliable), then toasts success/failure.
  */
-export async function copyToClipboard(data: BlobPart, mimeType = 'text/plain') {
+export async function copyToClipboard(text: string) {
 	try {
-		// Always use text/plain for maximum compatibility
-		const textData = String(data);
-
-		if (navigator.clipboard.write) {
-			await navigator.clipboard.write([
-				new ClipboardItem({
-					[mimeType]: new Blob([textData], {
-						type: mimeType
-					}),
-					['text/plain']: new Blob([textData], {
-						type: 'text/plain'
-					})
-				})
-			]);
-		} else {
-			await new Promise((resolve) => {
-				resolve(navigator.clipboard.writeText(textData));
-			});
-		}
+		await copyText(text);
 		toast.success('Copied 👍');
 	} catch (e) {
 		toast.error(`Error: ${e}`);
@@ -123,18 +107,30 @@ export function normalizePubKey(pubkey: string): string {
 }
 
 /**
- * Trigger a browser download of a (blob/object) URL under the given filename.
- * Browser-only; no-op on the server. Shared by the media views (chat bubble,
- * lightbox, message actions) so each isn't synthesizing its own <a>.
+ * Case-insensitive pubkey equality without normalizePubKey's hex-validation throw, so a
+ * malformed/foreign sender can't crash a comparison. Both operands are expected to be hex
+ * pubkeys (the only form stored in chat state); this only removes case/whitespace variance —
+ * the self-message notify filter uses it so a signer that returns a differently-cased pubkey
+ * can't let an own message through a raw ===.
  */
-export function downloadObjectUrl(url: string, filename: string): void {
+export function samePubKey(a: string, b: string): boolean {
+	return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Trigger a download of a (blob/object/remote) URL under the given filename. Web synthesizes an
+ * `<a download>` click via `saveBlob`; native fetches the blob and hands it to the share sheet (the
+ * WebView ignores the download attribute). Best-effort: fetch/save failures are swallowed. No-op on
+ * the server. Shared by the media views (chat bubble, lightbox, message actions).
+ */
+export async function downloadObjectUrl(url: string, filename: string): Promise<void> {
 	if (!browser) return;
-	const anchor = document.createElement('a');
-	anchor.href = url;
-	anchor.download = filename;
-	document.body.appendChild(anchor);
-	anchor.click();
-	anchor.remove();
+	try {
+		const blob = await (await fetch(url)).blob();
+		await shareBlob(blob, filename);
+	} catch {
+		// best-effort download trigger; a failed fetch/save is non-fatal
+	}
 }
 
 // ponytail: extension sniff on the path (query/hash stripped). Good enough for

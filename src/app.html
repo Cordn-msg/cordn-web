@@ -2,7 +2,13 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- interactive-widget=resizes-content makes the layout viewport (and thus dvh) shrink
+			 when the soft keyboard opens, so the chat composer stays visible instead of hiding
+			 behind it. Native gets the same effect via windowSoftInputMode=adjustResize. -->
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, interactive-widget=resizes-content"
+		/>
 		<meta name="text-scale" content="scale" />
 		<meta name="theme-color" content="#020617" />
 		<meta name="mobile-web-app-capable" content="yes" />

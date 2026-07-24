@@ -3,6 +3,7 @@
 	import InlineMediaUrl from '$lib/components/chat/InlineMediaUrl.svelte';
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
+	import { openExternal } from '$lib/services/nativeShims';
 	import {
 		MESSAGE_LINK_WRAP_CLASS,
 		MESSAGE_PART_CONTAINER_CLASS
@@ -21,10 +22,6 @@
 	}: { messageId: string; text: string; isOwn?: boolean } = $props();
 
 	const parts = $derived(getCachedChatMessageParts(messageId, text));
-
-	function openExternalLink(href: string) {
-		window.open(href, '_blank', 'noopener,noreferrer');
-	}
 </script>
 
 {#each parts as part, index (`${messageId}:part:${index}`)}
@@ -43,7 +40,7 @@
 	{:else if part.type === 'link'}
 		<button
 			type="button"
-			onclick={() => openExternalLink(part.href)}
+			onclick={() => void openExternal(part.href)}
 			class={cn(
 				'max-w-full min-w-0 whitespace-normal',
 				MESSAGE_LINK_WRAP_CLASS,

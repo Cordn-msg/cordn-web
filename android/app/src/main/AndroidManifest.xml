@@ -60,4 +60,13 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Camera is requested by the web QR scanner (getUserMedia) when the user opens a scan dialog.
+         Capacitor's BridgeWebChromeClient bridges the WebView's onPermissionRequest to the Android
+         runtime CAMERA prompt, but only if the permission is declared here — without it the launcher
+         silently denies and the scanner reports "no camera". required=false so devices without a
+         camera can still install. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

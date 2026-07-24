@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/web-cordn.net-blue.svg)](https://cordn.net)
 [![Get it on Zapstore](https://cordn.net/get-it-on-zapstore.svg)](https://zapstore.dev/apps/naddr1qqxk7un89e3k7unydchxzursqyv8wumn8ghj7un9d3shjtn6v9c8xar0wfjjuer9wcpzps7xmxansh7cyl8ak3wexws73n8jjpd7xpr8z50dtl34dgg22f0fqvzqqqr7pv6zvfm6)
+[![Get it on Obtainium](https://cordn.net/get-it-on-obtainium.png)](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/Cordn-msg/cordn-web)
 
 Cordn is a protocol for private group messaging. **cordn-web** is its open-source
 client — a fully functional app combining MLS end-to-end encryption, Nostr-based

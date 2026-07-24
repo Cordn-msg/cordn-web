@@ -2,6 +2,7 @@
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
 	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
 	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
+	import MigrationBanner from '$lib/components/chat/MigrationBanner.svelte';
 	import NativeGroupMetaSync from '$lib/components/chat/NativeGroupMetaSync.svelte';
 	import { isNativePlatform } from '$lib/services/nativeBridge';
 	import { untrack } from 'svelte';
@@ -135,6 +136,7 @@
 			</div>
 		{/if}
 
+		<MigrationBanner />
 		{@render children()}
 	</div>
 

@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CameraOff from '@lucide/svelte/icons/camera-off';
+	import { isNativePlatform } from '$lib/services/nativeShims';
 
 	let {
 		onResult
@@ -33,10 +34,16 @@
 					returnDetailedScanResult: true
 				});
 			}
-			const hasCamera = await QrScanner.hasCamera();
-			if (!hasCamera) {
-				status = 'no-camera';
-				return;
+			// On web, probe first so a desktop with no webcam shows the friendly 'no-camera' state.
+			// On native, skip the probe: Capacitor's bridge surfaces a denied CAMERA permission as a
+			// thrown error from start() (caught below as 'denied'), whereas hasCamera() swallows the
+			// rejection and would misreport it as 'no-camera'.
+			if (!isNativePlatform()) {
+				const hasCamera = await QrScanner.hasCamera();
+				if (!hasCamera) {
+					status = 'no-camera';
+					return;
+				}
 			}
 			await scanner.start();
 			status = 'scanning';
@@ -77,7 +84,9 @@
 			<CameraOff class="size-6 text-muted-foreground" />
 			<p class="text-xs text-muted-foreground">
 				{#if status === 'denied'}
-					Camera access was blocked. Enable it in your browser and try again.
+					Camera access was blocked. Enable it in your {isNativePlatform()
+						? 'device settings'
+						: 'browser'} and try again.
 				{:else if status === 'no-camera'}
 					No camera found on this device.
 				{:else}

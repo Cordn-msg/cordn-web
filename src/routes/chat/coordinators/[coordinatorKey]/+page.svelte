@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
+	import { externalLink } from '$lib/services/nativeShims';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import CoordinatorPurgeDialog from '$lib/components/chat/CoordinatorPurgeDialog.svelte';
@@ -353,6 +354,7 @@
 													href={serverInfo.website}
 													target="_blank"
 													rel="noopener noreferrer"
+													use:externalLink
 													class="inline-block text-sm break-all text-primary hover:underline"
 												>
 													{serverInfo.website}

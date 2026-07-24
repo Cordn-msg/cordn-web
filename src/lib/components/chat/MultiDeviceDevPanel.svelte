@@ -7,6 +7,7 @@
 	 */
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import { copyText, openExternal } from '$lib/services/nativeShims';
 	import type {
 		MultiDeviceOwnerConfig,
 		ReconcileCounts,
@@ -100,7 +101,7 @@
 
 	async function copyHash(address: string): Promise<void> {
 		try {
-			await navigator.clipboard.writeText(address);
+			await copyText(address);
 			toast.success('Address copied');
 		} catch {
 			toast.error('Could not copy — select manually');
@@ -109,7 +110,7 @@
 
 	/** Open the blob's GET URL in a new tab for server-side inspection. */
 	function openOnServer(address: string): void {
-		window.open(inspectUrl(address), '_blank', 'noopener,noreferrer');
+		void openExternal(inspectUrl(address));
 	}
 
 	/** Rows for an expanded transition: the content address of every sealed

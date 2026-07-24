@@ -21,6 +21,7 @@ import {
 	listChatGroupMembers,
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
+import { samePubKey } from '$lib/utils';
 import { eventStore } from '$lib/services/eventStore';
 import { firstValueFrom } from 'applesauce-core/observable';
 import { ProfileModel } from 'applesauce-core/models';
@@ -181,7 +182,10 @@ export async function notifyForUnreadChatMessages() {
 		for (const message of nextMessages) {
 			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
 			if (message.direction !== 'inbound') continue;
-			if (activePubkey && message.sender === activePubkey) continue;
+			// Default-safe self-filter: without an active identity we can't attribute the message, so
+			// stay quiet rather than risk notifying for our own echo. Compare via samePubKey so a
+			// signer returning a differently-cased pubkey can't let an own message through a raw ===.
+			if (!activePubkey || samePubKey(message.sender, activePubkey)) continue;
 			if (notificationState.notifiedMessageIds.has(message.id)) continue;
 
 			notificationState.notifiedMessageIds.add(message.id);

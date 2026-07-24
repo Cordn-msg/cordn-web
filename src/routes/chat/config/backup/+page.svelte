@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button';
@@ -19,12 +20,15 @@
 	import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { toast } from 'svelte-sonner';
 	import { nip19 } from 'nostr-tools';
+	import { isNativePlatform, saveBlob } from '$lib/services/nativeShims';
 	import Download from '@lucide/svelte/icons/download';
 	import Upload from '@lucide/svelte/icons/upload';
 	import DatabaseBackup from '@lucide/svelte/icons/database-backup';
 	import ShieldAlert from '@lucide/svelte/icons/shield-alert';
 
-	let tab = $state<'backup' | 'restore'>('backup');
+	let tab = $state<'backup' | 'restore'>(
+		page.url.searchParams.get('tab') === 'restore' ? 'restore' : 'backup'
+	);
 
 	let exporting = $state(false);
 	let importing = $state(false);
@@ -46,17 +50,11 @@
 
 	const groupCount = $derived(listChatGroups().length);
 
-	function downloadBlob(blob: Blob) {
+	async function downloadBlob(blob: Blob): Promise<boolean> {
 		const pubkey = $activeAccount?.pubkey ?? 'account';
 		const date = new Date().toISOString().slice(0, 10);
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `cordn-backup-${pubkey.slice(0, 8)}-${date}.json`;
-		document.body.appendChild(a);
-		a.click();
-		a.remove();
-		URL.revokeObjectURL(url);
+		const filename = `cordn-backup-${pubkey.slice(0, 8)}-${date}.json`;
+		return saveBlob(blob, filename);
 	}
 
 	async function handleExport() {
@@ -75,10 +73,15 @@
 				includeMessages: exportMessages,
 				passphrase: exportEncrypted ? exportPassphrase : null
 			});
-			downloadBlob(blob);
-			toast.success(
-				`Backup created${exportEncrypted ? ' (encrypted)' : ''}${exportMessages ? '' : ', messages excluded'}`
-			);
+			const saved = await downloadBlob(blob);
+			if (!saved) {
+				// saveBlob rejected (user cancelled the Save-as picker, or the write failed). Web's
+				// anchor path always succeeds, so this is effectively native-only.
+				toast.error('Backup was not saved.');
+			} else {
+				const detail = `${exportEncrypted ? ' (encrypted)' : ''}${exportMessages ? '' : ', messages excluded'}`;
+				toast.success(isNativePlatform() ? `Backup saved${detail}` : `Backup created${detail}`);
+			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Export failed');
 		} finally {

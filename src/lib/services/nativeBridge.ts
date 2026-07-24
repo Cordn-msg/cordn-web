@@ -33,10 +33,13 @@ import { isAppOrigin } from '$lib/utils/appOrigin';
  *  - the background poll is key-less (throwaway signer); no user secrets cross this seam.
  */
 
-/** True only inside the Capacitor native shell (Android). Web/PWA → false. */
-export function isNativePlatform(): boolean {
-	return browser && Capacitor.isNativePlatform();
-}
+// `isNativePlatform` + the web-API↔Capacitor shims live in the leaf `nativeShims` module so that
+// widely-imported files (e.g. utils.ts) can use them without pulling this module's heavy graph.
+// Re-exported here so existing `import { isNativePlatform } from '$lib/services/nativeBridge'`
+// callers keep working; new web-API shim callers (openExternal / saveBlob / copyText) should import
+// from `$lib/services/nativeShims` directly.
+export { isNativePlatform } from '$lib/services/nativeShims';
+import { isNativePlatform } from '$lib/services/nativeShims';
 
 let initialized = false;
 
