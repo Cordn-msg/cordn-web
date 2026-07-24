@@ -40,6 +40,13 @@ jobs:
       contents: write # create the GitHub release
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, NOT the default shallow clone. android/app/build.gradle
+          # derives versionCode from `git rev-list --count HEAD`; a depth-1 checkout
+          # makes that 1, so every CI-built APK would share versionCode 1 and never
+          # register as an update over a locally-built release. Keep in sync with
+          # build.gradle's versionCode derivation.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10
