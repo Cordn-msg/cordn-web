@@ -11,13 +11,18 @@ def appVersionName = new JsonSlurper().parseText(file('../../package.json').text
 
 def appVersionCode
 try {
-    def out = new ByteArrayOutputStream()
-    exec {
-        commandLine 'git', 'rev-list', '--count', 'HEAD'
-        standardOutput out
-        ignoreExitValue true
-    }
-    def count = out.toString().trim().toInteger()
+    // versionCode = git commit count (monotonic across stable AND prerelease). NOTE: the previous
+    // bare `exec { ... }` form threw "Could not find method exec()" on Project here, which the
+    // catch below swallowed → appVersionCode silently became 1 on every build (local + CI), so
+    // every release looked OLDER than the last and ZapStore never offered an update. ProcessBuilder
+    // sidesteps the Gradle exec API entirely and resolves git from the repo root (this file lives
+    // in android/app/, so ../../ is the repo root). Verified to return the true count.
+    def proc = new ProcessBuilder(['git', 'rev-list', '--count', 'HEAD'])
+        .directory(file('../../').canonicalFile)
+        .redirectErrorStream(true)
+        .start()
+    def count = proc.inputStream.text.trim().toInteger()
+    proc.waitFor()
     appVersionCode = count > 0 ? count : 1
 } catch (Exception ignored) {
     appVersionCode = 1
