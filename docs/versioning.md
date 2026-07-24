@@ -50,7 +50,8 @@ git push --follow-tags
 
 # validated → graduate to stable
 pnpm version patch                      # 0.2.0-next.5 → 0.2.0  (patch *graduates* a prerelease)
-git push --follow-tags                  # release build off the bare vX.Y.Z tag → F-Droid / zap.store
+git push --follow-tags                  # bare vX.Y.Z tag → CI builds + signs the release APK
+zsp publish                             # publish that release to Zapstore manually (main channel)
 ```
 
 **The one gotcha:** from a prerelease, `patch` *graduates* it (`0.2.0-next.5 → 0.2.0`), it does not
