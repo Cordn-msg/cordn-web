@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-07-24
+
+### Fixes
+
+- **ci:** use full checkout so gradle versionCode isn't 1 in shallow clone
+
 ## 0.2.1 — 2026-07-24
 
 ### Features
