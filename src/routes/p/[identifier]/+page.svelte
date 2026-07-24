@@ -14,6 +14,11 @@
 		fetchPublicCoordinatorAvailableKeyPackages,
 		type AvailableKeyPackageWithCoordinator
 	} from '$lib/queries/chatKeyPackageQueries';
+	import { createQuery } from '@tanstack/svelte-query';
+	import {
+		decodeProfileIdentifier,
+		profileIdentifierQueryOptions
+	} from '$lib/queries/profileIdentifierQueries';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { activeAccount, logout } from '$lib/services/accountManager.svelte';
 	import {
@@ -53,40 +58,36 @@
 
 	let { params } = $props();
 
-	type DecodedProfileIdentifier = { pubkey: string; error: string };
-
-	function decodeProfileIdentifier(identifier: string): string {
-		const trimmed = identifier.trim();
-		if (!trimmed) throw new Error('Missing profile identifier');
-
-		if (/^[0-9a-f]{64}$/i.test(trimmed)) {
-			return normalizePubKey(trimmed);
-		}
-
-		const decoded = nip19.decode(trimmed);
-		if (decoded.type === 'npub') {
-			return normalizePubKey(decoded.data);
-		}
-
-		if (decoded.type === 'nprofile') {
-			return normalizePubKey(decoded.data.pubkey);
-		}
-
-		throw new Error('Profile identifier must be a hex pubkey, npub, or nprofile');
-	}
-
-	const decodedProfileIdentifier = $derived.by<DecodedProfileIdentifier>(() => {
-		try {
-			return { pubkey: decodeProfileIdentifier(params.identifier), error: '' };
-		} catch (error) {
-			return {
-				pubkey: '',
-				error: error instanceof Error ? error.message : 'Failed to decode the profile identifier.'
-			};
-		}
+	const syncDecodedIdentifier = $derived(decodeProfileIdentifier(params.identifier));
+	// NIP-05 / shortname resolution is a remote read, so it goes through Svelte
+	// Query (AGENTS.md). The options function re-evaluates reactively as
+	// params.identifier changes; sync-decodable identifiers (hex/npub/nprofile)
+	// disable the query and read straight from syncDecodedIdentifier.
+	const profileIdentifierQuery = createQuery(() =>
+		profileIdentifierQueryOptions(params.identifier)
+	);
+	const profilePubkey = $derived.by(() => {
+		if (syncDecodedIdentifier) return syncDecodedIdentifier.pubkey;
+		return profileIdentifierQuery.data?.pubkey ?? '';
 	});
-	const profilePubkey = $derived.by(() => decodedProfileIdentifier.pubkey);
-	const profileIdentifierError = $derived.by(() => decodedProfileIdentifier.error);
+	const resolvingProfileIdentifier = $derived.by(() => {
+		if (syncDecodedIdentifier) return false;
+		return profileIdentifierQuery.isLoading;
+	});
+	const profileIdentifierError = $derived.by(() => {
+		if (syncDecodedIdentifier) return '';
+		const query = profileIdentifierQuery;
+		if (query.isError) {
+			return query.error instanceof Error
+				? query.error.message
+				: 'Failed to resolve the profile identifier.';
+		}
+		// Query resolved but matched nothing → not a usable identifier.
+		if (query.isSuccess && !query.data) {
+			return 'Profile identifier must be a hex pubkey, npub, nprofile, or NIP-05 address.';
+		}
+		return '';
+	});
 	const profile = $derived(eventStore.model(ProfileModel, profilePubkey));
 	const sharedGroups = $derived.by(() => {
 		if (!profilePubkey) return [];
@@ -143,7 +144,20 @@
 			(Boolean($activeAccount) && (loadingAvailableKeyPackages || !profileKeyPackage))
 	);
 	const loadedProfileRelays = $derived.by(() => getUserRelayListFromStore(profilePubkey));
-	const profileLookupRelays = $derived.by(() => getMetadataLookupRelays(profilePubkey));
+	// Relay hints embedded in the identifier (nprofile relays, NIP-05 `relays`
+	// map). Empty for hex/npub. Merged into the metadata lookup as a bootstrap
+	// so an nprofile/NIP-05 link can find the profile's kind:0 even before its
+	// 10002 relay list loads; the authoritative 10002 list + metadataRelays
+	// fallback are still kept (deduped).
+	const profileIdentifierRelayHints = $derived.by(() => {
+		if (syncDecodedIdentifier) return syncDecodedIdentifier.relayHints;
+		return profileIdentifierQuery.data?.relayHints ?? [];
+	});
+	const profileLookupRelays = $derived.by(() => {
+		const base = getMetadataLookupRelays(profilePubkey);
+		const hints = profileIdentifierRelayHints;
+		return hints.length > 0 ? [...new Set([...hints, ...base])] : base;
+	});
 	const profilePublishRelays = $derived.by(() => loadedProfileRelays);
 	let availableKeyPackages = $state<AvailableKeyPackageWithCoordinator[]>([]);
 	let loadingAvailableKeyPackages = $state(false);
@@ -494,7 +508,7 @@
 				<Card.Root>
 					<Card.Header>
 						<Card.Title>Invalid profile identifier</Card.Title>
-						<Card.Description>This profile link could not be decoded.</Card.Description>
+						<Card.Description>This profile link could not be resolved.</Card.Description>
 					</Card.Header>
 					<Card.Content>
 						<div class="space-y-4">
@@ -504,8 +518,17 @@
 								{profileIdentifierError}
 							</p>
 							<p class="text-sm text-muted-foreground">
-								Use a full hex pubkey, npub, or nprofile identifier.
+								Use a hex pubkey, npub, nprofile, NIP-05 address (user@domain), or a cordn.net shortname.
 							</p>
+						</div>
+					</Card.Content>
+				</Card.Root>
+			{:else if resolvingProfileIdentifier}
+				<Card.Root>
+					<Card.Content>
+						<div class="flex items-center gap-3 py-6 text-sm text-muted-foreground">
+							<Spinner class="size-4" />
+							Resolving profile…
 						</div>
 					</Card.Content>
 				</Card.Root>

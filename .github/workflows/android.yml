@@ -107,3 +107,40 @@ jobs:
           files: android/app/build/outputs/apk/**/*.apk
           prerelease: ${{ steps.lane.outputs.prerelease }}
           body_path: release_notes.md
+
+  publish-zapstore:
+    name: publish to Zapstore (Nostr)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release-apk # the GitHub Release (with APK) must exist for zsp to fetch
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bump ZSP_VERSION when upgrading zsp; filename strips the leading 'v'.
+      - name: Install zsp
+        env:
+          ZSP_VERSION: v0.4.14
+        run: |
+          curl -fsSL -o /usr/local/bin/zsp \
+            "https://github.com/zapstore/zsp/releases/download/${ZSP_VERSION}/zsp-${ZSP_VERSION#v}-linux-amd64"
+          chmod +x /usr/local/bin/zsp
+          zsp --version
+
+      # Tag has a hyphen → prerelease lane → beta channel (+ fetch prereleases);
+      # stable tag → main channel. Mirrors the release-apk lane detection above.
+      # ZAPSTORE_SIGNER holds the SIGN_WITH value: a NIP-46 bunker URL is
+      # recommended for CI/CD (avoids leaking an nsec via /proc/*/environ).
+      - name: Publish latest GitHub release to Zapstore relays
+        env:
+          SIGN_WITH: ${{ secrets.ZAPSTORE_SIGNER }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SIGN_WITH" ]; then
+            echo "ZAPSTORE_SIGNER secret not set; skipping Zapstore publish."
+            exit 0
+          fi
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            zsp publish --quiet --channel beta --pre-release zapstore.yaml
+          else
+            zsp publish --quiet --channel main zapstore.yaml
+          fi

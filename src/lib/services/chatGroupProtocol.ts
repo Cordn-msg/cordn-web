@@ -109,6 +109,32 @@ export function rejectPendingEpochOperations(
 	store.set(groupId, remaining);
 }
 
+/**
+ * Drop any pending `add-member` op for a target. Used when the target is removed
+ * before their Welcome was finalized: without this, a Welcome persisted before
+ * a reload could be delivered (StoreWelcome) by a post-reload sync AFTER the
+ * member was removed, handing them a Welcome to a group they just left. Both
+ * the stored op and the passed target are normalized pubkeys, so a raw compare
+ * is safe. remove-member / metadata ops are left intact.
+ */
+export function dropPendingAddMemberForTarget(
+	store: GroupPendingEpochStore,
+	groupId: string,
+	targetStablePubkey: string
+) {
+	const pending = store.get(groupId);
+	if (!pending?.length) return;
+	const remaining = pending.filter(
+		(operation) =>
+			operation.kind !== 'add-member' || operation.targetStablePubkey !== targetStablePubkey
+	);
+	if (remaining.length === 0) {
+		store.delete(groupId);
+		return;
+	}
+	store.set(groupId, remaining);
+}
+
 export async function reconcilePendingEpochOperations(params: {
 	store: GroupPendingEpochStore;
 	groupId: string;

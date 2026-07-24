@@ -1,8 +1,10 @@
 <script lang="ts">
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import { matchesProfileSearch } from '$lib/components/chat/profileSearch';
+	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { metadataRelays } from '$lib/services/relay-pool';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { nip19 } from 'nostr-tools';
 	import X from '@lucide/svelte/icons/x';
 
 	type SelectOption = {
@@ -32,23 +34,31 @@
 
 	let search = $state('');
 
+	// Load profile metadata for the option pubkeys so search matches names, not
+	// just pubkeys/refs. Fetch only while a search is active (mirrors
+	// AvailableKeyPackageDirectory); rows still load names lazily for display.
+	const profileHints = useProfileHints(
+		() => (search.trim() ? options.map((option) => option.pubkey) : []),
+		{ relays: metadataRelays }
+	);
+
 	const selectedSet = $derived.by(() => new Set(selectedPubkeys));
 	const selectedOptions = $derived.by(() =>
 		selectedPubkeys
 			.map((pubkey) => options.find((option) => option.pubkey === pubkey))
 			.filter((option): option is SelectOption => Boolean(option))
 	);
-	const filteredOptions = $derived.by(() => {
-		const query = search.trim().toLowerCase();
-		return options.filter((option) => {
+	const filteredOptions = $derived.by(() =>
+		options.filter((option) => {
 			if (selectedSet.has(option.pubkey)) return false;
-			if (!query) return true;
-			const npub = nip19.npubEncode(option.pubkey);
-			return [option.label, option.description, option.pubkey, npub]
-				.filter((value): value is string => Boolean(value))
-				.some((value) => value.toLowerCase().includes(query));
-		});
-	});
+			return matchesProfileSearch({
+				pubkey: option.pubkey,
+				profileHints,
+				search,
+				extraFields: [option.label, option.description]
+			});
+		})
+	);
 
 	function add(pubkey: string) {
 		if (selectedSet.has(pubkey)) return;

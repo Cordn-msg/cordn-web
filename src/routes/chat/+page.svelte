@@ -39,6 +39,7 @@
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { goto } from '$app/navigation';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
+	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -64,6 +65,16 @@
 	const hasCoordinator = $derived.by(() => coordinators.length > 0);
 	const hasKeyPackages = $derived.by(() => keyPackages.length > 0);
 	const hasGroups = $derived.by(() => groups.length > 0);
+
+	// Official Cordn discussion group. Lives on the default coordinator, so
+	// encodeGroupShareLink omits `c=` and only emits the `m=` name preview.
+	const CORDN_GROUP_ID = '48ea0377-8a10-4383-9129-a928ceae0232';
+	const cordnGroupHref = encodeGroupShareLink({
+		groupId: CORDN_GROUP_ID,
+		coordinatorKey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
+		metadata: { name: 'Cordn' }
+	});
+	const inCordnGroup = $derived.by(() => groups.some((group) => group.id === CORDN_GROUP_ID));
 	const pendingOnboardingSteps = $derived.by(() =>
 		onboardingSteps.filter((step) => !step.complete)
 	);
@@ -364,6 +375,7 @@
 											{:else if step.title === 'Create your first group'}
 												<div class="flex flex-wrap gap-2">
 													<Button href={resolve('/chat/create-group')}>Create group</Button>
+													<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
 												</div>
 											{/if}
 										</div>
@@ -455,12 +467,17 @@
 						{/if}
 					</Card.Content>
 					<Card.Footer class="pt-0">
-						<Button
-							href={resolve('/chat/create-group')}
-							variant={hasGroups ? 'outline' : 'default'}
-						>
-							Create group
-						</Button>
+						<div class="flex flex-wrap gap-2">
+							<Button
+								href={resolve('/chat/create-group')}
+								variant={hasGroups ? 'outline' : 'default'}
+							>
+								Create group
+							</Button>
+							{#if !inCordnGroup}
+								<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
+							{/if}
+						</div>
 					</Card.Footer>
 				</Card.Root>
 

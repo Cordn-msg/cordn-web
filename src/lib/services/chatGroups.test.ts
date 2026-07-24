@@ -66,10 +66,14 @@ vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
 	decryptGroupPayloadBase64: vi.fn()
 }));
 
-vi.mock('$lib/services/chatGroupProtocol', () => ({
-	createGroupPendingEpochStore: vi.fn(() => new Map()),
-	enqueuePendingEpochOperation: enqueuePendingEpochOperationMock
-}));
+vi.mock('$lib/services/chatGroupProtocol', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/services/chatGroupProtocol')>();
+	return {
+		...actual,
+		createGroupPendingEpochStore: vi.fn(() => new Map()),
+		enqueuePendingEpochOperation: enqueuePendingEpochOperationMock
+	};
+});
 
 vi.mock('$lib/services/chatGroupSessions.svelte', () => ({
 	buildPersistedChatGroup: buildPersistedChatGroupMock,

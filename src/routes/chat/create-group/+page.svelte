@@ -3,8 +3,8 @@
 	import { resolve } from '$app/paths';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
-	import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
-	import type { AvailableKeyPackage } from '$lib/contracts';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { availableKeyPackagesQueryOptions } from '$lib/queries/chatKeyPackageQueries';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
@@ -20,12 +20,12 @@
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import { createChatGroup, inviteChatGroupMember } from '$lib/services/chatGroups.svelte';
+	import { toast } from 'svelte-sonner';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Info from '@lucide/svelte/icons/info';
-	import { nip19 } from 'nostr-tools';
 	import { isHexKey } from 'applesauce-core/helpers';
 
 	let name = $state('');
@@ -39,8 +39,6 @@
 	let selectedMemberPubkeys = $state<string[]>([]);
 	let selectedAdminPubkeys = $state<string[]>([]);
 	let loading = $state(false);
-	let loadingCoordinatorMembers = $state(false);
-	let remoteAvailableKeyPackages = $state<AvailableKeyPackage[]>([]);
 	let error = $state('');
 	const coordinators = $derived.by(() => listChatCoordinators());
 	// Match the selected pubkey against stored coordinators so the field can show
@@ -63,53 +61,35 @@
 		const pubkey = coordinatorKey.trim();
 		return pubkey && /^[0-9a-f]{64}$/i.test(pubkey) ? pubkey : undefined;
 	});
-	const hasValidActiveAccount = $derived.by(() =>
-		Boolean($activeAccount?.pubkey?.trim() && /^[0-9a-f]{64}$/i.test($activeAccount.pubkey))
-	);
+	// Remote key packages for the selected coordinator, via the shared Svelte
+	// Query cache — same source as the Start-chat directory and the ChatHeader
+	// invite dropdown (AGENTS.md). Tightening `enabled` to require a valid
+	// single coordinator prevents falling through to “fetch all coordinators”.
+	const coordinatorKeyPackagesQuery = createQuery(() => {
+		const coordinatorKey = querySafeCoordinatorKey;
+		const base = availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', coordinatorKey);
+		return { ...base, enabled: base.enabled && coordinatorKey !== undefined };
+	});
 	const coordinatorMemberOptions = $derived.by(() => {
-		const entries = remoteAvailableKeyPackages
+		if (!querySafeCoordinatorKey) return [];
+		const entries = (coordinatorKeyPackagesQuery.data ?? [])
 			.filter((entry) => entry.pk !== $activeAccount?.pubkey)
 			.map((entry) => ({
 				pubkey: entry.pk,
-				label: nip19.npubEncode(entry.pk).slice(0, 16),
 				description: `${entry.last_resort ? 'Last resort' : 'Standard'} · ${entry.kp_ref}`
 			}));
 
 		return Array.from(new Map(entries.map((entry) => [entry.pubkey, entry])).values());
 	});
+	const loadingCoordinatorMembers = $derived(
+		querySafeCoordinatorKey !== undefined &&
+			coordinatorKeyPackagesQuery.isFetching &&
+			(coordinatorKeyPackagesQuery.data ?? []).length === 0
+	);
 
 	function samePubkeys(left: string[], right: string[]) {
 		return left.length === right.length && left.every((value, index) => value === right[index]);
 	}
-
-	$effect(() => {
-		if (!hasValidActiveAccount || !querySafeCoordinatorKey) {
-			remoteAvailableKeyPackages = [];
-			loadingCoordinatorMembers = false;
-			return;
-		}
-
-		let cancelled = false;
-		loadingCoordinatorMembers = true;
-
-		void fetchCoordinatorAvailableKeyPackages(querySafeCoordinatorKey)
-			.then((entries) => {
-				if (cancelled) return;
-				remoteAvailableKeyPackages = entries;
-			})
-			.catch(() => {
-				if (cancelled) return;
-				remoteAvailableKeyPackages = [];
-			})
-			.finally(() => {
-				if (cancelled) return;
-				loadingCoordinatorMembers = false;
-			});
-
-		return () => {
-			cancelled = true;
-		};
-	});
 
 	function selectCoordinator(pubkey: string) {
 		coordinatorKey = pubkey;
@@ -161,8 +141,24 @@
 				keyPackageRef: selectedKeyPackageRef || undefined,
 				adminPubkeys
 			});
+			// Invite members individually so one failure (typically "no reachable
+			// key package on this coordinator") can't silently abort every later
+			// invite and leave phantom admins in metadata. The group is already
+			// created, so failures are reported via toast and we still navigate in.
+			let failedInvites = 0;
 			for (const pubkey of selectedMemberPubkeys) {
-				await inviteChatGroupMember({ groupId: group.id, identifier: pubkey });
+				try {
+					await inviteChatGroupMember({ groupId: group.id, identifier: pubkey });
+				} catch {
+					failedInvites += 1;
+				}
+			}
+			if (failedInvites) {
+				toast.error(
+					`Group created, but ${failedInvites} of ${selectedMemberPubkeys.length} invite${
+						failedInvites === 1 ? '' : 's'
+					} failed. Make sure each member has published a key package on this coordinator, then add them from the group's info page.`
+				);
 			}
 			await goto(resolve('/chat/[id]', { id: group.id }));
 		} catch (err) {

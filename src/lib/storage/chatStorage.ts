@@ -4,6 +4,7 @@ import type {
 	StoredChatMessage,
 	StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import type { PendingEpochOperation } from '$lib/services/chatGroupProtocol';
 
 export type ChatStorageBackend = 'indexeddb' | 'memory';
 
@@ -32,6 +33,11 @@ export interface StoredChatGroupRecord {
 	poisonedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: string;
+	/** Not-yet-delivered outbound epoch ops (mostly add-member Welcomes awaiting
+	 *  Commit re-ingestion). Persisted on the group record so a reload before
+	 *  finalization no longer strands a Welcome; the in-memory Map in
+	 *  chatGroups.svelte.ts is rehydrated/cleared per owner in loadGroups(). */
+	pendingEpochOperations?: PendingEpochOperation[];
 }
 
 export interface StoredChatGroupStateRecord {

@@ -45,6 +45,7 @@ import {
 } from '$lib/chat/references';
 import {
 	createGroupPendingEpochStore,
+	dropPendingAddMemberForTarget,
 	enqueuePendingEpochOperation,
 	type PendingEpochOperation
 } from '$lib/services/chatGroupProtocol';
@@ -189,6 +190,11 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 			stateBytes: base64ToBytes(snapshot.stateBase64),
 			triggerCursor: snapshot.triggerCursor,
 			triggerMessageId: snapshot.triggerMessageId
+		})),
+		// Persist not-yet-finalized outbound epoch ops (see StoredChatGroupRecord).
+		// Cloned so the stored copy is detached from the in-memory Map entry.
+		pendingEpochOperations: (pendingEpochOperations.get(group.id) ?? []).map((op) => ({
+			...op
 		}))
 	};
 }
@@ -260,6 +266,10 @@ async function loadAndNormalizeChatGroup(
 
 async function loadGroups(ownerPubkey?: string) {
 	await persistGroupsPromise;
+	// Re-baseline the in-memory pending store for this owner: every group record
+	// carries its own not-yet-finalized ops, so a reload no longer strands a
+	// pending Welcome (the next watch sync finalizes + delivers it).
+	pendingEpochOperations.clear();
 	const storage = await getChatStorage();
 	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
 
@@ -270,6 +280,14 @@ async function loadGroups(ownerPubkey?: string) {
 	}
 
 	const records = await storage.listGroups(normalizedOwner);
+	for (const record of records) {
+		if (record.pendingEpochOperations?.length) {
+			pendingEpochOperations.set(
+				record.id,
+				record.pendingEpochOperations.map((op) => ({ ...op }))
+			);
+		}
+	}
 	const loaded = await Promise.all(
 		records.map((record) => loadAndNormalizeChatGroup(storage, record.id))
 	);
@@ -999,6 +1017,12 @@ export async function removeChatGroupMember(input: {
 			commitMessageBase64: sealedRemoveCommit.msg_64,
 			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
 		});
+		// Prevent a stranded pre-reload Welcome for this target firing post-removal.
+		dropPendingAddMemberForTarget(
+			pendingEpochOperations,
+			group.id,
+			normalizePubKey(input.targetStablePubkey)
+		);
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedRemoveCommit)
@@ -1496,6 +1520,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 
 export function deleteChatGroup(groupId: string): void {
 	chatGroupsStore.groups = chatGroupsStore.groups.filter((group) => group.id !== groupId);
+	pendingEpochOperations.delete(groupId);
 	removeSentJoinRequest(groupId);
 	void getChatStorage().then((storage) => storage.deleteGroup(groupId));
 }
