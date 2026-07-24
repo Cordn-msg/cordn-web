@@ -41,12 +41,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history, NOT the default shallow clone. android/app/build.gradle
-          # derives versionCode from `git rev-list --count HEAD`; a depth-1 checkout
-          # makes that 1, so every CI-built APK would share versionCode 1 and never
-          # register as an update over a locally-built release. Keep in sync with
-          # build.gradle's versionCode derivation.
           fetch-depth: 0
+      - name: Force full git history (versionCode = git rev-list --count HEAD)
+        # android/app/build.gradle derives versionCode from `git rev-list --count HEAD`.
+        # fetch-depth: 0 alone was NOT enough on tag builds — the 0.2.2 APK still shipped
+        # versionCode 1 (shallow clone → count 1), so it never registered as an update.
+        # Force-unshallow to guarantee the true monotonic count. See build.gradle.
+        run: |
+          git fetch --prune --unshallow >/dev/null 2>&1 || true
+          echo "versionCode will be: $(git rev-list --count HEAD)"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
