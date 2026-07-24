@@ -31,12 +31,13 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
 
-            <!-- Deep links: a chooser candidate for cordn.net /chat (group shares) and /p
-                 (profile shares). We deliberately skip App Links verification (no assetlinks.json),
-                 so tapping one shows a disambiguation dialog and the app opens once the user picks
-                 Cordn; the appUrlOpen listener then routes the path in-app. pathPrefix scopes capture
-                 so non-app paths (e.g. /blog) stay in the browser. -->
-            <intent-filter>
+            <!-- Verified App Links for cordn.net /chat (group shares) and /p (profile shares).
+                 autoVerify=true plus the assetlinks.json at cordn.net/.well-known/ (served from
+                 static/.well-known/) bind this APK's signing key to the domain, so Android opens
+                 Cordn directly — no chooser, no browser — for matching paths; the appUrlOpen listener
+                 (nativeBridge.ts) then routes the path in-app. pathPrefix scopes capture so
+                 non-app paths (e.g. /blog, landing /) stay in the browser. -->
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />

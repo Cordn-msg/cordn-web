@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "org.cordn.app",
+      "sha256_cert_fingerprints": [
+        "A6:62:6C:FC:A5:51:C5:60:5F:0A:F4:50:C6:BF:6D:83:1F:C7:0E:B2:DC:D1:7F:02:7E:B3:58:C5:68:52:75:8F"
+      ]
+    }
+  }
+]
