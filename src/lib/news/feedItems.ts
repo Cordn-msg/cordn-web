@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-07-24-links-invites',
+		createdAt: Date.UTC(2026, 6, 24),
+		version: 1,
+		title: 'Friendlier links and more reliable invites',
+		body: "- ✨ Profile links now accept NIP-05 addresses (like user@domain) and bare cordn.net shortnames alongside hex, npub, and nprofile, so you can link to a profile with whichever identifier you have.\n- ✨ New sign-ups get a \"Join Cordn group\" button on chat home to hop straight into the official discussion group.\n- 🔄 When the native app is installed, cordn.net chat and profile links now open it directly instead of showing an app chooser.\n- 🔄 Inviting members to a new group now sends each invite on its own, so one unreachable key package no longer aborts the rest — anything that fails surfaces as a toast.\n- 🐛 Reloading a group right after inviting someone no longer drops the invite: pending add-member operations are now saved and reapplied on the next open.\n- 🐛 A message you send no longer pings a notification on your own other devices.\n- 🔄 On mobile web, the on-screen keyboard no longer slides over the message composer.\n- 🔄 The news feed's unread marker is now a quiet red dot, matching the rest of the app's attention cues."
+	},
+	{
 		id: 'cordn-news-2026-07-23-multi-file-uploads',
 		createdAt: Date.UTC(2026, 6, 23),
 		version: 1,
