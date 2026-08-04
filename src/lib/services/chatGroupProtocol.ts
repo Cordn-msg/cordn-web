@@ -22,6 +22,11 @@ export type PendingEpochOperation =
 			kind: 'update-group-metadata';
 			groupId: string;
 			commitMessageBase64: string;
+	  }
+	| {
+			kind: 'self-update';
+			groupId: string;
+			commitMessageBase64: string;
 	  };
 
 export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;

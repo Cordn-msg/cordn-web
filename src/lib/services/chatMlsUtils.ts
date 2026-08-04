@@ -488,6 +488,32 @@ export async function removeMemberFromGroup(params: {
 	};
 }
 
+/**
+ * Self-update Commit (RFC 9420 §12.4: a Commit with no proposals carries a
+ * mandatory UpdatePath). Refreshes the sender's leaf keys and advances the
+ * epoch without membership or metadata changes. In the shared-leaf
+ * multi-device model this is the ratchet-divergence repair (spec
+ * multi-device §10): the epoch bump lets a ratchet-stale sibling
+ * fast-forward from the republished group document, which a same-epoch
+ * document cannot offer (§8 forward-only).
+ */
+export async function createSelfUpdateCommit(params: { state: ClientState }): Promise<{
+	newState: ClientState;
+	commitMessageBase64: string;
+}> {
+	const cipherSuite = await getCordnCipherSuite();
+	const result = await createCommit({
+		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
+		state: params.state,
+		ratchetTreeExtension: true
+	});
+
+	return {
+		newState: result.newState,
+		commitMessageBase64: bytesToBase64(encode(mlsMessageEncoder, result.commit))
+	};
+}
+
 export async function updateGroupMetadataExtension(params: {
 	state: ClientState;
 	metadata: CordnGroupMetadata;

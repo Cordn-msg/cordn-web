@@ -142,6 +142,10 @@ export interface GroupSnapshot {
 	state: ClientState;
 	coordinatorKey: string;
 	fetchCursor: number;
+	/** High-water mark including own posted messages (spec §4.1: the document
+	 *  cursor must cover every message folded into `state`, and own sends fold
+	 *  in at send time while advancing only `lastCursor`). */
+	lastCursor: number;
 }
 
 /** Per-group outcome of reconciliation (spec §8). */
@@ -216,7 +220,13 @@ export async function openDocument(
 // ---------------------------------------------------------------------------
 
 function buildGroupDocument(
-	input: { gid: string; state: ClientState; coordinatorKey: string; fetchCursor: number },
+	input: {
+		gid: string;
+		state: ClientState;
+		coordinatorKey: string;
+		fetchCursor: number;
+		lastCursor: number;
+	},
 	prev?: string
 ): GroupDocument {
 	return {
@@ -227,7 +237,15 @@ function buildGroupDocument(
 		issuedAt: Date.now(),
 		prev,
 		clientState: bytesToBase64(encode(clientStateEncoder, input.state)),
-		cursor: input.fetchCursor
+		// §4.1 consistent snapshot at ratchet granularity: the cursor must cover
+		// every message whose processing is folded into `state` — both inbound
+		// stream messages (fetchCursor) and own posted messages, which ratchet
+		// the state at send time but only advance lastCursor. Publishing
+		// fetchCursor alone would understate the ratchet: an adopter would
+		// re-process the writer's unechoed sends (spurious "Desired gen in the
+		// past", their send generations are never retained) or, worse, treat a
+		// ratchet-folded window as live-delivery territory.
+		cursor: Math.max(input.fetchCursor, input.lastCursor)
 	};
 }
 
@@ -287,7 +305,8 @@ export async function publishGroupDocument(params: {
 			gid: params.group.gid,
 			state: params.group.state,
 			coordinatorKey: params.group.coordinatorKey,
-			fetchCursor: params.group.fetchCursor
+			fetchCursor: params.group.fetchCursor,
+			lastCursor: params.group.lastCursor
 		},
 		params.prev
 	);
@@ -441,7 +460,7 @@ export async function walkGroupChain(params: {
 
 /** One epoch's slice of the catch-up gap (spec §8.5). Range is half-open
  * `(lo, hi]` — messages whose `cursor` falls in it decrypt with that epoch's
- * gen-0 ClientState. `hi === +Infinity` for the final (tip) epoch. */
+ * gen-0 ClientState. */
 export interface GapRange<T extends { cursor: number }> {
 	lo: number;
 	hi: number;
@@ -449,11 +468,14 @@ export interface GapRange<T extends { cursor: number }> {
 }
 
 /** Partition the catch-up message gap into per-epoch ranges (spec §8.5).
- * `boundaries` is `[decryptFrontier, ...chainCursors, +Infinity]`; range `i`
- * covers `(boundaries[i], boundaries[i+1]]` and pairs with `states[i]` in the
- * caller (`states` has one fewer element than `boundaries`). Pure so the
- * partitioning — the subtle part of chained catch-up — is testable without the
- * MLS / Blossom / orchestration surface. */
+ * `boundaries` is `[decryptFrontier, ...chainCursors]` — the tip document's
+ * cursor bounds the replay (spec §8.5 partition invariant: catch-up owns
+ * `(localCursor, tipDoc.cursor]`; live delivery owns the tail past it, because
+ * the live path both stores AND ratchets those messages). Range `i` covers
+ * `(boundaries[i], boundaries[i+1]]` and pairs with `states[i]` in the caller
+ * (`states` has one more element than the range count: the tip state is never
+ * used for replay). Pure so the partitioning — the subtle part of chained
+ * catch-up — is testable without the MLS / Blossom / orchestration surface. */
 export function partitionGapByEpoch<T extends { cursor: number }>(
 	gap: T[],
 	boundaries: number[]

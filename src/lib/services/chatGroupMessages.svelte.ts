@@ -240,7 +240,13 @@ function isFormerEpochIssue(detail: string): boolean {
 	);
 }
 
-function isStaleGenerationIssue(detail: string): boolean {
+/**
+ * ts-mls secret-tree failure for a message generation the local ratchet has
+ * already consumed (and no longer retains). On a shared-leaf multi-device
+ * group this is the sibling-divergence signal (spec multi-device §10): the
+ * sender's ratchet replica is behind ours.
+ */
+export function isStaleGenerationIssue(detail: string): boolean {
 	return detail === 'Desired gen in the past';
 }
 
@@ -535,6 +541,25 @@ export async function ingestChatGroupMessages(params: {
 			).opaqueMessageBase64;
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
+			// Multi-device (§10.6): the seal hides the epoch, so a device behind a
+			// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
+			// at this layer — the epochAhead gate below never gets to see these.
+			// Mirror it: do NOT advance the cursor (leave it at the decrypt
+			// frontier so a post-fast-forward re-fetch retries the message once
+			// the document state arrives) and dedup the advisory issue per cursor.
+			// Single-device keeps fail-and-advance: no document rescues it.
+			if (params.mdActive) {
+				if (!group.syncIssues.some((i) => i.cursor === message.cursor)) {
+					const issue = {
+						cursor: message.cursor,
+						createdAt: message.createdAt,
+						detail: `Sealed payload decrypt failed: ${detail}`
+					};
+					group.syncIssues.push(issue);
+					issues.push(issue);
+				}
+				continue;
+			}
 			group.fetchCursor = message.cursor;
 			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			const issue = {

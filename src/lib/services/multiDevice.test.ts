@@ -83,12 +83,13 @@ function fakeSeal(): Nip44Seal {
 
 const OWNER = 'ab'.repeat(32);
 
-function snapshot(epoch: number, gid: string, cursor = 5): GroupSnapshot {
+function snapshot(epoch: number, gid: string, cursor = 5, lastCursor?: number): GroupSnapshot {
 	return {
 		gid,
 		state: { __bytes: fakeStateBytes(epoch, gid) } as never,
 		coordinatorKey: 'coord:' + gid,
-		fetchCursor: cursor
+		fetchCursor: cursor,
+		lastCursor: lastCursor ?? cursor
 	};
 }
 
@@ -187,6 +188,28 @@ describe('multiDevice core', () => {
 			dekPubkey: OWNER
 		});
 		if (pulled.type === 'group') expect(pulled.prev).toBe('prevaddr');
+	});
+
+	test('publishGroupDocument covers own unechoed sends: cursor = max(fetchCursor, lastCursor)', async () => {
+		// §4.1 consistent snapshot at ratchet granularity: own sends fold into
+		// clientState at send time but advance only lastCursor, so publishing
+		// fetchCursor alone would understate the ratchet position.
+		const store = honestStore();
+		const res = await publishGroupDocument({
+			group: snapshot(1, 'g1', 100, 130),
+			seal: fakeSeal(),
+			dekPubkey: OWNER,
+			store
+		});
+		const pulled = await pullDocument({
+			address: res.address,
+			store,
+			addressToUrl: (a) => `https://blossom.test/${a}`,
+			seal: fakeSeal(),
+			dekPubkey: OWNER
+		});
+		if (pulled.type !== 'group') throw new Error('expected a group document');
+		expect(pulled.cursor).toBe(130);
 	});
 
 	test('publishGroupDocument rejects a store that lies about the address', async () => {
@@ -512,7 +535,9 @@ describe('walkGroupChain (spec §8.5)', () => {
 
 /** The catch-up replay pairs `states[i]` with `ranges[i]`: range i covers
  * `(boundaries[i], boundaries[i+1]]` and decrypts with that epoch's gen-0
- * ClientState. `states` has one fewer element than `boundaries`. */
+ * ClientState. The caller's boundaries end at the tip document's cursor (no
+ * +Infinity sentinel), so the tip state is never used for replay; these tests
+ * also exercise the generic +Infinity form to pin the half-open semantics. */
 function gapMsg(cursor: number): { cursor: number; opaqueMessageBase64: string } {
 	return { cursor, opaqueMessageBase64: `m${cursor}` };
 }
@@ -562,6 +587,23 @@ describe('partitionGapByEpoch (spec §8.5 replay boundaries)', () => {
 		const ranges = partitionGapByEpoch([], [5, 10, Number.POSITIVE_INFINITY]);
 		expect(ranges).toHaveLength(2);
 		expect(ranges.every((r) => r.messages.length === 0)).toBe(true);
+	});
+
+	test('caller bounds the replay at the tip cursor: the tail is left to live delivery', () => {
+		// Regression for the shared-leaf ratchet-divergence incident:
+		// catchUpGroupFromChain builds [decryptFrontier, ...chainCursors] with NO
+		// +Infinity sentinel (spec §8.5 partition invariant). Messages past the
+		// tip document's cursor belong to live delivery, which both stores AND
+		// ratchets them; replay-merging them first would trip live ingestion's
+		// cursor dedup and silently skip ratcheting them — leaving the ratchet
+		// behind under a current-looking cursor ("Desired gen in the past" on
+		// every subsequent send seen by siblings).
+		const boundaries = [100, 150, 200]; // decryptFrontier=100; tip chain cursor=200
+		const gap = [gapMsg(110), gapMsg(150), gapMsg(175), gapMsg(200), gapMsg(250)];
+		const ranges = partitionGapByEpoch(gap, boundaries);
+		expect(ranges).toHaveLength(2);
+		const replayed = ranges.flatMap((r) => r.messages.map((m) => m.cursor));
+		expect(replayed).toEqual([110, 150, 175, 200]); // 250 excluded: live delivery owns it
 	});
 });
 

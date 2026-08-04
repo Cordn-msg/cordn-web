@@ -1,5 +1,6 @@
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import type { CordnGroupMetadata } from '$lib/services/chatMlsUtils';
+import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 
 const {
 	processMessageMock,
@@ -58,6 +59,10 @@ describe('ingestChatGroupMessages()', () => {
 		mlsMessageDecoderMock.mockReturnValue([{ wireformat: 2 }, 1]);
 		decodeKeyPackageIdentityMock.mockReset();
 		getCordnGroupMetadataFromExtensionsMock.mockReset();
+		vi.mocked(decryptGroupPayloadBase64).mockReset();
+		vi.mocked(decryptGroupPayloadBase64).mockImplementation(async ({ encryptedBase64 }) => ({
+			opaqueMessageBase64: encryptedBase64
+		}));
 	});
 
 	test('records admin-policy rejections as sync issues', async () => {
@@ -391,5 +396,71 @@ describe('ingestChatGroupMessages()', () => {
 		expect(result.poisoned).toBe(true);
 		expect(group.status).toBe('poisoned');
 		expect(group.poisonedAtCursor).toBe(11);
+	});
+
+	test('an unseal failure with MD active leaves the cursor at the decrypt frontier', async () => {
+		// spec §10.6: the seal hides the epoch, so a device behind a sibling
+		// Commit cannot distinguish "ahead of my epoch" from "corrupt" at the
+		// unseal layer. Mirror the epoch-ahead branch: skip WITHOUT advancing
+		// the cursor so a post-fast-forward re-fetch retries the message, and
+		// dedup the advisory issue across re-fetches (cursor not advanced → the
+		// message re-delivers until catch-up resolves it).
+		vi.mocked(decryptGroupPayloadBase64).mockRejectedValue(new Error('decryption failed'));
+
+		const group = {
+			state: {
+				groupContext: { epoch: 5n },
+				ratchetTree: [],
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [] as Array<{ cursor: number; createdAt: number; detail: string }>,
+			status: 'active' as const
+		};
+
+		const msg = { cursor: 11, createdAt: 300, opaqueMessageBase64: 'sealed-ahead-message' };
+		const first = await ingestChatGroupMessages({ group, mdActive: true, messages: [msg] });
+		await ingestChatGroupMessages({ group, mdActive: true, messages: [msg] });
+
+		expect(first.issues).toHaveLength(1);
+		expect(first.issues[0]?.detail).toMatch(/sealed payload decrypt failed/i);
+		expect(group.fetchCursor).toBe(0);
+		expect(group.lastCursor).toBe(0);
+		expect(group.syncIssues.filter((i) => i.cursor === 11)).toHaveLength(1);
+		expect(group.status).toBe('active');
+	});
+
+	test('an unseal failure without MD keeps fail-and-advance', async () => {
+		// Single-device has no document rescue: advance past the failure and
+		// record the issue (the original behavior).
+		vi.mocked(decryptGroupPayloadBase64).mockRejectedValue(new Error('decryption failed'));
+
+		const group = {
+			state: {
+				groupContext: { epoch: 5n },
+				ratchetTree: [],
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [] as Array<{ cursor: number; createdAt: number; detail: string }>,
+			status: 'active' as const
+		};
+
+		const result = await ingestChatGroupMessages({
+			group,
+			mdActive: false,
+			messages: [{ cursor: 11, createdAt: 300, opaqueMessageBase64: 'sealed-ahead-message' }]
+		});
+
+		expect(result.issues).toHaveLength(1);
+		expect(result.issues[0]?.detail).toMatch(/sealed payload decrypt failed/i);
+		expect(group.fetchCursor).toBe(11);
+		expect(group.lastCursor).toBe(11);
 	});
 });

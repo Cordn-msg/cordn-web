@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 export const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-08-04-multi-device-reliability',
+		createdAt: Date.UTC(2026, 7, 4),
+		version: 1,
+		title: 'More reliable multi-device messaging',
+		body: "- 🐛 Messages from a linked device that was briefly offline or in the background no longer fail to decrypt on your other devices — each device now makes sure it is fully caught up before sending.\n- 🐛 Messages that arrive while one of your devices is still catching up are now recovered once it does, instead of being silently skipped.\n- 🔄 If a linked device's state ever drifts out of sync, the group now repairs itself instead of every message from that device failing until you fix it by hand."
+	},
+	{
 		id: 'cordn-news-2026-07-24-links-invites',
 		createdAt: Date.UTC(2026, 6, 24),
 		version: 1,

@@ -1390,7 +1390,8 @@ function toGroupSnapshot(group: StoredChatGroup): GroupSnapshot {
 		gid: group.id,
 		state: decodeStoredGroupState(group),
 		coordinatorKey: group.coordinatorKey,
-		fetchCursor: group.fetchCursor
+		fetchCursor: group.fetchCursor,
+		lastCursor: group.lastCursor
 	};
 }
 
@@ -2136,6 +2137,16 @@ async function catchUpGroupFromChain(params: {
 	//    sibling-Commits skip (shared-leaf guard) and the next step bridges.
 	//    mdActive so any partition imperfection skips instead of poisoning. ONE
 	//    working session accumulates recovered messages across ranges.
+	//
+	//    The replay is bounded at the tip document's cursor (spec §8.5 partition
+	//    invariant): catch-up owns (decryptFrontier, tipDoc.cursor]; the live
+	//    delivery stream owns (tipDoc.cursor, ∞). Messages past the tip cursor
+	//    are at the tip epoch and the live path both stores AND ratchets them.
+	//    Merging them here first would trip live ingestion's cursor dedup
+	//    (seenCursors) and silently skip ratcheting them — leaving the shared
+	//    leaf's ratchet behind under a current-looking cursor, so every
+	//    subsequent send from this device fails on siblings ("Desired gen in
+	//    the past"). The tip state is therefore never used for replay.
 	const account = requireActiveAccount('You must be logged in to catch up group messages');
 	const workingGroup = createWorkingChatGroupSession(
 		group,
@@ -2143,11 +2154,7 @@ async function catchUpGroupFromChain(params: {
 	);
 	workingGroup.fetchCursor = params.decryptFrontier;
 	const states = [params.localStateBase64, ...chain.map((s) => s.clientState)];
-	const boundaries = [
-		params.decryptFrontier,
-		...chain.map((s) => s.cursor),
-		Number.POSITIVE_INFINITY
-	];
+	const boundaries = [params.decryptFrontier, ...chain.map((s) => s.cursor)];
 	const ranges = partitionGapByEpoch(gap, boundaries);
 	for (let i = 0; i < ranges.length; i++) {
 		const range = ranges[i]!;

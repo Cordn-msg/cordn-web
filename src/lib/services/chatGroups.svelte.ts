@@ -17,6 +17,7 @@ import {
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
 	addMemberToGroup,
+	createSelfUpdateCommit,
 	encodeWelcomeBase64,
 	findMemberLeafIndexByStablePubkey,
 	getCordnGroupMetadataExtension,
@@ -32,6 +33,7 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	isStaleGenerationIssue,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
@@ -489,14 +491,26 @@ export async function assertGroupCanPerformOutboundOperation(
  * Resolve the group state to use when sending an application message.
  *
  * Application messages (kind 9 / 7 / 1111 / 1010 / 5) never change the MLS
- * epoch, so for a group with an active live subscription the pre-send
- * catch-up fetch is redundant: the subscription keeps local state current up
- * to the last delivered message, and this runs inside the serialized group
- * operation chain so it always sees the post-ingestion state. Only fall back
- * to a full catch-up for groups that are not currently watched.
+ * epoch, so for a single-device group with an active live subscription the
+ * pre-send catch-up fetch is redundant: the subscription keeps local state
+ * current up to the last delivered message, and this runs inside the
+ * serialized group operation chain so it always sees the post-ingestion
+ * state.
+ *
+ * Multi-device groups always take the catch-up path instead (spec
+ * multi-device §10.6: "behind" has a generation dimension). In the
+ * shared-leaf model "watched" is not "current": the watch flag outlives the
+ * subscription itself (backgrounded tabs freeze timers/sockets, suspended
+ * webviews), and a document fast-forward leaves the ratchet behind until the
+ * backlog is processed. Sending from a stale shared-leaf ratchet reuses
+ * generations a sibling already consumed, so the message fails on every
+ * sibling ("Desired gen in the past") and is lost — send-consumed generations
+ * are never retained. One `after: fetchCursor` round-trip per send is the
+ * cheap guard; it is near-empty when current.
  */
 async function prepareGroupForApplicationMessage(groupId: string): Promise<StoredChatGroup> {
-	if (isGroupActivelyWatched(groupId)) {
+	const account = requireActiveAccount('You must be logged in to send a message');
+	if (!isMultiDeviceActive(normalizePubKey(account.pubkey)) && isGroupActivelyWatched(groupId)) {
 		const group = requireChatGroup(groupId);
 		assertChatGroupIsActive(group);
 		return group;
@@ -585,7 +599,8 @@ export async function runGroupOperation<T>(
 }
 
 /**
- * Run an epoch-advancing outbound operation (invite / remove / metadata).
+ * Run an epoch-advancing outbound operation (invite / remove / metadata /
+ * self-update repair).
  * Reconciles the multi-device tip FIRST (§10 mitigation #1), then takes the
  * per-group lock. The order is load-bearing: `reconcileTipForOutbound` may
  * fast-forward THIS group, and `fastForwardGroup` re-enters `runGroupOperation`
@@ -603,7 +618,7 @@ async function runOutboundGroupOperation<T>(
 	await reconcileTipForOutbound();
 	const result = await runGroupOperation(groupId, operation);
 	// Multi-device re-publish (spec §10): an epoch-advancing outbound Commit
-	// (invite / remove / metadata) just completed and persisted new local state
+	// (invite / remove / metadata / self-update) just completed and persisted new local state
 	// (`replaceGroup` is the last step of each op, so by here the store holds the
 	// post-Commit state). Siblings cannot ingest the Commit from the stream
 	// (shared-leaf UpdatePath) and need a fresh group document to fast-forward.
@@ -624,6 +639,100 @@ async function runOutboundGroupOperation<T>(
 	const persistedGroup = getChatGroup(groupId);
 	if (persistedGroup) void advanceNativeCursor(groupId, groupFetchWatermark(persistedGroup));
 	return result;
+}
+
+/**
+ * Multi-device ratchet-divergence repair (spec multi-device §10). A "Desired
+ * gen in the past" ingestion failure on a shared-leaf group means a sibling's
+ * ratchet replica is behind ours (it skipped messages this device sent), and
+ * every message it sends fails here until repaired. Same-epoch group
+ * documents cannot fix within-epoch drift (§8 forward-only), so the
+ * converging move is an epoch-advancing self-update Commit by the DETECTING
+ * device — the one holding the advanced ratchet — followed by the §10
+ * document re-publish (fired unconditionally by runOutboundGroupOperation):
+ * siblings skip the Commit on the stream and fast-forward from the new
+ * document, resyncing their ratchets at the new epoch. Messages the sibling
+ * already sent stay lost (send-consumed generations are never retained);
+ * the repair bounds divergence from silent-permanent to transient.
+ *
+ * Rate-limited to one repair per group per detection epoch: the signal
+ * repeats per failed message until the sibling converges.
+ */
+const ratchetRepairEpochByGroup = new Map<string, string>();
+
+async function repairSharedLeafRatchetDivergence(
+	groupId: string,
+	detectedAtEpoch: string
+): Promise<void> {
+	await runOutboundGroupOperation(groupId, async () => {
+		if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) return;
+		ratchetRepairEpochByGroup.set(groupId, detectedAtEpoch);
+		try {
+			const account = requireActiveAccount('You must be logged in to repair group state');
+			const group = await assertGroupCanPerformOutboundOperation(groupId);
+			const state = decodeStoredGroupState(group);
+
+			const commitResult = await createSelfUpdateCommit({ state });
+			const sealedCommit = await sealForPosting({
+				state,
+				opaqueMessageBase64: commitResult.commitMessageBase64
+			});
+
+			enqueuePendingEpochOperation(pendingEpochOperations, {
+				kind: 'self-update',
+				groupId: group.id,
+				commitMessageBase64: sealedCommit.msg_64
+			});
+
+			const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+				client.PostGroupMessage(sealedCommit)
+			);
+
+			// A self-update changes no membership or metadata, so there are no
+			// system messages to synthesize; persist the new epoch like any
+			// other outbound Commit.
+			const workingGroup = createWorkingChatGroupSession(group, commitResult.newState);
+			const nextGroup = buildPersistedChatGroup({
+				group,
+				workingGroup,
+				encodeState,
+				metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState))
+			});
+
+			const tentativeSnapshot = createOutboundTentativeSnapshot({
+				groupId: group.id,
+				stateBase64: nextGroup.stateBase64,
+				fetchCursor: nextGroup.fetchCursor,
+				newEpoch: commitResult.newState.groupContext.epoch,
+				triggerCursor: posted.cursor
+			});
+			nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
+
+			replaceGroup(group.id, nextGroup);
+		} catch (error) {
+			// Transient failure (e.g. coordinator unreachable): release the
+			// rate-limit key so the next detection retries the repair.
+			if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) {
+				ratchetRepairEpochByGroup.delete(groupId);
+			}
+			throw error;
+		}
+	});
+}
+
+function scheduleSharedLeafRatchetRepair(groupId: string, detectedAtEpoch: string): void {
+	// Deferred off the current stack: the detection site can be running inside
+	// runGroupOperation (e.g. the pre-send catch-up), and the repair re-enters
+	// it via runOutboundGroupOperation — serialized through the group lock, but
+	// only safe to START after the current operation unwinds.
+	setTimeout(() => {
+		void repairSharedLeafRatchetDivergence(groupId, detectedAtEpoch).catch((error) => {
+			console.warn('[multi-device] ratchet-divergence repair failed', {
+				groupId,
+				error: error instanceof Error ? error.message : String(error)
+			});
+		});
+	}, 0);
 }
 
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
@@ -1200,6 +1309,7 @@ async function applyIncomingChatGroupMessages(
 	const state = decodeStoredGroupState(group);
 	const coordinatorClient = getCoordinatorClient(account, group.coordinatorKey);
 	const workingGroup = createWorkingChatGroupSession(group, state);
+	const mdActive = isMultiDeviceActive(normalizePubKey(account.pubkey));
 
 	const sync = await syncChatGroupMessages({
 		group,
@@ -1208,7 +1318,7 @@ async function applyIncomingChatGroupMessages(
 		pendingEpochOperations,
 		coordinatorClient,
 		localStablePubkey: normalizePubKey(account.pubkey),
-		mdActive: isMultiDeviceActive(normalizePubKey(account.pubkey))
+		mdActive
 	});
 
 	const nextGroup = buildPersistedChatGroup({
@@ -1248,6 +1358,17 @@ async function applyIncomingChatGroupMessages(
 	nextGroup.snapshots = updatedSnapshots;
 
 	replaceGroup(group.id, nextGroup);
+
+	// Multi-device ratchet-divergence detection (spec §10): a stale-generation
+	// failure on the live delivery path means a sibling's ratchet is behind
+	// ours — its messages will keep failing here until it resyncs. Repair from
+	// THIS device (it holds the advanced ratchet) via an epoch-advancing
+	// self-update Commit. The §8.5 chained catch-up replay bypasses this
+	// function (it calls ingestChatGroupMessages directly on a working group),
+	// so expected catch-up noise never triggers repairs.
+	if (mdActive && sync.issues.some((issue) => isStaleGenerationIssue(issue.detail))) {
+		scheduleSharedLeafRatchetRepair(group.id, state.groupContext.epoch.toString());
+	}
 
 	// Multi-device re-publish is NOT fired on ingestion. Own-Commit republish
 	// fires unconditionally at the end of `runOutboundGroupOperation` (the
