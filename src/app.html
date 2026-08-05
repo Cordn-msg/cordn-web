@@ -2,12 +2,15 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<!-- interactive-widget=resizes-content makes the layout viewport (and thus dvh) shrink
-			 when the soft keyboard opens, so the chat composer stays visible instead of hiding
-			 behind it. Native gets the same effect via windowSoftInputMode=adjustResize. -->
+		<!-- viewport-fit=cover opts the WebView/PWA into edge-to-edge so env(safe-area-inset-*)
+			 (and the SystemBars-injected --safe-area-inset-* vars) report real values: the header
+			 clears the notch and the composer clears the home indicator. interactive-widget=
+			 resizes-content makes the layout viewport (and thus dvh) shrink when the soft keyboard
+			 opens, so the chat composer stays visible instead of hiding behind it. Native gets the
+			 same keyboard effect via windowSoftInputMode=adjustResize. -->
 		<meta
 			name="viewport"
-			content="width=device-width, initial-scale=1, interactive-widget=resizes-content"
+			content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
 		/>
 		<meta name="text-scale" content="scale" />
 		<meta name="theme-color" content="#020617" />

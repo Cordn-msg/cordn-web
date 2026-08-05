@@ -183,6 +183,27 @@
 			});
 			void scrollToLatestMessage();
 		});
+
+		// Re-pin to the bottom when the scroll container itself shrinks — most importantly the soft
+		// keyboard opening on mobile — so the latest messages stay visible instead of being clipped
+		// off the new bottom edge. Guarded by wasAtBottom (never yank someone reading history) and
+		// rAF-batched so the multi-frame keyboard animation collapses to one cheap scrollTo.
+		let resizeFrame: number | null = null;
+		const ro = new ResizeObserver(() => {
+			if (!container || !wasAtBottom) return;
+			if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+			resizeFrame = requestAnimationFrame(() => {
+				resizeFrame = null;
+				if (container && wasAtBottom) {
+					container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+				}
+			});
+		});
+		if (container) ro.observe(container);
+		return () => {
+			ro.disconnect();
+			if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+		};
 	});
 
 	$effect(() => {

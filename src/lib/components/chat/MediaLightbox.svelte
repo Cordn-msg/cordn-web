@@ -117,7 +117,7 @@
 			/>
 		</div>
 
-		<div class="absolute top-3 right-3 flex items-center gap-1">
+		<div class="absolute top-safe right-3 flex items-center gap-1">
 			<button
 				type="button"
 				class="lightbox-btn"

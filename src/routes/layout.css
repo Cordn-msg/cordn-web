@@ -124,6 +124,30 @@
 	scrollbar-width: none;
 }
 
+/*
+ * Safe-area helpers (edge-to-edge on Android 15+ / targetSdk>=36). Read the SystemBars-injected
+ * --safe-area-inset-* var first — it's correct on Android WebView <140 where env() is buggy — with
+ * env() as the fallback and 0px last, so these are inert on desktop / no-notch (web unchanged).
+ * pt-safe/pb-safe use max(base, inset): clears tall system bars (status, 3-button nav, home
+ * indicator) without over-padding on devices with a small/no inset.
+ */
+@utility pt-safe {
+	padding-top: max(0.75rem, var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+}
+@utility pb-safe {
+	padding-bottom: max(0.75rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+@utility pl-safe {
+	padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+@utility pr-safe {
+	padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+}
+/* Floating controls (e.g. lightbox close) that want a gap BELOW the status bar, not flush to it. */
+@utility top-safe {
+	top: calc(0.75rem + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+}
+
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
@@ -133,5 +157,13 @@
 	}
 	html {
 		@apply font-sans;
+	}
+	html.native,
+	html.native body {
+		/* Native-shell feel: drop the grey tap-highlight flash and document overscroll bounce
+		   that read as "web page in a box". Intentionally NOT disabling text selection, so message
+		   content stays copyable. Web/PWA keeps the browser defaults. */
+		overscroll-behavior: none;
+		-webkit-tap-highlight-color: transparent;
 	}
 }

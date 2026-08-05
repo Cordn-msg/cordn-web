@@ -396,6 +396,11 @@
 		draft = '';
 		selectedMentions = [];
 		clearReplyTarget();
+		// Reassert composer focus so the soft keyboard stays open for the next message (mobile chat
+		// UX). The scroll + re-render above can blur the textarea and dismiss the keyboard; bumping
+		// focusKey here re-focuses it before the network send resolves, minimizing flicker (also
+		// keeps the cursor in the composer on desktop).
+		composerFocusKey += 1;
 
 		const sent = await sendGroupMessageAction(
 			groupId,

@@ -62,6 +62,10 @@ export async function initNativeShell(): Promise<void> {
 	if (!isNativePlatform() || initialized) return;
 	initialized = true;
 
+	// Mark the native runtime on <html> so CSS can switch off web-isms (tap-highlight flash,
+	// document overscroll bounce) for a native-app feel. Web/PWA keeps the defaults.
+	document.documentElement.classList.add('native');
+
 	try {
 		await StatusBar.setStyle({ style: Style.Default });
 	} catch {

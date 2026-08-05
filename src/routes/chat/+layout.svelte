@@ -124,10 +124,13 @@
 	});
 </script>
 
-<div class="flex h-dvh min-h-dvh bg-background text-foreground">
+<div class="flex h-dvh min-h-dvh bg-background pr-safe pl-safe text-foreground">
 	<ChatSidebar mobileSidebarOpen={chatLayout.mobileSidebarOpen} />
 
-	<div class="relative min-w-0 flex-1 overflow-hidden">
+	<!-- pt-safe here is the single status-bar clearance for EVERY /chat/* page (chat header,
+	     config, coordinators, news, create-group, …). ChatHeader does NOT add its own — that
+	     would double-pad /chat/[id]. -->
+	<div class="relative min-w-0 flex-1 overflow-hidden pt-safe">
 		{#if chatReconnectStatusStore.active}
 			<div
 				class="absolute inset-x-0 top-0 z-50 border-b border-border/60 bg-muted/60 px-2 py-1 text-sm text-muted-foreground backdrop-blur-sm"

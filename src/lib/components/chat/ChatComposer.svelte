@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
@@ -268,9 +269,15 @@
 			textareaRef.scrollHeight > (expanded ? 320 : 128) ? 'auto' : 'hidden';
 	}
 
+	// Track the last-seen focusKey so the effect skips its initial mount run. On mobile, focusing
+	// the textarea the moment a chat opens pops the soft keyboard unbidden — only focus on an
+	// explicit reply/edit, which bumps focusKey from its initial value.
+	let lastFocusKey = untrack(() => focusKey);
 	$effect(() => {
 		void focusKey;
 		if (!textareaRef || disabled) return;
+		if (focusKey === lastFocusKey) return;
+		lastFocusKey = focusKey;
 		textareaRef.focus();
 		const length = textareaRef.value.length;
 		textareaRef.setSelectionRange(length, length);
@@ -301,7 +308,7 @@
 </script>
 
 <div class="border-t border-border bg-background">
-	<form class="mx-auto max-w-5xl px-3 py-3 sm:px-4 md:px-6" onsubmit={handleSubmit}>
+	<form class="mx-auto max-w-5xl px-3 pt-3 pb-safe sm:px-4 md:px-6" onsubmit={handleSubmit}>
 		{#if editTo}
 			<div
 				class="mb-3 flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2"

@@ -475,7 +475,7 @@
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
+	<header class="border-b border-border bg-background/95 px-4 pt-safe pb-3 backdrop-blur md:px-6">
 		<div class="flex items-center justify-between gap-4">
 			<div class="flex min-w-0 items-center gap-3">
 				<div
