@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -44,7 +45,7 @@
 	);
 
 	function getGroupHref(groupId: string) {
-		return resolve('/chat/[id]', { id: groupId });
+		return resolve('/chat/[id]', { id: groupRouteId(groupId) });
 	}
 
 	// Drop the shared text into the target group's draft. The <a href> then navigates; ChatShell

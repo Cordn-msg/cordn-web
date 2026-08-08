@@ -5,13 +5,14 @@
 	import MigrationBanner from '$lib/components/chat/MigrationBanner.svelte';
 	import NativeGroupMetaSync from '$lib/components/chat/NativeGroupMetaSync.svelte';
 	import { isNativePlatform } from '$lib/services/nativeBridge';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
 		createChatLayoutContext,
 		setChatLayoutContext
 	} from '$lib/components/chat/chatLayoutContext';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
+		initNotificationClearOnForeground,
 		notifyForUnreadChatMessages,
 		syncChatAttention
 	} from '$lib/services/chatAttention.svelte';
@@ -31,6 +32,9 @@
 
 	let { children } = $props();
 	const chatLayout = setChatLayoutContext(createChatLayoutContext());
+
+	// Stale-notification hygiene: clear shown notifications when the tab is attended again.
+	onMount(initNotificationClearOnForeground);
 
 	const groups = $derived.by(() => listChatGroups());
 	let startupSyncedFor = $state('');

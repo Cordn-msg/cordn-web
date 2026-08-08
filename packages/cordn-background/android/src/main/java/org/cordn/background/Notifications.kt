@@ -130,4 +130,15 @@ internal object Notifications {
             // POST_NOTIFICATIONS not granted — silently skip.
         }
     }
+
+    /**
+     * Cancel every message-channel notification (one per known group gid). Per-id cancel — never
+     * cancelAll(), which would also kill the ongoing CHANNEL_SYNC foreground-service notification.
+     * Called on app foreground so a notification cleared by opening the app (instead of tapping
+     * it) doesn't linger in the shade as a stale duplicate of the in-app unread badge.
+     */
+    fun clearMessageNotifications(ctx: Context, gids: List<String>) {
+        val nm = NotificationManagerCompat.from(ctx)
+        for (gid in gids) nm.cancel(gid.hashCode())
+    }
 }

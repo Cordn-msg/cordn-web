@@ -21,6 +21,7 @@
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import {
@@ -29,7 +30,7 @@
 		isChatGroupPoisoned,
 		listChatGroupMembers
 	} from '$lib/services/chatGroups.svelte';
-	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
+	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import Info from '@lucide/svelte/icons/info';
 	import Moon from '@lucide/svelte/icons/moon';
@@ -76,7 +77,7 @@
 		canInvite ? 'Invite member' : 'Only configured group admins can invite members'
 	);
 	const infoHref = $derived.by(() =>
-		groupId ? resolve('/chat/[id]/info', { id: groupId }) : '/chat'
+		groupId ? resolve('/chat/[id]/info', { id: groupRouteId(groupId) }) : '/chat'
 	);
 	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
 	let groupShareOpen = $state(false);
@@ -88,7 +89,7 @@
 		const metadata = group.metadata?.name
 			? { name: group.metadata.name, icon: group.metadata.icon }
 			: undefined;
-		const path = encodeGroupShareLink({
+		const path = buildGroupSharePath({
 			groupId,
 			coordinatorKey: group.coordinatorKey,
 			relays: coordinator?.relays,

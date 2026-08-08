@@ -36,7 +36,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { cn, copyToClipboard, downloadObjectUrl } from '$lib/utils';
-	import { externalLink } from '$lib/services/nativeShims';
+	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
 	import ChatMessageMedia from './ChatMessageMedia.svelte';
@@ -819,7 +819,11 @@
 														href={part.href}
 														target="_blank"
 														rel="external noreferrer noopener"
-														use:externalLink
+														onclick={(e) => {
+															e.preventDefault();
+															e.stopPropagation();
+															void openMessageLink(part.href);
+														}}
 														class={cn(
 															MESSAGE_LINK_WRAP_CLASS,
 															isOwn

@@ -3,7 +3,7 @@
 	import InlineMediaUrl from '$lib/components/chat/InlineMediaUrl.svelte';
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
-	import { openExternal } from '$lib/services/nativeShims';
+	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import {
 		MESSAGE_LINK_WRAP_CLASS,
 		MESSAGE_PART_CONTAINER_CLASS
@@ -40,7 +40,7 @@
 	{:else if part.type === 'link'}
 		<button
 			type="button"
-			onclick={() => void openExternal(part.href)}
+			onclick={() => void openMessageLink(part.href)}
 			class={cn(
 				'max-w-full min-w-0 whitespace-normal',
 				MESSAGE_LINK_WRAP_CLASS,

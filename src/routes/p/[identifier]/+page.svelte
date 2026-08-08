@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -300,7 +301,7 @@
 	});
 
 	function getGroupHref(groupId: string) {
-		return resolve('/chat/[id]', { id: groupId });
+		return resolve('/chat/[id]', { id: groupRouteId(groupId) });
 	}
 
 	function resetProfileEditor() {
@@ -460,7 +461,7 @@
 				groupId: group.id,
 				identifier: profileKeyPackage.kp_ref
 			});
-			await goto(resolve('/chat/[id]', { id: group.id }));
+			await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
 		} catch (error) {
 			startChatError = error instanceof Error ? error.message : 'Failed to start chat';
 		} finally {

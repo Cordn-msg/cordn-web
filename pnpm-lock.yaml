@@ -65,6 +65,9 @@ importers:
       '@contextvm/sdk':
         specifier: ^0.13.10
         version: 0.13.10(typescript@6.0.3)
+      '@cordn/core':
+        specifier: ^0.5.5
+        version: 0.5.5
       '@noble/ciphers':
         specifier: 2.2.0
         version: 2.2.0
@@ -337,6 +340,10 @@ packages:
   '@contextvm/sdk@0.13.10':
     resolution: {integrity: sha512-2g0WrkqZxaI47PkwwD0tgMGYZ4tuU9pVmdF85FZykImCGn11pXrsfRACGnfXQPCbwFEF1sP/CAOkGpoeGqt4EQ==}
     engines: {bun: '>=1.2.0'}
+
+  '@cordn/core@0.5.5':
+    resolution: {integrity: sha512-sMtI2kBnpnul6HQmBxZ2RJDr6mn24eIpbxR9ZHZtQx/tcA+nLEU4LLxKPfFtulH3ihYZaxivpm6QAQSapxIhUQ==}
+    engines: {node: '>=20.12'}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -825,6 +832,9 @@ packages:
 
   '@scure/base@2.0.0':
     resolution: {integrity: sha512-3E1kpuZginKkek01ovG8krQ0Z44E3DHPjc5S2rjJw9lZn3KSQOs8S7wqikF/AH7iRanHypj85uGyxk0XAyC37w==}
+
+  '@scure/base@2.2.0':
+    resolution: {integrity: sha512-b8XEupJibegiXV+tDUseI8oLQc8ei3d/4Jkb2RpbHh3MfE054ov3uIz2dhFkB3FI8iwYkEh0gGCApkrYggkPNg==}
 
   '@scure/bip32@2.0.1':
     resolution: {integrity: sha512-4Md1NI5BzoVP+bhyJaY3K6yMesEFzNS1sE/cP+9nuvE7p/b0kx9XbpDHHFl8dHtufcbdHRUUQdRqLIPHN/s7yA==}
@@ -3132,6 +3142,30 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
+  ts-mls@2.0.0-rc.12:
+    resolution: {integrity: sha512-VAjd6uvRuydk529B/On9GgIinrUiDGGENkf7k8nDCaYZzAN7aOmJIQs9IsG8A2q7o+Ldp1bm0Ds2hhlgeqL7cg==}
+    peerDependencies:
+      '@hpke/chacha20poly1305': 1.8.0
+      '@hpke/dhkem-x448': 1.8.0
+      '@hpke/hybridkem-x-wing': 0.7.0
+      '@hpke/ml-kem': 0.3.0
+      '@noble/ciphers': 2.2.0
+      '@noble/curves': 2.2.0
+      '@noble/post-quantum': 0.6.1
+    peerDependenciesMeta:
+      '@hpke/chacha20poly1305':
+        optional: true
+      '@hpke/dhkem-x448':
+        optional: true
+      '@hpke/hybridkem-x-wing':
+        optional: true
+      '@hpke/ml-kem':
+        optional: true
+      '@noble/curves':
+        optional: true
+      '@noble/post-quantum':
+        optional: true
+
   ts-mls@2.0.0-rc.13:
     resolution: {integrity: sha512-+AOqU3CsVWByAqsTOybP0ZPZrThBIjTh3BSxEvEVPWc+G3hwH8zbDDs7mr1DhhjPNk+oEbmy6pe5gVZ3Ehnrsg==}
     peerDependencies:
@@ -3650,6 +3684,21 @@ snapshots:
       - typescript
       - utf-8-validate
 
+  '@cordn/core@0.5.5':
+    dependencies:
+      '@noble/ciphers': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@scure/base': 2.2.0
+      ts-mls: 2.0.0-rc.12(@noble/ciphers@2.2.0)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@hpke/chacha20poly1305'
+      - '@hpke/dhkem-x448'
+      - '@hpke/hybridkem-x-wing'
+      - '@hpke/ml-kem'
+      - '@noble/curves'
+      - '@noble/post-quantum'
+
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
@@ -4070,6 +4119,8 @@ snapshots:
   '@scure/base@1.2.6': {}
 
   '@scure/base@2.0.0': {}
+
+  '@scure/base@2.2.0': {}
 
   '@scure/bip32@2.0.1':
     dependencies:
@@ -6433,6 +6484,11 @@ snapshots:
   ts-api-utils@2.5.0(typescript@6.0.3):
     dependencies:
       typescript: 6.0.3
+
+  ts-mls@2.0.0-rc.12(@noble/ciphers@2.2.0):
+    dependencies:
+      '@hpke/core': 1.9.0
+      '@noble/ciphers': 2.2.0
 
   ts-mls@2.0.0-rc.13(@noble/ciphers@2.2.0):
     dependencies:

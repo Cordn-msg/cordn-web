@@ -209,6 +209,20 @@ export const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'A smoother keyboard on Android',
 		body: '- 🐛 The on-screen keyboard no longer covers the message bar in the native Android app — it lifts the composer into view and keeps the newest messages visible above it instead of hiding them behind it.\n- 🐛 Opening a chat no longer brings up the keyboard on its own — it only appears when you tap to reply or edit.\n- 🐛 The keyboard stays open after you send a message, so you can fire off the next one without re-tapping.\n- 🔄 The native app now fits your screen edge-to-edge — content clears the status bar, notch, and home indicator — and drops the web-style tap flash and overscroll bounce for a more native feel.'
+	},
+	{
+		id: 'cordn-news-2026-08-06-notifications',
+		createdAt: Date.UTC(2026, 7, 6),
+		version: 1,
+		title: 'Less notification clutter',
+		body: '- 🐛 Reading a message by opening Cordn — instead of tapping its notification — no longer leaves the notification lingering behind. Opening the app now clears your message notifications on both desktop and Android, the same as tapping one would.\n- 🔄 On desktop, Cordn no longer shows notifications while you are already looking at it — the in-app unread badge already shows what is new, so there is less noise while you have the app in focus.'
+	},
+	{
+		id: 'cordn-news-2026-08-08-group-refs',
+		createdAt: Date.UTC(2026, 7, 8),
+		version: 1,
+		title: 'Portable group links',
+		body: "- ✨ Group invites and share links now use the standard cordn1 format: the coordinator and relay hints are packed right into the link, so the same invite opens correctly no matter which Cordn client or coordinator setup receives it.\n- ✨ Paste a cordn1… group reference (or a cordn.net link) straight into a chat and it opens the group inside Cordn, instead of a blank tab.\n- 🐛 Pasting a full group link that carries a name and icon preview into the join box no longer glues that metadata into the group's address — the link now resolves cleanly.\n- 🔄 Links everywhere — the sidebar, message permalinks, and profile pages — now use the portable cordn1 form, so a group's link stays consistent wherever you copy or share it from."
 	}
 ];
 

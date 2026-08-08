@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import { externalLink } from '$lib/services/nativeShims';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import CoordinatorPurgeDialog from '$lib/components/chat/CoordinatorPurgeDialog.svelte';
@@ -432,7 +433,7 @@
 								{#each relatedGroups as group (group.id)}
 									<ChatGroupListItem
 										{group}
-										href={resolve('/chat/[id]', { id: group.id })}
+										href={resolve('/chat/[id]', { id: groupRouteId(group.id) })}
 										preview={group.metadata?.description || 'Coordinator-assisted messaging'}
 										profileHints={welcomeProfileHints}
 									/>

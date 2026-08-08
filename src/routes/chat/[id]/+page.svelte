@@ -7,7 +7,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
 		getCoordinatorLabel,
@@ -36,55 +35,57 @@
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
-	import {
-		decodeCoordinatorQueryParam,
-		decodeGroupMetadataQueryParam
-	} from '$lib/utils/groupShareLink';
+	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
 	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import RotateCw from '@lucide/svelte/icons/rotate-cw';
 
 	let { params } = $props();
 
-	const group = $derived.by(() => getChatGroup(params.id));
-	const groupId = $derived.by(() => params.id);
-	// Coordinator is read from the `c=` query param. Default to the public
-	// coordinator ONLY when no `c=` is present at all, so groups on the default
-	// coordinator can keep short links. A present-but-malformed `c=` must NOT
-	// silently default — that would route the join request to the wrong place.
-	const coordinatorParam = $derived(page.url.searchParams.get('c')?.trim() ?? '');
-	const coordinatorQuery = $derived(
-		coordinatorParam ? decodeCoordinatorQueryParam(coordinatorParam) : null
-	);
-	const coordinatorKey = $derived(
-		!coordinatorParam ? DEFAULT_CHAT_COORDINATOR_PUBKEY : (coordinatorQuery?.coordinatorKey ?? '')
-	);
-	const coordinatorError = $derived(
-		coordinatorParam && !coordinatorQuery
-			? 'This invite link has a malformed coordinator. Ask for a new link.'
-			: ''
-	);
-	const shareMetadata = $derived.by(() => {
-		const value = page.url.searchParams.get('m')?.trim();
-		if (!value) return null;
-		return decodeGroupMetadataQueryParam(value);
-	});
+	const locator = $derived.by(() => resolveGroupLocator(params.id, page.url.searchParams));
+	const group = $derived.by(() => getChatGroup(locator.gid));
+	const groupId = $derived.by(() => locator.gid);
+	const coordinatorKey = $derived(locator.coordinatorKey);
+	const coordinatorError = $derived(locator.coordinatorError);
+	const shareMetadata = $derived(locator.shareMetadata);
 
-	// Auto-register unknown coordinators from share links
+	// Auto-register coordinators a share link explicitly carried (cordn1 type 1
+	// or legacy `?c=`). Default-coordinator short links carry no coordinator, so
+	// they don't upsert.
 	$effect(() => {
-		if (!coordinatorQuery) return;
+		if (!locator.coordinatorProvided || locator.coordinatorError) return;
+		// Already a member → the coordinator is set up; skip the upsert so internal
+		// cordn1 navigation doesn't re-write relays (upsert replaces them) or bump
+		// markCoordinatorUsed on every click. Registration is only for genuinely
+		// new (non-member) group links.
+		if (group) return;
 		untrack(() => {
 			upsertChatCoordinator({
-				pubkey: coordinatorQuery.coordinatorKey,
-				relays: coordinatorQuery.relays
+				pubkey: locator.coordinatorKey,
+				relays: locator.relays
 			});
-			markCoordinatorUsed(coordinatorQuery.coordinatorKey);
+			markCoordinatorUsed(locator.coordinatorKey);
 		});
 	});
 
 	let requesting = $state(false);
 	let requestError = $state('');
-	let requestSent = $state(untrack(() => hasJoinRequestBeenSent(params.id)));
+	let requestSent = $state(untrack(() => hasJoinRequestBeenSent(locator.gid)));
 	let requestAfterLogin = $state(false);
+
+	// The [id] route component is reused across /chat/<param> changes (no {#key}),
+	// so the one-shot $state above would otherwise leak the previous group's
+	// requestSent / requestAfterLogin into the next group opened via a cordn1 link.
+	// Re-sync every ephemeral join-card flag to the currently resolved group.
+	$effect(() => {
+		const gid = locator.gid;
+		if (!gid) return;
+		untrack(() => {
+			requestSent = hasJoinRequestBeenSent(gid);
+			requestAfterLogin = false;
+			requesting = false;
+			requestError = '';
+		});
+	});
 
 	const relatedWelcomes = $derived.by(() => {
 		const key = coordinatorKey;
@@ -147,10 +148,19 @@
 
 		if (requesting || requestSent) return;
 
+		// Capture the group + coordinator at call time. The route component is
+		// reused across /chat/<param> changes (no {#key}), so the groupId /
+		// coordinatorKey $deriveds can point at a different group by the time the
+		// awaits below resolve. Durable writes use the captured values; live UI
+		// state is only touched while we're still viewing this group, so a
+		// mid-request navigation can't flip the new group's join-card flags.
+		const targetGid = groupId;
+		const targetCoordinator = coordinatorKey;
+
 		requesting = true;
 		requestError = '';
 
-		if (!coordinatorKey) {
+		if (!targetCoordinator) {
 			// ponytail: coordinatorError already gates the UI button; this guard
 			// keeps handleRequestJoin safe if ever called with a malformed link.
 			requestError = 'Cannot request to join: this link has no valid coordinator.';
@@ -163,21 +173,27 @@
 			// material instead of minting (and evicting) a new one. If another device
 			// already published one we don't hold, surface that as a multi-device
 			// prompt instead of silently taking over.
-			const result = await ensureLastResortPublished(coordinatorKey);
+			const result = await ensureLastResortPublished(targetCoordinator);
 			const keyPackageRef =
 				result.kind === 'foreign'
 					? await promptForeignLastResort(result.coordinatorKey)
 					: result.keyPackageRef;
 			if (!keyPackageRef) return;
 
-			await storeJoinRequest(coordinatorKey, groupId, keyPackageRef);
-			markJoinRequestSent(groupId);
-			requestSent = true;
-			void refreshWelcomes();
+			await storeJoinRequest(targetCoordinator, targetGid, keyPackageRef);
+			markJoinRequestSent(targetGid);
+			if (targetGid === locator.gid) {
+				requestSent = true;
+				void refreshWelcomes();
+			}
 		} catch (error) {
-			requestError = error instanceof Error ? error.message : 'Failed to request to join group';
+			if (targetGid === locator.gid) {
+				requestError = error instanceof Error ? error.message : 'Failed to request to join group';
+			}
 		} finally {
-			requesting = false;
+			if (targetGid === locator.gid) {
+				requesting = false;
+			}
 		}
 	}
 
@@ -196,7 +212,7 @@
 
 {#if group}
 	<ChatShell groupId={group.id} title={group.metadata?.name || 'Chat'} />
-{:else if groupId}
+{:else}
 	<div class="hidden">
 		<AccountLoginDialog />
 	</div>
@@ -215,7 +231,9 @@
 				</Card.Header>
 				<Card.Content class="space-y-4">
 					<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
-						<p class="font-mono text-xs break-all">{groupId}</p>
+						{#if groupId}
+							<p class="font-mono text-xs break-all">{groupId}</p>
+						{/if}
 					</div>
 
 					{#if coordinatorError}

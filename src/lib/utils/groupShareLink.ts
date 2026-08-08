@@ -1,9 +1,10 @@
 import { goto } from '$app/navigation';
 import { nip19 } from 'nostr-tools';
 import { bytesToBase64, base64ToBytes } from 'ts-mls';
+import { encodeGroupRef, decodeGroupRef, isGroupRef, type GroupRef } from '@cordn/core';
 import { normalizePubKey } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
-import { isAppOrigin } from './appOrigin';
+import { PUBLIC_WEB_ORIGIN, isAppOrigin } from './appOrigin';
 import { openExternal } from '$lib/services/nativeShims';
 
 export interface GroupShareMetadata {
@@ -73,39 +74,32 @@ export function decodeGroupMetadataQueryParam(param: string): GroupShareMetadata
 }
 
 /**
- * Encode a group ID and coordinator info into a shareable URL path.
- * The coordinator info is encoded as an nprofile nip19 identifier
- * in the `c` query parameter, which includes the coordinator pubkey
- * and optional relay hints. The `c` param is omitted for groups
- * hosted on the default coordinator.
+ * Build the app share path for a group using the cordn1 bech32 group reference
+ * (reference/cordn/spec/applications/group-ref.md). The coordinator pubkey and
+ * relay hints are packed INTO the cordn1 string, so there is no `?c=`. Rich
+ * share-card metadata (name + icon) is still carried as base64url in `?m=`,
+ * since the group reference itself carries only protocol coordinates.
  *
- * Group metadata (name + icon) is encoded as a base64 JSON blob in
- * the `m` query parameter, so shareable links render a minimal
- * group card. The `m` param is omitted when there is no group name.
+ * The coordinator is always included (spec §4.2 recommends it for cross-client
+ * share links) — portability beats saving a few characters, and it drops the
+ * "is this the default coordinator?" branch that made old links ambiguous.
+ *
+ * ponytail: path-based (`/chat/cordn1…`) rather than fragment (`#cordn1…`) even
+ * though spec §6 prefers a fragment for log-privacy. This is a client-routed SPA
+ * (no server logs the path) and path-based reuses the existing `[id]` route,
+ * the join-card logic, and the verified `cordn.net/chat` App Link.
  */
-export function encodeGroupShareLink(data: GroupShareLinkData): string {
-	const params: string[] = [];
-
-	const isDefaultCoordinator =
-		normalizePubKey(data.coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY);
-
-	if (!isDefaultCoordinator) {
-		const nprofile = nip19.nprofileEncode({
-			pubkey: data.coordinatorKey,
-			relays: data.relays ?? []
-		});
-		// nprofile (bech32) is URL-safe, so no encoding needed.
-		params.push(`c=${nprofile}`);
-	}
-
+export function buildGroupSharePath(data: GroupShareLinkData): string {
+	const ref: GroupRef = {
+		gid: data.groupId,
+		coordinatorPubkey: normalizePubKey(data.coordinatorKey),
+		...(data.relays && data.relays.length > 0 ? { relays: data.relays } : {})
+	};
+	const code = encodeGroupRef(ref);
 	const encodedMeta = encodeGroupShareMetadata(data.metadata);
-	if (encodedMeta) {
-		// base64url charset is URL-safe, so no encoding needed.
-		params.push(`m=${encodedMeta}`);
-	}
-
-	const query = params.length > 0 ? `?${params.join('&')}` : '';
-	return `/chat/${data.groupId}${query}`;
+	// base64url charset is URL-safe; cordn1 (bech32) is URL-safe — no encoding.
+	const query = encodedMeta ? `?m=${encodedMeta}` : '';
+	return `/chat/${code}${query}`;
 }
 
 /**
@@ -144,9 +138,121 @@ export function decodeCoordinatorQueryParam(param: string): {
 	return null;
 }
 
+export interface ResolvedGroupLocator {
+	gid: string;
+	/** Coordinator to use for fetches/joins. Defaults to the public coordinator
+	 *  when the link carried none; '' only when the link is malformed. */
+	coordinatorKey: string;
+	/** True when the link explicitly carried a coordinator (cordn1 type 1 or a
+	 *  legacy `?c=`). Gates auto-registration so default-coordinator short links
+	 *  don't upsert. */
+	coordinatorProvided: boolean;
+	relays?: string[];
+	coordinatorError: string;
+	shareMetadata: GroupShareMetadata | null;
+}
+
+/**
+ * Resolve the `[id]` route param (+ query) into the gid + coordinator used to
+ * look the group up and drive the join flow. Accepts both the canonical cordn1
+ * group reference in the path AND, for back-compat, a bare gid with a legacy
+ * `?c=` coordinator hint.
+ *
+ * A cordn1 ref that fails checksum/structure is NOT treated as a bare gid
+ * (spec §5: MUST NOT silently fall back) — it surfaces as a locator error with
+ * an empty gid so the route can show a clear message.
+ */
+export function resolveGroupLocator(
+	idParam: string,
+	searchParams: URLSearchParams
+): ResolvedGroupLocator {
+	const mValue = searchParams.get('m')?.trim();
+	const shareMetadata = mValue ? decodeGroupMetadataQueryParam(mValue) : null;
+
+	if (isGroupRef(idParam)) {
+		try {
+			const ref = decodeGroupRef(idParam);
+			return {
+				gid: ref.gid,
+				coordinatorKey: ref.coordinatorPubkey ?? DEFAULT_CHAT_COORDINATOR_PUBKEY,
+				coordinatorProvided: ref.coordinatorPubkey !== undefined,
+				...(ref.relays && ref.relays.length > 0 ? { relays: ref.relays } : {}),
+				coordinatorError: '',
+				shareMetadata
+			};
+		} catch {
+			return {
+				gid: '',
+				coordinatorKey: '',
+				coordinatorProvided: false,
+				coordinatorError: 'This group link is malformed. Ask for a new link.',
+				shareMetadata
+			};
+		}
+	}
+
+	// Legacy / internal form: bare gid in the path, coordinator from `?c=`.
+	const coordinatorParam = searchParams.get('c')?.trim() ?? '';
+	const coordinatorQuery = coordinatorParam ? decodeCoordinatorQueryParam(coordinatorParam) : null;
+	const coordinatorKey = !coordinatorParam
+		? DEFAULT_CHAT_COORDINATOR_PUBKEY
+		: (coordinatorQuery?.coordinatorKey ?? '');
+	const coordinatorError =
+		coordinatorParam && !coordinatorQuery
+			? 'This invite link has a malformed coordinator. Ask for a new link.'
+			: '';
+	return {
+		gid: idParam,
+		coordinatorKey,
+		coordinatorProvided: Boolean(coordinatorParam && coordinatorQuery),
+		...(coordinatorQuery?.relays && coordinatorQuery.relays.length > 0
+			? { relays: coordinatorQuery.relays }
+			: {}),
+		coordinatorError,
+		shareMetadata
+	};
+}
+
+/**
+ * Resolve the gid of the group currently reflected in a `/chat/<id>` path (or
+ * `''` when not on a group route). The `[id]` segment may be a `cordn1` ref or a
+ * bare gid — both decode to the same gid — so callers (tab title, notification
+ * suppression, sidebar active state) compare by gid and stay correct under
+ * either URL form, including `/e` / `/info` sub-paths.
+ */
+export function activeGroupId(
+	pathname: string,
+	searchParams: URLSearchParams = new URLSearchParams()
+): string {
+	if (!pathname.startsWith('/chat/')) return '';
+	const segment = pathname.split('/')[2];
+	if (!segment) return '';
+	return resolveGroupLocator(segment, searchParams).gid;
+}
+
+/** Host users paste bare (cordn.net/…). The canonical public host, since dev
+ *  origins are localhost and won't be pasted. */
+const APP_HOST = (() => {
+	try {
+		return new URL(PUBLIC_WEB_ORIGIN).host;
+	} catch {
+		return 'cordn.net';
+	}
+})();
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Matches a bare "cordn.net/…" string (no scheme). Requires a `/` so the bare
+ *  host alone isn't mistaken for a path. */
+function looksLikeBareAppHostUrl(value: string): boolean {
+	return new RegExp(`^${escapeRegExp(APP_HOST)}(?=/|$)`, 'i').test(value) && value.includes('/');
+}
+
 /**
  * A navigation target resolved from a user-entered share string.
- *  - `internal`: an app-relative path to goto() (relative link or bare group id).
+ *  - `internal`: an app-relative path to goto() (cordn1 ref, relative link, or bare group id).
  *  - `external`: an absolute http(s) URL whose origin is resolved at goto time.
  */
 export type ParsedShareTarget =
@@ -169,11 +275,36 @@ export function parseShareTarget(raw: string): ParsedShareTarget | null {
 	const trimmed = raw.trim();
 	if (!trimmed) return null;
 
+	// Bare cordn1 group reference (no URL wrapper), possibly with a trailing
+	// ?m=… metadata query copied from a full share link → internal nav. Split any
+	// query/hash off FIRST: isGroupRef rejects the `?` (not bech32), and without
+	// splitting the bare-id fallback below would encodeURIComponent the `?m=`
+	// into the id segment (mangling metadata into the gid).
+	const refEnd = trimmed.search(/[?#]/);
+	const refPart = refEnd === -1 ? trimmed : trimmed.slice(0, refEnd);
+	const queryHash = refEnd === -1 ? '' : trimmed.slice(refEnd);
+	if (isGroupRef(refPart)) {
+		return { kind: 'internal', path: `/chat/${refPart}${queryHash}` };
+	}
+
 	if (/^https?:\/\//i.test(trimmed)) {
 		try {
 			return { kind: 'external', url: new URL(trimmed).toString() };
 		} catch {
 			return null;
+		}
+	}
+
+	// Bare app-host URL without a scheme (cordn.net/…) → internal, so pasting
+	// "cordn.net/chat/cordn1…" routes in-app instead of a new tab or a misrouted
+	// /chat/cordn.net/… path. Full https://cordn.net/… links are classified as
+	// external here and reconciled to internal by gotoShareTarget's origin check.
+	if (looksLikeBareAppHostUrl(trimmed)) {
+		try {
+			const url = new URL(`https://${trimmed}`);
+			return { kind: 'internal', path: `${url.pathname}${url.search}${url.hash}` };
+		} catch {
+			// Fall through to bare-id handling.
 		}
 	}
 
@@ -235,4 +366,20 @@ export async function gotoShareTarget(target: ParsedShareTarget): Promise<void> 
 		}
 		await openExternal(target.url);
 	}
+}
+
+/**
+ * Open a link found in message text: internal targets (bare cordn1 ref, app-host
+ * URL, or app-relative path) go through goto() in-app; everything else opens in a
+ * new tab / system browser. Centralizes the decision so a cordn1 string or a
+ * cordn.net/… link pasted into a chat navigates internally instead of spawning
+ * a blank tab.
+ */
+export async function openMessageLink(href: string): Promise<void> {
+	const target = parseShareTarget(href);
+	if (target) {
+		await gotoShareTarget(target);
+		return;
+	}
+	await openExternal(href);
 }

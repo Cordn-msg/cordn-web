@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
+import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
@@ -51,6 +52,13 @@ let initialized = false;
 let appActive = true;
 
 /**
+ * Web Notifications this tab has shown and still owns (web only; native notifications are
+ * managed by the plugin). Tracked so a foreground/focus event can close them — otherwise a
+ * message read in-app leaves a stale toast/shade entry until the OS retires it.
+ */
+const activeWebNotifications = new Set<Notification>();
+
+/**
  * One-time native-shell bootstrap. No-op on web. Idempotent.
  * - styles the status bar, hides the launch splash, arms notification permission + tap routing,
  * - schedules the background poll worker and drains any sidecar staged while the app was closed,
@@ -87,6 +95,7 @@ export async function initNativeShell(): Promise<void> {
 	void drainBackgroundSidecar(); // ingest anything staged while the app was closed
 	void seedBackground();
 	void routeLaunchGid(); // deep-link if launched from a notification tap
+	void clearShownNotifications(); // drop stale shade entries now that the app is foregrounded
 	routeSharedContent(); // group-picker if launched/resumed from an Android share
 
 	try {
@@ -95,6 +104,7 @@ export async function initNativeShell(): Promise<void> {
 			// Background → seed the poll set with the latest cursors.
 			// Foreground → drain staged bytes (catch-up) then re-seed.
 			if (isActive) {
+				void clearShownNotifications(); // user is back in-app → shade notifications are stale
 				void drainBackgroundSidecar().then(() => void seedBackground());
 				void routeLaunchGid();
 				void routeSharedContent();
@@ -239,10 +249,33 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 		icon: n.icon,
 		tag: `cordn-group-${n.groupId}`
 	});
+	// Track so a foreground/focus event can close stale entries (see clearShownNotifications).
+	activeWebNotifications.add(notification);
 	notification.onclick = () => {
 		window.focus();
-		goto(resolve('/chat/[id]', { id: n.groupId }));
+		goto(resolve('/chat/[id]', { id: groupRouteId(n.groupId) }));
 	};
+	notification.onclose = () => activeWebNotifications.delete(notification);
+	notification.onerror = () => activeWebNotifications.delete(notification);
+}
+
+/**
+ * Dismiss every Cordn message notification. Web: closes the Notifications this tab still owns.
+ * Native: cancels each group's notification by id (per-id, never cancelAll — the ongoing
+ * CHANNEL_SYNC foreground-service notification must keep running).
+ */
+export async function clearShownNotifications(): Promise<void> {
+	if (!browser) return;
+	if (isNativePlatform()) {
+		try {
+			await CordnBackground.clearMessageNotifications();
+		} catch {
+			// never block on a failed clear
+		}
+		return;
+	}
+	for (const n of activeWebNotifications) n.close();
+	activeWebNotifications.clear();
 }
 
 // ───────────────────────────── unified native poster + dedupe (notification consolidation) ─────────────────────────────
@@ -292,7 +325,7 @@ export async function routeLaunchGid(): Promise<void> {
 	const gid = await CordnBackground.consumeLaunchGid()
 		.then((r) => r.gid)
 		.catch(() => null);
-	if (gid) goto(resolve('/chat/[id]', { id: gid }));
+	if (gid) goto(resolve('/chat/[id]', { id: groupRouteId(gid) }));
 }
 
 // ───────────────────────────── share target (Android SEND intent) ─────────────────────────────

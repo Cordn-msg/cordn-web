@@ -1,5 +1,6 @@
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
+import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 import {
 	acceptChatWelcome,
 	createChatGroup,
@@ -296,7 +297,7 @@ export async function acceptWelcomeAction(welcomeId: string) {
 		// the `consumed` array on the next fetch) so other admins stop seeing it
 		// instead of waiting for the 5-min poll. Best-effort: the poll retries.
 		void refreshWelcomeNotificationsAction().catch(() => {});
-		await goto(resolve('/chat/[id]', { id: group.id }));
+		await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
 		return true;
 	} catch (error) {
 		const notification = getWelcomeNotification(welcomeId);

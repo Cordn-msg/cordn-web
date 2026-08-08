@@ -97,6 +97,14 @@ class CordnBackgroundPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun clearMessageNotifications(call: PluginCall) {
+        // Cancel by seeded gid id — never cancelAll (would kill the ongoing sync-service notification).
+        val gids = BackgroundStore.get(getContext()).pollGroups().map { it.gid }
+        Notifications.clearMessageNotifications(getContext(), gids)
+        call.resolve()
+    }
+
+    @PluginMethod
     fun advanceNativeCursor(call: PluginCall) {
         val gid = call.getString("gid")
         if (gid.isNullOrEmpty()) {

@@ -1,21 +1,24 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatRichBody from '$lib/chat/ChatRichBody.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 
 	let { params } = $props();
 
-	const groupId = $derived(params.id);
+	const groupId = $derived(resolveGroupLocator(params.id, page.url.searchParams).gid);
 	const eventId = $derived(params.eventId);
-	const group = $derived(getChatGroup(groupId));
-	const backHref = $derived(resolve('/chat/[id]', { id: groupId }));
+	const group = $derived(groupId ? getChatGroup(groupId) : undefined);
+	const backHref = $derived(resolve('/chat/[id]', { id: groupRouteId(groupId) }));
 
 	function navigateToEvent(id: string) {
-		void goto(resolve('/chat/[id]/e/[eventId]', { id: groupId, eventId: id }));
+		void goto(resolve('/chat/[id]/e/[eventId]', { id: groupRouteId(groupId), eventId: id }));
 	}
 </script>
 

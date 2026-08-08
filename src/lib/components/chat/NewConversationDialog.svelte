@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { goto } from '$app/navigation';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
@@ -43,7 +44,7 @@
 			const groupId = await startChatWithKeyPackageAction(kp);
 			open = false;
 			onNavigate();
-			await goto(resolve('/chat/[id]', { id: groupId }));
+			await goto(resolve('/chat/[id]', { id: groupRouteId(groupId) }));
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to start chat';
 		} finally {

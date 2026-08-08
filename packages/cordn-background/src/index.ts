@@ -114,6 +114,8 @@ export interface CordnBackgroundPlugin {
 	upsertGroupMeta(options: CordnBackgroundMetaOptions): Promise<void>;
 	/** Post a unified native message notification (title + body; icon from the native cache). */
 	postMessageNotification(options: CordnBackgroundPostNotificationOptions): Promise<void>;
+	/** Cancel every message-channel notification (per-group id; leaves the sync one running). */
+	clearMessageNotifications(): Promise<void>;
 	/** Advance the worker's nativeCursor so it skips messages the live path already handled. */
 	advanceNativeCursor(options: CordnBackgroundAdvanceCursorOptions): Promise<void>;
 	/** Consume + return the group id captured from a notification-tap launch (deep-link routing). */

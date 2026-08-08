@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
@@ -160,7 +161,7 @@
 					} failed. Make sure each member has published a key package on this coordinator, then add them from the group's info page.`
 				);
 			}
-			await goto(resolve('/chat/[id]', { id: group.id }));
+			await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create group';
 		} finally {

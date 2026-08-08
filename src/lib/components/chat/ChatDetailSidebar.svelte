@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import ChatRichBody from '$lib/chat/ChatRichBody.svelte';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import X from '@lucide/svelte/icons/x';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 
@@ -19,7 +20,9 @@
 		onJumpToMessage?: (eventId: string) => void;
 	} = $props();
 
-	const pageHref = $derived(resolve('/chat/[id]/e/[eventId]', { id: groupId, eventId }));
+	const pageHref = $derived(
+		resolve('/chat/[id]/e/[eventId]', { id: groupRouteId(groupId), eventId })
+	);
 </script>
 
 <div class="flex h-full min-h-0 w-full flex-col bg-background text-foreground">

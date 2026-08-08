@@ -1,6 +1,11 @@
 import { browser } from '$app/environment';
 import { page } from '$app/state';
-import { ensureNotificationPermission, showLocalNotification } from '$lib/services/nativeBridge';
+import {
+	clearShownNotifications,
+	ensureNotificationPermission,
+	isNativePlatform,
+	showLocalNotification
+} from '$lib/services/nativeBridge';
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
@@ -22,6 +27,7 @@ import {
 	listChatGroups
 } from '$lib/services/chatGroups.svelte';
 import { samePubKey } from '$lib/utils';
+import { activeGroupId } from '$lib/utils/groupShareLink';
 import { eventStore } from '$lib/services/eventStore';
 import { firstValueFrom } from 'applesauce-core/observable';
 import { ProfileModel } from 'applesauce-core/models';
@@ -40,8 +46,9 @@ function getBaseTitle(pathname: string) {
 		return 'News | Cordn';
 	}
 	if (pathname.startsWith('/chat/')) {
-		const groupId = pathname.split('/')[2];
-		const group = groupId ? getChatGroup(groupId) : undefined;
+		// The [id] segment may be a cordn1 ref — decode to the gid before lookup.
+		const gid = activeGroupId(pathname);
+		const group = gid ? getChatGroup(gid) : undefined;
 		return group?.metadata?.name ? `${group.metadata.name} | Cordn` : 'Chat | Cordn';
 	}
 
@@ -103,17 +110,6 @@ function getNotificationBody(sender: string, content: string) {
 	return `New message from ${sender.slice(0, 12)}…`;
 }
 
-function shouldSuppressNotification(groupId: string) {
-	const groupPath = `/chat/${groupId}`;
-	if (
-		document.visibilityState === 'visible' &&
-		(page.url.pathname === groupPath || page.url.pathname.startsWith(`${groupPath}/`))
-	) {
-		return true;
-	}
-	return false;
-}
-
 const NOTIFICATION_PROFILE_TIMEOUT_MS = 1500;
 
 /**
@@ -160,7 +156,9 @@ export async function notifyForUnreadChatMessages() {
 		const nextMessages = group.messages.filter((message) => message.cursor > previousCursor);
 		notificationState.lastProcessedCursorByGroup.set(group.id, group.lastCursor);
 
-		if (shouldSuppressNotification(group.id)) continue;
+		// Attended tab (visible + focused) → the in-app badge/dots already surface attention, so a
+		// toast is just noise. Mirrors native's appActive suppression; fires only when backgrounded.
+		if (document.visibilityState === 'visible' && document.hasFocus()) continue;
 
 		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
 		const profileHints: ChatGroupProfileHints = {};
@@ -197,4 +195,23 @@ export async function notifyForUnreadChatMessages() {
 			});
 		}
 	}
+}
+
+/**
+ * Web-only: clear shown notifications when the tab returns to the foreground (visible / focus),
+ * so a message read in-app doesn't leave a stale toast/shade entry. Native clears via
+ * initNativeShell's appStateChange listener; this is a no-op there. Returns a cleanup function —
+ * pass directly to onMount. Call once from the chat layout.
+ */
+export function initNotificationClearOnForeground(): () => void {
+	if (!browser || isNativePlatform()) return () => {};
+	const clear = () => {
+		if (document.visibilityState === 'visible') void clearShownNotifications();
+	};
+	document.addEventListener('visibilitychange', clear);
+	window.addEventListener('focus', clear);
+	return () => {
+		document.removeEventListener('visibilitychange', clear);
+		window.removeEventListener('focus', clear);
+	};
 }

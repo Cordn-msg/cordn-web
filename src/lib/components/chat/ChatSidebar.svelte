@@ -31,6 +31,8 @@
 		listChatCoordinators
 	} from '$lib/services/chatCoordinators.svelte';
 	import { normalizePubKey } from '$lib/utils';
+	import { activeGroupId } from '$lib/utils/groupShareLink';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
@@ -159,8 +161,12 @@
 		return page.url.pathname === href;
 	}
 
-	function getGroupHref(groupId: string) {
-		return resolve('/chat/[id]', { id: groupId });
+	// gid-based: the [id] segment may be a cordn1 ref or a bare gid, so compare the
+	// decoded gid instead of a raw path string (cordn1 URLs would break isActive).
+	// Decoded once per URL change (isGroupActive runs per row), not per row.
+	const activeGroupGid = $derived(activeGroupId(page.url.pathname, page.url.searchParams));
+	function isGroupActive(groupId: string) {
+		return activeGroupGid === groupId;
 	}
 
 	function getNewsHref() {
@@ -169,7 +175,7 @@
 
 	async function navigateToMessage(groupId: string, messageKey: string) {
 		closeMobileSidebar();
-		const groupHref = resolve('/chat/[id]', { id: groupId });
+		const groupHref = resolve('/chat/[id]', { id: groupRouteId(groupId) });
 		const targetUrl = new URL(groupHref, page.url);
 		targetUrl.searchParams.set('message', messageKey);
 		// The path is resolved above before adding a local query parameter.
@@ -613,13 +619,13 @@
 							{@const summary = getChatSummary(chat.id)}
 							<ChatGroupListItem
 								group={chat}
-								href={getGroupHref(chat.id)}
+								href={resolve('/chat/[id]', { id: groupRouteId(chat.id) })}
 								preview={summary.preview}
 								unreadCount={summary.unreadCount}
 								unreadReferenceCount={summary.unreadReferenceCount}
 								{collapsed}
 								variant="sidebar"
-								active={isActive(getGroupHref(chat.id))}
+								active={isGroupActive(chat.id)}
 								onclick={closeMobileSidebar}
 								profileHints={groupProfileHints}
 							/>

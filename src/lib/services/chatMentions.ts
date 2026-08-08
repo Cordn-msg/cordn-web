@@ -1,4 +1,5 @@
 import { nip19 } from 'nostr-tools';
+import { isGroupRef } from '@cordn/core';
 
 import type { ChatMentionReference } from '$lib/components/chat/chat.types';
 import { normalizePubKey } from '$lib/utils';
@@ -16,6 +17,9 @@ export type ChatMentionTextPart =
 const NOSTR_PROFILE_REFERENCE_PATTERN =
 	/nostr:((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
 const URL_PATTERN = /https?:\/\/[^\s<]+[^\s<.,!?;:()[\]{}"']/g;
+// Bare cordn1 group reference (spec/applications/group-ref.md). Loose charset;
+// isGroupRef validates the matched token before it becomes a link.
+const CORDN_REF_PATTERN = /cordn1[0-9a-z]{6,}/g;
 const TYPED_NPUB_PATTERN =
 	/(?:^|\s)(?:nostr:)?((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
 const TYPED_HEX_PUBKEY_PATTERN = /(?:^|\s)([0-9a-fA-F]{64})(?=$|\s|[.,!?;:])/g;
@@ -75,18 +79,28 @@ export function serializeChatProfileMentions(
 }
 
 function appendTextWithLinks(parts: ChatMentionTextPart[], text: string) {
-	let lastIndex = 0;
-
+	// Collect link-worthy tokens: http(s) URLs and bare cordn1 group refs. A
+	// cordn1 inside a URL (e.g. https://cordn.net/chat/cordn1…) is skipped by the
+	// overlap guard below so the whole URL stays one link.
+	const tokens: { index: number; value: string }[] = [];
 	for (const match of text.matchAll(URL_PATTERN)) {
-		const index = match.index ?? 0;
-		const href = match[0];
-
-		if (index > lastIndex) {
-			parts.push({ type: 'text', text: text.slice(lastIndex, index) });
+		tokens.push({ index: match.index ?? 0, value: match[0] });
+	}
+	for (const match of text.matchAll(CORDN_REF_PATTERN)) {
+		if (isGroupRef(match[0])) {
+			tokens.push({ index: match.index ?? 0, value: match[0] });
 		}
+	}
+	tokens.sort((a, b) => a.index - b.index);
 
-		parts.push({ type: 'link', text: href, href });
-		lastIndex = index + href.length;
+	let lastIndex = 0;
+	for (const token of tokens) {
+		if (token.index < lastIndex) continue; // overlap: token is inside an earlier link
+		if (token.index > lastIndex) {
+			parts.push({ type: 'text', text: text.slice(lastIndex, token.index) });
+		}
+		parts.push({ type: 'link', text: token.value, href: token.value });
+		lastIndex = token.index + token.value.length;
 	}
 
 	if (lastIndex < text.length) {

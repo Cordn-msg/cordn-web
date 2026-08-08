@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import GroupAvatarFallback from '$lib/components/chat/GroupAvatarFallback.svelte';
 	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
@@ -44,10 +45,13 @@
 	import Shield from '@lucide/svelte/icons/shield';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserRoundX from '@lucide/svelte/icons/user-round-x';
+	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 
 	let { params } = $props();
 
-	const group = $derived.by(() => getChatGroup(params.id) ?? listChatGroups()[0]);
+	const gid = $derived(resolveGroupLocator(params.id, page.url.searchParams).gid);
+	const group = $derived.by(() => (gid ? getChatGroup(gid) : undefined) ?? listChatGroups()[0]);
 	const members = $derived.by(() => (group ? listChatGroupMembers(group.id) : []));
 	const canManageMembers = $derived.by(() => {
 		if (!$activeAccount || !group) return false;
@@ -225,7 +229,7 @@
 					</div>
 				</div>
 
-				<Button href={resolve('/chat/[id]', { id: group.id })} variant="outline">
+				<Button href={resolve('/chat/[id]', { id: groupRouteId(group.id) })} variant="outline">
 					<ArrowLeft class="mr-2 size-4" />
 					Back to chat
 				</Button>

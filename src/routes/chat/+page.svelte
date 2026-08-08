@@ -39,7 +39,8 @@
 	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { goto } from '$app/navigation';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
-	import { encodeGroupShareLink } from '$lib/utils/groupShareLink';
+	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import CircleCheckBig from '@lucide/svelte/icons/circle-check-big';
@@ -66,10 +67,11 @@
 	const hasKeyPackages = $derived.by(() => keyPackages.length > 0);
 	const hasGroups = $derived.by(() => groups.length > 0);
 
-	// Official Cordn discussion group. Lives on the default coordinator, so
-	// encodeGroupShareLink omits `c=` and only emits the `m=` name preview.
+	// Official Cordn discussion group. Encoded as a cordn1 ref (coordinator packed
+	// in) plus the `m=` name preview; the default coordinator is embedded, not
+	// omitted, so the link is self-contained and portable across clients.
 	const CORDN_GROUP_ID = '48ea0377-8a10-4383-9129-a928ceae0232';
-	const cordnGroupHref = encodeGroupShareLink({
+	const cordnGroupHref = buildGroupSharePath({
 		groupId: CORDN_GROUP_ID,
 		coordinatorKey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
 		metadata: { name: 'Cordn' }
@@ -199,7 +201,7 @@
 	}
 
 	function getGroupHref(groupId: string) {
-		return resolve('/chat/[id]', { id: groupId });
+		return resolve('/chat/[id]', { id: groupRouteId(groupId) });
 	}
 
 	function getNewsHref() {
