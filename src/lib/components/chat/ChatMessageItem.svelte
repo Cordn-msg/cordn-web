@@ -504,7 +504,6 @@
 						href={authorHref}
 						class="rounded-full focus-visible:ring-2 focus-visible:ring-ring"
 						aria-label={`Open profile for ${displayName}`}
-						onclick={(event) => event.stopPropagation()}
 					>
 						<Avatar
 							pubkey={message.author}

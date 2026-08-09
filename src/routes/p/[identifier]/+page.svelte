@@ -20,6 +20,7 @@
 		decodeProfileIdentifier,
 		profileIdentifierQueryOptions
 	} from '$lib/queries/profileIdentifierQueries';
+	import { ensureProfileLoaded, ensureUserRelayListLoaded } from '$lib/queries/chatProfileQueries';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { activeAccount, logout } from '$lib/services/accountManager.svelte';
 	import {
@@ -36,12 +37,7 @@
 	} from '$lib/services/chatGroups.svelte';
 	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
-	import {
-		addressLoader,
-		createUserRelayListByPubkeyLoader,
-		getMetadataLookupRelays,
-		getUserRelayListFromStore
-	} from '$lib/services/loaders.svelte';
+	import { getUserRelayListFromStore } from '$lib/services/loaders.svelte';
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -146,18 +142,12 @@
 	);
 	const loadedProfileRelays = $derived.by(() => getUserRelayListFromStore(profilePubkey));
 	// Relay hints embedded in the identifier (nprofile relays, NIP-05 `relays`
-	// map). Empty for hex/npub. Merged into the metadata lookup as a bootstrap
-	// so an nprofile/NIP-05 link can find the profile's kind:0 even before its
-	// 10002 relay list loads; the authoritative 10002 list + metadataRelays
-	// fallback are still kept (deduped).
+	// map). Empty for hex/npub. Passed to `ensureProfileLoaded` as a bootstrap so
+	// an nprofile/NIP-05 link can find the profile's kind:0 even before its
+	// authoritative 10002 relay list loads.
 	const profileIdentifierRelayHints = $derived.by(() => {
 		if (syncDecodedIdentifier) return syncDecodedIdentifier.relayHints;
 		return profileIdentifierQuery.data?.relayHints ?? [];
-	});
-	const profileLookupRelays = $derived.by(() => {
-		const base = getMetadataLookupRelays(profilePubkey);
-		const hints = profileIdentifierRelayHints;
-		return hints.length > 0 ? [...new Set([...hints, ...base])] : base;
 	});
 	const profilePublishRelays = $derived.by(() => loadedProfileRelays);
 	let availableKeyPackages = $state<AvailableKeyPackageWithCoordinator[]>([]);
@@ -175,7 +165,9 @@
 			)
 		];
 	});
-	const sharedGroupProfileHints = useProfileHints(() => sharedGroupPubkeys);
+	const sharedGroupProfileHints = useProfileHints(() => sharedGroupPubkeys, {
+		relays: metadataRelays
+	});
 	let editingProfile = $state(false);
 	let profileName = $state('');
 	let profileDisplayName = $state('');
@@ -239,39 +231,12 @@
 		};
 	});
 
-	$effect(() => {
-		if (sharedGroupPubkeys.length === 0) return;
-
-		const subscriptions = sharedGroupPubkeys.flatMap((pubkey) => [
-			createUserRelayListByPubkeyLoader(pubkey).subscribe(),
-			addressLoader({
-				kind: Metadata,
-				pubkey,
-				relays: getMetadataLookupRelays(pubkey)
-			}).subscribe()
-		]);
-
-		return () => subscriptions.forEach((subscription) => subscription.unsubscribe());
-	});
-
+	// Deduped via Svelte Query: a repeat visit within the stale window does no
+	// network work and paints straight from the eventStore cache.
 	$effect(() => {
 		if (!profilePubkey) return;
-
-		const subscription = createUserRelayListByPubkeyLoader(profilePubkey).subscribe();
-
-		return () => subscription.unsubscribe();
-	});
-
-	$effect(() => {
-		if (!profilePubkey) return;
-
-		const subscription = addressLoader({
-			kind: Metadata,
-			pubkey: profilePubkey,
-			relays: profileLookupRelays
-		}).subscribe();
-
-		return () => subscription.unsubscribe();
+		ensureUserRelayListLoaded(profilePubkey);
+		ensureProfileLoaded(profilePubkey, profileIdentifierRelayHints);
 	});
 
 	$effect(() => {

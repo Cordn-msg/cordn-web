@@ -8,7 +8,12 @@ export function normalizeQueryCoordinatorKey(coordinatorKey?: string): string {
 
 export const chatQueryKeys = {
 	all: ['chat'] as const,
-	profile: (pubkey: string) => [...chatQueryKeys.all, 'profile', normalizePubKey(pubkey)] as const,
+	// `hints` is part of the key so an nprofile/NIP-05 deep link (which carries
+	// relay hints) dedups separately from the default metadataRelays lookup.
+	profile: (pubkey: string, hints: readonly string[] = []) =>
+		[...chatQueryKeys.all, 'profile', normalizePubKey(pubkey), hints] as const,
+	userRelayList: (pubkey: string) =>
+		[...chatQueryKeys.all, 'user-relay-list', normalizePubKey(pubkey)] as const,
 	account: (stablePubkey: string) =>
 		[...chatQueryKeys.all, 'account', normalizePubKey(stablePubkey)] as const,
 	coordinators: (stablePubkey: string) =>
