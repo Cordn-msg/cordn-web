@@ -41,18 +41,21 @@ export interface ChatMessage {
 	systemDetail?: string;
 	/** Media attachment. Optimistic/draft messages carry a local plaintext
 	 *  `previewUrl` (shown immediately during upload); confirmed messages leave
-	 *  this undefined and the item resolves the `imeta` lazily via the
-	 *  encrypted-media store. */
-	/** Media attachment. Optimistic/draft messages carry a local plaintext
-	 *  `previewUrl` (shown immediately during upload); confirmed messages leave
 	 *  this undefined and resolve the `imeta` lazily via the encrypted-media
 	 *  store. Upload progress is NOT here — it lives in the `mediaUploadProgress`
-	 *  registry so a per-tick update never rebuilds the message list. */
+	 *  registry so a per-tick update never rebuilds the message list.
+	 *
+	 *  Voice notes carry `durationMs` + `waveform` (the precomputed peaks), which
+	 *  confirmed messages reconstruct from the `imeta` hints instead. */
 	media?: {
 		mime: string;
 		filename: string;
 		sizeBytes?: number;
 		previewUrl?: string;
+		/** Voice note only: whole-note length in ms. */
+		durationMs?: number;
+		/** Voice note only: normalized 0–1 amplitude peaks for the waveform. */
+		waveform?: number[];
 	};
 }
 

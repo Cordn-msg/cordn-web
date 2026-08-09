@@ -161,6 +161,17 @@ export function mediaExtLabel(filename?: string, mime?: string): string {
 	return '';
 }
 
+/** Short clock label for a duration in seconds: `0:42`, `1:03`, `12:34`. Used by the
+ *  voice-note recorder strip and player. Caps at m:ss; voice notes are short —
+ *  an hours column would be noise. */
+export function formatClock(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+	const total = Math.floor(seconds);
+	const m = Math.floor(total / 60);
+	const s = total % 60;
+	return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 /** Human-readable byte size: B / KB / MB / GB, one decimal under 10 of a unit.
  *  Replaces naive `Math.round(size / 1024)` that rendered e.g. "37245 KB". */
 export function formatBytes(bytes: number): string {

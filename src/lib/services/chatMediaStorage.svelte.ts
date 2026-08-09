@@ -301,8 +301,11 @@ export async function sendChatMediaMessage(params: {
 	/** Abort the in-flight upload and skip the final MLS send. The caller can
 	 *  detect a cancel via its own `signal.aborted` (no special error type). */
 	signal?: AbortSignal;
+	/** Voice-note metadata to carry in the `imeta` as display hints
+	 *  (`duration` + `waveform`). Omitted for non-voice media. */
+	voice?: { durationMs: number; waveform: number[] };
 }): Promise<void> {
-	const { groupId, file, text, replyTo, onProgress, signal } = params;
+	const { groupId, file, text, replyTo, onProgress, signal, voice } = params;
 	// Fail fast before the upload: the final MLS send needs an account, and
 	// surfacing it here beats encrypting + uploading first.
 	requireActiveAccount('You must be logged in to send media');
@@ -352,7 +355,9 @@ export async function sendChatMediaMessage(params: {
 		filename: metadata.filename,
 		plaintextHashHex: bytesToHex(enc.plaintextHash),
 		nonceHex: bytesToHex(enc.nonce),
-		version: MEDIA_VERSION
+		version: MEDIA_VERSION,
+		durationMs: voice?.durationMs,
+		waveform: voice?.waveform
 	});
 
 	// Thread the exact encryption key so the sender's stashed copy decrypts the

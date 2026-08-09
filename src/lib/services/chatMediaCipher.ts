@@ -142,6 +142,13 @@ export interface MediaReference {
 	readonly blurhash?: string;
 	readonly thumbhash?: string;
 	readonly alt?: string;
+	/** Voice note: whole-note duration in milliseconds. Display hint; the audio
+	 *  bytes themselves remain AEAD-authenticated, so a tampered value is at
+	 *  worst a cosmetic lie, not a security one. */
+	readonly durationMs?: number;
+	/** Voice note: normalized amplitude peaks (0–1) driving the waveform bars.
+	 *  Display hint, same integrity posture as `durationMs`. */
+	readonly waveform?: number[];
 }
 
 /** Encodes a media reference as a NIP-92 `imeta` tag (`["imeta", "url ...", …]`). */
@@ -159,6 +166,9 @@ export function buildImetaTag(ref: MediaReference): string[] {
 	if (ref.blurhash) tag.push(`blurhash ${ref.blurhash}`);
 	if (ref.thumbhash) tag.push(`thumbhash ${ref.thumbhash}`);
 	if (ref.alt) tag.push(`alt ${ref.alt}`);
+	if (ref.durationMs !== undefined) tag.push(`duration ${Math.round(ref.durationMs)}`);
+	if (ref.waveform && ref.waveform.length > 0)
+		tag.push(`waveform ${ref.waveform.map((peak) => peak.toFixed(3)).join(',')}`);
 	return tag;
 }
 
@@ -195,7 +205,9 @@ export function parseImetaTag(tag: string[]): MediaReference | null {
 		dim: fields['dim'],
 		blurhash: fields['blurhash'],
 		thumbhash: fields['thumbhash'],
-		alt: fields['alt']
+		alt: fields['alt'],
+		durationMs: parseDuration(fields['duration']),
+		waveform: parseWaveform(fields['waveform'])
 	};
 }
 
@@ -212,6 +224,24 @@ export function findImetaTag(tags: string[][]): MediaReference | null {
 /** §4: receivers MUST reject `imeta` whose `v` is absent or names an unknown version. */
 export function isKnownMediaVersion(version: string | undefined): boolean {
 	return version === MEDIA_VERSION;
+}
+
+/** Parse the voice-note `duration` hint (milliseconds). Undefined when absent or non-finite. */
+function parseDuration(raw: string | undefined): number | undefined {
+	if (!raw) return undefined;
+	const value = Number(raw);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** Parse the voice-note `waveform` hint (comma-separated 0–1 peaks). Undefined when absent;
+ *  drops NaN/∞ entries so a malformed field never breaks the render. */
+function parseWaveform(raw: string | undefined): number[] | undefined {
+	if (!raw) return undefined;
+	const peaks = raw
+		.split(',')
+		.map((entry) => Number(entry))
+		.filter((value) => Number.isFinite(value) && value >= 0 && value <= 1);
+	return peaks.length > 0 ? peaks : undefined;
 }
 
 // ---------------------------------------------------------------------------

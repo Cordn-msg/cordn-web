@@ -26,6 +26,7 @@
 		reportMediaUpload,
 		clearMediaUploadProgress
 	} from '$lib/services/chatMediaStorage.svelte';
+	import { type RecordingResult } from '$lib/services/voiceRecorder.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
 		buildAnnotationIndex,
@@ -510,6 +511,89 @@
 			});
 	}
 
+	function sendVoiceMessage(result: RecordingResult, text: string) {
+		const createdAt = Date.now();
+		const optimisticId = `optimistic:${crypto.randomUUID()}`;
+		// Audio needs a local URL too (not just images) so the optimistic player can
+		// play the just-recorded clip before the upload resolves.
+		const previewUrl = URL.createObjectURL(result.file);
+		const currentReplyTarget = replyTarget;
+		const optimisticReplyTarget = currentReplyTarget
+			? {
+					id: currentReplyTarget.id,
+					author: currentReplyTarget.pubkey,
+					authorLabel: replyTargetAuthor || currentReplyTarget.pubkey,
+					text: currentReplyTarget.content
+				}
+			: undefined;
+
+		appendOptimisticMessage({
+			id: optimisticId,
+			eventId: optimisticId,
+			author: activePubkey,
+			text,
+			kind: ChatKinds.Text,
+			createdAt,
+			timeLabel: formatUnixTimestamp(createdAt, true, false),
+			dayLabel: formatUnixTimestamp(createdAt, false, true),
+			isOwn: true,
+			deliveryState: 'sending',
+			replyTo: optimisticReplyTarget,
+			media: {
+				mime: result.mime,
+				filename: result.file.name,
+				sizeBytes: result.file.size,
+				previewUrl,
+				durationMs: result.durationMs,
+				waveform: result.peaks
+			}
+		});
+
+		void messageListRef?.scrollToBottom();
+
+		const controller = new AbortController();
+		registerMediaUpload(optimisticId, controller);
+
+		sendChatMediaMessage({
+			groupId,
+			file: result.file,
+			text,
+			replyTo: currentReplyTarget ?? undefined,
+			voice: { durationMs: result.durationMs, waveform: result.peaks },
+			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
+			signal: controller.signal
+		})
+			.then(() => {
+				removeOptimisticMessage(optimisticId);
+				URL.revokeObjectURL(previewUrl);
+			})
+			.catch((error) => {
+				if (controller.signal.aborted) {
+					removeOptimisticMessage(optimisticId);
+					URL.revokeObjectURL(previewUrl);
+					return;
+				}
+				console.error('Failed to send voice note:', error);
+				chatComposerActionsStore.error =
+					error instanceof Error ? error.message : 'Failed to send voice note';
+				updateOptimisticMessage(optimisticId, (message) => ({
+					...message,
+					deliveryState: 'error'
+				}));
+			})
+			.finally(() => {
+				unregisterMediaUpload(optimisticId);
+				clearMediaUploadProgress(optimisticId);
+			});
+	}
+
+	function handleSendVoice(result: RecordingResult) {
+		if (!group) return;
+		sendVoiceMessage(result, draft.trim());
+		draft = '';
+		selectedMentions = [];
+	}
+
 	async function handleRetrySend(message: ChatMessage) {
 		if (!message.id.startsWith('optimistic:') || !group) return;
 
@@ -770,6 +854,7 @@
 			bind:value={draft}
 			onSubmit={handleSubmit}
 			onSendMedia={handleSendMedia}
+			onSendVoice={handleSendVoice}
 			disabled={isRemoved || isPoisoned}
 			replyTo={composerReplyPreview}
 			editTo={editTarget ? { text: editPreview } : null}

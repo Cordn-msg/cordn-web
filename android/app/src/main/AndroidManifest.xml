@@ -71,4 +71,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <!-- Microphone is requested by voice-note recording (getUserMedia + MediaRecorder) in the chat
+         composer. Same bridge as CAMERA above: Capacitor's BridgeWebChromeClient maps the WebView's
+         onPermissionRequest for AUDIO_CAPTURE to the runtime RECORD_AUDIO prompt, but only if the
+         permission is declared here. required=false so devices without a mic can still install. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 </manifest>

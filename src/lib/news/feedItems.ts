@@ -230,6 +230,13 @@ export const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Portable group links',
 		body: "- ✨ Group invites and share links now use the standard cordn1 format: the coordinator and relay hints are packed right into the link, so the same invite opens correctly no matter which Cordn client or coordinator setup receives it.\n- ✨ Paste a cordn1… group reference (or a cordn.net link) straight into a chat and it opens the group inside Cordn, instead of a blank tab.\n- 🐛 Pasting a full group link that carries a name and icon preview into the join box no longer glues that metadata into the group's address — the link now resolves cleanly.\n- 🔄 Links everywhere — the sidebar, message permalinks, and profile pages — now use the portable cordn1 form, so a group's link stays consistent wherever you copy or share it from."
+	},
+	{
+		id: 'cordn-news-2026-08-10-voice-notes',
+		createdAt: Date.UTC(2026, 7, 10),
+		version: 1,
+		title: 'Send voice notes in a chat',
+		body: '- ✨ Hold the mic button to record a voice message, then release to send it — handy when you’d rather talk than type.\n- ✨ While holding, drag up to keep recording hands-free (then tap send or discard), or drag left to cancel.\n- ✨ Voice notes play right in the conversation with a waveform and timer — tap the bar to jump to any moment.\n- 🔄 Like everything else, voice notes are encrypted end-to-end and respect your media autoload setting.'
 	}
 ];
 

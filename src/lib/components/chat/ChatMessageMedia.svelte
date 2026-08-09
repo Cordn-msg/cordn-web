@@ -18,6 +18,7 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import X from '@lucide/svelte/icons/x';
+	import VoiceNotePlayer from './VoiceNotePlayer.svelte';
 	import type { ChatMessage } from './chat.types';
 
 	/**
@@ -103,6 +104,7 @@
 	});
 
 	const hasMedia = $derived(Boolean(optimistic || ref));
+	const isOptimisticAudio = $derived(Boolean(optimistic?.mime.startsWith('audio/')));
 	const showingImage = $derived(
 		optimistic ? optimistic.mime.startsWith('image/') : Boolean(ref?.mime.startsWith('image/'))
 	);
@@ -121,7 +123,17 @@
 	<div class="mb-2 max-w-[16rem] sm:max-w-[20rem]">
 		{#if optimistic}
 			<div class="relative">
-				{#if optimistic.previewUrl && showingImage}
+				{#if isOptimisticAudio}
+					<div class="rounded-2xl border border-border/60 bg-background/50 px-3 py-2.5">
+						<VoiceNotePlayer
+							url={optimistic.previewUrl ?? ''}
+							durationMs={optimistic.durationMs}
+							waveform={optimistic.waveform ?? []}
+							isOwn={message.isOwn}
+							id={messageId}
+						/>
+					</div>
+				{:else if optimistic.previewUrl && showingImage}
 					<button
 						type="button"
 						class="block max-h-64 w-full overflow-hidden rounded-2xl"
@@ -187,6 +199,16 @@
 			<!-- svelte-ignore a11y_media_has_caption -->
 			<video src={resolved.url} controls preload="metadata" class="max-h-64 w-full rounded-2xl"
 			></video>
+		{:else if resolved && resolved.mime.startsWith('audio/')}
+			<div class="rounded-2xl border border-border/60 bg-background/50 px-3 py-2.5">
+				<VoiceNotePlayer
+					url={resolved.url}
+						durationMs={ref?.durationMs}
+						waveform={ref?.waveform ?? []}
+						isOwn={message.isOwn}
+						id={messageId}
+				/>
+			</div>
 		{:else if resolved}
 			<button
 				type="button"

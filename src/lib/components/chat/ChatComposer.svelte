@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { capturePhoto, captureVideo, pickImagesFromGallery } from '$lib/services/nativeShims';
-	import { formatBytes } from '$lib/utils';
+	import { formatBytes, formatClock } from '$lib/utils';
+	import {
+		createVoiceRecorder,
+		isVoiceRecordingSupported,
+		type RecordingResult
+	} from '$lib/services/voiceRecorder.svelte';
 	import { toast } from 'svelte-sonner';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import AtSign from '@lucide/svelte/icons/at-sign';
@@ -14,6 +19,10 @@
 	import SendHorizontal from '@lucide/svelte/icons/send-horizontal';
 	import X from '@lucide/svelte/icons/x';
 	import Paperclip from '@lucide/svelte/icons/paperclip';
+	import Mic from '@lucide/svelte/icons/mic';
+	import Lock from '@lucide/svelte/icons/lock';
+	import Trash from '@lucide/svelte/icons/trash-2';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChatComposerActions from './ChatComposerActions.svelte';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
@@ -39,7 +48,8 @@
 		selectedMentions = $bindable([]),
 		unreadReferenceCount = 0,
 		onNavigateToReference = () => {},
-		onSendMedia = () => {}
+		onSendMedia = () => {},
+		onSendVoice = () => {}
 	}: {
 		value?: string;
 		onSubmit: () => void;
@@ -55,6 +65,10 @@
 		onNavigateToReference?: () => void | Promise<void>;
 		/** Send media files (with the current draft as caption). */
 		onSendMedia?: (files: File[], caption: string) => void;
+		/** Send a recorded voice note. The composer drives the recorder UX; this
+		 *  fires on release, on a locked-recording send tap, or on a silence-VAD
+		 *  auto-stop. */
+		onSendVoice?: (result: RecordingResult) => void;
 	} = $props();
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -70,6 +84,158 @@
 		readonly previewUrl: string;
 	}
 	let pendingAttachments = $state<StagedAttachment[]>([]);
+
+	// Voice-note recorder. Created once; send happens only via explicit
+	// gestures/buttons (release-to-send, drag-up-to-lock, trash to cancel) — there
+	// is no silence auto-stop, so `onSendVoice` is read at call time in each handler.
+	const recorder = createVoiceRecorder();
+	const voiceSupported = isVoiceRecordingSupported();
+	const isRecording = $derived(
+		recorder.state === 'recording' || recorder.state === 'locked' || recorder.state === 'requesting'
+	);
+	const showMic = $derived(
+		!disabled && voiceSupported && !value.trim() && pendingAttachments.length === 0 && !isRecording
+	);
+
+	// Hold-to-record gesture tracking. Listeners attach to window on pointerdown
+	// so the gesture survives even though the mic button is hidden while the
+	// recording bar is showing. LOCK = drag up (hands-free); CANCEL = drag left.
+	// `dragUpPx`/`dragLeftPx` feed the lock/cancel target highlights and the
+	// record-button icon crossfade, so the user sees where each direction leads.
+	let activePointerId: number | null = null;
+	let gestureStartX = 0;
+	let gestureStartY = 0;
+	let dragLocked = false;
+	let dragUpPx = $state(0);
+	let dragLeftPx = $state(0);
+	// Gesture thresholds scaled to the viewport so they're equally reachable on
+	// phones and tablets, not fixed pixels that feel too long on small screens.
+	// Computed once at init — a recording session is too short for a resize or
+	// rotation mid-gesture to matter. ponytail: clamped so extreme aspect ratios
+	// stay sane; revisit if a specific device feels off.
+	const LOCK_PX = Math.min(120, Math.max(56, Math.round(window.innerHeight * 0.1)));
+	const CANCEL_PX = Math.min(140, Math.max(48, Math.round(window.innerWidth * 0.30)));
+	const lockProgress = $derived(Math.min(1, dragUpPx / LOCK_PX));
+	const cancelProgress = $derived(Math.min(1, dragLeftPx / CANCEL_PX));
+
+	function beginGesture(event: PointerEvent) {
+		activePointerId = event.pointerId;
+		gestureStartX = event.clientX;
+		gestureStartY = event.clientY;
+		dragLocked = false;
+		dragUpPx = 0;
+		dragLeftPx = 0;
+		// Touch implicitly captures the pointer to the pointerdown target (the mic
+		// button), which unmounts the instant recording begins — that orphaned
+		// capture would swallow pointerup/pointermove and strand the recording on
+		// phones. Re-capture on <body> (never unmounts) so the gesture survives the
+		// DOM swap and release/drag keep working. Mouse has no implicit capture, so
+		// this is a harmless no-op on desktop.
+		try {
+			document.body.setPointerCapture(event.pointerId);
+		} catch {
+			/* setPointerCapture unsupported — window listeners are the fallback */
+		}
+		window.addEventListener('pointermove', onGestureMove);
+		window.addEventListener('pointerup', onGestureEnd);
+		window.addEventListener('pointercancel', onGestureEnd);
+	}
+
+	function startVoice(event: PointerEvent) {
+		if (event.pointerType === 'mouse' && event.button !== 0) return;
+		if (recorder.state !== 'idle' && recorder.state !== 'error') return;
+		// Always engage the hold gesture. If a native permission dialog appears
+		// (first-ever use) the recorder self-detects the getUserMedia delay and
+		// starts hands-free (locked) instead, where send/trash buttons are
+		// reachable — the system dialog would otherwise orphan the pointer gesture.
+		beginGesture(event);
+		void recorder.start();
+	}
+
+	function onGestureMove(event: PointerEvent) {
+		if (event.pointerId !== activePointerId) return;
+		if (recorder.state !== 'recording') return;
+		dragUpPx = Math.max(0, gestureStartY - event.clientY);
+		dragLeftPx = Math.max(0, gestureStartX - event.clientX);
+		if (dragUpPx > LOCK_PX && !dragLocked) {
+			dragLocked = true;
+			recorder.lock();
+		} else if (dragLeftPx > CANCEL_PX) {
+			endGesture();
+			void recorder.cancel();
+		}
+	}
+
+	async function onGestureEnd(event: PointerEvent) {
+		if (event.pointerId !== activePointerId) return;
+		endGesture();
+		const s = recorder.state;
+		if (s === 'recording') {
+			const result = await recorder.stop();
+			if (result) onSendVoice(result);
+		} else if (s === 'requesting') {
+			// Released while still acquiring (granted-permission slow path) — abort.
+			void recorder.cancel();
+		}
+	}
+
+	function endGesture() {
+		if (activePointerId !== null) {
+			try {
+				document.body.releasePointerCapture(activePointerId);
+			} catch {
+				/* nothing captured / already released */
+			}
+		}
+		activePointerId = null;
+		dragUpPx = 0;
+		dragLeftPx = 0;
+		window.removeEventListener('pointermove', onGestureMove);
+		window.removeEventListener('pointerup', onGestureEnd);
+		window.removeEventListener('pointercancel', onGestureEnd);
+	}
+
+	async function finishLockedRecording() {
+		const result = await recorder.stop();
+		if (result) onSendVoice(result);
+	}
+
+	function cancelRecording() {
+		void recorder.cancel();
+	}
+
+	$effect(() => {
+		const s = recorder.state;
+		if (s === 'error') {
+			toast.error('Voice recording failed', { description: recorder.error ?? undefined });
+		}
+		// Release any held pointer capture + gesture listeners once recording
+		// settles — covers the locked-cancel and permission-denied paths where no
+		// pointerup ever fires (and the dialog-orphaned first-use case).
+		if (s === 'error' || s === 'idle') endGesture();
+	});
+
+	// Debounce the "Waiting for microphone…" placeholder: a granted mic resolves
+	// getUserMedia in a few frames, so surfacing `requesting` immediately flashes
+	// it on every record. Only show it if the request genuinely lingers (a slow
+	// grant or a native permission dialog) — keeps tap-to-record feeling snappy.
+	let requestingVisible = $state(false);
+	let requestingTimer: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => {
+		if (recorder.state === 'requesting') {
+			requestingTimer = setTimeout(() => (requestingVisible = true), 200);
+		} else {
+			if (requestingTimer) clearTimeout(requestingTimer);
+			requestingVisible = false;
+		}
+	});
+
+	onDestroy(() => {
+		if (requestingTimer) clearTimeout(requestingTimer);
+		endGesture();
+		recorder.destroy();
+	});
+
 	let documentInputRef: HTMLInputElement | null = $state(null);
 	let mentionQuery = $state('');
 	let mentionStart = $state(-1);
@@ -447,6 +613,117 @@
 		{/if}
 
 		<div class="flex min-w-0 items-end gap-3">
+			{#if isRecording}
+				{#if recorder.state === 'requesting' && requestingVisible}
+					<div
+						class="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-xl border border-border bg-card px-3"
+					>
+						<span
+							class="min-w-0 flex-1 animate-pulse truncate text-xs text-muted-foreground"
+							>Waiting for microphone…</span
+						>
+						<button
+							type="button"
+							class="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-destructive"
+							onclick={cancelRecording}
+							aria-label="Cancel"
+							title="Cancel"
+						>
+							<X class="size-4" />
+						</button>
+					</div>
+				{:else if recorder.state === 'locked'}
+					<div
+						class="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-xl border border-border bg-card px-3"
+					>
+						<button
+							type="button"
+							class="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-destructive"
+							onclick={cancelRecording}
+							aria-label="Discard voice note"
+							title="Discard"
+						>
+							<Trash class="size-4" />
+						</button>
+						<div class="flex h-6 min-w-0 flex-1 items-center gap-[2px]">
+							{#each recorder.livePeaks as peak, i (i)}
+								<div
+									class="min-w-[2px] flex-1 rounded-full bg-foreground/50"
+									style={`height: ${Math.max(10, Math.round(peak * 100))}%`}
+								></div>
+							{/each}
+						</div>
+						<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+							{formatClock(recorder.elapsedMs / 1000)}
+						</span>
+						<button
+							type="button"
+							class="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform active:scale-95"
+							onclick={finishLockedRecording}
+							aria-label="Send voice note"
+							title="Send"
+						>
+							<SendHorizontal class="size-4" />
+						</button>
+					</div>
+				{:else}
+					<!-- Active hold: drag up to lock, left to cancel. The lock target floats
+					     above the record button, the cancel target sits at the left. Both
+					     brighten + grow as the finger approaches; the record-button icon
+					     crossfades mic → lock / mic → trash to reinforce the direction. -->
+					<div class="relative flex w-full items-center gap-2">
+						<div
+							class="pointer-events-none absolute bottom-full right-0 z-20 mb-2 flex flex-col items-center gap-0.5 transition-all duration-150"
+							style={`opacity: ${0.3 + 0.7 * lockProgress}; transform: scale(${0.8 + 0.2 * lockProgress})`}
+						>
+							<div
+								class="flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md"
+							>
+								<Lock class="size-5" />
+							</div>
+							<ChevronUp class="size-3 text-muted-foreground" />
+						</div>
+						<div
+							class="pointer-events-none flex shrink-0 items-center gap-0.5 transition-all duration-150"
+							style={`opacity: ${0.3 + 0.7 * cancelProgress}; transform: scale(${0.8 + 0.2 * cancelProgress})`}
+						>
+							<ChevronLeft class="size-3 text-muted-foreground" />
+							<div
+								class="flex size-10 items-center justify-center rounded-full bg-destructive/15 text-destructive"
+							>
+								<Trash class="size-5" />
+							</div>
+						</div>
+						<div class="flex h-7 min-w-0 flex-1 items-center gap-[2px] px-1">
+							{#each recorder.livePeaks as peak, i (i)}
+								<div
+									class="min-w-[2px] flex-1 rounded-full bg-foreground/50"
+									style={`height: ${Math.max(10, Math.round(peak * 100))}%`}
+								></div>
+							{/each}
+						</div>
+						<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+							{formatClock(recorder.elapsedMs / 1000)}
+						</span>
+						<div
+							class="relative flex size-11 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-md"
+						>
+							<Mic
+								class="absolute size-5 transition-opacity duration-100"
+								style={`opacity: ${Math.max(0, 1 - lockProgress - cancelProgress)}`}
+							/>
+							<Lock
+								class="absolute size-5 transition-opacity duration-100"
+								style={`opacity: ${lockProgress}`}
+							/>
+							<Trash
+								class="absolute size-5 transition-opacity duration-100"
+								style={`opacity: ${cancelProgress}`}
+							/>
+						</div>
+					</div>
+				{/if}
+			{:else}
 			<ChatComposerActions
 				onTakePhoto={takePhoto}
 				onTakeVideo={takeVideo}
@@ -512,13 +789,26 @@
 					style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
 				/>
 			</div>
-			<Button
-				type="submit"
-				class="h-11 shrink-0 rounded-xl px-4"
-				disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
-			>
-				<SendHorizontal class="size-4" />
-			</Button>
+			{#if showMic}
+				<button
+					type="button"
+					class="flex size-11 shrink-0 touch-none items-center justify-center rounded-xl bg-primary text-primary-foreground transition-transform active:scale-95"
+					onpointerdown={startVoice}
+					aria-label="Hold to record voice note"
+					title="Hold to record voice note"
+				>
+					<Mic class="size-5" />
+				</button>
+			{:else}
+				<Button
+					type="submit"
+					class="h-11 shrink-0 rounded-xl px-4"
+					disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
+				>
+					<SendHorizontal class="size-4" />
+				</Button>
+			{/if}
+		{/if}
 		</div>
 	</form>
 </div>
