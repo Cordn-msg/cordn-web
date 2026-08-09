@@ -6,12 +6,13 @@
 		peekMessageMedia,
 		resolveMessageMedia,
 		getMediaAutoLoad,
+		mediaUploadProgress,
 		isMessageMediaLoaded,
 		markMessageMediaLoaded,
 		type ResolvedMedia
 	} from '$lib/services/chatMediaStorage.svelte';
 	import { openMediaLightbox } from '$lib/services/chatMediaLightbox.svelte';
-	import { cn, downloadObjectUrl, mediaExtLabel } from '$lib/utils';
+	import { cn, downloadObjectUrl, formatBytes, mediaExtLabel } from '$lib/utils';
 	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 	import Download from '@lucide/svelte/icons/download';
 	import FileText from '@lucide/svelte/icons/file-text';
@@ -103,11 +104,15 @@
 
 	const hasMedia = $derived(Boolean(optimistic || ref));
 	const showingImage = $derived(
-		optimistic?.kind === 'image' ||
-			(optimistic ? optimistic.mime.startsWith('image/') : Boolean(ref?.mime.startsWith('image/')))
+		optimistic ? optimistic.mime.startsWith('image/') : Boolean(ref?.mime.startsWith('image/'))
 	);
-	const uploading = $derived(Boolean(optimistic?.uploading));
-	const uploadProgress = $derived(optimistic?.uploadProgress ?? null);
+	// Upload progress lives in the `mediaUploadProgress` registry, NOT the message
+	// object — so a per-tick progress update re-renders only this bubble, never the
+	// virtualized list (the source of the upload flicker). Presence of an entry = uploading.
+	const uploadState = $derived(optimistic ? mediaUploadProgress[messageId] : undefined);
+	const uploading = $derived(Boolean(uploadState));
+	const uploadProgress = $derived(uploadState?.percent ?? null);
+	const uploadPhase = $derived(uploadState?.phase);
 	const isFailed = $derived(Boolean(message.deliveryState === 'error') || failed);
 	const mediaLabel = $derived(mediaExtLabel(ref?.filename, ref?.mime));
 </script>
@@ -115,8 +120,8 @@
 {#if hasMedia}
 	<div class="mb-2 max-w-[16rem] sm:max-w-[20rem]">
 		{#if optimistic}
-			{#if optimistic.previewUrl && showingImage}
-				<div class="relative">
+			<div class="relative">
+				{#if optimistic.previewUrl && showingImage}
 					<button
 						type="button"
 						class="block max-h-64 w-full overflow-hidden rounded-2xl"
@@ -135,74 +140,23 @@
 							class="max-h-64 w-full cursor-zoom-in object-cover"
 						/>
 					</button>
-					{#if uploading}
-						<div
-							class="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/40 backdrop-blur-[1px]"
-						>
-							{#if uploadProgress === null}
-								<Spinner class="size-6" />
-							{:else}
-								<div class="h-1.5 w-2/3 overflow-hidden rounded-full bg-foreground/20">
-									<div
-										class="h-full rounded-full bg-foreground transition-[width] duration-200 ease-out"
-										style={`width: ${uploadProgress}%`}
-									></div>
-								</div>
+				{:else}
+					<div
+						class="flex items-center gap-2 rounded-xl border border-border/60 bg-background/50 px-2.5 py-2"
+					>
+						<FileText class="size-4 shrink-0 text-muted-foreground" />
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-xs">{optimistic.filename}</p>
+							{#if optimistic.sizeBytes}
+								<p class="text-[10px] text-muted-foreground tabular-nums">
+									{formatBytes(optimistic.sizeBytes)}
+								</p>
 							{/if}
 						</div>
-						<button
-							type="button"
-							class="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-background"
-							aria-label="Cancel upload"
-							title="Cancel upload"
-							onclick={(event) => {
-								event.stopPropagation();
-								cancelMediaUpload(messageId);
-							}}
-						>
-							<X class="size-4" />
-						</button>
-					{/if}
-				</div>
-			{:else}
-				<div class="rounded-xl border border-border/60 bg-background/50 px-2.5 py-2">
-					<div class="mb-1 flex items-center justify-between gap-2">
-						<span class="min-w-0 flex-1 truncate text-xs">{optimistic.filename}</span>
-						{#if uploading}
-							<div class="flex shrink-0 items-center gap-1.5">
-								{#if uploadProgress !== null}
-									<span class="text-[10px] text-muted-foreground tabular-nums">
-										{uploadProgress}%
-									</span>
-								{/if}
-								<button
-									type="button"
-									class="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-									aria-label="Cancel upload"
-									title="Cancel upload"
-									onclick={() => cancelMediaUpload(messageId)}
-								>
-									<X class="size-3.5" />
-								</button>
-							</div>
-						{/if}
 					</div>
-					{#if uploading}
-						{#if uploadProgress === null}
-							<div class="flex items-center justify-center py-0.5">
-								<Spinner class="size-3.5 text-muted-foreground" />
-							</div>
-						{:else}
-							<div class="h-1 w-full overflow-hidden rounded-full bg-foreground/15">
-								<div
-									class="h-full rounded-full bg-foreground transition-[width] duration-200 ease-out"
-									style={`width: ${uploadProgress}%`}
-								></div>
-							</div>
-						{/if}
-					{/if}
-				</div>
-			{/if}
+				{/if}
+				{@render uploadOverlay()}
+			</div>
 		{:else if loading}
 			<div
 				class="flex h-24 w-48 items-center justify-center rounded-2xl border border-dashed border-border/50"
@@ -228,6 +182,11 @@
 					class="max-h-64 w-full cursor-zoom-in object-cover transition-transform hover:scale-[1.02]"
 				/>
 			</button>
+		{:else if resolved && resolved.mime.startsWith('video/')}
+			<!-- ponytail: mirrors InlineMediaUrl's video branch; captions aren't synthesized for arbitrary media. -->
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video src={resolved.url} controls preload="metadata" class="max-h-64 w-full rounded-2xl"
+			></video>
 		{:else if resolved}
 			<button
 				type="button"
@@ -268,3 +227,36 @@
 		{/if}
 	</div>
 {/if}
+
+{#snippet uploadOverlay()}
+	{#if uploading}
+		<div
+			class="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/40 backdrop-blur-[1px]"
+		>
+			<div class="flex w-2/3 flex-col items-center gap-1">
+				{#if uploadProgress === null}
+					<Spinner class="size-5" />
+				{:else}
+					<div class="h-1.5 w-full overflow-hidden rounded-full bg-foreground/20">
+						<div
+							class="h-full rounded-full bg-foreground transition-[width] duration-200 ease-out"
+							style={`width: ${uploadProgress}%`}
+						></div>
+					</div>
+				{/if}
+				{#if uploadPhase}
+					<span class="text-[10px] text-foreground/80">{uploadPhase}</span>
+				{/if}
+			</div>
+		</div>
+		<button
+			type="button"
+			class="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-background"
+			aria-label="Cancel upload"
+			title="Cancel upload"
+			onclick={() => cancelMediaUpload(messageId)}
+		>
+			<X class="size-4" />
+		</button>
+	{/if}
+{/snippet}

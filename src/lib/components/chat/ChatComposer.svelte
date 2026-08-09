@@ -4,6 +4,9 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
+	import { capturePhoto, captureVideo, pickImagesFromGallery } from '$lib/services/nativeShims';
+	import { formatBytes } from '$lib/utils';
+	import { toast } from 'svelte-sonner';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import AtSign from '@lucide/svelte/icons/at-sign';
 	import Pencil from '@lucide/svelte/icons/pencil';
@@ -57,18 +60,16 @@
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
 	let expanded = $state(false);
 
-	// Staged media attachments: picked via the `+` menu (multiple selection
-	// enabled), sent on submit with the current draft as caption. Each holds a
-	// File plus a preview object URL for images; URLs are revoked on remove/send
-	// so they never leak. Each staged file becomes its own message at send time
-	// (one `imeta` per MLS message is the existing model).
+	// Staged media attachments: added via the `+` menu (gallery, camera capture, or documents),
+	// sent on submit with the current draft as caption. Each holds a File plus a preview object URL
+	// for images; URLs are revoked on remove/send so they never leak. Each staged file becomes its
+	// own message at send time (one `imeta` per MLS message is the existing model).
 	interface StagedAttachment {
 		readonly id: string;
 		readonly file: File;
 		readonly previewUrl: string;
 	}
 	let pendingAttachments = $state<StagedAttachment[]>([]);
-	let imageInputRef: HTMLInputElement | null = $state(null);
 	let documentInputRef: HTMLInputElement | null = $state(null);
 	let mentionQuery = $state('');
 	let mentionStart = $state(-1);
@@ -219,8 +220,49 @@
 		});
 	}
 
-	function pickImage() {
-		imageInputRef?.click();
+	function stageFiles(files: File[]) {
+		for (const file of files) {
+			pendingAttachments = [
+				...pendingAttachments,
+				{
+					id: crypto.randomUUID(),
+					file,
+					previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : ''
+				}
+			];
+		}
+	}
+
+	// Photo and video capture share one path — both @capacitor/camera methods yield a single File the
+	// composer stages identically — so a tiny helper removes the duplicated try/stage/toast body.
+	async function captureAndStage(capture: () => Promise<File | null>) {
+		try {
+			const file = await capture();
+			if (file) stageFiles([file]);
+		} catch (err) {
+			toast.error('Could not open camera', {
+				description: err instanceof Error ? err.message : String(err)
+			});
+		}
+	}
+
+	function takePhoto() {
+		void captureAndStage(capturePhoto);
+	}
+
+	function takeVideo() {
+		void captureAndStage(captureVideo);
+	}
+
+	async function pickImage() {
+		try {
+			const files = await pickImagesFromGallery();
+			if (files.length > 0) stageFiles(files);
+		} catch (err) {
+			toast.error('Could not open gallery', {
+				description: err instanceof Error ? err.message : String(err)
+			});
+		}
 	}
 
 	function pickDocument() {
@@ -236,16 +278,7 @@
 		const files = input.files ? Array.from(input.files) : [];
 		input.value = '';
 		if (files.length === 0) return;
-		for (const file of files) {
-			pendingAttachments = [
-				...pendingAttachments,
-				{
-					id: crypto.randomUUID(),
-					file,
-					previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : ''
-				}
-			];
-		}
+		stageFiles(files);
 	}
 
 	function removeAttachment(id: string) {
@@ -368,14 +401,6 @@
 		{/if}
 
 		<input
-			bind:this={imageInputRef}
-			type="file"
-			accept="image/*"
-			multiple
-			class="hidden"
-			onchange={handleFileSelected}
-		/>
-		<input
 			bind:this={documentInputRef}
 			type="file"
 			multiple
@@ -403,7 +428,7 @@
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-xs font-medium">{attachment.file.name}</p>
 							<p class="text-[11px] text-muted-foreground">
-								{Math.round(attachment.file.size / 1024)} KB
+								{formatBytes(attachment.file.size)}
 							</p>
 						</div>
 						<Button
@@ -422,7 +447,12 @@
 		{/if}
 
 		<div class="flex min-w-0 items-end gap-3">
-			<ChatComposerActions onPickImage={pickImage} onPickDocument={pickDocument} />
+			<ChatComposerActions
+				onTakePhoto={takePhoto}
+				onTakeVideo={takeVideo}
+				onPickImage={pickImage}
+				onPickDocument={pickDocument}
+			/>
 			<div class="flex min-w-0 flex-1 flex-col gap-2">
 				{#if unreadReferenceCount > 0}
 					<div class="flex justify-center">

@@ -22,7 +22,9 @@
 	import {
 		sendChatMediaMessage,
 		registerMediaUpload,
-		unregisterMediaUpload
+		unregisterMediaUpload,
+		reportMediaUpload,
+		clearMediaUploadProgress
 	} from '$lib/services/chatMediaStorage.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
@@ -454,13 +456,10 @@
 			isOwn: true,
 			deliveryState: 'sending',
 			media: {
-				kind: isImage ? 'image' : 'file',
 				mime: file.type || 'application/octet-stream',
 				filename: file.name,
 				sizeBytes: file.size,
-				previewUrl,
-				uploading: true,
-				uploadProgress: null
+				previewUrl
 			}
 		});
 
@@ -481,11 +480,7 @@
 			file,
 			text,
 			replyTo: undefined,
-			onProgress: (progress) =>
-				updateOptimisticMessage(optimisticId, (message) => ({
-					...message,
-					media: message.media ? { ...message.media, uploadProgress: progress } : message.media
-				})),
+			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
 			.then(() => {
@@ -506,11 +501,13 @@
 					error instanceof Error ? error.message : 'Failed to send media';
 				updateOptimisticMessage(optimisticId, (message) => ({
 					...message,
-					deliveryState: 'error',
-					media: message.media ? { ...message.media, uploading: false } : message.media
+					deliveryState: 'error'
 				}));
 			})
-			.finally(() => unregisterMediaUpload(optimisticId));
+			.finally(() => {
+				unregisterMediaUpload(optimisticId);
+				clearMediaUploadProgress(optimisticId);
+			});
 	}
 
 	async function handleRetrySend(message: ChatMessage) {

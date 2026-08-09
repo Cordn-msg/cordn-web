@@ -152,6 +152,55 @@ export async function initNativeShell(): Promise<void> {
 	}
 }
 
+// ───────────────────────────── Android hardware back button ─────────────────────────────
+
+/**
+ * Overlay closer supplied by the chat layout. The mobile sidebar drawer is hand-rolled (no
+ * `role="dialog"` / ESC handler), so it can't be detected or closed via the generic Escape path
+ * below — it needs an explicit store write from the layout that owns it. Module-scoped so a
+ * remount re-points to the current layout instance without double-registering the native listener.
+ */
+let overlayCloser: (() => boolean) | null = null;
+let backHandlerInitialized = false;
+
+/**
+ * Wire the Android hardware/gesture back button to a priority chain (native only; no-op on web):
+ *  1. close the mobile sidebar drawer if open (explicit, via the layout's store),
+ *  2. dismiss the topmost ESC-closable overlay — bits-ui Dialog/Sheet/Dropdown/Popover
+ *     (`[data-state="open"]`) or the custom MediaLightbox (`[role="dialog"]`) — by dispatching
+ *     one synthetic Escape, which reuses each component's existing close path instead of a
+ *     per-overlay registry,
+ *  3. traverse the SvelteKit history stack (`canGoBack` → `window.history.back()`),
+ *  4. at the root of history, `minimizeApp()` (backgrounds the app, keeps the process cached for
+ *     fast relaunch — gentler than `exitApp()`).
+ *
+ * Registering a `backButton` listener disables Capacitor's default, so this owns the whole flow.
+ */
+export async function initBackButtonHandler(consumeOverlay?: () => boolean): Promise<void> {
+	if (!isNativePlatform()) return;
+	overlayCloser = consumeOverlay ?? null; // latest layout instance wins (remount / HMR)
+	if (backHandlerInitialized) return;
+	backHandlerInitialized = true;
+	try {
+		await App.addListener('backButton', ({ canGoBack }) => {
+			if (overlayCloser?.()) return; // hand-rolled drawer first
+			if (document.querySelector('[role="dialog"], [data-state="open"]')) {
+				// One synthetic Escape closes the topmost overlay via its own handler: bits-ui listens on
+				// document, MediaLightbox on window — a bubbling keydown dispatched on document reaches both.
+				document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+				return;
+			}
+			if (canGoBack) {
+				window.history.back();
+				return;
+			}
+			void App.minimizeApp();
+		});
+	} catch {
+		backHandlerInitialized = false; // allow a retry on the next attempt
+	}
+}
+
 // ───────────────────────────── android native signer (NIP-55) ─────────────────────────────
 
 /**

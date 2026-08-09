@@ -218,6 +218,13 @@ export const newsReleases: NewsRelease[] = [
 		body: '- 🐛 Reading a message by opening Cordn — instead of tapping its notification — no longer leaves the notification lingering behind. Opening the app now clears your message notifications on both desktop and Android, the same as tapping one would.\n- 🔄 On desktop, Cordn no longer shows notifications while you are already looking at it — the in-app unread badge already shows what is new, so there is less noise while you have the app in focus.'
 	},
 	{
+		id: 'cordn-news-2026-08-09-avatar-profile-link',
+		createdAt: Date.UTC(2026, 7, 9),
+		version: 5,
+		title: 'Jump to a profile from the chat',
+		body: "- ✨ Tap a member's avatar in a group chat to open their profile, where you can see their details and start a direct chat with them.\n- 🐛 On Android, pressing back now closes an open group list, dialog, or image instead of jumping out of the chat behind it.\n- ✨ Videos shared in a chat now play inline — tap to watch right in the conversation instead of getting a share sheet.\n- 🐛 Sending a video no longer uploads it twice on some servers: Cordn learns which storage server silently alters uploads and skips it afterward, so each file is sent once.\n- 🔄 Uploads are smoother — one continuous progress bar with a clear status (connecting, finishing, retrying) replaces the old jump between a bar and a spinner, and the chat no longer flickers while a photo or video uploads.\n- 🐛 A message's action buttons (reply, react, info) now close when you tap anywhere else, instead of hovering over the chat until you pick one — and they no longer overlap neighbouring messages or steal their taps.\n- 🔄 On a long message, those buttons now appear at whichever end you are looking at, so you no longer have to scroll up to the top to reach them.\n- ✨ The native Android app now lets you know when a new version is out: it checks Zapstore and shows a banner so you can update in one tap instead of running an older build."
+	},
+	{
 		id: 'cordn-news-2026-08-08-group-refs',
 		createdAt: Date.UTC(2026, 7, 8),
 		version: 1,

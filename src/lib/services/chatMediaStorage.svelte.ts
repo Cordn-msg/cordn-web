@@ -159,6 +159,55 @@ export function cancelMediaUpload(id: string): void {
 	mediaUploadControllers[id]?.abort();
 }
 
+//
+// In-flight upload progress — reactive, keyed by optimistic message id.
+//
+// Lives OUTSIDE the message object on purpose: `xhr.upload.onprogress` fires
+// 10–20×/sec, and routing each tick through the message list (array rebuild +
+// sort + virtualizer remeasure) was the source of the upload flicker. The
+// uploading bubble reads this record directly, so a tick invalidates only that
+// one component. `percent: null` = indeterminate (connecting / finalizing /
+// retrying); `phase` is the caption shown under it. `reportMediaUpload`
+// coalesces sub-100% ticks to ~10/sec — the bar already animates via
+// `transition-[width] duration-200`, so finer granularity is wasted renders.
+export const mediaUploadProgress = $state<
+	Record<string, { percent: number | null; phase?: string }>
+>({});
+const lastProgressReport = new Map<string, number>();
+const PROGRESS_THROTTLE_MS = 100;
+
+export function reportMediaUpload(id: string, percent: number | null, phase?: string): void {
+	const now = performance.now();
+	const last = lastProgressReport.get(id);
+	if (
+		last !== undefined &&
+		percent !== null &&
+		percent !== 100 &&
+		now - last < PROGRESS_THROTTLE_MS
+	) {
+		return;
+	}
+	lastProgressReport.set(id, now);
+	mediaUploadProgress[id] = { percent, phase };
+}
+
+export function clearMediaUploadProgress(id: string): void {
+	lastProgressReport.delete(id);
+	delete mediaUploadProgress[id];
+}
+
+//
+// Per-server byte-fidelity verdict for the upload fallback loop (session-scoped).
+//
+// The blob is opaque AEAD `application/octet-stream`, so a server either
+// stores uploads verbatim or re-encodes them — a property of the server, not
+// the file. Once a server passes `verifyBlobRoundtrip` it always will; once it
+// serves mismatched bytes it always will. Memoizing both means: after the first
+// upload learns the verdict, subsequent sends SKIP the wasted PUT+GET to a
+// re-encoding server and SKIP the verify GET on a faithful one. Session-scoped
+// (clears on reload) so a server config change is eventually re-detected.
+const blobServerVerdict = new Map<string, 'good' | 'bad'>();
+
 /**
  * Upload to the configured Blossom server, falling back through the preset
  * list on failure. The blob is AEAD ciphertext, so its Content-Type is the
@@ -176,7 +225,7 @@ export function cancelMediaUpload(id: string): void {
 async function uploadBlobWithFallback(
 	blob: Uint8Array,
 	signer: BlossomSigner,
-	onProgress?: (progress: number | null) => void,
+	onProgress?: (percent: number | null, phase?: string) => void,
 	signal?: AbortSignal
 ): Promise<{ url: string }> {
 	const configured = getBlossomServer();
@@ -190,27 +239,42 @@ async function uploadBlobWithFallback(
 
 	let lastError: unknown;
 	for (const server of order) {
+		// Skip servers already learned to re-encode uploads this session — no point
+		// paying the wasted PUT + verify GET again. The first send to a bad server
+		// still pays once to learn the verdict.
+		if (blobServerVerdict.get(server) === 'bad') continue;
 		try {
-			// `null` = indeterminate → spinner while connecting. Reported before each
-			// attempt so a fallback retry shows a spinner (not the bar jumping back to
-			// 0); the bar only appears once `uploadBlob` reports real bytes.
-			onProgress?.(null);
+			// Indeterminate + caption while connecting. Reported before each attempt
+			// so a fallback retry shows "Retrying…" (not the bar jumping back to 0);
+			// the bar only appears once `uploadBlob` reports real bytes.
+			onProgress?.(null, 'Connecting…');
 			const uploaded = await uploadBlob({ serverUrl: server, blob, signer, onProgress, signal });
-			// `null` again → finalizing spinner. `uploadBlob` pinned the bar to 100%
-			// just before resolving; now flip to a spinner for the verify-roundtrip
-			// GET + the MLS seal, which can lag on large files.
-			onProgress?.(null);
+			// `uploadBlob` pinned the bar to 100%; the verify GET + MLS seal tail
+			// follows. Hold a "Finalizing…" caption rather than collapsing to a bare
+			// spinner so the flow reads as one continuous send.
+			onProgress?.(null, 'Finalizing…');
 			// Guard against media-optimizer servers that accept the PUT then silently
 			// re-encode: served bytes would differ from the stored blob and AEAD
-			// decryption would fail for every recipient. A mismatch throws here, so
-			// the loop falls through to the next server.
-			await verifyBlobRoundtrip(uploaded.url, uploaded.sha256);
+			// decryption would fail for every recipient. A mismatch throws here and
+			// the loop falls through to the next server. A server verified
+			// byte-faithful earlier this session is trusted (the verdict is a server
+			// property), so repeat sends skip the full verify GET.
+			if (blobServerVerdict.get(server) !== 'good') {
+				await verifyBlobRoundtrip(uploaded.url, uploaded.sha256);
+				blobServerVerdict.set(server, 'good');
+			}
 			return { url: uploaded.url };
 		} catch (error) {
 			// A user cancel stops the whole upload — don't fall back to another server.
 			if (signal?.aborted) throw error;
+			// A round-trip mismatch means this server re-encodes uploads — a durable
+			// property of the server, so remember it and skip the wasted round next time.
+			if (error instanceof Error && /round-trip sha256 mismatch/.test(error.message)) {
+				blobServerVerdict.set(server, 'bad');
+			}
 			lastError = error;
 			console.warn(`Blossom upload to ${server} failed:`, error);
+			onProgress?.(null, 'Retrying…');
 		}
 	}
 	throw lastError instanceof Error
@@ -230,9 +294,10 @@ export async function sendChatMediaMessage(params: {
 	file: File;
 	text: string;
 	replyTo?: ChatMessageReplyTarget;
-	/** Upload-progress reporter: a number (0–100) shows a determinate bar; `null`
-	 *  shows an indeterminate spinner (connecting / verify + seal tail). */
-	onProgress?: (progress: number | null) => void;
+	/** Upload-progress reporter: a `number` (0–100) drives a determinate bar;
+	 *  `null` + a `phase` caption ("Connecting…", "Finalizing…", "Retrying…")
+	 *  covers the indeterminate tails without collapsing back to a bare spinner. */
+	onProgress?: (percent: number | null, phase?: string) => void;
 	/** Abort the in-flight upload and skip the final MLS send. The caller can
 	 *  detect a cancel via its own `signal.aborted` (no special error type). */
 	signal?: AbortSignal;
@@ -259,11 +324,16 @@ export async function sendChatMediaMessage(params: {
 	let state = decodeStoredGroupState(group);
 	let key = await deriveMediaKey(state);
 	let enc = encryptMedia({ key, plaintext, metadata });
+	// Prime the resolved-media cache with the local plaintext so the sender's own confirmed message
+	// resolves as a cache hit — no re-download of the just-uploaded blob. The plaintext hash is stable
+	// across the epoch-race re-encryption below (same plaintext), so one prime covers both paths.
+	cacheResolvedMedia(plaintext, mime, metadata.filename, bytesToHex(enc.plaintextHash));
 	const signer = ephemeralBlossomSigner();
 	let { url } = await uploadBlobWithFallback(enc.blob, signer, onProgress, signal);
 
 	const latest = getChatGroup(groupId);
 	if (latest && decodeStoredGroupState(latest).groupContext.epoch !== state.groupContext.epoch) {
+		console.warn('Media epoch advanced during upload; re-encrypting and re-uploading');
 		state = decodeStoredGroupState(latest);
 		key = await deriveMediaKey(state);
 		enc = encryptMedia({ key, plaintext, metadata });
@@ -358,6 +428,34 @@ function runMediaWorker(req: MediaDecryptRequest): Promise<Uint8Array> {
 }
 
 /**
+ * Insert a resolved-media entry (decrypted plaintext → ObjectURL) into the cache, keyed by plaintext
+ * hash, with FIFO eviction at the cap. Shared by the receive path (after fetch+decrypt) and the send
+ * path (priming with the local plaintext so the sender's own just-uploaded media resolves without a
+ * second round-trip to the store — the re-download that made a sent video look like it "uploaded
+ * twice"). No-op if the hash is already cached.
+ */
+function cacheResolvedMedia(
+	plaintext: Uint8Array,
+	mime: string,
+	filename: string,
+	plaintextHashHex: string
+): ResolvedMedia {
+	const existing = mediaObjectUrlCache[plaintextHashHex];
+	if (existing) return existing;
+	const url = URL.createObjectURL(new Blob([plaintext as BlobPart], { type: mime }));
+	const resolved: ResolvedMedia = { url, mime, filename, plaintextHashHex };
+	mediaObjectUrlCache[plaintextHashHex] = resolved;
+	mediaCacheOrder.push(plaintextHashHex);
+	if (mediaCacheOrder.length > MAX_MEDIA_CACHE) {
+		const oldestKey = mediaCacheOrder.shift()!;
+		const oldest = mediaObjectUrlCache[oldestKey];
+		delete mediaObjectUrlCache[oldestKey];
+		if (oldest) revokeMedia(oldest);
+	}
+	return resolved;
+}
+
+/**
  * Resolve a message's `imeta` to a viewable ObjectURL: fetch the encrypted blob
  * from the store, decrypt with the stashed per-epoch key, cache the result.
  * Returns `null` if the message has no media, an unknown version (§4: reject),
@@ -392,25 +490,7 @@ export async function resolveMessageMedia(params: {
 			expectedPlaintextHash: hexToBytes(hash)
 		});
 
-		const url = URL.createObjectURL(new Blob([plaintext as BlobPart], { type: ref.mime }));
-		const resolved: ResolvedMedia = {
-			url,
-			mime: ref.mime,
-			filename: ref.filename,
-			plaintextHashHex: hash
-		};
-		mediaObjectUrlCache[hash] = resolved;
-		mediaCacheOrder.push(hash);
-
-		// ponytail: FIFO eviction at the cap. Fine for ~50 in-memory images; a true
-		// LRU would track reads, but scrolling past media rarely revisits.
-		if (mediaCacheOrder.length > MAX_MEDIA_CACHE) {
-			const oldestKey = mediaCacheOrder.shift()!;
-			const oldest = mediaObjectUrlCache[oldestKey];
-			delete mediaObjectUrlCache[oldestKey];
-			if (oldest) revokeMedia(oldest);
-		}
-		return resolved;
+		return cacheResolvedMedia(plaintext, ref.mime, ref.filename, hash);
 	})();
 	try {
 		return await mediaInFlight[hash];

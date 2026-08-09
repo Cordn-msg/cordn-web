@@ -2,19 +2,26 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Camera from '@lucide/svelte/icons/camera';
+	import Video from '@lucide/svelte/icons/video';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import FileText from '@lucide/svelte/icons/file-text';
+	import { isNativePlatform } from '$lib/services/nativeShims';
 
 	/**
-	 * Composer actions menu — the `+` next to the composer. Today it only opens
-	 * media pickers (image / document); it is intentionally a discrete, exported
-	 * component so non-media actions (polls, payments, etc.) can be appended to
-	 * the same dropdown later without touching the composer.
+	 * Composer actions menu — the `+` next to the composer. Camera capture (photo on all platforms,
+	 * video native-only), plus image/document pickers. A discrete, exported component so further
+	 * non-media actions (polls, payments, etc.) can be appended to the same dropdown later without
+	 * touching the composer.
 	 */
 	let {
+		onTakePhoto = () => {},
+		onTakeVideo = () => {},
 		onPickImage = () => {},
 		onPickDocument = () => {}
 	}: {
+		onTakePhoto?: () => void;
+		onTakeVideo?: () => void;
 		onPickImage?: () => void;
 		onPickDocument?: () => void;
 	} = $props();
@@ -37,6 +44,16 @@
 		{/snippet}
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content align="start" side="top" class="w-48">
+		<DropdownMenu.Item onclick={onTakePhoto} class="gap-2">
+			<Camera class="size-4" />
+			<span>Take Photo</span>
+		</DropdownMenu.Item>
+		{#if isNativePlatform()}
+			<DropdownMenu.Item onclick={onTakeVideo} class="gap-2">
+				<Video class="size-4" />
+				<span>Record Video</span>
+			</DropdownMenu.Item>
+		{/if}
 		<DropdownMenu.Item onclick={onPickImage} class="gap-2">
 			<ImageIcon class="size-4" />
 			<span>Image</span>

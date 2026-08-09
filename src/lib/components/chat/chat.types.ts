@@ -43,18 +43,16 @@ export interface ChatMessage {
 	 *  `previewUrl` (shown immediately during upload); confirmed messages leave
 	 *  this undefined and the item resolves the `imeta` lazily via the
 	 *  encrypted-media store. */
+	/** Media attachment. Optimistic/draft messages carry a local plaintext
+	 *  `previewUrl` (shown immediately during upload); confirmed messages leave
+	 *  this undefined and resolve the `imeta` lazily via the encrypted-media
+	 *  store. Upload progress is NOT here — it lives in the `mediaUploadProgress`
+	 *  registry so a per-tick update never rebuilds the message list. */
 	media?: {
-		kind: 'image' | 'file';
 		mime: string;
 		filename: string;
 		sizeBytes?: number;
 		previewUrl?: string;
-		uploading?: boolean;
-		/** Upload progress: a `number` (0–100) renders a determinate progress bar;
-		 *  `null` renders an indeterminate spinner (connecting, fallback retry, and
-		 *  the verify + MLS-seal tail after the bar fills). Only meaningful while
-		 *  `uploading` is true. */
-		uploadProgress?: number | null;
 	};
 }
 

@@ -14,6 +14,14 @@ import { Browser } from '@capacitor/browser';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Clipboard } from '@capacitor/clipboard';
+import {
+	Camera,
+	CameraDirection,
+	CameraErrorCode,
+	MediaType,
+	MediaTypeSelection,
+	type MediaResult
+} from '@capacitor/camera';
 
 /**
  * Local Capacitor plugin (SaveAsPlugin, in the Android app module) that opens the Storage Access
@@ -156,4 +164,121 @@ export async function copyText(text: string): Promise<void> {
 		return;
 	}
 	await navigator.clipboard.writeText(text);
+}
+
+/**
+ * Friendly messages for the structured `CameraErrorCode`s the plugin throws (8.2.0+). Cancel codes
+ * are handled separately by `isMediaCancelError` so they stay silent.
+ */
+const MEDIA_ERROR_MESSAGES: Record<string, string> = {
+	[CameraErrorCode.CameraPermissionDenied]: 'Camera permission was denied',
+	[CameraErrorCode.GalleryPermissionDenied]: 'Gallery permission was denied',
+	[CameraErrorCode.NoCameraAvailable]: 'No camera available on this device'
+};
+
+/** True for both the native structured cancel codes and the web path's thrown string. */
+function isMediaCancelError(err: unknown): boolean {
+	const code = (err as { code?: string })?.code;
+	return (
+		code === CameraErrorCode.TakePhotoCancelled ||
+		code === CameraErrorCode.ChooseMediaCancelled ||
+		code === CameraErrorCode.RecordVideoCancelled ||
+		/cancel/i.test(String(err))
+	);
+}
+
+/** Normalize a non-cancel plugin error into an Error whose message is safe to show in a toast. */
+function friendlyMediaError(err: unknown): Error {
+	const code = (err as { code?: string })?.code;
+	const message =
+		(code && MEDIA_ERROR_MESSAGES[code]) || (err instanceof Error ? err.message : String(err));
+	return new Error(message);
+}
+
+/**
+ * Convert a Capacitor Camera `MediaResult` into a `File` for the composer's staging pipeline.
+ * `webPath` is a blob URL on web and a Capacitor-served file URL on native, so `fetch` works on
+ * both — no `Filesystem.readFile` round-trip. Native results carry no original filename (the photo
+ * picker returns content:// URIs), so a timestamped name is synthesized.
+ */
+async function mediaResultToFile(result: MediaResult): Promise<File> {
+	if (!result.webPath) throw new Error('Camera returned no media');
+	const blob = await fetch(result.webPath).then((response) => response.blob());
+	// `result.type` (Photo|Video) is always present and is the reliable signal — `blob.type` from a
+	// fetched Capacitor file URL is often empty on native, and `metadata.format` needs includeMetadata.
+	// Default per media type; honor metadata.format when present (e.g. png). This is what stops a
+	// recorded video from being mislabeled image/jpeg and sent as a broken .jpg.
+	const isVideo = result.type === MediaType.Video;
+	const format = result.metadata?.format;
+	const ext = format ? (format === 'jpeg' ? 'jpg' : format) : isVideo ? 'mp4' : 'jpg';
+	const mime = blob.type || (isVideo ? 'video/mp4' : ext === 'png' ? 'image/png' : 'image/jpeg');
+	const prefix = isVideo ? 'video' : ext === 'png' ? 'image' : 'photo';
+	return new File([blob], `${prefix}-${Date.now()}.${ext}`, {
+		type: mime
+	});
+}
+
+/**
+ * Open the camera and capture a single photo. Returns a File ready for the composer's staging
+ * pipeline, or null if the user cancelled (silent — not an error). Throws a friendly Error on
+ * permission denial / hardware failure so the caller can toast.
+ *
+ * No `isNativePlatform()` branch: `Camera.takePhoto` opens the native CameraX intent on Android and
+ * renders the in-browser `pwa-camera-modal` viewfinder on web (registered from `@ionic/pwa-elements`
+ * in the root layout; falls back to a file input if unavailable). The bare `<input capture>` hint is
+ * ignored by Capacitor's WebView bridge (ionic-team/capacitor#7411), which is why this routes through
+ * the plugin instead of a raw input.
+ */
+export async function capturePhoto(): Promise<File | null> {
+	try {
+		const result = await Camera.takePhoto({
+			saveToGallery: false,
+			correctOrientation: true,
+			cameraDirection: CameraDirection.Rear
+		});
+		return await mediaResultToFile(result);
+	} catch (err) {
+		if (isMediaCancelError(err)) return null;
+		throw friendlyMediaError(err);
+	}
+}
+
+/**
+ * Open the camera and record a video. Native-only: `Camera.recordVideo` is unimplemented on web, so
+ * the UI gates this action to native (see ChatComposerActions). Returns a File for the composer's
+ * staging pipeline (flows through as a generic 'file' attachment), or null on cancel. `isPersistent:
+ * false` keeps the recording in temp cache — the upload copies bytes to the coordinator, so there is
+ * no reason to persist locally. Throws a friendly Error on permission / hardware failure.
+ */
+export async function captureVideo(): Promise<File | null> {
+	try {
+		const result = await Camera.recordVideo({
+			saveToGallery: false,
+			isPersistent: false
+		});
+		return await mediaResultToFile(result);
+	} catch (err) {
+		if (isMediaCancelError(err)) return null;
+		throw friendlyMediaError(err);
+	}
+}
+
+/**
+ * Pick one or more images from the gallery. Native → the modern Android Photo Picker (permissionless
+ * on Android 13+, better UX than the legacy ACTION_GET_CONTENT sheet the raw `<input>` landed on);
+ * web → a plain `<input type="file" accept="image/*" multiple>` (identical to the previous
+ * hand-rolled input, so PWA behavior is unchanged). Image-only; video is a separate decision.
+ * Returns [] on cancel.
+ */
+export async function pickImagesFromGallery(): Promise<File[]> {
+	try {
+		const { results } = await Camera.chooseFromGallery({
+			mediaType: MediaTypeSelection.Photo,
+			allowMultipleSelection: true
+		});
+		return await Promise.all(results.map(mediaResultToFile));
+	} catch (err) {
+		if (isMediaCancelError(err)) return [];
+		throw friendlyMediaError(err);
+	}
 }

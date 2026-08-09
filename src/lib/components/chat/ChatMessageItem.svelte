@@ -1,6 +1,22 @@
 <script lang="ts" module>
 	let sharedSavedReactions = $state<string[] | null>(null);
 	let activeTouchActionsMessageId = $state<string | null>(null);
+
+	// One document-level listener dismisses the touch action bar when the user
+	// presses anywhere that isn't the bar itself or a message bubble (bubbles own
+	// their tap-to-toggle). Registered once; the visible id is module-scoped.
+	let globalDismissBound = false;
+	function bindGlobalDismiss() {
+		if (globalDismissBound || typeof document === 'undefined') return;
+		globalDismissBound = true;
+		document.addEventListener('pointerdown', (event) => {
+			const target = event.target;
+			if (!(target instanceof Element)) return;
+			if (target.closest('[data-message-actions],[data-message-bubble]')) return;
+			activeTouchActionsMessageId = null;
+		});
+	}
+	bindGlobalDismiss();
 </script>
 
 <script lang="ts">
@@ -37,6 +53,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import { cn, copyToClipboard, downloadObjectUrl } from '$lib/utils';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
+	import { resolve } from '$app/paths';
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
 	import ChatMessageMedia from './ChatMessageMedia.svelte';
@@ -89,6 +106,9 @@
 	let customReaction = $state('');
 	let customReactionInput: HTMLInputElement | null = $state(null);
 	let interactionControlsActive = $state(false);
+	let placeActionsBelow = $state(false);
+	let bubbleEl: HTMLElement | null = $state(null);
+	let wasMobileActionsVisible = false;
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -99,11 +119,14 @@
 	const GESTURE_MOVE_TOLERANCE = 10;
 
 	const isOwn = $derived(message.isOwn ?? false);
-	const actionSideClass = $derived(
-		isOwn
-			? 'right-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:right-full sm:top-3 sm:translate-y-0 sm:mr-2'
-			: 'left-0 top-0 -translate-y-[calc(100%+0.35rem)] sm:left-full sm:top-3 sm:translate-y-0 sm:ml-2'
-	);
+	const actionSideClass = $derived.by(() => {
+		const side = isOwn ? 'right-0 sm:right-full sm:mr-2' : 'left-0 sm:left-full sm:ml-2';
+		const mobile = placeActionsBelow
+			? 'top-full translate-y-[0.35rem]'
+			: 'top-0 -translate-y-[calc(100%+0.35rem)]';
+		const desktop = placeActionsBelow ? 'sm:top-auto sm:bottom-3' : 'sm:top-3';
+		return `${side} ${mobile} ${desktop} sm:translate-y-0`;
+	});
 	const savedReactions = $derived(sharedSavedReactions ?? []);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
 	const mobileActionsVisible = $derived(activeTouchActionsMessageId === message.id);
@@ -151,6 +174,7 @@
 	const profileState = useProfile(() => message.author);
 	const profile = $derived(profileState.current);
 	const authorNpub = $derived(nip19.npubEncode(message.author));
+	const authorHref = $derived(resolve('/p/[identifier]', { identifier: authorNpub }));
 	const displayName = $derived.by(
 		() => profile?.name || profile?.display_name || profile?.nip05 || `${authorNpub.slice(0, 12)}…`
 	);
@@ -167,6 +191,17 @@
 		if (sharedSavedReactions === null) {
 			sharedSavedReactions = loadCustomChatReactions();
 		}
+	});
+
+	// When touch actions get dismissed elsewhere (global pointerdown or another
+	// row taking the active id), release this row's hover latch so its action
+	// subtree actually unmounts instead of accumulating hidden across the session.
+	$effect(() => {
+		const visible = mobileActionsVisible;
+		if (wasMobileActionsVisible && !visible) {
+			maybeDeactivateInteractionControls();
+		}
+		wasMobileActionsVisible = visible;
 	});
 
 	function normalizeCustomReaction(value: string) {
@@ -188,7 +223,20 @@
 	}
 
 	function activateInteractionControls() {
+		refreshActionPlacement();
 		interactionControlsActive = true;
+	}
+
+	function maybeDeactivateInteractionControls() {
+		if (reactionMenuOpen || actionsMenuOpen || customReactionOpen || mobileActionsVisible) return;
+		interactionControlsActive = false;
+	}
+
+	// Anchor the action bar to whichever end of the bubble is in view, so a tall
+	// message scrolled to its bottom still shows the actions within reach.
+	function refreshActionPlacement() {
+		if (!bubbleEl) return;
+		placeActionsBelow = bubbleEl.getBoundingClientRect().top < 48;
 	}
 
 	function showTouchActions() {
@@ -359,7 +407,11 @@
 		}
 
 		if (Math.abs(swipeOffset) < GESTURE_MOVE_TOLERANCE) {
-			showTouchActions();
+			if (mobileActionsVisible) {
+				clearTouchActions();
+			} else {
+				showTouchActions();
+			}
 		}
 
 		resetGesture();
@@ -448,12 +500,19 @@
 		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
 			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
 				{#if showAvatar}
-					<Avatar
-						pubkey={message.author}
-						picture={profile?.picture}
-						size="h-8 w-8"
-						alt={displayName}
-					/>
+					<a
+						href={authorHref}
+						class="rounded-full focus-visible:ring-2 focus-visible:ring-ring"
+						aria-label={`Open profile for ${displayName}`}
+						onclick={(event) => event.stopPropagation()}
+					>
+						<Avatar
+							pubkey={message.author}
+							picture={profile?.picture}
+							size="h-8 w-8"
+							alt={displayName}
+						/>
+					</a>
 				{:else}
 					<div class="h-8 w-8" aria-hidden="true"></div>
 				{/if}
@@ -465,19 +524,17 @@
 				class:flex-row-reverse={isOwn}
 				onpointerenter={activateInteractionControls}
 				onfocusin={activateInteractionControls}
-				onclick={() => {
-					if (mobileActionsVisible || actionsMenuOpen || reactionMenuOpen) return;
-					clearTouchActions();
-				}}
+				onpointerleave={maybeDeactivateInteractionControls}
 			>
 				<div class="relative flex max-w-full min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
 					{#if shouldMountInteractionControls}
 						<TooltipProvider>
 							<div
+								data-message-actions
 								class={cn(
-									'absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:opacity-100 sm:group-hover:opacity-100',
+									'pointer-events-none absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100',
 									mobileActionsVisible || reactionMenuOpen || actionsMenuOpen
-										? 'opacity-100'
+										? 'pointer-events-auto opacity-100'
 										: 'opacity-0 sm:opacity-0',
 									actionSideClass
 								)}
@@ -718,6 +775,8 @@
 					<div class="relative max-w-full min-w-0">
 						<div
 							role="group"
+							bind:this={bubbleEl}
+							data-message-bubble
 							data-message-id={message.id}
 							class={cn(
 								bubbleClass,

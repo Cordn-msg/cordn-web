@@ -4,8 +4,9 @@
 	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
 	import MigrationBanner from '$lib/components/chat/MigrationBanner.svelte';
 	import NativeGroupMetaSync from '$lib/components/chat/NativeGroupMetaSync.svelte';
-	import { isNativePlatform } from '$lib/services/nativeBridge';
+	import { isNativePlatform, initBackButtonHandler } from '$lib/services/nativeBridge';
 	import { onMount, untrack } from 'svelte';
+	import { get } from 'svelte/store';
 	import {
 		createChatLayoutContext,
 		setChatLayoutContext
@@ -35,6 +36,18 @@
 
 	// Stale-notification hygiene: clear shown notifications when the tab is attended again.
 	onMount(initNotificationClearOnForeground);
+
+	// Android hardware back button: close the mobile sidebar / any open overlay first, else
+	// traverse SvelteKit history, else background the app. Native only (no-op inside the helper).
+	onMount(() => {
+		void initBackButtonHandler(() => {
+			if (get(chatLayout.mobileSidebarOpen)) {
+				chatLayout.mobileSidebarOpen.set(false);
+				return true;
+			}
+			return false;
+		});
+	});
 
 	const groups = $derived.by(() => listChatGroups());
 	let startupSyncedFor = $state('');
