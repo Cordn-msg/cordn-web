@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-	buildImetaTag,
-	parseImetaTag,
-	type MediaReference
-} from '$lib/services/chatMediaCipher';
+import { buildImetaTag, parseImetaTag, type MediaReference } from '$lib/services/chatMediaCipher';
 
 const BASE: MediaReference = {
 	url: 'https://store.example/abc',

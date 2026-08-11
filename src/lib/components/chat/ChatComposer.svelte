@@ -114,7 +114,7 @@
 	// rotation mid-gesture to matter. ponytail: clamped so extreme aspect ratios
 	// stay sane; revisit if a specific device feels off.
 	const LOCK_PX = Math.min(120, Math.max(56, Math.round(window.innerHeight * 0.1)));
-	const CANCEL_PX = Math.min(140, Math.max(48, Math.round(window.innerWidth * 0.30)));
+	const CANCEL_PX = Math.min(140, Math.max(48, Math.round(window.innerWidth * 0.3)));
 	const lockProgress = $derived(Math.min(1, dragUpPx / LOCK_PX));
 	const cancelProgress = $derived(Math.min(1, dragLeftPx / CANCEL_PX));
 
@@ -618,8 +618,7 @@
 					<div
 						class="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-xl border border-border bg-card px-3"
 					>
-						<span
-							class="min-w-0 flex-1 animate-pulse truncate text-xs text-muted-foreground"
+						<span class="min-w-0 flex-1 animate-pulse truncate text-xs text-muted-foreground"
 							>Waiting for microphone…</span
 						>
 						<button
@@ -653,7 +652,7 @@
 								></div>
 							{/each}
 						</div>
-						<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+						<span class="shrink-0 text-xs text-muted-foreground tabular-nums">
 							{formatClock(recorder.elapsedMs / 1000)}
 						</span>
 						<button
@@ -673,7 +672,7 @@
 					     crossfades mic → lock / mic → trash to reinforce the direction. -->
 					<div class="relative flex w-full items-center gap-2">
 						<div
-							class="pointer-events-none absolute bottom-full right-0 z-20 mb-2 flex flex-col items-center gap-0.5 transition-all duration-150"
+							class="pointer-events-none absolute right-0 bottom-full z-20 mb-2 flex flex-col items-center gap-0.5 transition-all duration-150"
 							style={`opacity: ${0.3 + 0.7 * lockProgress}; transform: scale(${0.8 + 0.2 * lockProgress})`}
 						>
 							<div
@@ -702,11 +701,11 @@
 								></div>
 							{/each}
 						</div>
-						<span class="shrink-0 text-xs tabular-nums text-muted-foreground">
+						<span class="shrink-0 text-xs text-muted-foreground tabular-nums">
 							{formatClock(recorder.elapsedMs / 1000)}
 						</span>
 						<div
-							class="relative flex size-11 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-md"
+							class="text-destructive-foreground relative flex size-11 shrink-0 items-center justify-center rounded-full bg-destructive shadow-md"
 						>
 							<Mic
 								class="absolute size-5 transition-opacity duration-100"
@@ -724,91 +723,91 @@
 					</div>
 				{/if}
 			{:else}
-			<ChatComposerActions
-				onTakePhoto={takePhoto}
-				onTakeVideo={takeVideo}
-				onPickImage={pickImage}
-				onPickDocument={pickDocument}
-			/>
-			<div class="flex min-w-0 flex-1 flex-col gap-2">
-				{#if unreadReferenceCount > 0}
+				<ChatComposerActions
+					onTakePhoto={takePhoto}
+					onTakeVideo={takeVideo}
+					onPickImage={pickImage}
+					onPickDocument={pickDocument}
+				/>
+				<div class="flex min-w-0 flex-1 flex-col gap-2">
+					{#if unreadReferenceCount > 0}
+						<div class="flex justify-center">
+							<Button
+								type="button"
+								variant="secondary"
+								size="sm"
+								class="h-8 gap-2 rounded-full shadow-lg"
+								onclick={onNavigateToReference}
+								aria-label="Jump to unread reference"
+							>
+								<AtSign class="size-4" />
+								<span>{unreadReferenceCount}</span>
+							</Button>
+						</div>
+					{/if}
+					{#if activeMention && mentionMatches.length > 0}
+						<div class="rounded-xl border border-border bg-popover p-1 shadow-lg">
+							{#each mentionMatches as candidate, index (candidate.pubkey)}
+								<button
+									type="button"
+									class={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${index === highlightedMentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`}
+									onclick={() => selectMention(candidate)}
+								>
+									<div class="min-w-0 flex-1">
+										<ProfileCard pubkey={candidate.pubkey} mode="compact" profileLink={false} />
+										<p class="mt-1 truncate text-xs text-muted-foreground">
+											{getMentionHint(candidate)}
+										</p>
+									</div>
+								</button>
+							{/each}
+						</div>
+					{/if}
 					<div class="flex justify-center">
 						<Button
 							type="button"
-							variant="secondary"
-							size="sm"
-							class="h-8 gap-2 rounded-full shadow-lg"
-							onclick={onNavigateToReference}
-							aria-label="Jump to unread reference"
+							variant="ghost"
+							size="icon"
+							class="h-8 w-8 rounded-lg"
+							onclick={() => (expanded = !expanded)}
+							aria-label={expanded ? 'Collapse composer' : 'Expand composer'}
 						>
-							<AtSign class="size-4" />
-							<span>{unreadReferenceCount}</span>
+							<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
 						</Button>
 					</div>
-				{/if}
-				{#if activeMention && mentionMatches.length > 0}
-					<div class="rounded-xl border border-border bg-popover p-1 shadow-lg">
-						{#each mentionMatches as candidate, index (candidate.pubkey)}
-							<button
-								type="button"
-								class={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${index === highlightedMentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`}
-								onclick={() => selectMention(candidate)}
-							>
-								<div class="min-w-0 flex-1">
-									<ProfileCard pubkey={candidate.pubkey} mode="compact" profileLink={false} />
-									<p class="mt-1 truncate text-xs text-muted-foreground">
-										{getMentionHint(candidate)}
-									</p>
-								</div>
-							</button>
-						{/each}
-					</div>
-				{/if}
-				<div class="flex justify-center">
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						class="h-8 w-8 rounded-lg"
-						onclick={() => (expanded = !expanded)}
-						aria-label={expanded ? 'Collapse composer' : 'Expand composer'}
-					>
-						<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
-					</Button>
+					<Textarea
+						bind:ref={textareaRef}
+						bind:value
+						placeholder="Type a message..."
+						rows={expanded ? 6 : 1}
+						wrap="soft"
+						{disabled}
+						onkeydown={handleKeyDown}
+						oninput={handleInput}
+						class={COMPOSER_INPUT_WRAP_CLASS}
+						style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
+					/>
 				</div>
-				<Textarea
-					bind:ref={textareaRef}
-					bind:value
-					placeholder="Type a message..."
-					rows={expanded ? 6 : 1}
-					wrap="soft"
-					{disabled}
-					onkeydown={handleKeyDown}
-					oninput={handleInput}
-					class={COMPOSER_INPUT_WRAP_CLASS}
-					style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
-				/>
-			</div>
-			{#if showMic}
-				<button
-					type="button"
-					class="flex size-11 shrink-0 touch-none items-center justify-center rounded-xl bg-primary text-primary-foreground transition-transform active:scale-95"
-					onpointerdown={startVoice}
-					aria-label="Hold to record voice note"
-					title="Hold to record voice note"
-				>
-					<Mic class="size-5" />
-				</button>
-			{:else}
-				<Button
-					type="submit"
-					class="h-11 shrink-0 rounded-xl px-4"
-					disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
-				>
-					<SendHorizontal class="size-4" />
-				</Button>
+				{#if showMic}
+					<button
+						type="button"
+						class="flex size-11 shrink-0 touch-none items-center justify-center rounded-xl bg-primary text-primary-foreground transition-transform active:scale-95"
+						onpointerdown={startVoice}
+						aria-label="Hold to record voice note"
+						title="Hold to record voice note"
+					>
+						<Mic class="size-5" />
+					</button>
+				{:else}
+					<Button
+						type="submit"
+						class="h-11 shrink-0 rounded-xl px-4"
+						disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
+					>
+						<SendHorizontal class="size-4" />
+					</Button>
+				{/if}
 			{/if}
-		{/if}
 		</div>
 	</form>
 </div>

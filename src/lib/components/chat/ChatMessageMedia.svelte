@@ -203,10 +203,10 @@
 			<div class="rounded-2xl border border-border/60 bg-background/50 px-3 py-2.5">
 				<VoiceNotePlayer
 					url={resolved.url}
-						durationMs={ref?.durationMs}
-						waveform={ref?.waveform ?? []}
-						isOwn={message.isOwn}
-						id={messageId}
+					durationMs={ref?.durationMs}
+					waveform={ref?.waveform ?? []}
+					isOwn={message.isOwn}
+					id={messageId}
 				/>
 			</div>
 		{:else if resolved}

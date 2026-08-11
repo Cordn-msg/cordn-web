@@ -242,9 +242,7 @@ export function createVoiceRecorder(): VoiceRecorder {
 			sampleBuffer = new Uint8Array(analyser.fftSize);
 			source.connect(analyser);
 			// No analyser→destination connect: we don't monitor playback live.
-			recorder = mime
-				? new MediaRecorder(stream, { mimeType: mime })
-				: new MediaRecorder(stream);
+			recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
 			recorder.ondataavailable = (event) => {
 				if (event.data && event.data.size > 0) chunks.push(event.data);
 			};
@@ -290,12 +288,7 @@ export function createVoiceRecorder(): VoiceRecorder {
 			}
 			active.onstop = () => {
 				let result: RecordingResult | null = null;
-				if (
-					send &&
-					chunks.length > 0 &&
-					durationMs >= MIN_KEEPABLE_MS &&
-					peaks.length > 0
-				) {
+				if (send && chunks.length > 0 && durationMs >= MIN_KEEPABLE_MS && peaks.length > 0) {
 					const blobType = mime || (chunks[0] as Blob).type || 'audio/webm';
 					const blob = new Blob(chunks, { type: blobType });
 					if (blob.size >= MIN_KEEPABLE_BYTES) {

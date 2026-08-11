@@ -143,7 +143,7 @@
 			tabindex={0}
 			onclick={onTrackClick}
 			onkeydown={onTrackKeydown}
-			class="flex h-8 min-w-0 flex-1 cursor-pointer items-center overflow-hidden gap-[1px]"
+			class="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-[1px] overflow-hidden"
 		>
 			{#each displayWaveform as peak, i (i)}
 				<div
@@ -168,7 +168,7 @@
 		</div>
 	{/if}
 
-	<span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+	<span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">
 		{formatClock(currentTime)} / {formatClock(durationSec)}
 	</span>
 </div>
