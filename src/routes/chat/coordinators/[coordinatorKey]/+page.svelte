@@ -512,7 +512,7 @@
 					{#if !$activeAccount}
 						<div class="space-y-3">
 							<p class="text-sm text-muted-foreground">
-								Log in to fetch welcomes from this coordinator.
+								Log in to fetch invitations from this coordinator.
 							</p>
 							<AccountLoginDialog />
 						</div>
@@ -525,7 +525,7 @@
 									{:else}
 										<Inbox class="mr-2 size-4" />
 									{/if}
-									{loadingWelcomes ? 'Fetching welcomes…' : 'Fetch pending welcomes'}
+									{loadingWelcomes ? 'Fetching invitations…' : 'Fetch pending invitations'}
 								</Button>
 							</div>
 							{#if welcomeError}
@@ -535,7 +535,7 @@
 								<div
 									class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
 								>
-									No fetched welcomes yet.
+									No fetched invitations yet.
 								</div>
 							{:else}
 								<div class="space-y-3">

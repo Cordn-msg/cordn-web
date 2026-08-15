@@ -6,6 +6,8 @@
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { browser } from '$app/environment';
+	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+	import { isAndroidNative } from '$lib/services/nativeBridge';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { toast } from 'svelte-sonner';
@@ -72,6 +74,20 @@
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const hasAccount = $derived.by(() => Boolean($activeAccount));
+	// Web-only storage disclaimer: browser storage is the source of truth on web,
+	// so warn once (dismiss is permanent — the fact is about the browser, not the
+	// account). Hidden entirely in the Android native app, where it is false.
+	const WEB_STORAGE_DISCLAIMER_KEY = 'cordn.webStorageDisclaimerDismissed';
+	let storageDisclaimerDismissed = $state(
+		browser ? localStorage.getItem(WEB_STORAGE_DISCLAIMER_KEY) === '1' : false
+	);
+	const showStorageDisclaimer = $derived.by(
+		() => hasAccount && !isAndroidNative() && !storageDisclaimerDismissed
+	);
+	function dismissStorageDisclaimer() {
+		localStorage.setItem(WEB_STORAGE_DISCLAIMER_KEY, '1');
+		storageDisclaimerDismissed = true;
+	}
 	const hasGroups = $derived.by(() => groups.length > 0);
 	const hasPublishedLastResort = $derived.by(() =>
 		keyPackages.some(
@@ -134,7 +150,7 @@
 </script>
 
 <svelte:head>
-	<title>Chats | Cordn</title>
+	<title>{hasAccount ? 'Chats' : 'Cordn'} | Cordn</title>
 	<meta name="description" content="Your Cordn chats." />
 </svelte:head>
 
@@ -155,6 +171,36 @@
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
+				{#if showStorageDisclaimer}
+					<Card.Root class="border-amber-500/40 bg-amber-500/5">
+						<Card.Header class="space-y-1.5">
+							<Card.Title class="flex items-center gap-2">
+								<TriangleAlert class="size-4 text-amber-500" />
+								Your chats live in this browser
+							</Card.Title>
+							<Card.Description>
+								Cordn on the web keeps your chats, contacts, and settings in this browser's storage.
+								Clearing browser data will delete them, and they won't show up in other browsers.
+								Back up from Settings, or use the Android app, which keeps your data in its own
+								storage.
+							</Card.Description>
+						</Card.Header>
+						<Card.Content class="flex flex-wrap items-center gap-3">
+							<Button href={resolve('/chat/config/backup')}>Back up your data</Button>
+							<a
+								href="https://zapstore.dev/apps/naddr1qqxk7un89e3k7unydchxzursqyv8wumn8ghj7un9d3shjtn6v9c8xar0wfjjuer9wcpzps7xmxansh7cyl8ak3wexws73n8jjpd7xpr8z50dtl34dgg22f0fqvzqqqr7pv6zvfm6"
+								target="_blank"
+								rel="noreferrer"
+								class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+							>
+								Get the app
+							</a>
+							<Button variant="ghost" class="ml-auto" onclick={dismissStorageDisclaimer}>
+								Dismiss
+							</Button>
+						</Card.Content>
+					</Card.Root>
+				{/if}
 				{#if showReachabilityCallout}
 					<Card.Root>
 						<Card.Header class="space-y-1.5">

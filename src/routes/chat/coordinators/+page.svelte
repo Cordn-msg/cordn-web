@@ -114,7 +114,7 @@
 				<Card.Footer class="flex-wrap justify-between gap-3 border-t border-border pt-6">
 					<p class="text-sm text-muted-foreground">
 						Coordinators are the primary operational boundary for Cordn groups, key packages, and
-						welcomes.
+						invitations.
 					</p>
 					<div class="flex gap-2">
 						<Button href={resolve('/chat/create-group')} variant="outline">
