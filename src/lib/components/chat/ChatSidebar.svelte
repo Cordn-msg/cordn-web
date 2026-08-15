@@ -398,7 +398,9 @@
 		</div>
 	{/if}
 
-	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4">
+	<nav
+		class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4"
+	>
 		{#if isSearching && !collapsed}
 			<div class="space-y-2">
 				<div class="flex items-center justify-between px-1">

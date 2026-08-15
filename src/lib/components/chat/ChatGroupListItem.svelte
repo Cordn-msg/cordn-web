@@ -92,7 +92,7 @@
 	<!-- The caller passes route hrefs resolved with $app/paths when route params are needed. -->
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 	<a {href} {onclick} class={linkClass}>
-		{#if isSidebar}
+		{#if isSidebar && active && !collapsed}
 			<span
 				class="size-1.5 shrink-0 rounded-full"
 				style={`background-color: ${coordinatorAccent.color};`}
