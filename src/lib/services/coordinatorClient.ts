@@ -98,7 +98,7 @@ export type coordinatorClient = {
  * wedged socket can retry forever. Bounding it here makes a stuck subscribe
  * fail fast as a transient error so the watch reconciler can rebuild.
  */
-const SUBSCRIBE_SETUP_TIMEOUT_MS = 10_000;
+const SUBSCRIBE_SETUP_TIMEOUT_MS = 20_000;
 
 async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToolStream>) {
 	const streamCall = callToolStream<CallToolResult>(...params);

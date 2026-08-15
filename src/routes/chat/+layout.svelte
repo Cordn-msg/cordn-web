@@ -55,7 +55,7 @@
 
 	// Steady-state watch driver: ensure every watchable group is watched whenever
 	// the account or the group set changes (initial load, new/accepted groups).
-	// Reconnection is owned by chatGroupWatch.svelte via resumeChatGroupWatching.
+	// Reconnection and recovery are owned by chatGroupWatch.svelte's reconciler.
 	$effect(() => {
 		if (!$activeAccount || groups.length === 0) return;
 		void untrack(() => startWatchingAllGroups());

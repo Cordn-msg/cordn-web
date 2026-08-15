@@ -130,17 +130,20 @@ type TickOptions = {
 /** Per-watch deadline for backlog fetch + subscribe setup to settle. */
 const WATCH_SETUP_DEADLINE_MS = 20_000;
 /**
- * Backlog fetch (msg_fetch_many) timeout. Idempotent cursor read; a timeout is
- * recorded as a failed start and per-coordinator backoff spaces the retries.
+ * Backlog fetch (msg_fetch_many) timeout. Idempotent cursor read; matches the
+ * pre-reconciler value — real-relay latency needs the headroom, and a failure
+ * no longer kills the watch (see startCoordinatorWatches).
  */
-const WATCH_BACKLOG_FETCH_TIMEOUT_MS = 8_000;
+const WATCH_BACKLOG_FETCH_TIMEOUT_MS = 20_000;
 /**
- * Hard ceiling for a steady-state tick. Legitimate work is bounded by design
- * (backlog 8s + subscribe setup 10s, phases in parallel), so reaching this
- * means something is wedged: tear everything down and rebuild from scratch.
- * The visible "Updating chats…" banner can therefore never stick.
+ * Hard ceiling for a tick. Awaited work is bounded by design — signer gate
+ * ≤8s and MD reconcile ≤8s settle on the first tick and are cached after, and
+ * the catch-up fetch is timeout-bounded at 20s (watch setups are
+ * fire-and-forget) — so reaching this means something is wedged: tear
+ * everything down and rebuild from scratch. The visible "Updating chats…"
+ * banner can therefore never stick.
  */
-const TICK_DEADLINE_MS = 20_000;
+const TICK_DEADLINE_MS = 30_000;
 /** Cold start runs without a banner and pays the signer gate + MD reconcile. */
 const FIRST_TICK_DEADLINE_MS = 40_000;
 /** Foreground heartbeat — the convergence backstop for keepalive-green zombies. */
@@ -158,7 +161,7 @@ const STALE_STREAM_MARGIN_MS = 10_000;
 /** Same window measured from the last delivered chunk (zombie proof, see above). */
 const DELIVERY_STALE_MS = 30_000 + 20_000 + STALE_STREAM_MARGIN_MS;
 /** Reconnect backoff per coordinator after a failed watch start. */
-const COORDINATOR_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
+const COORDINATOR_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000];
 const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 0;
 
@@ -185,10 +188,14 @@ function findWatchHandleByCoordinator(coordinatorKey: string): GroupWatchTask | 
 	return undefined;
 }
 
-/** True when the stream hasn't delivered a chunk within the keepalive window. */
+/** True when the stream hasn't delivered a chunk within the keepalive window.
+ *
+ * A watch that has never delivered a chunk gets its grace from `startedAt`
+ * instead: young/quiet watches must not read as zombies just because a
+ * catch-up fetch found messages first (the natural fetch-vs-stream race). */
 function isDeliveryStale(handle: GroupWatchTask): boolean {
-	if (!handle.lastChunkAt) return true;
-	return Date.now() - handle.lastChunkAt > DELIVERY_STALE_MS;
+	const since = handle.lastChunkAt ?? handle.startedAt;
+	return Date.now() - since > DELIVERY_STALE_MS;
 }
 
 function clearCurrentWatch(handle?: GroupWatchTask | null) {
@@ -250,7 +257,7 @@ function recordCoordinatorFailure(coordinatorKey: string) {
 	entry.failures += 1;
 	const delay =
 		COORDINATOR_BACKOFF_MS[Math.min(entry.failures - 1, COORDINATOR_BACKOFF_MS.length - 1)] ??
-		60_000;
+		COORDINATOR_BACKOFF_MS[COORDINATOR_BACKOFF_MS.length - 1];
 	entry.notBefore = Date.now() + delay;
 	coordinatorBackoff.set(coordinatorKey, entry);
 }
@@ -504,10 +511,19 @@ async function startCoordinatorWatches(
 		try {
 			// Backlog first: bring the local cursor up to the server tip before
 			// the stream opens (the stream only delivers what arrives after
-			// `after`). The fetch is timeout-bounded; failure propagates to the
-			// tick, which records backoff and retries later.
+			// `after`). A backlog failure is NOT fatal to the watch — cursor
+			// idempotency lets the catch-up phase close the gap later, and a slow
+			// fetch must not cost the group its live subscription.
 			const client = getCoordinatorClient(account, coordinatorKey);
-			const { failedGroupIds } = await fetchCoordinatorGroupBacklog({ client, groups });
+			let failedGroupIds = new Set<string>();
+			try {
+				({ failedGroupIds } = await fetchCoordinatorGroupBacklog({ client, groups }));
+			} catch (error) {
+				console.warn('[watch] backlog fetch failed — subscribing anyway', {
+					coordinatorKey,
+					detail: error instanceof Error ? error.message : String(error)
+				});
+			}
 			if (handle.closing) return;
 			const subscriptionGroups = groupIds
 				.filter((groupId) => !failedGroupIds.has(groupId))
@@ -642,18 +658,24 @@ async function startMissingWatches(account: IAccount) {
 
 	const groupsByCoordinator = groupWatchableGroupsByCoordinator(desired);
 	await Promise.all(
-		[...groupsByCoordinator.entries()].map(async ([coordinatorKey, groups]) => {
-			if (backoffBlocks(coordinatorKey)) return;
-			try {
-				await startCoordinatorWatches(account, coordinatorKey, groups);
-				clearCoordinatorBackoff(coordinatorKey);
-			} catch (error) {
-				recordCoordinatorFailure(coordinatorKey);
-				console.warn('[watch] failed to start coordinator watches', {
-					coordinatorKey,
-					detail: error instanceof Error ? error.message : String(error)
+		[...groupsByCoordinator.entries()].map(([coordinatorKey, groups]) => {
+			if (backoffBlocks(coordinatorKey)) return Promise.resolve();
+			// Fire-and-forget: each start is bounded by the client's own setup
+			// deadline, stragglers are reaped by the setup deadline, and backoff
+			// spaces retries. Awaiting full setups here would let one slow
+			// coordinator pin the whole tick against its deadline — exactly the
+			// churn hardReset exists to stop. Synchronous registration keeps the
+			// diff idempotent while setups are in flight.
+			void startCoordinatorWatches(account, coordinatorKey, groups)
+				.then(() => clearCoordinatorBackoff(coordinatorKey))
+				.catch((error) => {
+					recordCoordinatorFailure(coordinatorKey);
+					console.warn('[watch] failed to start coordinator watches', {
+						coordinatorKey,
+						detail: error instanceof Error ? error.message : String(error)
+					});
 				});
-			}
+			return Promise.resolve();
 		})
 	);
 }
@@ -773,10 +795,13 @@ async function runTick(reason: string, options: TickOptions): Promise<void> {
 	chatGroupWatchStore.startup = 'starting';
 	chatGroupWatchStore.error = '';
 
-	// The banner is for connectivity recovery only, and only after the first
-	// tick has settled (fresh opens start silently). Delayed so a fast tick
-	// doesn't flash a useless banner.
-	const showBanner = warmed && reason !== 'active account changed';
+	// The banner and the send-blocking resume mirror are for connectivity
+	// RECOVERY only (catch-up sweeps, account switch) — never for steady-state
+	// ensure ticks: the layout $effect fires one per ingested message, and a
+	// banner (or a send blocked behind the mirror) on every message is exactly
+	// the old choreography bug in new clothes. Fresh opens stay silent too.
+	const recovery = options.catchUp === true || reason === 'active account changed';
+	const showBanner = warmed && recovery;
 	let bannerTimer: ReturnType<typeof setTimeout> | undefined;
 	if (showBanner) {
 		bannerTimer = setTimeout(() => setChatReconnectStatus('Updating chats…'), BANNER_DELAY_MS);
@@ -831,12 +856,15 @@ function requestTick(reason: string, options: TickOptions = {}): Promise<void> {
 	const promise = runTick(reason, { catchUp });
 	tickPromise = promise;
 	// Outbound sends await the in-flight tick via this mirror so they never
-	// race a teardown/backlog ingestion (chatUiActions).
-	setChatGroupResumePromise(promise);
+	// race a teardown/backlog ingestion (chatUiActions) — but only while a
+	// recovery tick is actually rebuilding state; steady-state ticks must not
+	// block sends.
+	const mirrorsResume = catchUp || reason === 'active account changed';
+	if (mirrorsResume) setChatGroupResumePromise(promise);
 	promise.finally(() => {
 		if (tickPromise === promise) {
 			tickPromise = null;
-			setChatGroupResumePromise(null);
+			if (mirrorsResume) setChatGroupResumePromise(null);
 			if (tickDirty) {
 				tickDirty = false;
 				const nextCatchUp = dirtyCatchUp;
