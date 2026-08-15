@@ -778,7 +778,7 @@
 					<Textarea
 						bind:ref={textareaRef}
 						bind:value
-						placeholder="Type a message..."
+						placeholder="Type a message…"
 						rows={expanded ? 6 : 1}
 						wrap="soft"
 						{disabled}

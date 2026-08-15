@@ -10,7 +10,6 @@ export const defaultRelays = [
 ];
 
 export const commonRelays = [
-	'wss://relay.damus.io',
 	'wss://relay.nostr.net',
 	'wss://relay.ditto.pub/',
 	'wss://nos.lol',
@@ -20,7 +19,6 @@ export const commonRelays = [
 
 export const metadataRelays = [
 	'wss://nos.lol',
-	'wss://relay.damus.io',
 	'wss://relay.ditto.pub/',
 	'wss://relay.primal.net',
 	'wss://relay.nostr.net',

@@ -13,11 +13,43 @@
 	import Smartphone from '@lucide/svelte/icons/smartphone';
 	import Bell from '@lucide/svelte/icons/bell';
 	import { isNativePlatform } from '$lib/services/nativeBridge';
+	import { browser } from '$app/environment';
+	import { Button } from '$lib/components/ui/button';
+	import Moon from '@lucide/svelte/icons/moon';
+	import Sun from '@lucide/svelte/icons/sun';
+	import { setMode } from 'mode-watcher';
+
+	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
+
+	function toggleTheme() {
+		// State sync happens in the MutationObserver below.
+		setMode(isDarkMode ? 'light' : 'dark');
+	}
+
+	const themeLabel = $derived.by(() =>
+		isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'
+	);
+
+	$effect(() => {
+		if (!browser) return;
+
+		const root = document.documentElement;
+		const updateTheme = () => {
+			isDarkMode = root.classList.contains('dark');
+		};
+
+		updateTheme();
+
+		const observer = new MutationObserver(updateTheme);
+		observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+
+		return () => observer.disconnect();
+	});
 </script>
 
 <svelte:head>
-	<title>Config | Cordn</title>
-	<meta name="description" content="Cordn chat settings placeholder." />
+	<title>Settings | Cordn</title>
+	<meta name="description" content="Cordn settings." />
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -30,8 +62,25 @@
 				<Bolt class="size-4" />
 			</div>
 			<div>
-				<h1 class="text-lg font-semibold tracking-tight">Config</h1>
-				<p class="text-sm text-muted-foreground">Local client preferences placeholder</p>
+				<h1 class="text-lg font-semibold tracking-tight">Settings</h1>
+			</div>
+			<div class="ml-auto">
+				<Button
+					type="button"
+					variant="outline"
+					size="icon"
+					class="h-10 w-10 rounded-xl"
+					aria-label={themeLabel}
+					title={themeLabel}
+					onclick={toggleTheme}
+				>
+					<Sun
+						class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all! dark:scale-0 dark:-rotate-90"
+					/>
+					<Moon
+						class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all! dark:scale-100 dark:rotate-0"
+					/>
+				</Button>
 			</div>
 		</div>
 	</header>

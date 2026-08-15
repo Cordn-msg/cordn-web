@@ -7,6 +7,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { availableKeyPackagesQueryOptions } from '$lib/queries/chatKeyPackageQueries';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -39,6 +40,7 @@
 	let selectedKeyPackageRef = $state('');
 	let selectedMemberPubkeys = $state<string[]>([]);
 	let selectedAdminPubkeys = $state<string[]>([]);
+	let advancedOpen = $state(false);
 	let loading = $state(false);
 	let error = $state('');
 	const coordinators = $derived.by(() => listChatCoordinators());
@@ -186,9 +188,7 @@
 			</div>
 			<div>
 				<h1 class="text-lg font-semibold tracking-tight">Create group</h1>
-				<p class="text-sm text-muted-foreground">
-					Create a real Cordn MLS group bound to a coordinator.
-				</p>
+				<p class="text-sm text-muted-foreground">Your messages are end-to-end encrypted.</p>
 			</div>
 		</div>
 	</header>
@@ -211,119 +211,21 @@
 						</InputGroup.Addon>
 					</InputGroup.Root>
 
-					<InputGroup.Root>
-						<InputGroup.Input
-							value={coordinatorDisplay}
-							oninput={onCoordinatorInput}
-							readonly={!!selectedCoordinator}
-							placeholder="64-char coordinator pubkey"
-							class={selectedCoordinator ? '' : 'font-mono'}
-						/>
-						<InputGroup.Addon>
-							<InputGroup.Text>Coordinator</InputGroup.Text>
-						</InputGroup.Addon>
-						{#if selectedCoordinator}
-							<InputGroup.Addon class="px-1">
-								<span
-									class="size-2.5 shrink-0 rounded-full border border-border"
-									style={`background-color: ${getCoordinatorColor(selectedCoordinator)};`}
-									aria-hidden="true"
-								></span>
+					<div class="grid gap-5 sm:grid-cols-2">
+						<InputGroup.Root>
+							<InputGroup.Input bind:value={icon} placeholder="🪢" />
+							<InputGroup.Addon>
+								<InputGroup.Text>Icon</InputGroup.Text>
 							</InputGroup.Addon>
-						{/if}
-						<InputGroup.Addon align="inline-end">
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<InputGroup.Button {...props} variant="ghost" class="!pe-1.5 text-xs">
-											Use saved <ChevronDown class="size-3" />
-										</InputGroup.Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end">
-									{#if coordinators.length === 0}
-										<DropdownMenu.Item disabled>No saved coordinators</DropdownMenu.Item>
-									{:else}
-										{#each coordinators as coordinator (coordinator.pubkey)}
-											<DropdownMenu.Item onSelect={() => selectCoordinator(coordinator.pubkey)}>
-												<span
-													class="size-2.5 shrink-0 rounded-full border border-border"
-													style={`background-color: ${getCoordinatorColor(coordinator)};`}
-													aria-hidden="true"
-												></span>
-												{getCoordinatorLabel(coordinator.pubkey)}
-											</DropdownMenu.Item>
-										{/each}
-									{/if}
-									{#if coordinatorKey.trim() && !selectedCoordinator}
-										<DropdownMenu.Item onSelect={saveTypedCoordinator}
-											>Save current value</DropdownMenu.Item
-										>
-									{/if}
-									<DropdownMenu.Item onSelect={() => selectCoordinator('')}>Clear</DropdownMenu.Item
-									>
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</InputGroup.Addon>
-						<InputGroup.Addon align="inline-end">
-							<Info class="size-4 text-muted-foreground" />
-						</InputGroup.Addon>
-					</InputGroup.Root>
+						</InputGroup.Root>
 
-					<InputGroup.Root>
-						<InputGroup.Input
-							value={selectedKeyPackageRef
-								? availableKeyPackages.find(
-										(entry) => entry.keyPackageRef === selectedKeyPackageRef
-									)?.label || selectedKeyPackageRef
-								: 'Generate a new key package'}
-							readonly
-							placeholder="Select an existing key package or generate a new one"
-						/>
-						<InputGroup.Addon>
-							<InputGroup.Text>Key package</InputGroup.Text>
-						</InputGroup.Addon>
-						<InputGroup.Addon align="inline-end">
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<InputGroup.Button {...props} variant="ghost" class="!pe-1.5 text-xs">
-											Choose <ChevronDown class="size-3" />
-										</InputGroup.Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end">
-									<DropdownMenu.Item onSelect={() => (selectedKeyPackageRef = '')}>
-										Generate new key package
-									</DropdownMenu.Item>
-									{#each availableKeyPackages as keyPackage (keyPackage.keyPackageRef)}
-										<DropdownMenu.Item
-											onSelect={() => (selectedKeyPackageRef = keyPackage.keyPackageRef)}
-										>
-											{keyPackage.label}
-										</DropdownMenu.Item>
-									{/each}
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</InputGroup.Addon>
-						<InputGroup.Addon align="inline-end">
-							<KeyRound class="size-4 text-muted-foreground" />
-						</InputGroup.Addon>
-					</InputGroup.Root>
-
-					<InputGroup.Root>
-						<InputGroup.Input bind:value={icon} placeholder="🪢" />
-						<InputGroup.Addon>
-							<InputGroup.Text>Icon</InputGroup.Text>
-						</InputGroup.Addon>
-					</InputGroup.Root>
-
-					<InputGroup.Root>
-						<InputGroup.Input bind:value={imageUrl} placeholder="https://example.com/group.png" />
-						<InputGroup.Addon>
-							<InputGroup.Text>Image</InputGroup.Text>
-						</InputGroup.Addon>
-					</InputGroup.Root>
+						<InputGroup.Root>
+							<InputGroup.Input bind:value={imageUrl} placeholder="https://example.com/group.png" />
+							<InputGroup.Addon>
+								<InputGroup.Text>Image</InputGroup.Text>
+							</InputGroup.Addon>
+						</InputGroup.Root>
+					</div>
 
 					<InputGroup.Root>
 						<InputGroup.Textarea
@@ -336,16 +238,16 @@
 						</InputGroup.Addon>
 					</InputGroup.Root>
 
-					<div class="space-y-5 border-t border-border pt-5">
+					<div class="space-y-5">
 						<ChatPubkeyMultiSelect
 							label="Members"
-							helperText="Invite members from the selected coordinator's available key packages."
+							helperText="Only people reachable on the hosting coordinator are listed."
 							placeholder="Search available members…"
 							emptyLabel={coordinatorKey.trim()
 								? loadingCoordinatorMembers
-									? 'Loading coordinator key packages…'
-									: 'No available key packages found for this coordinator.'
-								: 'Select a coordinator to load available key packages.'}
+									? 'Loading available members…'
+									: 'No one else is reachable on this coordinator yet.'
+								: 'Select a coordinator to see available members.'}
 							options={coordinatorMemberOptions}
 							bind:selectedPubkeys={selectedMemberPubkeys}
 						/>
@@ -361,6 +263,133 @@
 							bind:selectedPubkeys={selectedAdminPubkeys}
 						/>
 					</div>
+
+					<Collapsible.Root bind:open={advancedOpen}>
+						<Collapsible.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									type="button"
+									class="flex w-full items-center justify-between gap-3 rounded-2xl border border-border px-4 py-3 text-left font-medium transition-colors hover:bg-muted/30"
+								>
+									<span class="flex min-w-0 items-center gap-2">
+										{#if selectedCoordinator}
+											<span
+												class="size-2.5 shrink-0 rounded-full border border-border"
+												style={`background-color: ${getCoordinatorColor(selectedCoordinator)};`}
+												aria-hidden="true"
+											></span>
+										{/if}
+										<span class="truncate">Hosting on {coordinatorDisplay || 'no coordinator'}</span
+										>
+									</span>
+									<span class="shrink-0 text-sm font-normal text-muted-foreground">
+										{advancedOpen ? 'Hide' : 'Change'}
+										<ChevronDown
+											class="ml-1 inline size-4 align-[-3px] transition-transform [[data-state=open]_&]:rotate-180"
+										/>
+									</span>
+								</button>
+							{/snippet}
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<div class="mt-4 space-y-5">
+								<InputGroup.Root>
+									<InputGroup.Input
+										value={coordinatorDisplay}
+										oninput={onCoordinatorInput}
+										readonly={!!selectedCoordinator}
+										placeholder="64-char coordinator pubkey"
+										class={selectedCoordinator ? '' : 'font-mono'}
+									/>
+									<InputGroup.Addon>
+										<InputGroup.Text>Coordinator</InputGroup.Text>
+									</InputGroup.Addon>
+									<InputGroup.Addon align="inline-end">
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger>
+												{#snippet child({ props })}
+													<InputGroup.Button {...props} variant="ghost" class="!pe-1.5 text-xs">
+														Use saved <ChevronDown class="size-3" />
+													</InputGroup.Button>
+												{/snippet}
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Content align="end">
+												{#if coordinators.length === 0}
+													<DropdownMenu.Item disabled>No saved coordinators</DropdownMenu.Item>
+												{:else}
+													{#each coordinators as coordinator (coordinator.pubkey)}
+														<DropdownMenu.Item
+															onSelect={() => selectCoordinator(coordinator.pubkey)}
+														>
+															<span
+																class="size-2.5 shrink-0 rounded-full border border-border"
+																style={`background-color: ${getCoordinatorColor(coordinator)};`}
+																aria-hidden="true"
+															></span>
+															{getCoordinatorLabel(coordinator.pubkey)}
+														</DropdownMenu.Item>
+													{/each}
+												{/if}
+												{#if coordinatorKey.trim() && !selectedCoordinator}
+													<DropdownMenu.Item onSelect={saveTypedCoordinator}
+														>Save current value</DropdownMenu.Item
+													>
+												{/if}
+												<DropdownMenu.Item onSelect={() => selectCoordinator('')}
+													>Clear</DropdownMenu.Item
+												>
+											</DropdownMenu.Content>
+										</DropdownMenu.Root>
+									</InputGroup.Addon>
+									<InputGroup.Addon align="inline-end">
+										<Info class="size-4 text-muted-foreground" />
+									</InputGroup.Addon>
+								</InputGroup.Root>
+
+								<InputGroup.Root>
+									<InputGroup.Input
+										value={selectedKeyPackageRef
+											? availableKeyPackages.find(
+													(entry) => entry.keyPackageRef === selectedKeyPackageRef
+												)?.label || selectedKeyPackageRef
+											: 'Generate a new key package'}
+										readonly
+										placeholder="Select an existing key package or generate a new one"
+									/>
+									<InputGroup.Addon>
+										<InputGroup.Text>Key package</InputGroup.Text>
+									</InputGroup.Addon>
+									<InputGroup.Addon align="inline-end">
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger>
+												{#snippet child({ props })}
+													<InputGroup.Button {...props} variant="ghost" class="!pe-1.5 text-xs">
+														Choose <ChevronDown class="size-3" />
+													</InputGroup.Button>
+												{/snippet}
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Content align="end">
+												<DropdownMenu.Item onSelect={() => (selectedKeyPackageRef = '')}>
+													Generate new key package
+												</DropdownMenu.Item>
+												{#each availableKeyPackages as keyPackage (keyPackage.keyPackageRef)}
+													<DropdownMenu.Item
+														onSelect={() => (selectedKeyPackageRef = keyPackage.keyPackageRef)}
+													>
+														{keyPackage.label}
+													</DropdownMenu.Item>
+												{/each}
+											</DropdownMenu.Content>
+										</DropdownMenu.Root>
+									</InputGroup.Addon>
+									<InputGroup.Addon align="inline-end">
+										<KeyRound class="size-4 text-muted-foreground" />
+									</InputGroup.Addon>
+								</InputGroup.Root>
+							</div>
+						</Collapsible.Content>
+					</Collapsible.Root>
 
 					{#if error}
 						<p class="text-sm text-destructive">{error}</p>

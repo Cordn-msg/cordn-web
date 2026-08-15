@@ -4,6 +4,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { deleteGroupAction, chatGroupInfoActionsStore } from '$lib/services/chatUiActions.svelte';
+	import {
+		markChatGroupMentionsRead,
+		markChatGroupRead
+	} from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, type StoredChatGroup } from '$lib/services/chatGroups.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -14,6 +18,7 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+	import CheckCheck from '@lucide/svelte/icons/check-check';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	let {
@@ -78,6 +83,16 @@
 			{/snippet}
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Content align="end" class="w-48">
+			<DropdownMenu.Item
+				onclick={() => {
+					markChatGroupRead(group.id, group.lastCursor);
+					markChatGroupMentionsRead(group.id, group.lastCursor);
+				}}
+				class="gap-2"
+			>
+				<CheckCheck class="size-4" />
+				<span>Mark as read</span>
+			</DropdownMenu.Item>
 			<DropdownMenu.Item
 				onclick={() => (showDeleteDialog = true)}
 				class="gap-2 text-destructive data-[highlighted]:text-destructive"

@@ -7,6 +7,11 @@
 	import ChatGroupUnreadChips from './ChatGroupUnreadChips.svelte';
 	import ChatGroupActions from './ChatGroupActions.svelte';
 	import { normalizePubKey } from '$lib/utils';
+	import {
+		getChatCoordinator,
+		getCoordinatorColor,
+		getCoordinatorLabel
+	} from '$lib/services/chatCoordinators.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let {
@@ -59,6 +64,16 @@
 		})
 	);
 	const showActions = $derived(!collapsed);
+	// Coordinator accent for the sidebar dot, derived internally so no call site
+	// threads props. Falls back to the deterministic derived color when the
+	// coordinator isn't in the local store.
+	const coordinatorAccent = $derived.by(() => {
+		const stored = getChatCoordinator(group.coordinatorKey);
+		return {
+			color: getCoordinatorColor(stored ?? { pubkey: group.coordinatorKey, color: undefined }),
+			label: getCoordinatorLabel(group.coordinatorKey)
+		};
+	});
 	// Anchor is a sibling of the action button (not its parent) so the button
 	// click never navigates and we avoid nested interactive elements.
 	const linkClass = $derived.by(() => {
@@ -77,6 +92,14 @@
 	<!-- The caller passes route hrefs resolved with $app/paths when route params are needed. -->
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 	<a {href} {onclick} class={linkClass}>
+		{#if isSidebar}
+			<span
+				class="size-1.5 shrink-0 rounded-full"
+				style={`background-color: ${coordinatorAccent.color};`}
+				title={coordinatorAccent.label}
+				aria-hidden="true"
+			></span>
+		{/if}
 		<div class="relative shrink-0">
 			<ChatGroupAvatar
 				{group}

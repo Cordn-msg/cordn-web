@@ -64,9 +64,12 @@
 
 	let {
 		collapsed = false,
+		layout = 'vertical',
 		onNavigate = () => {}
 	}: {
 		collapsed?: boolean;
+		/** vertical: labeled rows (sidebar); horizontal: labeled tiles (chat home). */
+		layout?: 'vertical' | 'horizontal';
 		onNavigate?: () => void;
 	} = $props();
 
@@ -195,7 +198,7 @@
 			const parts: string[] = [];
 			if (unreadWelcomeNotifications > 0) {
 				parts.push(
-					`${unreadWelcomeNotifications} welcome${unreadWelcomeNotifications === 1 ? '' : 's'}`
+					`${unreadWelcomeNotifications} invitation${unreadWelcomeNotifications === 1 ? '' : 's'}`
 				);
 			}
 			if (unreadJoinRequests > 0) {
@@ -249,6 +252,73 @@
 	function getItemLabel(item: UnifiedItem): string {
 		return getCoordinatorLabel(item.data.coordinatorKey);
 	}
+
+	type QuickAction = {
+		id: string;
+		icon: typeof Plus;
+		/** Row + dropdown label. */
+		text: string;
+		/** Tile caption (short). */
+		caption: string;
+		aria: string;
+		title?: string;
+		href?: string;
+		onclick?: () => void;
+		active: boolean;
+		badge: number;
+		visible?: boolean;
+	};
+
+	// Single source of truth for the action set: labels, icons, handlers, and
+	// state live here once instead of drifting across the three render shapes.
+	const actions = $derived.by<QuickAction[]>(() => {
+		const list: QuickAction[] = [
+			{
+				id: 'new',
+				icon: Plus,
+				text: 'New conversation',
+				caption: 'Chat',
+				aria: 'New conversation',
+				onclick: () => (newConversationOpen = true),
+				active: newConversationOpen,
+				badge: 0
+			},
+			{
+				id: 'notifications',
+				icon: Inbox,
+				text: 'Notifications',
+				caption: 'Notifications',
+				aria: 'Open notifications',
+				title: getNotificationsButtonLabel(),
+				onclick: () => (notificationsOpen = true),
+				active: notificationsOpen,
+				badge: unreadNotificationTotal
+			},
+			{
+				id: 'share',
+				icon: QrCodeIcon,
+				text: 'Share',
+				caption: 'Share',
+				aria: 'Share profile',
+				onclick: () => (profileShareOpen = true),
+				active: profileShareOpen,
+				badge: 0,
+				visible: Boolean($activeAccount)
+			},
+			{
+				id: 'settings',
+				icon: Bolt,
+				text: 'Settings',
+				caption: 'Settings',
+				aria: 'Open settings',
+				href: resolve('/chat/config'),
+				onclick: onNavigate,
+				active: isActive('/chat/config'),
+				badge: 0
+			}
+		];
+		return list.filter((action) => action.visible !== false);
+	});
 </script>
 
 {#if collapsed}
@@ -270,113 +340,82 @@
 				{/snippet}
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content align="end" class="w-56">
-				<DropdownMenu.Item onclick={() => (newConversationOpen = true)} class="gap-2">
-					<Plus class="size-4" />
-					<span>New conversation</span>
-				</DropdownMenu.Item>
-
-				<DropdownMenu.Item onclick={() => (notificationsOpen = true)} class="gap-2">
-					<span class="relative flex items-center">
-						<Inbox class="size-4" />
-						{#if unreadNotificationTotal > 0}
+				{#each actions as action (action.id)}
+					<DropdownMenu.Item
+						onclick={action.href ? navigateToConfig : action.onclick}
+						class="gap-2"
+					>
+						<action.icon class="size-4" />
+						<span>{action.text}</span>
+						{#if action.badge > 0}
 							<span
-								class="ml-2 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+								class="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
 							>
-								{unreadNotificationTotal}
+								{action.badge}
 							</span>
 						{/if}
-					</span>
-					<span>Notifications</span>
-				</DropdownMenu.Item>
-
-				{#if $activeAccount}
-					<DropdownMenu.Item onclick={() => (profileShareOpen = true)} class="gap-2">
-						<QrCodeIcon class="size-4" />
-						<span>Share profile</span>
 					</DropdownMenu.Item>
-				{/if}
-
-				<DropdownMenu.Item onclick={navigateToConfig} class="gap-2">
-					<Bolt class="size-4" />
-					<span>Config</span>
-				</DropdownMenu.Item>
+				{/each}
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
 	</div>
-{:else}
+{:else if layout === 'horizontal'}
 	<div class="grid gap-2 {$activeAccount ? 'grid-cols-4' : 'grid-cols-3'}">
-		<button
-			type="button"
-			onclick={() => (newConversationOpen = true)}
-			class="flex items-center justify-center rounded-xl border border-transparent px-3 py-3 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
-			aria-label="New conversation"
-			title="New conversation"
-		>
-			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
-			>
-				<Plus class="size-4" />
-			</div>
-		</button>
-
-		<button
-			type="button"
-			onclick={() => (notificationsOpen = true)}
-			class="relative flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {notificationsOpen
-				? 'border-primary bg-primary/10 text-foreground'
-				: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
-			aria-label="Open notifications"
-			title={getNotificationsButtonLabel()}
-		>
-			<div
-				class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
-			>
-				<Inbox class="size-4" />
-				{#if unreadNotificationTotal > 0}
-					<span
-						class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-					>
-						{unreadNotificationTotal}
-					</span>
-				{/if}
-			</div>
-		</button>
-
-		{#if $activeAccount}
-			<button
-				type="button"
-				onclick={() => (profileShareOpen = true)}
-				class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {profileShareOpen
-					? 'border-primary bg-primary/10 text-foreground'
-					: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
-				aria-label="Share profile"
-				title="Share profile"
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		{#each actions as action (action.id)}
+			<svelte:element
+				this={action.href ? 'a' : 'button'}
+				href={action.href}
+				type={action.href ? undefined : 'button'}
+				onclick={action.onclick}
+				class="flex flex-col items-center gap-2 rounded-xl border px-2 py-3 transition-colors {action.active
+					? 'border-primary bg-primary/10'
+					: 'border-transparent hover:border-border hover:bg-background'}"
+				aria-label={action.aria}
+				title={action.title ?? action.aria}
 			>
 				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+					class="relative flex h-12 w-12 items-center justify-center rounded-full border border-border bg-background"
 				>
-					<QrCodeIcon class="size-4" />
+					<action.icon class="size-5" />
+					{#if action.badge > 0}
+						<span
+							class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+						>
+							{action.badge}
+						</span>
+					{/if}
 				</div>
-			</button>
-		{/if}
-
-		<a
-			href={resolve('/chat/config')}
-			onclick={onNavigate}
-			class="flex items-center justify-center rounded-xl border px-3 py-3 text-sm transition-colors {isActive(
-				'/chat/config'
-			)
-				? 'border-primary bg-primary/10 text-foreground'
-				: 'border-transparent text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}"
-			aria-label="Open config"
-			title="Open config"
-		>
-			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
+				<span class="text-xs text-muted-foreground">{action.caption}</span>
+			</svelte:element>
+		{/each}
+	</div>
+{:else}
+	<div class="space-y-1">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		{#each actions as action (action.id)}
+			<svelte:element
+				this={action.href ? 'a' : 'button'}
+				href={action.href}
+				type={action.href ? undefined : 'button'}
+				onclick={action.onclick}
+				class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors {action.active
+					? 'bg-primary/10 text-foreground'
+					: 'text-muted-foreground hover:bg-background hover:text-foreground'}"
+				aria-label={action.aria}
+				title={action.title ?? action.aria}
 			>
-				<Bolt class="size-4" />
-			</div>
-		</a>
+				<action.icon class="size-4 shrink-0" />
+				<span class="truncate">{action.text}</span>
+				{#if action.badge > 0}
+					<span
+						class="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
+					>
+						{action.badge}
+					</span>
+				{/if}
+			</svelte:element>
+		{/each}
 	</div>
 {/if}
 
@@ -385,7 +424,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Notifications</Dialog.Title>
 			<Dialog.Description>
-				Welcomes and join requests fetched across known coordinators.
+				Invitations to join groups, and requests to join yours.
 			</Dialog.Description>
 		</Dialog.Header>
 

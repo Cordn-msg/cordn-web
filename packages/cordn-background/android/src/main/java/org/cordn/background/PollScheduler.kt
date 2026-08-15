@@ -1,6 +1,7 @@
 package org.cordn.background
 
 import android.content.Context
+import android.os.Build
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -22,7 +23,7 @@ internal object PollScheduler {
     private const val ONESHOT_NAME = "cordn_bg_poll_oneshot"
 
     /** Apply the stored delivery mode. Called on app launch, mode change, and boot. */
-    fun applyDeliveryMode(context: Context) {
+    fun applyDeliveryMode(context: Context, fromBoot: Boolean = false) {
         val mode = BackgroundStore.get(context).getDeliveryMode("fast")
         when (mode) {
             "off" -> {
@@ -36,7 +37,14 @@ internal object PollScheduler {
             else -> {
                 // "fast" — WM-15 backstop + foreground service at the user interval.
                 schedulePeriodic(context)
-                startServiceSafe(context)
+                // Android 15+ (targetSdk 35+) categorically forbids starting a dataSync FGS
+                // from BOOT_COMPLETED — attempting it is a guaranteed exception (previously
+                // the boot crash). Skip it; the WM backstop delivers until the next app launch
+                // re-applies the mode in the foreground, where the start is allowed. Below
+                // Android 15, BOOT_COMPLETED is an allowed background-start exemption.
+                if (!fromBoot || Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                    startServiceSafe(context)
+                }
             }
         }
     }

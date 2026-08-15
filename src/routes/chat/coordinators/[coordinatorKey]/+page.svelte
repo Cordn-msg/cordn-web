@@ -503,9 +503,9 @@
 
 			<Card.Root>
 				<Card.Header>
-					<Card.Title>Welcomes</Card.Title>
+					<Card.Title>Invitations</Card.Title>
 					<Card.Description
-						>Fetch and inspect pending welcomes queued for the active identity on this coordinator.</Card.Description
+						>Invitations to join groups, fetched for your identity on this coordinator.</Card.Description
 					>
 				</Card.Header>
 				<Card.Content>

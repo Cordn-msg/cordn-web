@@ -237,6 +237,13 @@ export const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Send voice notes in a chat',
 		body: '- ✨ Hold the mic button to record a voice message, then release to send it — handy when you’d rather talk than type.\n- ✨ While holding, drag up to keep recording hands-free (then tap send or discard), or drag left to cancel.\n- ✨ Voice notes play right in the conversation with a waveform and timer — tap the bar to jump to any moment.\n- 🔄 Like everything else, voice notes are encrypted end-to-end and respect your media autoload setting.'
+	},
+	{
+		id: 'cordn-news-2026-08-15-ui-refresh',
+		createdAt: Date.UTC(2026, 7, 15),
+		version: 1,
+		title: 'A cleaner, calmer chat app',
+		body: '- ✨ Chat home has a fresh, focused layout: clear tiles to start a chat, check notifications, share your profile, or open settings — and your chats below them, with the news feed sitting in the list like any other conversation instead of being pinned on top.\n- 🔄 The sidebar is now one simple list of your chats, most recent first, with a small colored dot marking which coordinator hosts each group.\n- ✨ Fold the quick actions out of the way on chat home and in the sidebar — a quiet red dot on the toggle lets you know when an invitation needs your attention while they are hidden, and each spot remembers whether you left it open or closed.\n- 🔄 Creating a group is one simple form — name, picture, and members first — while coordinator and key-package details wait under Advanced until you want them.\n- 🔄 The New conversation dialog is tidier, and its join field stays hidden behind a "Join group" toggle until you need it.\n- 🔄 Inviting someone to a group now uses the same searchable people directory as starting a new conversation.\n- 🔄 Clearer words throughout: welcomes are "invitations" you accept or decline, Config is now Settings, and the theme toggle lives in the Settings header.\n- ✨ Mark any chat as read right from its sidebar menu, and an empty conversation greets you with a friendly "No messages yet — say hi 👋".\n- 🐛 On Android, the app no longer crashes right after the phone restarts.\n- 🐛 On Android, saving a backup no longer crashes the app — large backups are written straight to the location you pick.'
 	}
 ];
 

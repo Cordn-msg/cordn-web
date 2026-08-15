@@ -59,6 +59,7 @@
 						activePubkey: $activeAccount?.pubkey
 					})}
 				</p>
+				<p class="text-xs text-muted-foreground">Invited you to join</p>
 				{#if notification.preview?.description}
 					<p class="line-clamp-2 text-xs break-words text-muted-foreground">
 						{notification.preview.description}
@@ -99,7 +100,7 @@
 						{#if submitting}
 							<Spinner class="mr-1 size-3" />
 						{/if}
-						{submitting ? 'Rejecting…' : 'Reject'}
+						{submitting ? 'Declining…' : 'Decline'}
 					</Button>
 				{/if}
 			{/if}

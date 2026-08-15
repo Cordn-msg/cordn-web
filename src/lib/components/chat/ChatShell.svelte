@@ -816,18 +816,27 @@
 		{/if}
 
 		<div class="min-h-0 flex-1">
-			<ChatMessageList
-				bind:this={messageListRef}
-				{messages}
-				onReply={handleReply}
-				onReact={handleReact}
-				onEdit={handleEdit}
-				onDelete={handleDelete}
-				onRetrySend={handleRetrySend}
-				onVisibleUnreadReference={handleVisibleUnreadReference}
-				onOpenRich={handleOpenRich}
-				onPin={handlePin}
-			/>
+			{#if messages.length === 0}
+				<div
+					class="flex h-full items-center justify-center px-6 pb-10 text-center"
+					aria-live="polite"
+				>
+					<p class="max-w-sm text-sm text-muted-foreground">No messages yet — say hi 👋</p>
+				</div>
+			{:else}
+				<ChatMessageList
+					bind:this={messageListRef}
+					{messages}
+					onReply={handleReply}
+					onReact={handleReact}
+					onEdit={handleEdit}
+					onDelete={handleDelete}
+					onRetrySend={handleRetrySend}
+					onVisibleUnreadReference={handleVisibleUnreadReference}
+					onOpenRich={handleOpenRich}
+					onPin={handlePin}
+				/>
+			{/if}
 		</div>
 
 		{#if isRemoved}

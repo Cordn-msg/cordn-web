@@ -230,11 +230,9 @@
 					<Card.Description>You are not a member of this group yet.</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-4">
-					<div class="rounded-xl bg-muted/40 p-3 text-sm text-muted-foreground">
-						{#if groupId}
-							<p class="font-mono text-xs break-all">{groupId}</p>
-						{/if}
-					</div>
+					{#if groupId}
+						<p class="font-mono text-xs break-all text-muted-foreground">{groupId}</p>
+					{/if}
 
 					{#if coordinatorError}
 						<div class="rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">

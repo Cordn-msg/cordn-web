@@ -50,11 +50,13 @@
 
 	const groupCount = $derived(listChatGroups().length);
 
-	async function downloadBlob(blob: Blob): Promise<boolean> {
+	async function downloadBlob(payload: string): Promise<boolean> {
 		const pubkey = $activeAccount?.pubkey ?? 'account';
 		const date = new Date().toISOString().slice(0, 10);
 		const filename = `cordn-backup-${pubkey.slice(0, 8)}-${date}.json`;
-		return saveBlob(blob, filename);
+		// String, not Blob: native streams the text to the save-picker without base64 re-encoding
+		// (the Blob path was the OOM crash on Android); web wraps it in a Blob internally.
+		return saveBlob(payload, filename, 'application/json');
 	}
 
 	async function handleExport() {
@@ -69,11 +71,11 @@
 		// spinner paint, but the explicit yield removes any doubt on slow devices.
 		await new Promise((resolve) => setTimeout(resolve));
 		try {
-			const blob = await exportClientData({
+			const payload = await exportClientData({
 				includeMessages: exportMessages,
 				passphrase: exportEncrypted ? exportPassphrase : null
 			});
-			const saved = await downloadBlob(blob);
+			const saved = await downloadBlob(payload);
 			if (!saved) {
 				// saveBlob rejected (user cancelled the Save-as picker, or the write failed). Web's
 				// anchor path always succeeds, so this is effectively native-only.

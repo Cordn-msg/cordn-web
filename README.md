@@ -98,7 +98,7 @@ To prompt users to reload after a new deploy, the app compares a build-time vers
 - The profile route at [`/p/[identifier]`](src/routes/p/[identifier]/+page.svelte) renders the extended [`ProfileCard`](src/lib/components/ProfileCard.svelte) view plus the locally stored groups shared with that profile.
 - Shared-group discovery on the profile route is derived from local group membership via [`listChatGroups()`](src/lib/services/chatGroups.svelte.ts:243) and [`listChatGroupMembers()`](src/lib/services/chatGroups.svelte.ts:511), keeping the implementation local-first and avoiding redundant remote fetches.
 - The profile route uses a stacked row layout and, when the viewed profile matches the active account, shows inline logout actions plus a simple metadata editor.
-- Profile metadata publishing prefers the user's NIP-65 outboxes and falls back to `wss://relay.damus.io` and `wss://relay.primal.net` when mailbox data is unavailable.
+- Profile metadata publishing prefers the user's NIP-65 outboxes and falls back to `wss://relay.primal.net` when mailbox data is unavailable.
 
 ## Development
 

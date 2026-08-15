@@ -29,7 +29,13 @@ import {
  * proxy is inert on web because `saveBlob` only calls it inside an `isNativePlatform()` guard.
  */
 interface SaveAsPlugin {
-	saveAs(options: { data: string; mimeType?: string; suggestedName?: string }): Promise<{
+	saveAs(options: {
+		data: string;
+		/** 'utf8' sends the string as-is; 'base64' (default, legacy) decodes it as base64. */
+		encoding?: 'base64' | 'utf8';
+		mimeType?: string;
+		suggestedName?: string;
+	}): Promise<{
 		uri: string;
 	}>;
 }
@@ -102,28 +108,45 @@ function downloadViaAnchor(blob: Blob, filename: string): void {
 }
 
 /**
- * Save a blob to a user-chosen filesystem location. Native opens Android's Storage Access Framework
- * "Save as" picker (via the local `SaveAsPlugin`) so the user picks Downloads / Documents / SD card
- * / a cloud provider — the same UX a browser offers for downloads. Web uses `<a download>`.
+ * Save text or binary data to a user-chosen filesystem location. Native opens Android's Storage
+ * Access Framework "Save as" picker (via the local `SaveAsPlugin`) so the user picks Downloads /
+ * Documents / SD card / a cloud provider — the same UX a browser offers for downloads. Web uses
+ * `<a download>`.
+ *
+ * Prefer passing a string when the payload is text (e.g. the JSON backup): it crosses the
+ * Capacitor bridge as-is, skipping the Blob → FileReader data-URL → base64 chain that briefly
+ * held ~4 extra copies of the payload in the WebView and was the OOM that crashed large native
+ * backups. Blobs still take the base64 path (binary callers).
  *
  * Use this for artifacts that must land on the real filesystem — e.g. the encrypted backup. For
  * media, where the system share sheet's Save-to-Photos/Files targets are the expected UX, prefer
  * `shareBlob`. Returns false on a native failure (including the user cancelling the picker).
  */
-export async function saveBlob(blob: Blob, filename: string): Promise<boolean> {
+export async function saveBlob(
+	data: Blob | string,
+	filename: string,
+	mimeType = 'application/json'
+): Promise<boolean> {
 	if (isNativePlatform()) {
 		try {
-			await SaveAs.saveAs({
-				data: await blobToBase64(blob),
-				mimeType: blob.type || 'application/octet-stream',
-				suggestedName: filename
-			});
+			if (typeof data === 'string') {
+				await SaveAs.saveAs({ data, encoding: 'utf8', mimeType, suggestedName: filename });
+			} else {
+				await SaveAs.saveAs({
+					data: await blobToBase64(data),
+					mimeType: data.type || mimeType,
+					suggestedName: filename
+				});
+			}
 			return true;
 		} catch {
 			return false;
 		}
 	}
-	downloadViaAnchor(blob, filename);
+	downloadViaAnchor(
+		typeof data === 'string' ? new Blob([data], { type: mimeType }) : data,
+		filename
+	);
 	return true;
 }
 

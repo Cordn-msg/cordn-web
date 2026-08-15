@@ -5,6 +5,7 @@ import { listChatGroups } from '$lib/services/chatGroups.svelte';
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import { getCoordinatorServerName } from '$lib/services/coordinatorServerInfo.svelte';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
+import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
 
@@ -104,14 +105,30 @@ function saveCoordinators() {
 
 function loadCoordinators() {
 	if (!browser) return;
+	let firstRun = false;
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return;
-		const parsed = JSON.parse(raw) as PersistedCoordinators;
-		chatCoordinatorsStore.coordinators = (parsed.coordinators ?? []).map(migrateCoordinator);
-		ensureSingleDefault();
+		if (!raw) {
+			firstRun = true;
+		} else {
+			const parsed = JSON.parse(raw) as PersistedCoordinators;
+			chatCoordinatorsStore.coordinators = (parsed.coordinators ?? []).map(migrateCoordinator);
+			ensureSingleDefault();
+		}
 	} catch {
 		chatCoordinatorsStore.coordinators = [];
+	}
+
+	// First run: seed the default coordinator so new users never have to think
+	// about coordinators — it's just there. Not flagged isDefault: that flag is a
+	// pure power-user preference (which of several is preselected in create-group),
+	// never a functional gate. Seeding only on first run (not on every empty store)
+	// means a user who deliberately removes all coordinators isn't re-seeded.
+	if (firstRun) {
+		upsertChatCoordinator({
+			pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
+			label: 'Default coordinator'
+		});
 	}
 }
 

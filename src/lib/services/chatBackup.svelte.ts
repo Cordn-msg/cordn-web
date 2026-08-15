@@ -231,7 +231,12 @@ async function decryptEnvelope(
 	}
 }
 
-export async function exportClientData(options: ExportOptions = {}): Promise<Blob> {
+/**
+ * Serialize the backup document. Returns the JSON text (not a Blob) so the native save path can
+ * hand the string straight to the platform save-picker without the Blob→base64 re-encoding that
+ * OOM'd large backups on Android; web callers wrap it in a Blob for the `<a download>` path.
+ */
+export async function exportClientData(options: ExportOptions = {}): Promise<string> {
 	if (!browser) throw new BackupError('Backup can only run in the browser');
 	const { includeMessages = true, passphrase = null } = options;
 	const account = requireActiveAccount('Log in to export a backup');
@@ -272,7 +277,7 @@ export async function exportClientData(options: ExportOptions = {}): Promise<Blo
 			? await encryptDocument(doc, passphrase)
 			: JSON.stringify(doc, null, 2);
 
-	return new Blob([serialized], { type: 'application/json' });
+	return serialized;
 }
 
 export async function importClientData(

@@ -35,7 +35,18 @@ class CordnNotificationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val store = BackgroundStore.get(this)
         val intervalMin = store.getDeliveryIntervalMinutes(5)
-        startForegroundSync(intervalMin)
+        // Root guard for every start path (boot, START_STICKY restart, app launch): Android 15+
+        // (targetSdk 35+) forbids starting a dataSync FGS from BOOT_COMPLETED, Android 12+ can
+        // reject background starts, and system service restarts may race restrictions — the
+        // ForegroundServiceStartNotAllowedException is thrown HERE, inside startForeground(),
+        // not at the caller's startForegroundService() call (which is why the caller-side
+        // try/catch never sees it). Never let it crash: stop promptly (required anyway when
+        // startForeground fails after startForegroundService, or the app ANRs) and let the
+        // WorkManager backstop deliver until the next app launch re-applies the mode.
+        if (!startForegroundSync(intervalMin)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         // Always (re)start the loop: onStartCommand re-fires on a configureDelivery re-entry, so
         // restarting is how an interval change actually takes effect (the old loop was still
         // running the old interval). Cheap — one immediate poll + the new cadence; the previous
@@ -63,14 +74,24 @@ class CordnNotificationService : Service() {
         }
     }
 
-    private fun startForegroundSync(intervalMin: Long) {
+    /** @return true if the service is now foreground; false if the system refused (caller must stopSelf). */
+    private fun startForegroundSync(intervalMin: Long): Boolean {
         val notif = Notifications.buildSyncNotification(this, intervalMin)
         // ponytail: foregroundServiceType needs API 29+. dataSync is the closest declared type
         // for "periodically fetches data"; no special permission below API 34.
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIF_ID, notif)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+            return true
+        } catch (t: Throwable) {
+            // ForegroundServiceStartNotAllowedException (boot on Android 15+, bg start, FGS
+            // budget exhausted…) surfaces here, on the service's own thread, one stack frame
+            // away from a production crash. Log and degrade to the WM backstop instead.
+            android.util.Log.w("CordnBg", "startForeground rejected — stopping (WM backstop covers)", t)
+            return false
         }
     }
 

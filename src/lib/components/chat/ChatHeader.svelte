@@ -5,14 +5,11 @@
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Spinner } from '$lib/components/ui/spinner';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import VirtualKeyPackageList from '$lib/components/chat/VirtualKeyPackageList.svelte';
-	import { matchesKeyPackageSearch } from '$lib/components/chat/keyPackageSearch';
+	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { Input } from '$lib/components/ui/input';
 	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
@@ -22,7 +19,6 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
-	import { metadataRelays } from '$lib/services/relay-pool';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import {
 		getChatGroup,
@@ -33,14 +29,9 @@
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import Info from '@lucide/svelte/icons/info';
-	import Moon from '@lucide/svelte/icons/moon';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import Share2 from '@lucide/svelte/icons/share-2';
-	import Sun from '@lucide/svelte/icons/sun';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
-	import { setMode } from 'mode-watcher';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	let {
 		groupId,
@@ -55,14 +46,15 @@
 		await refreshInviteKeyPackagesAction(groupId);
 	}
 
-	async function inviteMember(identifier: string) {
-		await inviteGroupMemberAction(groupId, identifier);
-	}
+	let invitingRef = $state('');
 
-	function formatKeyPackageLabel(
-		entry: (typeof chatHeaderActionsStore.availableKeyPackages)[number]
-	) {
-		return `${entry.stablePubkey.slice(0, 12)}…${entry.stablePubkey.slice(-8)}`;
+	async function inviteMember(keyPackageRef: string) {
+		try {
+			invitingRef = keyPackageRef;
+			await inviteGroupMemberAction(groupId, keyPackageRef);
+		} finally {
+			invitingRef = '';
+		}
 	}
 
 	const group = $derived.by(() => (groupId ? getChatGroup(groupId) : undefined));
@@ -79,9 +71,7 @@
 	const infoHref = $derived.by(() =>
 		groupId ? resolve('/chat/[id]/info', { id: groupRouteId(groupId) }) : '/chat'
 	);
-	let isDarkMode = $state(browser ? document.documentElement.classList.contains('dark') : false);
 	let groupShareOpen = $state(false);
-	let inviteKeyPackageSearch = $state('');
 
 	const groupShareUrl = $derived.by(() => {
 		if (!groupId || !group?.coordinatorKey) return '';
@@ -98,87 +88,18 @@
 		return browser ? new URL(path, publicWebOrigin()).toString() : path;
 	});
 
-	const inviteKeyPackageProfileHints = useProfileHints(
-		() => {
-			if (!chatHeaderActionsStore.inviteOpen) return [];
-			return [...new Set(visibleInviteKeyPackagePubkeys)];
-		},
-		{ relays: metadataRelays }
+	const existingMemberPubkeys = $derived(
+		groupId ? listChatGroupMembers(groupId).map((member) => member.stablePubkey) : []
 	);
-	let visibleInviteKeyPackageIds = $state<string[]>([]);
-
-	const filteredInviteKeyPackages = $derived.by(() =>
-		chatHeaderActionsStore.availableKeyPackages.filter((entry) =>
-			matchesKeyPackageSearch({
-				pubkey: entry.stablePubkey,
-				keyPackageRef: entry.keyPackageRef,
-				isLastResort: entry.isLastResort,
-				profileHints: inviteKeyPackageProfileHints,
-				search: inviteKeyPackageSearch
-			})
-		)
-	);
-	const visibleInviteKeyPackagePubkeys = $derived.by(() => {
-		const visibleIds = new SvelteSet(visibleInviteKeyPackageIds);
-		const pubkeys = new SvelteSet<string>();
-		for (const entry of filteredInviteKeyPackages) {
-			if (visibleIds.has(entry.keyPackageRef)) {
-				pubkeys.add(entry.stablePubkey);
-			}
-		}
-		return [...pubkeys];
-	});
-	const visibleInviteKeyPackageItems = $derived.by(() => {
-		const existingMemberPubkeys = new SvelteSet(
-			groupId ? listChatGroupMembers(groupId).map((member) => member.stablePubkey) : []
-		);
-
-		return filteredInviteKeyPackages
-			.filter((entry) => !existingMemberPubkeys.has(entry.stablePubkey))
-			.map((entry) => ({
-				id: entry.keyPackageRef,
-				entry: { ...entry, label: formatKeyPackageLabel(entry) },
-				pubkey: entry.stablePubkey,
-				actionLabel: 'Invite',
-				actionDisabled: chatHeaderActionsStore.inviteSubmitting,
-				onAction: () => inviteMember(entry.keyPackageRef)
-			}));
-	});
 
 	async function navigateToInfo() {
 		await goto(infoHref);
 	}
 
-	function toggleTheme() {
-		const nextMode = isDarkMode ? 'light' : 'dark';
-		setMode(nextMode);
-		isDarkMode = nextMode === 'dark';
-	}
-
-	const themeLabel = $derived.by(() =>
-		isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'
-	);
-
 	$effect(() => {
 		if (chatHeaderActionsStore.inviteOpen) {
 			void refreshAvailableKeyPackages();
 		}
-	});
-
-	$effect(() => {
-		if (!browser) return;
-
-		const root = document.documentElement;
-		const updateTheme = () => {
-			isDarkMode = root.classList.contains('dark');
-		};
-
-		updateTheme();
-
-		const observer = new MutationObserver(updateTheme);
-		observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-
-		return () => observer.disconnect();
 	});
 </script>
 
@@ -217,23 +138,6 @@
 					type="button"
 					variant="outline"
 					size="icon"
-					class="relative h-10 w-10 rounded-xl"
-					aria-label={themeLabel}
-					title={themeLabel}
-					onclick={toggleTheme}
-				>
-					<Sun
-						class="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all! dark:scale-0 dark:-rotate-90"
-					/>
-					<Moon
-						class="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all! dark:scale-100 dark:rotate-0"
-					/>
-					<span class="sr-only">{themeLabel}</span>
-				</Button>
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
 					class="h-10 w-10 rounded-xl"
 					href={infoHref}
 					aria-label="Group info"
@@ -263,7 +167,7 @@
 						<Dialog.Header>
 							<Dialog.Title>Invite member</Dialog.Title>
 							<Dialog.Description>
-								Consume a coordinator key package and publish a welcome for this group.
+								Invite someone who is reachable on this coordinator.
 							</Dialog.Description>
 						</Dialog.Header>
 
@@ -278,54 +182,15 @@
 						{/if}
 
 						<div class="space-y-3">
-							<div class="flex items-center justify-between gap-2">
-								<p class="text-sm text-muted-foreground">
-									{filteredInviteKeyPackages.length} of {chatHeaderActionsStore.availableKeyPackages
-										.length} available key package{chatHeaderActionsStore.availableKeyPackages
-										.length === 1
-										? ''
-										: 's'}
-								</p>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onclick={refreshAvailableKeyPackages}
-									disabled={chatHeaderActionsStore.inviteLoading || !$activeAccount}
-								>
-									{#if chatHeaderActionsStore.inviteLoading}
-										<Spinner class="mr-1 size-3" />
-									{/if}
-									{chatHeaderActionsStore.inviteLoading ? 'Refreshing…' : 'Refresh'}
-								</Button>
-							</div>
-
-							<Input
-								bind:value={inviteKeyPackageSearch}
-								placeholder="Search by pubkey, package reference, or last resort"
-								aria-label="Search invite key packages"
+							<AvailableKeyPackageDirectory
+								onStartChat={(entry) => inviteMember(entry.kp_ref)}
+								startingRef={invitingRef}
+								coordinatorKey={group?.coordinatorKey}
+								excludePubkeys={existingMemberPubkeys}
+								actionLabel="Invite"
+								maxHeightClass="max-h-[26rem]"
+								emptyMessage="No one else is reachable on this coordinator yet."
 							/>
-
-							<div>
-								{#if !$activeAccount}
-									<p class="text-sm text-muted-foreground">Log in to invite members.</p>
-								{:else if chatHeaderActionsStore.inviteLoading && chatHeaderActionsStore.availableKeyPackages.length === 0}
-									<p class="text-sm text-muted-foreground">Loading available key packages…</p>
-								{:else if chatHeaderActionsStore.availableKeyPackages.length === 0}
-									<p class="text-sm text-muted-foreground">
-										No coordinator key packages available for invitation.
-									</p>
-								{:else if filteredInviteKeyPackages.length === 0}
-									<p class="text-sm text-muted-foreground">No key packages match your search.</p>
-								{:else}
-									<VirtualKeyPackageList
-										items={visibleInviteKeyPackageItems}
-										onVisibleItemsChange={(itemIds) => {
-											visibleInviteKeyPackageIds = itemIds;
-										}}
-									/>
-								{/if}
-							</div>
 						</div>
 					</Dialog.Content>
 				</Dialog.Root>
@@ -362,14 +227,6 @@
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-56">
-						<DropdownMenu.Item onclick={toggleTheme} class="gap-2">
-							{#if isDarkMode}
-								<Sun class="size-4" />
-							{:else}
-								<Moon class="size-4" />
-							{/if}
-							<span>{themeLabel}</span>
-						</DropdownMenu.Item>
 						<DropdownMenu.Item onclick={navigateToInfo} class="gap-2">
 							<Info class="size-4" />
 							<span>Group info</span>

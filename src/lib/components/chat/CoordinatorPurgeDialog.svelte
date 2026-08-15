@@ -43,7 +43,7 @@
 				This removes <span class="font-medium text-foreground">{label}</span> and deletes everything
 				associated with it from this browser: {impact.groups} group{impact.groups === 1 ? '' : 's'}, {impact.keyPackagesPublished}
 				key package{impact.keyPackagesPublished === 1 ? '' : 's'} published to the coordinator, plus {impact.keyPackagesLocal}
-				consumed local record{impact.keyPackagesLocal === 1 ? '' : 's'}, and {impact.welcomes} welcome{impact.welcomes ===
+				consumed local record{impact.keyPackagesLocal === 1 ? '' : 's'}, and {impact.welcomes} invitation{impact.welcomes ===
 				1
 					? ''
 					: 's'}. Messages and membership on other devices or coordinators are not affected.

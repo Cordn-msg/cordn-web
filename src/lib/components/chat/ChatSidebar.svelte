@@ -3,7 +3,6 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { untrack } from 'svelte';
 	import { eventStore } from '$lib/services/eventStore';
 	import { addressLoader } from '$lib/services/loaders.svelte';
@@ -13,23 +12,12 @@
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
-	import CoordinatorPurgeDialog from '$lib/components/chat/CoordinatorPurgeDialog.svelte';
+	import QuickActions from '$lib/components/chat/QuickActions.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import {
-		getChatGroupSummary,
-		markChatGroupMentionsRead,
-		markChatGroupRead
-	} from '$lib/services/chatGroupPresence.svelte';
+	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
-	import {
-		getChatCoordinator,
-		getCoordinatorColor,
-		getCoordinatorLabel,
-		listChatCoordinators
-	} from '$lib/services/chatCoordinators.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import { activeGroupId } from '$lib/utils/groupShareLink';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
@@ -37,16 +25,12 @@
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
-	import { getUnreadNewsCount, hasUnreadNews } from '$lib/news/newsReadState.svelte';
+	import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
-	import CheckCheck from '@lucide/svelte/icons/check-check';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
-	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import X from '@lucide/svelte/icons/x';
 	import {
 		getSearchKeywords,
@@ -70,8 +54,6 @@
 	let keywordQuery = $state('');
 	let highlightedKeywordIndex = $state(0);
 	let profileNames: string[] = $state([]);
-	let purgeDialogOpen = $state(false);
-	let purgeTarget = $state<{ pubkey: string; label: string } | null>(null);
 	const groupProfileHints = useProfileHints(
 		() => {
 			const activePubkey = $activeAccount ? normalizePubKey($activeAccount.pubkey) : '';
@@ -87,12 +69,8 @@
 		},
 		{ relays: metadataRelays }
 	);
-	const chats = $derived.by(() =>
-		[...listChatGroups()].sort((a, b) => getGroupActivityAt(b) - getGroupActivityAt(a))
-	);
+	const allChats = $derived.by(() => listChatGroups());
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
-	const newsHasUnread = $derived.by(() => hasUnreadNews());
-	const coordinators = $derived.by(() => listChatCoordinators());
 	const resolvedSearchQuery = $derived.by(() =>
 		resolveSearchQuery(debouncedSearchQuery, $activeAccount?.pubkey, profileNames)
 	);
@@ -114,49 +92,24 @@
 	});
 	const chatSummaries = $derived.by(() =>
 		Object.fromEntries(
-			chats.map((chat) => [chat.id, getChatGroupSummary(chat.id, $activeAccount?.pubkey)])
+			allChats.map((chat) => [chat.id, getChatGroupSummary(chat.id, $activeAccount?.pubkey)])
 		)
 	);
-	const groupedChats = $derived.by(() => {
-		const groups = new SvelteMap<
-			string,
-			{
-				pubkey: string;
-				label: string;
-				color: string | undefined;
-				chats: ReturnType<typeof listChatGroups>;
-			}
-		>();
 
-		for (const chat of chats) {
-			const coordinator = getChatCoordinator(chat.coordinatorKey);
-			const pubkey = coordinator?.pubkey ?? chat.coordinatorKey;
-			const label = getCoordinatorLabel(chat.coordinatorKey);
-			const color = coordinator ? getCoordinatorColor(coordinator) : undefined;
+	function hasUnreadActivity(groupId: string): boolean {
+		const summary = chatSummaries[groupId];
+		return Boolean(summary && (summary.unreadCount > 0 || summary.unreadReferenceCount > 0));
+	}
 
-			const existing = groups.get(pubkey);
-			if (existing) {
-				existing.chats.push(chat);
-				continue;
-			}
-
-			groups.set(pubkey, {
-				pubkey,
-				label,
-				color,
-				chats: [chat]
-			});
-		}
-
-		return [...groups.values()].sort((a, b) => {
-			const aIndex = coordinators.findIndex((entry) => entry.pubkey === a.pubkey);
-			const bIndex = coordinators.findIndex((entry) => entry.pubkey === b.pubkey);
-			return (
-				(aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex) -
-				(bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex)
-			);
-		});
-	});
+	// Same rule as the home feed: unread chats bubble to the top (newest first
+	// within the tier), read chats settle by last activity.
+	const chats = $derived.by(() =>
+		[...allChats].sort(
+			(a, b) =>
+				Number(hasUnreadActivity(b.id)) - Number(hasUnreadActivity(a.id)) ||
+				getGroupActivityAt(b) - getGroupActivityAt(a)
+		)
+	);
 	function isActive(href: string) {
 		return page.url.pathname === href;
 	}
@@ -167,10 +120,6 @@
 	const activeGroupGid = $derived(activeGroupId(page.url.pathname, page.url.searchParams));
 	function isGroupActive(groupId: string) {
 		return activeGroupGid === groupId;
-	}
-
-	function getNewsHref() {
-		return resolve('/chat/news');
 	}
 
 	async function navigateToMessage(groupId: string, messageKey: string) {
@@ -185,10 +134,6 @@
 
 	function getChatHomeHref() {
 		return resolve('/chat');
-	}
-
-	function getCoordinatorHref(pubkey: string) {
-		return resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey: pubkey });
 	}
 
 	function getChatSummary(groupId: string) {
@@ -272,19 +217,6 @@
 		requestAnimationFrame(() => searchInputRef?.focus());
 	}
 
-	function getCoordinatorStatusClass(coordinatorKey: string) {
-		const tone = getCoordinatorHealthTone(coordinatorKey);
-		if (tone === 'degraded') {
-			return 'bg-amber-500';
-		}
-
-		if (tone === 'healthy') {
-			return 'bg-emerald-500';
-		}
-
-		return 'bg-muted-foreground/40';
-	}
-
 	$effect(() => {
 		const pubkey = $activeAccount?.pubkey;
 		if (!pubkey) {
@@ -356,8 +288,8 @@
 			href={getChatHomeHref()}
 			onclick={closeMobileSidebar}
 			class={`flex min-w-0 items-center gap-3 rounded-xl transition-colors hover:text-foreground ${collapsed ? 'justify-center' : ''} ${isActive(getChatHomeHref()) ? 'text-foreground' : 'text-muted-foreground'}`}
-			aria-label="Open chat home"
-			title="Chat home"
+			aria-label="Open chats"
+			title="Chats"
 		>
 			<div
 				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background p-1.5"
@@ -426,7 +358,7 @@
 					bind:ref={searchInputRef}
 					bind:value={searchQuery}
 					type="search"
-					placeholder="Search messages..."
+					placeholder="Search messages…"
 					aria-label="Search messages"
 					oninput={handleSearchInput}
 					onkeydown={handleSearchKeydown}
@@ -467,16 +399,6 @@
 	{/if}
 
 	<nav class="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4">
-		{#if !(isSearching && !collapsed) && newsHasUnread}
-			<NewsListItem
-				href={getNewsHref()}
-				variant="sidebar"
-				{collapsed}
-				unreadCount={newsUnreadCount}
-				active={isActive(getNewsHref())}
-				onclick={closeMobileSidebar}
-			/>
-		{/if}
 		{#if isSearching && !collapsed}
 			<div class="space-y-2">
 				<div class="flex items-center justify-between px-1">
@@ -534,120 +456,45 @@
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>
-				No groups yet. Create your first group.
+				No chats yet. Start a new conversation.
 			</div>
 		{:else}
-			{#each groupedChats as coordinatorGroup (coordinatorGroup.pubkey)}
-				<div
-					class={`space-y-2 border-l-4 pl-2 ${collapsed ? 'py-1' : 'rounded-r-xl border-y border-r border-border/60 bg-background/40 p-2 pl-2'}`}
-					style={`border-left-color: ${coordinatorGroup.color};`}
-				>
-					<div class={collapsed ? '' : 'flex items-center gap-1'}>
-						<a
-							href={getCoordinatorHref(coordinatorGroup.pubkey)}
-							onclick={closeMobileSidebar}
-							class={`flex items-center rounded-lg px-2 py-1.5 transition-colors ${collapsed ? 'justify-center' : 'min-w-0 flex-1 hover:bg-background'} ${isActive(getCoordinatorHref(coordinatorGroup.pubkey)) ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-							aria-label={`Open ${coordinatorGroup.label}`}
-							title={coordinatorGroup.label}
-						>
-							{#if collapsed}
-								<span class="sr-only">{coordinatorGroup.label}</span>
-								<span class="h-2.5 w-2.5 rounded-full border border-border/70 bg-background/80"
-								></span>
-							{:else}
-								<div class="flex min-w-0 items-center gap-2">
-									<span
-										class={`h-2 w-2 shrink-0 rounded-full ${getCoordinatorStatusClass(coordinatorGroup.pubkey)}`}
-									></span>
-									<p class="truncate text-xs font-semibold tracking-[0.18em] uppercase">
-										{coordinatorGroup.label}
-									</p>
-								</div>
-							{/if}
-						</a>
-
-						{#if !collapsed}
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<Button
-											{...props}
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											class="shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
-											aria-label="Coordinator actions"
-											title="Coordinator actions"
-											onclick={closeMobileSidebar}
-										>
-											<EllipsisVertical class="size-3.5" />
-										</Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end" class="w-44">
-									<DropdownMenu.Item
-										onclick={() =>
-											coordinatorGroup.chats.forEach((chat) => {
-												markChatGroupRead(chat.id, chat.lastCursor);
-												markChatGroupMentionsRead(chat.id, chat.lastCursor);
-											})}
-										class="gap-2"
-									>
-										<CheckCheck class="size-4" />
-										<span>Mark all as read</span>
-									</DropdownMenu.Item>
-									<DropdownMenu.Item
-										onclick={() => {
-											purgeTarget = {
-												pubkey: coordinatorGroup.pubkey,
-												label: coordinatorGroup.label
-											};
-											purgeDialogOpen = true;
-										}}
-										class="gap-2 text-destructive data-[highlighted]:text-destructive"
-									>
-										<Trash2 class="size-4" />
-										<span>Remove</span>
-									</DropdownMenu.Item>
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						{/if}
-					</div>
-
-					<div class="space-y-1">
-						{#each coordinatorGroup.chats as chat (chat.id)}
-							{@const summary = getChatSummary(chat.id)}
-							<ChatGroupListItem
-								group={chat}
-								href={resolve('/chat/[id]', { id: groupRouteId(chat.id) })}
-								preview={summary.preview}
-								unreadCount={summary.unreadCount}
-								unreadReferenceCount={summary.unreadReferenceCount}
-								{collapsed}
-								variant="sidebar"
-								active={isGroupActive(chat.id)}
-								onclick={closeMobileSidebar}
-								profileHints={groupProfileHints}
-							/>
-						{/each}
-					</div>
-				</div>
-			{/each}
+			<div class="space-y-1">
+				{#each chats as chat (chat.id)}
+					{@const summary = getChatSummary(chat.id)}
+					<ChatGroupListItem
+						group={chat}
+						href={resolve('/chat/[id]', { id: groupRouteId(chat.id) })}
+						preview={summary.preview}
+						unreadCount={summary.unreadCount}
+						unreadReferenceCount={summary.unreadReferenceCount}
+						{collapsed}
+						variant="sidebar"
+						active={isGroupActive(chat.id)}
+						onclick={closeMobileSidebar}
+						profileHints={groupProfileHints}
+					/>
+				{/each}
+			</div>
 		{/if}
-		{#if !(isSearching && !collapsed) && !newsHasUnread}
+		{#if !(isSearching && !collapsed)}
 			<NewsListItem
-				href={getNewsHref()}
+				href={resolve('/chat/news')}
 				variant="sidebar"
 				{collapsed}
-				unreadCount={0}
-				active={isActive(getNewsHref())}
+				unreadCount={newsUnreadCount}
+				active={isActive(resolve('/chat/news'))}
 				onclick={closeMobileSidebar}
 			/>
 		{/if}
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		<ChatActionIcons {collapsed} onNavigate={closeMobileSidebar} />
+		{#if collapsed}
+			<ChatActionIcons {collapsed} onNavigate={closeMobileSidebar} />
+		{:else}
+			<QuickActions storageKey="cordn.sidebarQuickActionsOpen" onNavigate={closeMobileSidebar} />
+		{/if}
 
 		{#if $activeAccount}
 			<div
@@ -671,11 +518,3 @@
 		{/if}
 	</div>
 </aside>
-
-{#if purgeTarget}
-	<CoordinatorPurgeDialog
-		bind:open={purgeDialogOpen}
-		pubkey={purgeTarget.pubkey}
-		label={purgeTarget.label}
-	/>
-{/if}

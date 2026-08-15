@@ -3,12 +3,14 @@
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { goto } from '$app/navigation';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
 	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import { startChatWithKeyPackageAction } from '$lib/services/chatUiActions.svelte';
 	import Users from '@lucide/svelte/icons/users';
 	import LogIn from '@lucide/svelte/icons/log-in';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
 	let {
 		open = $bindable(false),
@@ -20,11 +22,15 @@
 
 	let startingRef = $state('');
 	let error = $state('');
+	let joinOpen = $state(false);
 
 	// bits-ui dialog content unmounts after the close animation, so the directory
 	// (and its search state) remounts fresh each time the dialog opens.
 	$effect(() => {
-		if (open) error = '';
+		if (open) {
+			error = '';
+			joinOpen = false;
+		}
 	});
 
 	function handleCreateGroupClick() {
@@ -57,66 +63,63 @@
 	<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),36rem)] sm:max-w-xl">
 		<Dialog.Header>
 			<Dialog.Title>New conversation</Dialog.Title>
-			<Dialog.Description>
-				Create a new group or start a conversation from an available key package.
-			</Dialog.Description>
+			<Dialog.Description>Message someone, start a group, or join with a link.</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="flex flex-col gap-4">
+		<div class="flex flex-col gap-2">
 			<a
 				href={resolve('/chat/create-group')}
 				onclick={handleCreateGroupClick}
-				class="flex items-center gap-3 rounded-xl border border-border p-4 transition-colors hover:bg-muted/30"
+				class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors hover:bg-muted/40"
 			>
-				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
-				>
-					<Users class="size-4" />
-				</div>
-				<div class="min-w-0">
-					<p class="text-sm font-medium">Create group</p>
-					<p class="text-xs text-muted-foreground">
-						Start a new group chat with custom settings and member invites
-					</p>
-				</div>
+				<Users class="size-4 shrink-0 text-muted-foreground" />
+				<span class="font-medium">Create group</span>
 			</a>
 
-			<div class="rounded-xl border border-border p-4">
-				<div class="flex items-center gap-3">
-					<div
-						class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background"
-					>
-						<LogIn class="size-4" />
+			<Collapsible.Root bind:open={joinOpen}>
+				<Collapsible.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors hover:bg-muted/40"
+						>
+							<LogIn class="size-4 shrink-0 text-muted-foreground" />
+							<span class="font-medium">Join group</span>
+							<ChevronDown
+								class="ml-auto size-4 text-muted-foreground transition-transform {joinOpen
+									? 'rotate-180'
+									: ''}"
+							/>
+						</button>
+					{/snippet}
+				</Collapsible.Trigger>
+				<Collapsible.Content>
+					<div class="px-3 pb-3">
+						<GroupLinkInput
+							onNavigate={() => {
+								open = false;
+								onNavigate();
+							}}
+						/>
 					</div>
-					<div class="min-w-0">
-						<p class="text-sm font-medium">Join group</p>
-						<p class="text-xs text-muted-foreground">
-							Paste a link or group ID someone shared to open it here
-						</p>
-					</div>
-				</div>
-				<div class="mt-3">
-					<GroupLinkInput
-						onNavigate={() => {
-							open = false;
-							onNavigate();
-						}}
-					/>
-				</div>
-			</div>
+				</Collapsible.Content>
+			</Collapsible.Root>
 
 			{#if error}
 				<p class="text-sm text-destructive">{error}</p>
 			{/if}
 
+			<p class="px-3 pt-3 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+				Message someone
+			</p>
 			<AvailableKeyPackageDirectory
 				onStartChat={startChat}
 				{startingRef}
-				includeSelf
 				showCount
 				showCoordinatorFilter
 				maxHeightClass="max-h-[32rem]"
-				emptyMessage="No public key packages found yet. Add coordinators and publish a key package first."
+				emptyMessage="No one else is discoverable here yet. Refresh, or ask them to publish a key package."
 			/>
 		</div>
 	</Dialog.Content>

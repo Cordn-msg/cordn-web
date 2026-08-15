@@ -8,9 +8,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import {
-		useAvailableKeyPackages,
+		availableKeyPackagesQueryOptions,
 		type AvailableKeyPackageWithCoordinator
 	} from '$lib/queries/chatKeyPackageQueries';
+	import { createQuery } from '@tanstack/svelte-query';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
@@ -31,6 +32,12 @@
 		showCount?: boolean;
 		/** Show the collapsible coordinator filter pills. */
 		showCoordinatorFilter?: boolean;
+		/** Restrict the directory to one coordinator (e.g. group invites). */
+		coordinatorKey?: string;
+		/** Pubkeys hidden from the list (e.g. existing group members). */
+		excludePubkeys?: string[];
+		/** Row action label ("Start chat", "Invite", …). */
+		actionLabel?: string;
 		maxHeightClass?: string;
 		emptyMessage?: string;
 	};
@@ -41,6 +48,9 @@
 		includeSelf = false,
 		showCount = false,
 		showCoordinatorFilter = false,
+		coordinatorKey = undefined,
+		excludePubkeys = [],
+		actionLabel = 'Start chat',
 		maxHeightClass = 'max-h-[24rem]',
 		emptyMessage = 'No public key packages found yet.'
 	}: Props = $props();
@@ -51,16 +61,22 @@
 	let visibleKeyPackageIds = $state<string[]>([]);
 
 	const activePubkey = $derived($activeAccount ? normalizePubKey($activeAccount.pubkey) : '');
-	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
+	const availableKeyPackagesQuery = createQuery(() =>
+		availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', coordinatorKey)
+	);
 	const remoteKeyPackages = $derived(availableKeyPackagesQuery.data ?? []);
 
 	// Dialog lists others only (people you can start a chat with); the chat home
 	// directory includes your own packages with a "You" badge. Normalized compare
 	// so an uppercase/npub active pubkey never leaks your own card into "Start chat".
+	const excludedPubkeys = $derived(new Set((excludePubkeys ?? []).map(normalizePubKey)));
 	const scopedKeyPackages = $derived(
-		includeSelf
-			? remoteKeyPackages
-			: remoteKeyPackages.filter((entry) => normalizePubKey(entry.pk) !== activePubkey)
+		remoteKeyPackages.filter((entry) => {
+			const pk = normalizePubKey(entry.pk);
+			if (pk === activePubkey && !includeSelf) return false;
+			if (excludedPubkeys.has(pk)) return false;
+			return true;
+		})
 	);
 
 	const filteredKeyPackages = $derived(
@@ -130,7 +146,7 @@
 				entry,
 				pubkey: entry.pk,
 				badge: isOwn ? 'You' : undefined,
-				actionLabel: isOwn ? undefined : isStarting ? 'Starting…' : 'Start chat',
+				actionLabel: isOwn ? undefined : isStarting ? `${actionLabel}…` : actionLabel,
 				actionDisabled: isStarting,
 				onAction: isOwn ? undefined : () => onStartChat(entry),
 				className: showCoordinatorBorder ? 'border-l-4 bg-muted/20' : 'bg-muted/20',
@@ -153,7 +169,7 @@
 	<div
 		class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"
 	>
-		Log in to browse coordinator key packages.
+		Log in to see who you can message.
 	</div>
 {:else}
 	<div class="space-y-3">
@@ -217,7 +233,7 @@
 
 		<Input
 			bind:value={search}
-			placeholder="Search by pubkey, package reference, or last resort"
+			placeholder="Search by name or key"
 			aria-label="Search available key packages"
 		/>
 
