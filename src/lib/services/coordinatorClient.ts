@@ -92,6 +92,38 @@ export type coordinatorClient = {
 	}>;
 };
 
+/**
+ * Setup deadline for opening a subscription stream. `callToolStream` resolves
+ * only once the subscribe request actually publishes, and a publish on a
+ * wedged socket can retry forever. Bounding it here makes a stuck subscribe
+ * fail fast as a transient error so the watch reconciler can rebuild.
+ */
+const SUBSCRIBE_SETUP_TIMEOUT_MS = 10_000;
+
+async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToolStream>) {
+	const streamCall = callToolStream<CallToolResult>(...params);
+	let setupTimer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			streamCall,
+			new Promise<never>((_, reject) => {
+				setupTimer = setTimeout(
+					() =>
+						reject(new Error(`Subscribe setup timed out after ${SUBSCRIBE_SETUP_TIMEOUT_MS}ms`)),
+					SUBSCRIBE_SETUP_TIMEOUT_MS
+				);
+			})
+		]);
+	} catch (error) {
+		// The losing promise may still resolve later; abort its stream so it
+		// cannot leak as an orphaned subscription.
+		void streamCall.then((call) => call.abort('setup timeout')).catch(() => undefined);
+		throw error;
+	} finally {
+		if (setupTimer) clearTimeout(setupTimer);
+	}
+}
+
 export class cordnClient implements coordinatorClient {
 	private stableClient: Client | null = null;
 	private stableTransport: NostrClientTransport | null = null;
@@ -176,10 +208,10 @@ export class cordnClient implements coordinatorClient {
 	}
 
 	async disconnect(): Promise<void> {
-		await Promise.all([
-			this.stableConnected?.catch(() => undefined),
-			this.ephemeralConnected.catch(() => undefined)
-		]);
+		// Never await the connect promises: a hung initialize on a dead socket
+		// must not block teardown, and its eventual rejection is swallowed here.
+		void this.stableConnected?.catch(() => undefined);
+		void this.ephemeralConnected.catch(() => undefined);
 		await Promise.all([
 			this.stableTransport?.close().catch(() => undefined),
 			this.ephemeralTransport.close().catch(() => undefined)
@@ -444,12 +476,14 @@ export class cordnClient implements coordinatorClient {
 	}> {
 		await this.ephemeralConnected;
 
-		const call = await callToolStream<CallToolResult>({
-			client: this.ephemeralClient,
-			transport: this.ephemeralTransport,
-			name: COORDINATOR_METHODS.subscribeManyGroupMessages,
-			arguments: { ...input }
-		});
+		const call = await callToolStreamWithSetupDeadline([
+			{
+				client: this.ephemeralClient,
+				transport: this.ephemeralTransport,
+				name: COORDINATOR_METHODS.subscribeManyGroupMessages,
+				arguments: { ...input }
+			}
+		]);
 		const stream: AsyncIterable<GroupMessage> = {
 			async *[Symbol.asyncIterator]() {
 				for await (const chunk of call.stream) {

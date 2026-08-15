@@ -56,7 +56,11 @@ class AccountCoordinatorClientRegistry {
 			relays: target.relays,
 			onHealth: (signal) => {
 				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
-				else markCoordinatorDegraded(serverPubkey, signal.error);
+				// A signer that cannot sign means no request ever reached the
+				// coordinator — that is local identity state, not reachability, so it
+				// must not mark the coordinator degraded.
+				else if (!isSignerUnavailableError(signal.error))
+					markCoordinatorDegraded(serverPubkey, signal.error);
 			},
 			onServerInfo: (info) => setCoordinatorServerInfo(serverPubkey, info)
 		} as ConstructorParameters<typeof cordnClient>[0]);
@@ -112,13 +116,8 @@ class AccountCoordinatorClientRegistry {
 
 const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry>();
 
-/**
- * Per-(account, coordinator) in-flight client rebuild promises. Keyed by the
- * same chain key as `coordinatorOperationChains` so operations on a rebuilding
- * coordinator await its rebuild, while operations on healthy coordinators
- * proceed independently.
- */
-const refreshPromisesByCoordinator = new Map<string, Promise<void>>();
+/** Coordinators with an old client disconnecting in the background. */
+const rebuildingClients = new Set<string>();
 
 function getAccountRegistryKey(account: IAccount): string {
 	return account.id;
@@ -147,7 +146,7 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 }
 
 export function isCoordinatorClientRefreshInProgress(): boolean {
-	return refreshPromisesByCoordinator.size > 0;
+	return rebuildingClients.size > 0;
 }
 
 export async function disconnectCoordinatorClients(account?: IAccount): Promise<void> {
@@ -248,15 +247,7 @@ async function runCoordinatorOperation<T>(
 	});
 	const tail = previous.catch(() => undefined).then(() => current);
 	coordinatorOperationChains.set(chainKey, tail);
-	const queued = previous
-		.catch(() => undefined)
-		.then(async () => {
-			const refresh = refreshPromisesByCoordinator.get(chainKey);
-			if (refresh) {
-				await refresh.catch(() => undefined);
-			}
-			return operation();
-		});
+	const queued = previous.catch(() => undefined).then(() => operation());
 	try {
 		return await queued;
 	} finally {
@@ -308,19 +299,14 @@ export async function withCoordinatorClient<T>(
 
 /**
  * Rebuild a single coordinator's client so subsequent calls use a fresh
- * socket. Rebuilding replaces the client in-place and disconnects the old one
- * locally (no network publishes), which is what makes this safe to use from
- * the resume path: tearing down an unhealthy socket via an abort publish would
- * hang indefinitely, since relay publishes retry forever until ACKed.
- *
- * Concurrent rebuilds for the same coordinator dedup onto a single in-flight
- * promise (tracked in `refreshPromisesByCoordinator`) so the operation chain
- * can await them without forcing a second disconnect.
+ * socket. Synchronous swap, fire-and-forget teardown: a hung connect or
+ * wedged publish on the old socket must never block the rebuild. The fresh
+ * client is independent; the old one dies in the background.
  */
-export async function replaceCoordinatorClient(
+export function replaceCoordinatorClient(
 	coordinatorKey: string,
 	account: IAccount | undefined = manager.getActive()
-): Promise<void> {
+): void {
 	if (!account) {
 		return;
 	}
@@ -330,22 +316,15 @@ export async function replaceCoordinatorClient(
 		return;
 	}
 
-	const chainKey = getCoordinatorOperationKey(account, coordinatorKey);
-	const existing = refreshPromisesByCoordinator.get(chainKey);
-	if (existing) {
-		return existing;
-	}
-
 	const oldClient = registry.replaceClient(coordinatorKey);
 	if (!oldClient) {
 		return;
 	}
 
-	const promise = oldClient.disconnect().finally(() => {
-		if (refreshPromisesByCoordinator.get(chainKey) === promise) {
-			refreshPromisesByCoordinator.delete(chainKey);
-		}
-	});
-	refreshPromisesByCoordinator.set(chainKey, promise);
-	return promise;
+	const chainKey = getCoordinatorOperationKey(account, coordinatorKey);
+	rebuildingClients.add(chainKey);
+	void oldClient
+		.disconnect()
+		.catch(() => undefined)
+		.finally(() => rebuildingClients.delete(chainKey));
 }

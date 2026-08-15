@@ -19,6 +19,7 @@
 	} from '$lib/services/chatAttention.svelte';
 	import { loadNewsReadState } from '$lib/news/newsReadState.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
+	import { signerReadinessStore } from '$lib/services/signerReadiness.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { startWatchingAllGroups } from '$lib/services/chatGroupWatch.svelte';
 	import {
@@ -148,7 +149,15 @@
 	     config, coordinators, news, create-group, …). ChatHeader does NOT add its own — that
 	     would double-pad /chat/[id]. -->
 	<div class="relative min-w-0 flex-1 overflow-hidden pt-safe">
-		{#if chatReconnectStatusStore.active}
+		{#if signerReadinessStore.waiting}
+			<!-- Identity gate (NIP-07 injection race) takes precedence over the sync
+		     banner: waiting on the signer, not on coordinators. -->
+			<div
+				class="absolute inset-x-0 top-0 z-50 border-b border-border/60 bg-muted/60 px-2 py-1 text-sm text-muted-foreground backdrop-blur-sm"
+			>
+				Waiting for Nostr signer…
+			</div>
+		{:else if chatReconnectStatusStore.active}
 			<div
 				class="absolute inset-x-0 top-0 z-50 border-b border-border/60 bg-muted/60 px-2 py-1 text-sm text-muted-foreground backdrop-blur-sm"
 			>
