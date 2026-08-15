@@ -351,7 +351,7 @@
 		</Button>
 	{/if}
 
-	{#if !collapsed}
+	{#if !collapsed && chats.length > 0}
 		<div class="pb-3">
 			<InputGroup.Root>
 				<InputGroup.Input
@@ -492,10 +492,12 @@
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		{#if collapsed}
-			<ChatActionIcons {collapsed} onNavigate={closeMobileSidebar} />
-		{:else}
-			<QuickActions storageKey="cordn.sidebarQuickActionsOpen" onNavigate={closeMobileSidebar} />
+		{#if $activeAccount}
+			{#if collapsed}
+				<ChatActionIcons {collapsed} onNavigate={closeMobileSidebar} />
+			{:else}
+				<QuickActions storageKey="cordn.sidebarQuickActionsOpen" onNavigate={closeMobileSidebar} />
+			{/if}
 		{/if}
 
 		{#if $activeAccount}

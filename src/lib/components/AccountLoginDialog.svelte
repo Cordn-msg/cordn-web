@@ -26,7 +26,7 @@
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
 	import { relayPool, metadataRelays } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
-	import { copyToClipboard } from '$lib/utils';
+	import { cn, copyToClipboard } from '$lib/utils';
 	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import { toast } from 'svelte-sonner';
 	import Eye from '@lucide/svelte/icons/eye';
@@ -36,6 +36,18 @@
 	import Gem from '@lucide/svelte/icons/gem';
 
 	let open = $state(false);
+
+	let {
+		triggerLabel = 'Login',
+		triggerVariant = 'outline',
+		triggerClass = ''
+	}: {
+		triggerLabel?: string;
+		triggerVariant?: 'outline' | 'default' | 'ghost';
+		triggerClass?: string;
+	} = $props();
+
+	const triggerClasses = $derived(cn(buttonVariants({ variant: triggerVariant }), triggerClass));
 
 	$effect(() => {
 		if (dialogState.dialogId === DIALOG_IDS.LOGIN) {
@@ -336,7 +348,7 @@
 </script>
 
 <Dialog.Root bind:open onOpenChange={() => (dialogState.dialogId = null)}>
-	<Dialog.Trigger class={buttonVariants({ variant: 'outline' })}>Login</Dialog.Trigger>
+	<Dialog.Trigger class={triggerClasses}>{triggerLabel}</Dialog.Trigger>
 	<Dialog.Content class="sm:max-w-[425px]">
 		<Dialog.Header>
 			<Dialog.Title>Connect Account</Dialog.Title>

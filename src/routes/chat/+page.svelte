@@ -143,108 +143,130 @@
 		<div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
 			<div class="flex items-start gap-3">
 				<ChatMobileSidebarButton />
-				<div class="space-y-1">
-					<h1 class="text-xl font-semibold tracking-tight">Chats</h1>
-				</div>
+				{#if hasAccount}
+					<div class="space-y-1">
+						<h1 class="text-xl font-semibold tracking-tight">Chats</h1>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</header>
 
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
-		<div class="mx-auto flex max-w-6xl flex-col gap-6">
-			{#if showReachabilityCallout}
+		{#if hasAccount}
+			<div class="mx-auto flex max-w-6xl flex-col gap-6">
+				{#if showReachabilityCallout}
+					<Card.Root>
+						<Card.Header class="space-y-1.5">
+							<Card.Title>No one can invite you yet</Card.Title>
+							<Card.Description>
+								You can join and create chats, but other people can't start a private conversation
+								with you until you publish a key package. It only takes a second.
+							</Card.Description>
+						</Card.Header>
+						<Card.Content class="space-y-3">
+							{#if reachabilityError}
+								<p class="text-sm text-destructive">{reachabilityError}</p>
+							{/if}
+							<div>
+								<Button onclick={makeReachable} disabled={makingReachable}>
+									{#if makingReachable}
+										<Spinner class="mr-2 size-4" />
+									{/if}
+									{makingReachable ? 'Setting up…' : 'Make me reachable'}
+								</Button>
+							</div>
+						</Card.Content>
+					</Card.Root>
+				{/if}
+
+				<QuickActions
+					storageKey="cordn.homeQuickActionsOpen"
+					layout="horizontal"
+					defaultOpen={browser ? !window.matchMedia('(max-width: 767px)').matches : true}
+				/>
+
 				<Card.Root>
-					<Card.Header class="space-y-1.5">
-						<Card.Title>No one can invite you yet</Card.Title>
-						<Card.Description>
-							You can join and create chats, but other people can't start a private conversation
-							with you until you publish a key package. It only takes a second.
-						</Card.Description>
+					<Card.Header>
+						<Card.Title>Chats</Card.Title>
 					</Card.Header>
-					<Card.Content class="space-y-3">
-						{#if reachabilityError}
-							<p class="text-sm text-destructive">{reachabilityError}</p>
+					<Card.Content class="space-y-4">
+						{#if feedRows.length > 0}
+							<div class="space-y-3">
+								{#each feedRows as row (row.kind === 'news' ? 'news' : row.group.id)}
+									{#if row.kind === 'news'}
+										<NewsListItem
+											href={resolve('/chat/news')}
+											variant="card"
+											unreadCount={newsUnreadCount}
+										/>
+									{:else}
+										{@const summary = getChatGroupSummary(row.group.id, $activeAccount?.pubkey)}
+										<ChatGroupListItem
+											group={row.group}
+											href={getGroupHref(row.group.id)}
+											preview={summary.preview}
+											unreadCount={summary.unreadCount}
+											unreadReferenceCount={summary.unreadReferenceCount}
+										/>
+									{/if}
+								{/each}
+							</div>
 						{/if}
-						<div>
-							<Button onclick={makeReachable} disabled={makingReachable}>
-								{#if makingReachable}
-									<Spinner class="mr-2 size-4" />
-								{/if}
-								{makingReachable ? 'Setting up…' : 'Make me reachable'}
-							</Button>
-						</div>
-					</Card.Content>
-				</Card.Root>
-			{/if}
-
-			<QuickActions
-				storageKey="cordn.homeQuickActionsOpen"
-				layout="horizontal"
-				defaultOpen={browser ? !window.matchMedia('(max-width: 767px)').matches : true}
-			/>
-
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Chats</Card.Title>
-				</Card.Header>
-				<Card.Content class="space-y-4">
-					{#if feedRows.length > 0}
-						<div class="space-y-3">
-							{#each feedRows as row (row.kind === 'news' ? 'news' : row.group.id)}
-								{#if row.kind === 'news'}
-									<NewsListItem
-										href={resolve('/chat/news')}
-										variant="card"
-										unreadCount={newsUnreadCount}
-									/>
-								{:else}
-									{@const summary = getChatGroupSummary(row.group.id, $activeAccount?.pubkey)}
-									<ChatGroupListItem
-										group={row.group}
-										href={getGroupHref(row.group.id)}
-										preview={summary.preview}
-										unreadCount={summary.unreadCount}
-										unreadReferenceCount={summary.unreadReferenceCount}
-									/>
-								{/if}
-							{/each}
-						</div>
-					{/if}
-					{#if !hasGroups}
-						<div
-							class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-						>
-							{#if hasAccount}
+						{#if !hasGroups}
+							<div
+								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+							>
 								No chats yet. Create one or join the Cordn group to get started.
-							{:else}
-								<div class="flex flex-col items-start gap-3">
-									<span>Connect your Nostr identity to start chatting.</span>
-									<AccountLoginDialog />
-								</div>
+							</div>
+						{/if}
+					</Card.Content>
+					<Card.Footer class="flex-col items-start gap-3 pt-0">
+						<div class="flex flex-wrap gap-2">
+							<Button
+								href={resolve('/chat/create-group')}
+								variant={hasGroups ? 'outline' : 'default'}
+							>
+								Create group
+							</Button>
+							{#if !inCordnGroup}
+								<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
 							{/if}
 						</div>
-					{/if}
-				</Card.Content>
-				<Card.Footer class="flex-col items-start gap-3 pt-0">
-					<div class="flex flex-wrap gap-2">
-						<Button
-							href={resolve('/chat/create-group')}
-							variant={hasGroups ? 'outline' : 'default'}
+						<a
+							href={resolve('/chat/config')}
+							class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
 						>
-							Create group
-						</Button>
-						{#if !inCordnGroup}
-							<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
-						{/if}
-					</div>
-					<a
-						href={resolve('/chat/config')}
-						class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-					>
-						Manage coordinators &amp; key packages →
-					</a>
-				</Card.Footer>
-			</Card.Root>
-		</div>
+							Manage coordinators &amp; key packages →
+						</a>
+					</Card.Footer>
+				</Card.Root>
+			</div>
+		{:else}
+			<!-- Logged-out home is the last step of the landing page: one job (get an
+			     identity), zero dead ends. The login dialog pre-selects the best tab. -->
+			<div
+				class="mx-auto flex min-h-full w-full max-w-md flex-col items-center justify-center gap-6 py-8 text-center"
+			>
+				<div class="space-y-3">
+					<h1 class="text-2xl font-semibold tracking-tight">Welcome to Cordn</h1>
+					<p class="text-sm text-muted-foreground">
+						Private group messaging, end-to-end encrypted. Your identity is a key you hold — no
+						email, no phone number.
+					</p>
+				</div>
+				<AccountLoginDialog
+					triggerLabel="Get started"
+					triggerVariant="default"
+					triggerClass="h-11 px-8 text-base"
+				/>
+				<a
+					href={resolve('/')}
+					class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+				>
+					What is Cordn?
+				</a>
+			</div>
+		{/if}
 	</div>
 </div>
