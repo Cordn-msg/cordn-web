@@ -885,6 +885,16 @@ export function startWatchingAllGroups(): Promise<void> {
 	return requestTick('ensure watches');
 }
 
+/**
+ * Manual refresh (pull-to-refresh): one catch-up pass over all watched groups,
+ * same machinery as the focus/online triggers. Re-entrant and coalesced; subject
+ * to the catch-up rate limit, so a pull right after a focus pass is a cheap no-op
+ * tick rather than a redundant backlog fan-out.
+ */
+export function refreshWatchedGroups(): Promise<void> {
+	return requestTick('pull-to-refresh', { catchUp: true });
+}
+
 if (browser) {
 	manager.active$.subscribe((account) => {
 		const nextAccountId = account?.id ?? '';

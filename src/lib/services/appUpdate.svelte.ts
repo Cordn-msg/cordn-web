@@ -131,6 +131,11 @@ export function stopAppUpdateWatcher() {
 	}
 }
 
+/** One-shot manual update check (pull-to-refresh on web); shares the poll's in-flight guard. */
+export function checkForUpdateNow(): void {
+	void pollVersion();
+}
+
 export function reloadForUpdate() {
 	if (browser) location.reload();
 }

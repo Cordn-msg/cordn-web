@@ -28,6 +28,23 @@
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
+	import { refreshChatFeedAction } from '$lib/services/chatUiActions.svelte';
+	import { appUpdateStore, reloadForUpdate } from '$lib/services/appUpdate.svelte';
+
+	// Pull-to-refresh on the chat list (native shell + standalone PWA only — a plain
+	// browser tab keeps the browser's own PTR as the emergency reload). When a web
+	// deploy is already known, the pull installs it instead of refreshing data.
+	const chatListPullToRefresh = {
+		onRefresh: async () => {
+			if (appUpdateStore.available) {
+				reloadForUpdate();
+				return;
+			}
+			await refreshChatFeedAction();
+		},
+		label: () => (appUpdateStore.available ? 'Release to update' : null)
+	};
 
 	const groups = $derived.by(() => listChatGroups());
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
@@ -168,7 +185,10 @@
 		</div>
 	</header>
 
-	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
+	<div
+		class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8"
+		use:pullToRefresh={chatListPullToRefresh}
+	>
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
 				{#if showStorageDisclaimer}

@@ -30,7 +30,9 @@ import {
 	markJoinRequestDismissed,
 	setJoinRequestSubmitting
 } from '$lib/services/chatJoinRequests.svelte';
-import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
+import { stopWatchingGroup, refreshWatchedGroups } from '$lib/services/chatGroupWatch.svelte';
+import { checkForUpdateNow } from '$lib/services/appUpdate.svelte';
+import { isNativePlatform } from '$lib/services/nativeShims';
 import { softDeleteGroup, isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { getChatGroupResumePromise } from '$lib/services/chatGroupWatchStatus.svelte';
 import { queryClient } from '$lib/query-client';
@@ -347,6 +349,21 @@ export async function refreshJoinRequestsAction() {
 		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey, undefined),
 		staleTime: 0
 	});
+}
+
+/**
+ * Pull-to-refresh on the chat list: one catch-up pass over watched groups plus the
+ * notification-style remote reads (welcomes, join requests). On web it also rides
+ * along a one-shot deploy check — when an update is already known the gesture
+ * reloads instead (see the pull-to-refresh label in the chat page).
+ */
+export async function refreshChatFeedAction(): Promise<void> {
+	if (!isNativePlatform()) checkForUpdateNow();
+	await Promise.all([
+		refreshWatchedGroups().catch(() => {}),
+		refreshWelcomeNotificationsAction().catch(() => {}),
+		refreshJoinRequestsAction().catch(() => {})
+	]);
 }
 
 export async function acceptJoinRequestAction(joinRequestId: string) {
