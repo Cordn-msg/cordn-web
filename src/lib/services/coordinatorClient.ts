@@ -100,6 +100,37 @@ export type coordinatorClient = {
  */
 const SUBSCRIBE_SETUP_TIMEOUT_MS = 20_000;
 
+/**
+ * Bound for waiting on a transport's MCP `initialize` handshake. The handshake
+ * publishes over the relays, and the SDK's publish loop retries forever while
+ * the relays are unreachable — so the connect promise can stay pending
+ * indefinitely. Every coordinator call awaits it before doing anything, so an
+ * unbounded wait here hung whole watch ticks past their deadline, which is what
+ * drove the tick-deadline → hardReset → reconnect loop against dead relays.
+ * Racing (not aborting) leaves the handshake running: a later call can still
+ * succeed once it finally connects, paced by the coordinator backoff.
+ */
+const CONNECT_WAIT_TIMEOUT_MS = 10_000;
+
+export function withConnectDeadline(connected: Promise<void>): Promise<void> {
+	// Standing catch: when the deadline wins the race, the losing connect
+	// promise's eventual rejection must not surface as unhandled.
+	connected.catch(() => undefined);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		connected,
+		new Promise<never>((_, reject) => {
+			timer = setTimeout(
+				() =>
+					reject(new Error(`Coordinator connection timed out after ${CONNECT_WAIT_TIMEOUT_MS}ms`)),
+				CONNECT_WAIT_TIMEOUT_MS
+			);
+		})
+	]).finally(() => {
+		if (timer) clearTimeout(timer);
+	});
+}
+
 async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToolStream>) {
 	const streamCall = callToolStream<CallToolResult>(...params);
 	let setupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -249,7 +280,7 @@ export class cordnClient implements coordinatorClient {
 		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
 
 		try {
-			await connected;
+			await withConnectDeadline(connected);
 			const client = transportKind === 'stable' ? this.stableClient! : this.ephemeralClient;
 			const result = await client.callTool(
 				{
@@ -474,7 +505,7 @@ export class cordnClient implements coordinatorClient {
 		abort: (reason?: string) => Promise<void>;
 		isStale: (marginMs?: number) => boolean;
 	}> {
-		await this.ephemeralConnected;
+		await withConnectDeadline(this.ephemeralConnected);
 
 		const call = await callToolStreamWithSetupDeadline([
 			{
