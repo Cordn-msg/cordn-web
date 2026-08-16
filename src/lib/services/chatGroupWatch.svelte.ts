@@ -12,6 +12,7 @@ import {
 import {
 	disconnectCoordinatorClients,
 	getCoordinatorClient,
+	isCurrentCoordinatorClient,
 	isTransientCoordinatorError,
 	replaceCoordinatorClient
 } from '$lib/services/chatRuntime';
@@ -70,9 +71,9 @@ import { normalizePubKey } from '$lib/utils';
  * Convergence rests on cursor idempotency: ingestion dedups by cursor, so
  * "tear everything down and restart from cursors" is always safe. Teardown is
  * therefore instant and local — abort publishes are fire-and-forget hints,
- * never something correctness depends on. Every await is deadline-bounded, and
- * the tick itself has a hard ceiling: if it overruns, the whole watch set is
- * rebuilt from scratch rather than leaving the UI stuck on "Updating chats…".
+ * never something correctness depends on. Every await is bounded, and
+ * recovery is local: a failed step swaps its client and backs off, and the
+ * next trigger re-ensures — there is no global escalation.
  */
 
 export const chatGroupWatchStore = $state<{
@@ -87,6 +88,8 @@ type GroupWatchTask = {
 	groupIds: string[];
 	coordinatorKey: string;
 	startedAt: number;
+	/** The client this watch's calls run on — used to ignore stale-client collateral. */
+	client?: coordinatorClient;
 	/** Live once the subscription is wired; false while backlog/subscribe setup runs. */
 	live: boolean;
 	closing: boolean;
@@ -127,25 +130,18 @@ type TickOptions = {
 	catchUp?: boolean;
 };
 
-/** Per-watch deadline for backlog fetch + subscribe setup to settle. */
-const WATCH_SETUP_DEADLINE_MS = 20_000;
+/**
+ * Per-watch deadline for backlog fetch + subscribe setup to settle. Must
+ * exceed the legitimate worst case (20s backlog + 20s subscribe), or a
+ * concurrent tick reaps healthy setups mid-flight.
+ */
+const WATCH_SETUP_DEADLINE_MS = 45_000;
 /**
  * Backlog fetch (msg_fetch_many) timeout. Idempotent cursor read; matches the
  * pre-reconciler value — real-relay latency needs the headroom, and a failure
  * no longer kills the watch (see startCoordinatorWatches).
  */
 const WATCH_BACKLOG_FETCH_TIMEOUT_MS = 20_000;
-/**
- * Hard ceiling for a tick. Awaited work is bounded by design — signer gate
- * ≤8s and MD reconcile ≤8s settle on the first tick and are cached after, and
- * the catch-up fetch is timeout-bounded at 20s (watch setups are
- * fire-and-forget) — so reaching this means something is wedged: tear
- * everything down and rebuild from scratch. The visible "Updating chats…"
- * banner can therefore never stick.
- */
-const TICK_DEADLINE_MS = 30_000;
-/** Cold start runs without a banner and pays the signer gate + MD reconcile. */
-const FIRST_TICK_DEADLINE_MS = 40_000;
 /** Foreground heartbeat — the convergence backstop for keepalive-green zombies. */
 const HEARTBEAT_INTERVAL_MS = 60_000;
 /** Min spacing between catch-up sweeps (focus/visibility events can burst). */
@@ -173,6 +169,8 @@ let tickPromise: Promise<void> | null = null;
 let tickDirty = false;
 let dirtyCatchUp = false;
 let lastCatchUpAt = 0;
+/** True while a detached catch-up sweep is running (see tickBody). */
+let catchUpInFlight = false;
 let lastActiveAccountId = '';
 /** Armed once the first tick settled, so fresh opens start silently. */
 let warmed = false;
@@ -473,12 +471,34 @@ async function fetchCoordinatorGroupBacklog(input: {
  * would poison the resubscribe. The stream loop's finally block schedules the
  * restart tick.
  */
-function noteStreamFailure(coordinatorKey: string, error: unknown, what: string) {
+function noteStreamFailure(
+	coordinatorKey: string,
+	client: coordinatorClient,
+	error: unknown,
+	what: string
+) {
 	const detail = error instanceof Error ? error.message : String(error);
+	// Failures observed on an already-retired client are teardown collateral
+	// from an earlier swap: not evidence, so no degraded mark, no new swap.
+	if (!isCurrentCoordinatorClient(coordinatorKey, client)) {
+		console.debug('[watch] stream failure on retired client — ignored', {
+			coordinatorKey,
+			what,
+			detail
+		});
+		return;
+	}
 	if (isTransientCoordinatorError(error)) {
+		// First-domino visibility: the swap itself is silent by design, but the
+		// original transient error should be findable when debugging.
+		console.debug('[watch] transient stream failure — swapping client', {
+			coordinatorKey,
+			what,
+			detail
+		});
 		markCoordinatorDegraded(coordinatorKey, detail);
 		const account = manager.getActive();
-		if (account) replaceCoordinatorClient(coordinatorKey, account);
+		if (account) replaceCoordinatorClient(coordinatorKey, account, client);
 	} else {
 		console.warn(`[watch] ${what}`, { coordinatorKey, detail });
 	}
@@ -515,6 +535,7 @@ async function startCoordinatorWatches(
 			// idempotency lets the catch-up phase close the gap later, and a slow
 			// fetch must not cost the group its live subscription.
 			const client = getCoordinatorClient(account, coordinatorKey);
+			handle.client = client;
 			let failedGroupIds = new Set<string>();
 			try {
 				({ failedGroupIds } = await fetchCoordinatorGroupBacklog({ client, groups }));
@@ -566,7 +587,12 @@ async function startCoordinatorWatches(
 			handle.task = (async () => {
 				void subscription.result.catch((error) => {
 					if (handle.closing) return;
-					noteStreamFailure(coordinatorKey, error, 'coordinator subscription result failed');
+					noteStreamFailure(
+						coordinatorKey,
+						client,
+						error,
+						'coordinator subscription result failed'
+					);
 				});
 
 				try {
@@ -588,7 +614,12 @@ async function startCoordinatorWatches(
 					}
 				} catch (error) {
 					if (!handle.closing) {
-						noteStreamFailure(coordinatorKey, error, 'coordinator subscription stream failed');
+						noteStreamFailure(
+							coordinatorKey,
+							client,
+							error,
+							'coordinator subscription stream failed'
+						);
 					}
 				} finally {
 					await Promise.all(
@@ -611,12 +642,16 @@ async function startCoordinatorWatches(
 			// and the diff will re-open the watch on the next tick.
 			clearCurrentWatch(handle);
 			if (handle.closing) return;
+			// Same for a retired client: the failure is collateral from an earlier
+			// swap — record nothing, swap nothing, warn nothing; the next tick's
+			// diff re-opens the watch on the replacement client.
+			if (handle.client && !isCurrentCoordinatorClient(coordinatorKey, handle.client)) return;
 			throw error;
 		}
 	})();
 
 	handle.ready = readyPromise;
-	// Standing catch: the tick races this promise against its deadline, so a
+	// Standing catch: this promise is fire-and-forget at the call site, so a
 	// late rejection must never surface as unhandled.
 	readyPromise.catch(() => undefined);
 	return readyPromise;
@@ -661,15 +696,21 @@ async function startMissingWatches(account: IAccount) {
 		[...groupsByCoordinator.entries()].map(([coordinatorKey, groups]) => {
 			if (backoffBlocks(coordinatorKey)) return Promise.resolve();
 			// Fire-and-forget: each start is bounded by the client's own setup
-			// deadline, stragglers are reaped by the setup deadline, and backoff
-			// spaces retries. Awaiting full setups here would let one slow
-			// coordinator pin the whole tick against its deadline — exactly the
-			// churn hardReset exists to stop. Synchronous registration keeps the
-			// diff idempotent while setups are in flight.
+			// deadline, stragglers are reaped, and backoff spaces retries.
+			// Awaiting full setups here would let one slow coordinator pin the
+			// whole tick. Synchronous registration keeps the diff idempotent
+			// while setups are in flight.
 			void startCoordinatorWatches(account, coordinatorKey, groups)
 				.then(() => clearCoordinatorBackoff(coordinatorKey))
 				.catch((error) => {
 					recordCoordinatorFailure(coordinatorKey);
+					// A failed start often means the client itself is dead — a connect
+					// timeout leaves the rejected connect promise cached on the client
+					// forever, and a closed transport rejects every call. Swap a fresh
+					// identity so the backoff-spaced retry isn't pounding a corpse.
+					if (isTransientCoordinatorError(error)) {
+						replaceCoordinatorClient(coordinatorKey, account);
+					}
 					console.warn('[watch] failed to start coordinator watches', {
 						coordinatorKey,
 						detail: error instanceof Error ? error.message : String(error)
@@ -724,7 +765,7 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 			if (handle && !isDeliveryStale(handle)) return;
 
 			stopCoordinatorWatches(coordinatorKey, 'delivery gap detected');
-			replaceCoordinatorClient(coordinatorKey, account);
+			replaceCoordinatorClient(coordinatorKey, account, client);
 			requestTick('zombie coordinator detected');
 		})
 	);
@@ -741,49 +782,28 @@ async function tickBody(account: IAccount, options: TickOptions): Promise<void> 
 	const watchedBefore = [...currentWatches.keys()];
 
 	reapUnhealthyWatches(account);
-	// Phases 2 and 3 touch disjoint watch sets, so they run in parallel.
-	await Promise.all([
-		startMissingWatches(account),
-		options.catchUp ? catchUpWatchedCoordinators(account, watchedBefore) : Promise.resolve()
-	]);
-}
 
-/**
- * Race a promise against a deadline. Returns true when the deadline won. A
- * standing catch keeps the losing promise's eventual rejection from surfacing
- * as unhandled; genuine rejections propagate while the race is still live.
- */
-function raceDeadline(promise: Promise<void>, ms: number): Promise<boolean> {
-	promise.catch(() => undefined);
-	let timedOut = false;
-	const guard = new Promise<void>((resolve) => {
-		setTimeout(() => {
-			timedOut = true;
-			resolve();
-		}, ms);
-	});
-	return Promise.race([promise.then(() => !timedOut), guard.then(() => true)]);
-}
-
-/**
- * Escalation path: the tick overran its ceiling, so something is wedged beyond
- * what per-op deadlines can catch. Tear down every watch (instant, local),
- * swap in fresh clients, and run one more bounded convergence pass. If even
- * that overruns, the caller's failure path clears the banner and the next
- * trigger retries under backoff.
- */
-async function hardReset(account: IAccount) {
-	console.warn('[watch] tick deadline exceeded — rebuilding all watches from scratch');
-	const coordinatorKeys = new Set(
-		[...currentWatches.values()].map((handle) => handle.coordinatorKey)
-	);
-	for (const handle of new Set(currentWatches.values())) {
-		closeWatch(handle, 'tick deadline exceeded');
+	// Both convergence phases run DETACHED from the tick. Every step inside
+	// them is individually bounded (fetch timeouts, setup deadlines,
+	// per-coordinator backoff) and idempotent (cursor dedup), so awaiting them
+	// here bought nothing — an awaited catch-up (20s fetch + unbounded
+	// ingestion) regularly overran any global ceiling. Recovery is purely
+	// LOCAL: each failure path swaps the client and applies backoff, and the
+	// next trigger re-ensures. (A global tick deadline + hard-reset hammer was
+	// removed: with all real work detached it measured nothing real, yet its
+	// teardown destroyed healthy in-flight connections and bred the very
+	// retry storm it blamed.) A catch-up request while a sweep is still
+	// running is skipped: live subscriptions cover the interim, and the next
+	// trigger re-runs it.
+	await startMissingWatches(account);
+	if (options.catchUp && !catchUpInFlight) {
+		catchUpInFlight = true;
+		void catchUpWatchedCoordinators(account, watchedBefore)
+			.catch(() => undefined)
+			.finally(() => {
+				catchUpInFlight = false;
+			});
 	}
-	for (const coordinatorKey of coordinatorKeys) {
-		replaceCoordinatorClient(coordinatorKey, account);
-	}
-	await raceDeadline(tickBody(account, { catchUp: true }), TICK_DEADLINE_MS);
 }
 
 async function runTick(reason: string, options: TickOptions): Promise<void> {
@@ -814,9 +834,10 @@ async function runTick(reason: string, options: TickOptions): Promise<void> {
 	};
 
 	try {
-		const deadlineMs = warmed ? TICK_DEADLINE_MS : FIRST_TICK_DEADLINE_MS;
-		const timedOut = await raceDeadline(tickBody(account, options), deadlineMs);
-		if (timedOut) await hardReset(account);
+		// No global deadline: the tick awaits only the bounded gates in
+		// tickBody, and every detached phase owns its recovery (client swap +
+		// backoff + the next trigger's re-ensure).
+		await tickBody(account, options);
 		chatGroupWatchStore.startup = 'ready';
 		clearBannerTimer();
 		clearChatReconnectStatus();

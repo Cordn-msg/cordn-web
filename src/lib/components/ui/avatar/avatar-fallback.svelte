@@ -1,20 +1,32 @@
 <script lang="ts">
-	import { Avatar as AvatarPrimitive } from 'bits-ui';
-	import { cn } from '$lib/utils.js';
+	import { getContext } from 'svelte';
+	import type { HTMLAttributes } from 'svelte/elements';
+	import { cn, type WithElementRef } from '$lib/utils.js';
+	import { AVATAR_STATUS_KEY, type AvatarStatusContext } from './avatar-context.js';
 
 	let {
 		ref = $bindable(null),
 		class: className,
+		style = undefined,
+		children,
 		...restProps
-	}: AvatarPrimitive.FallbackProps = $props();
+	}: WithElementRef<HTMLAttributes<HTMLSpanElement>> = $props();
+
+	const avatar = getContext<AvatarStatusContext>(AVATAR_STATUS_KEY);
 </script>
 
-<AvatarPrimitive.Fallback
-	bind:ref
-	data-slot="avatar-fallback"
-	class={cn(
-		'flex size-full items-center justify-center rounded-full bg-muted text-sm text-muted-foreground group-data-[size=sm]/avatar:text-xs',
-		className
-	)}
-	{...restProps}
-/>
+{#if avatar.status !== 'loaded'}
+	<span
+		bind:this={ref}
+		data-slot="avatar-fallback"
+		data-status={avatar.status}
+		class={cn(
+			'flex size-full items-center justify-center rounded-full bg-muted text-sm text-muted-foreground group-data-[size=sm]/avatar:text-xs',
+			className
+		)}
+		{style}
+		{...restProps}
+	>
+		{@render children?.()}
+	</span>
+{/if}

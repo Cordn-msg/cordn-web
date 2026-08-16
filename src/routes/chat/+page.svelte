@@ -112,16 +112,32 @@
 		)
 	);
 	// Reachability callout: shows after login until a last-resort key package is
-	// published, so others can invite the user. Suppressed when the migration banner
+	// published, so others can invite the user. Dismiss is permanent and per browser
+	// (like the storage disclaimer) — republishing later stays possible via the
+	// key-package config page. Suppressed when the migration banner
 	// detects the identity is already reachable from another device — that case has
 	// its own (link/restore) UX and publishing here would trigger a destructive
 	// last-resort take-over.
+	// ponytail: dismissal is global, not per-account; key it by pubkey if
+	// multi-account users complain about the callout staying hidden.
+	const REACHABILITY_DISMISSED_KEY = 'cordn.reachabilityCalloutDismissed';
+	let reachabilityCalloutDismissed = $state(
+		browser ? localStorage.getItem(REACHABILITY_DISMISSED_KEY) === '1' : false
+	);
+	function dismissReachabilityCallout() {
+		localStorage.setItem(REACHABILITY_DISMISSED_KEY, '1');
+		reachabilityCalloutDismissed = true;
+	}
+	const showReachabilityCallout = $derived.by(
+		() =>
+			hasAccount &&
+			!hasPublishedLastResort &&
+			!migrationBannerStore.detected &&
+			!reachabilityCalloutDismissed
+	);
 	// ponytail: no anti-flash gate, so a multi-device user on a brand-new device may
 	// see this callout briefly before migrationBannerStore.detected settles. Add a
 	// probeComplete flag to migrationBannerStore if it bothers anyone.
-	const showReachabilityCallout = $derived.by(
-		() => hasAccount && !hasPublishedLastResort && !migrationBannerStore.detected
-	);
 
 	// Official Cordn discussion group. Encoded as a cordn1 ref (coordinator packed
 	// in) plus the `m=` name preview; the default coordinator is embedded, not
@@ -234,12 +250,15 @@
 							{#if reachabilityError}
 								<p class="text-sm text-destructive">{reachabilityError}</p>
 							{/if}
-							<div>
+							<div class="flex flex-wrap items-center gap-3">
 								<Button onclick={makeReachable} disabled={makingReachable}>
 									{#if makingReachable}
 										<Spinner class="mr-2 size-4" />
 									{/if}
 									{makingReachable ? 'Setting up…' : 'Make me reachable'}
+								</Button>
+								<Button variant="ghost" class="ml-auto" onclick={dismissReachabilityCallout}>
+									Dismiss
 								</Button>
 							</div>
 						</Card.Content>

@@ -1,0 +1,47 @@
+diff --git a/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js b/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
+index 924869bdb3eedccf57345314adb7c1a9b2a12b20..8ca24d5cd38ac5764a5e26e739b6955a57aaad19 100644
+--- a/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
++++ b/dist/bits/utilities/dismissible-layer/use-dismissable-layer.svelte.js
+@@ -33,7 +33,20 @@ export class DismissibleLayerState {
+             this.#documentObj = getOwnerDocument(this.opts.ref.current);
+         });
+         let unsubEvents = noop;
++        // PATCHED: port of upstream #2087 (fixes #2080). Without this, a layer
++        // destroyed within the 1ms window still fires the afterSleep callback,
++        // re-attaches document listeners to a dead instance, and a later
++        // pointerdown debounce reads destroyed $deriveds (derived_inert).
++        let pendingTimer = null;
++        let destroyed = false;
++        const clearPendingTimer = () => {
++            if (pendingTimer != null) {
++                clearTimeout(pendingTimer);
++                pendingTimer = null;
++            }
++        };
+         const cleanup = () => {
++            clearPendingTimer();
+             this.#resetState();
+             globalThis.bitsDismissableLayers.delete(this);
+             this.#handleInteractOutside.destroy();
+@@ -42,8 +55,10 @@ export class DismissibleLayerState {
+         watch([() => this.opts.enabled.current, () => this.opts.ref.current], () => {
+             if (!this.opts.enabled.current || !this.opts.ref.current)
+                 return;
+-            afterSleep(1, () => {
+-                if (!this.opts.ref.current)
++            clearPendingTimer();
++            pendingTimer = afterSleep(1, () => {
++                pendingTimer = null;
++                if (destroyed || !this.opts.ref.current)
+                     return;
+                 globalThis.bitsDismissableLayers.set(this, this.#behaviorType);
+                 unsubEvents();
+@@ -52,6 +67,8 @@ export class DismissibleLayerState {
+             return cleanup;
+         });
+         onDestroyEffect(() => {
++            destroyed = true;
++            clearPendingTimer();
+             this.#resetState.destroy();
+             globalThis.bitsDismissableLayers.delete(this);
+             this.#handleInteractOutside.destroy();

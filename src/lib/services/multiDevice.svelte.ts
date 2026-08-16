@@ -109,9 +109,9 @@ export const DEFAULT_MULTI_DEVICE_RELAYS = [
  * strand the sealed document. Editable in Advanced.
  */
 export const DEFAULT_BLOSSOM_SERVERS = [
-	'https://blossom.primal.net/',
 	'https://cdn.hzrd149.com/',
-	'https://blossom.ditto.pub/'
+	'https://blossom.ditto.pub/',
+	'https://blossom.primal.net/'
 ];
 
 /**

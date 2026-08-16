@@ -1,21 +1,35 @@
 <script lang="ts">
-	import { Avatar as AvatarPrimitive } from 'bits-ui';
-	import { cn } from '$lib/utils.js';
+	import { setContext } from 'svelte';
+	import type { HTMLAttributes } from 'svelte/elements';
+	import { cn, type WithElementRef } from '$lib/utils.js';
+	import {
+		AVATAR_STATUS_KEY,
+		type AvatarLoadingStatus,
+		type AvatarStatusContext
+	} from './avatar-context.js';
 
 	let {
 		ref = $bindable(null),
-		loadingStatus = $bindable('loading'),
 		size = 'default',
 		class: className,
+		children,
 		...restProps
-	}: AvatarPrimitive.RootProps & {
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & {
 		size?: 'default' | 'sm' | 'lg';
 	} = $props();
+
+	let loadingStatus = $state<AvatarLoadingStatus>('loading');
+
+	setContext(AVATAR_STATUS_KEY, {
+		get status() {
+			return loadingStatus;
+		},
+		set: (next: AvatarLoadingStatus) => (loadingStatus = next)
+	} satisfies AvatarStatusContext);
 </script>
 
-<AvatarPrimitive.Root
-	bind:ref
-	bind:loadingStatus
+<div
+	bind:this={ref}
 	data-slot="avatar"
 	data-size={size}
 	class={cn(
@@ -23,4 +37,6 @@
 		className
 	)}
 	{...restProps}
-/>
+>
+	{@render children?.()}
+</div>

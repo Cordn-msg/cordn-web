@@ -18,6 +18,9 @@ patchedDependencies:
   applesauce-signers@6.0.1:
     hash: c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545
     path: patches/applesauce-signers@6.0.1.patch
+  bits-ui@2.18.1:
+    hash: 9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d
+    path: patches/bits-ui@2.18.1.patch
   nostr-signer-capacitor-plugin@0.0.5:
     hash: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
     path: patches/nostr-signer-capacitor-plugin@0.0.5.patch
@@ -66,8 +69,8 @@ importers:
         specifier: ^1.30
         version: 1.30.0(zod@4.4.3)
       '@contextvm/sdk':
-        specifier: ^0.13.10
-        version: 0.13.10(typescript@6.0.3)
+        specifier: ^0.13.11
+        version: 0.13.11(typescript@6.0.3)
       '@cordn/core':
         specifier: ^0.5.5
         version: 0.5.5
@@ -179,7 +182,7 @@ importers:
         version: 4.1.10(playwright@1.60.0)(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0))(vitest@4.1.10)
       bits-ui:
         specifier: ^2.18.1
-        version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.56.6(@typescript-eslint/types@8.59.3))(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(typescript@6.0.3)(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))
+        version: 2.18.1(patch_hash=9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d)(@internationalized/date@3.12.1)(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.56.6(@typescript-eslint/types@8.59.3))(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(typescript@6.0.3)(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -348,8 +351,8 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4.0
 
-  '@contextvm/sdk@0.13.10':
-    resolution: {integrity: sha512-2g0WrkqZxaI47PkwwD0tgMGYZ4tuU9pVmdF85FZykImCGn11pXrsfRACGnfXQPCbwFEF1sP/CAOkGpoeGqt4EQ==}
+  '@contextvm/sdk@0.13.11':
+    resolution: {integrity: sha512-0WSpr+rAh5Uc+rBXUIV77AcwxBh17pvYG4YG0e/O+4y2ddiocUopVkdXB23dqS0OcmOhYqs862Uv8BHqrcqSHA==}
     engines: {bun: '>=1.2.0'}
 
   '@cordn/core@0.5.5':
@@ -3686,7 +3689,7 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
 
-  '@contextvm/sdk@0.13.10(typescript@6.0.3)':
+  '@contextvm/sdk@0.13.11(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.4.3)
       '@noble/hashes': 2.2.0
@@ -4727,7 +4730,7 @@ snapshots:
 
   big-integer@1.6.52: {}
 
-  bits-ui@2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.56.6(@typescript-eslint/types@8.59.3))(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(typescript@6.0.3)(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3)):
+  bits-ui@2.18.1(patch_hash=9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d)(@internationalized/date@3.12.1)(@sveltejs/kit@2.70.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.56.6(@typescript-eslint/types@8.59.3))(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(typescript@6.0.3)(vite@8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)))(svelte@5.56.6(@typescript-eslint/types@8.59.3)):
     dependencies:
       '@floating-ui/core': 1.7.5
       '@floating-ui/dom': 1.7.6

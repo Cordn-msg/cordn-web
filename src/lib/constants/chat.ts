@@ -14,11 +14,11 @@ export const DEFAULT_CHAT_COORDINATOR_PUBKEY =
  * uploads (bostr.online, relay.nostr.net), which would break AEAD decryption
  * for recipients.
  */
-export const DEFAULT_BLOSSOM_SERVER = 'https://blossom.primal.net/';
+export const DEFAULT_BLOSSOM_SERVER = 'https://cdn.hzrd149.com/';
 export const BLOSSOM_SERVERS = [
-	'https://blossom.primal.net/',
 	'https://cdn.hzrd149.com/',
 	'https://blossom.ditto.pub/',
+	'https://blossom.primal.net/',
 	'https://files.sovbit.host/',
 	'https://blossom.data.haus/',
 	'https://0x0.happytavern.co/',

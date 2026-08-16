@@ -99,6 +99,14 @@ export type coordinatorClient = {
  * fail fast as a transient error so the watch reconciler can rebuild.
  */
 const SUBSCRIBE_SETUP_TIMEOUT_MS = 20_000;
+/**
+ * Deadline for the MCP initialize handshake (relay connect + round-trip).
+ * Unbounded, it is capped only by the SDK's 60s request timeout — longer than
+ * every deadline above it, which made tick deadlines detonate legitimately
+ * slow cold starts. On timeout the client is disconnected; since SDK 0.13.11
+ * that genuinely cancels the stuck initialize publish.
+ */
+const CONNECT_TIMEOUT_MS = 20_000;
 
 async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToolStream>) {
 	const streamCall = callToolStream<CallToolResult>(...params);
@@ -121,6 +129,43 @@ async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToo
 		throw error;
 	} finally {
 		if (setupTimer) clearTimeout(setupTimer);
+	}
+}
+
+/**
+ * Bounded MCP initialize handshake. The raw promise keeps only a logging
+ * catch (its rejection is also observed by the race); on timeout we reject
+ * and hand back control via `onTimeout` (the caller disconnects — with the
+ * lifecycle pool that genuinely cancels the stuck initialize publish instead
+ * of abandoning it as a zombie). `isClosed` downgrades the log for
+ * rejections that are deliberate-teardown collateral, not failures.
+ */
+export async function withConnectDeadline(
+	raw: Promise<void>,
+	options: {
+		kind: 'ephemeral' | 'stable';
+		onTimeout: () => void;
+		isClosed?: () => boolean;
+	}
+): Promise<void> {
+	const { kind, onTimeout, isClosed } = options;
+	void raw.catch((error) => {
+		const log = isClosed?.() ? console.debug : console.error;
+		log(`Failed to connect ${kind} client to server: ${error}`);
+	});
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			raw,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => {
+					reject(new Error(`${kind} connect timed out after ${CONNECT_TIMEOUT_MS}ms`));
+					onTimeout();
+				}, CONNECT_TIMEOUT_MS);
+			})
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
 }
 
@@ -155,6 +200,7 @@ export class cordnClient implements coordinatorClient {
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
 		const relays = options.relays || [];
+		// SDK ≥ 0.13.11: the pool cancels in-flight publish retries on disconnect.
 		const relayHandler = new ApplesauceRelayPool(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {
@@ -186,7 +232,15 @@ export class cordnClient implements coordinatorClient {
 			isStateless: true,
 			giftWrapMode: GiftWrapMode.EPHEMERAL,
 			openStream: {
-				enabled: true
+				enabled: true,
+				policy: {
+					// Keepalive: idle 30s → ping, pong due within 30s. Relays occasionally
+					// eat a ping or pong; the default 20s probe window turned a single
+					// lost round-trip into a stream abort + client swap. 30/30 keeps
+					// dead-stream detection (60s) while tolerating one slow relay hop.
+					idleTimeoutMs: 30_000,
+					probeTimeoutMs: 30_000
+				}
 			},
 			oversizedTransfer: {
 				enabled: true
@@ -199,15 +253,22 @@ export class cordnClient implements coordinatorClient {
 			signer: ephemeralSigner
 		});
 
-		this.ephemeralConnected = this.ephemeralClient
-			.connect(this.ephemeralTransport)
-			.catch((error) => {
-				console.error(`Failed to connect ephemeral client to server: ${error}`);
-				throw error;
-			});
+		this.ephemeralConnected = withConnectDeadline(
+			this.ephemeralClient.connect(this.ephemeralTransport),
+			{
+				kind: 'ephemeral',
+				onTimeout: () => void this.disconnect(),
+				isClosed: () => this.closed
+			}
+		);
 	}
 
+	/** Set by {@link disconnect}: distinguishes deliberate teardown rejections
+	 * (expected, debug) from genuine connect failures (error). */
+	private closed = false;
+
 	async disconnect(): Promise<void> {
+		this.closed = true;
 		// Never await the connect promises: a hung initialize on a dead socket
 		// must not block teardown, and its eventual rejection is swallowed here.
 		void this.stableConnected?.catch(() => undefined);
@@ -230,9 +291,10 @@ export class cordnClient implements coordinatorClient {
 				...this.transportBase,
 				signer: this.stableSigner
 			});
-			this.stableConnected = this.stableClient.connect(this.stableTransport).catch((error) => {
-				console.error(`Failed to connect stable client to server: ${error}`);
-				throw error;
+			this.stableConnected = withConnectDeadline(this.stableClient.connect(this.stableTransport), {
+				kind: 'stable',
+				onTimeout: () => void this.disconnect(),
+				isClosed: () => this.closed
 			});
 		}
 

@@ -79,6 +79,11 @@ class AccountCoordinatorClientRegistry {
 		return client;
 	}
 
+	/** Lookup-only: unlike {@link getClient}, never creates a client. */
+	peekClient(coordinatorKey: string): cordnClient | undefined {
+		return this.clients.get(resolveCoordinatorTarget(coordinatorKey).serverPubkey);
+	}
+
 	/**
 	 * Swaps in a fresh client for a single coordinator and returns the previous
 	 * one for the caller to disconnect. Used by the resume path to bring up a
@@ -181,7 +186,11 @@ export function isTransientCoordinatorError(error: unknown): boolean {
 	// "...Failed to send keepalive ping" only matches via `keepalive`). Without
 	// these, a dead keepalive aborts the subscription without scheduling a
 	// resume, leaving the group unwatched until the next foreground event.
-	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected|open stream aborted|keepalive/i.test(
+	// `publish aborted` is the lifecycle pool cancelling in-flight publishes on
+	// client teardown; `not connected` is the MCP client rejecting a request
+	// whose transport closed mid-flight — both are client-lifecycle artifacts,
+	// never permanent coordinator state.
+	return /timeout|timed out|connection closed|failed to publish event|relay rejected publish|network|disconnected|not connected|publish aborted|open stream aborted|keepalive/i.test(
 		detail
 	);
 }
@@ -273,9 +282,11 @@ export async function withCoordinatorClient<T>(
 ): Promise<T> {
 	return runCoordinatorOperation(account, coordinatorKey, async () => {
 		let rebuilt = false;
+		let client: coordinatorClient | undefined;
 		for (let attempt = 0; attempt <= TRANSIENT_RETRY_BACKOFF_MS.length; attempt += 1) {
 			try {
-				return await operation(getCoordinatorClient(account, coordinatorKey));
+				client = getCoordinatorClient(account, coordinatorKey);
+				return await operation(client);
 			} catch (error) {
 				if (!isTransientCoordinatorError(error)) {
 					throw error;
@@ -287,8 +298,10 @@ export async function withCoordinatorClient<T>(
 					// First transient failure: the socket may be stale, so rebuild once.
 					// Later retries reuse the fresh client rather than paying more
 					// reconnect cycles on a coordinator that may be genuinely down.
+					// The observed client rides along: if it was already retired by a
+					// concurrent swap, this failure is teardown collateral, not evidence.
 					rebuilt = true;
-					await replaceCoordinatorClient(coordinatorKey, account);
+					await replaceCoordinatorClient(coordinatorKey, account, client);
 				}
 				await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_BACKOFF_MS[attempt]));
 			}
@@ -298,14 +311,35 @@ export async function withCoordinatorClient<T>(
 }
 
 /**
+ * Whether `client` is still the registry's current client for this
+ * coordinator. Failures observed on a retired client are teardown collateral
+ * from an earlier swap — not new evidence about the coordinator.
+ */
+export function isCurrentCoordinatorClient(
+	coordinatorKey: string,
+	client: coordinatorClient,
+	account: IAccount | undefined = manager.getActive()
+): boolean {
+	if (!account) return false;
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	return registry !== undefined && registry.peekClient(coordinatorKey) === client;
+}
+
+/**
  * Rebuild a single coordinator's client so subsequent calls use a fresh
  * socket. Synchronous swap, fire-and-forget teardown: a hung connect or
  * wedged publish on the old socket must never block the rebuild. The fresh
  * client is independent; the old one dies in the background.
+ *
+ * When `expectedClient` is provided and no longer current, the swap is
+ * skipped: the failure that prompted it came from an already-retired client,
+ * and tearing down the replacement mid-handshake would only breed another
+ * round of collateral failures.
  */
 export function replaceCoordinatorClient(
 	coordinatorKey: string,
-	account: IAccount | undefined = manager.getActive()
+	account: IAccount | undefined = manager.getActive(),
+	expectedClient?: coordinatorClient
 ): void {
 	if (!account) {
 		return;
@@ -313,6 +347,13 @@ export function replaceCoordinatorClient(
 
 	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
 	if (!registry) {
+		return;
+	}
+
+	if (expectedClient && registry.peekClient(coordinatorKey) !== expectedClient) {
+		console.debug('[coordinator] failure observed on retired client — swap skipped', {
+			coordinatorKey
+		});
 		return;
 	}
 
