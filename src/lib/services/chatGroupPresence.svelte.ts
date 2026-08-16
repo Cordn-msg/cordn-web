@@ -71,7 +71,7 @@ export function deleteChatGroupPresenceForOwner(ownerPubkey: string) {
 	chatGroupPresenceStore.groups = {};
 }
 
-export function getChatGroupLastReadCursor(groupId: string): number {
+function getChatGroupLastReadCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0;
 }
 
@@ -91,7 +91,7 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 	savePresence();
 }
 
-export function getChatGroupLastReadMentionCursor(groupId: string): number {
+function getChatGroupLastReadMentionCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadMentionCursor ?? 0;
 }
 
@@ -162,7 +162,7 @@ export function getChatGroupSummary(groupId: string, activePubkey?: string): Cha
 	};
 }
 
-export function getLatestChatGroupMessagePreview(groupId: string): string {
+function getLatestChatGroupMessagePreview(groupId: string): string {
 	const draftPreview = getChatDraftPreview(groupId);
 	if (draftPreview) {
 		return draftPreview;

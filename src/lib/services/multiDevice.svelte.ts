@@ -49,7 +49,7 @@ import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { ingestChatGroupMessages } from '$lib/services/chatGroupMessages.svelte';
 import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
-import { normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey } from '$lib/utils';
 import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
 	MultiDeviceError,
@@ -628,7 +628,7 @@ async function reapGroupChain(params: {
 	} catch (error) {
 		dbg('reap chain walk failed (best-effort)', {
 			gid: params.gid.slice(0, 8),
-			error: error instanceof Error ? error.message : String(error)
+			error: errorMessage(error)
 		});
 	}
 	// Head unioned explicitly: covers the epoch-0 doc and the throw-before-any-step case.
@@ -676,7 +676,7 @@ async function reapAllReachable(config: MultiDeviceOwnerConfig): Promise<void> {
 			targets.push(g.address); // head is known + leaving the tip — delete it anyway
 			dbg('reap-all chain walk failed (best-effort)', {
 				gid: g.gid.slice(0, 8),
-				error: error instanceof Error ? error.message : String(error)
+				error: errorMessage(error)
 			});
 		}
 	}
@@ -1575,7 +1575,7 @@ export async function reconcileTipForOutbound(): Promise<void> {
 		if (tipEvent) await handleTipEvent(tipEvent, normalizePubKey(account.pubkey));
 	} catch (error) {
 		dbg('reconcileTipForOutbound failed', {
-			error: error instanceof Error ? error.message : String(error)
+			error: errorMessage(error)
 		});
 	}
 }
@@ -1652,7 +1652,7 @@ function makeReadStore(servers: string[]): BlobStore {
 				const errors = agg instanceof AggregateError ? agg.errors : [agg];
 				throw new Error(
 					`Could not fetch document from any server: ${errors
-						.map((e) => (e instanceof Error ? e.message : String(e)))
+						.map((e) => errorMessage(e))
 						.join('; ')}`,
 					{ cause: agg }
 				);
@@ -1913,7 +1913,7 @@ function makeReconcileTarget(catchUp?: {
 				}).catch((error) =>
 					dbg('catchUp failed; fast-forward preserved liveness', {
 						gid: doc.gid,
-						error: error instanceof Error ? error.message : String(error)
+						error: errorMessage(error)
 					})
 				);
 			}
@@ -2101,7 +2101,7 @@ async function catchUpGroupFromChain(params: {
 	} catch (error) {
 		dbg('catchUp walk failed; fast-forward preserved liveness', {
 			gid: params.groupId,
-			error: error instanceof Error ? error.message : String(error)
+			error: errorMessage(error)
 		});
 		return;
 	}
@@ -2121,7 +2121,7 @@ async function catchUpGroupFromChain(params: {
 	} catch (error) {
 		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
 			gid: params.groupId,
-			error: error instanceof Error ? error.message : String(error)
+			error: errorMessage(error)
 		});
 		return;
 	}

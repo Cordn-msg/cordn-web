@@ -78,7 +78,7 @@ function toShortnameNip05(identifier: string): string | null {
  * decodable nor a valid NIP-05/shortname; throws when a NIP-05 lookup runs
  * but returns no valid pubkey.
  */
-export async function resolveProfileIdentifier(
+async function resolveProfileIdentifier(
 	identifier: string
 ): Promise<ResolvedProfileIdentifier | null> {
 	const value = identifier.trim();

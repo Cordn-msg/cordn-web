@@ -32,7 +32,7 @@ import {
 	getCordnGroupMetadataFromExtensions,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
-import { normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey } from '$lib/utils';
 
 export interface StoredChatMessage {
 	cursor: number;
@@ -112,18 +112,18 @@ export function createUnsignedCordnMessageEvent(params: {
 	};
 }
 
-export function finalizeCordnMessageEvent(event: UnsignedEvent): ChatCordnMessageEnvelope {
+function finalizeCordnMessageEvent(event: UnsignedEvent): ChatCordnMessageEnvelope {
 	return {
 		...event,
 		id: getEventHash(event)
 	};
 }
 
-export function encodeCordnMessageEvent(event: ChatCordnMessageEnvelope): Uint8Array {
+function encodeCordnMessageEvent(event: ChatCordnMessageEnvelope): Uint8Array {
 	return encoder.encode(JSON.stringify(event));
 }
 
-export function decodeCordnMessageEvent(bytes: Uint8Array): ChatCordnMessageEnvelope {
+function decodeCordnMessageEvent(bytes: Uint8Array): ChatCordnMessageEnvelope {
 	const parsed = JSON.parse(decoder.decode(bytes)) as unknown;
 	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
 		throw new Error('Invalid cordn message envelope');
@@ -151,7 +151,7 @@ export function encodeAuthenticatedSender(stablePubkey: string): Uint8Array {
 	return encoder.encode(stablePubkey);
 }
 
-export function decodeAuthenticatedSender(bytes: Uint8Array): string {
+function decodeAuthenticatedSender(bytes: Uint8Array): string {
 	return decoder.decode(bytes);
 }
 
@@ -180,7 +180,7 @@ export async function createApplicationMessageBase64(params: {
 	};
 }
 
-export async function processMessageBase64(params: {
+async function processMessageBase64(params: {
 	state: ClientState;
 	opaqueMessageBase64: string;
 	callback?: IncomingMessageCallback;
@@ -425,7 +425,7 @@ export function createSystemMessagesFromStateChange(input: {
  * `createSystemMessagesFromStateChange`, so presentation stays consistent
  * across the fleet without re-ingesting the Commit.
  */
-export function createSystemMessagesFromCommitProposals(input: {
+function createSystemMessagesFromCommitProposals(input: {
 	cursor: number;
 	createdAt: number;
 	proposals: ProposalWithSender[];
@@ -540,7 +540,7 @@ export async function ingestChatGroupMessages(params: {
 				})
 			).opaqueMessageBase64;
 		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
+			const detail = errorMessage(error);
 			// Multi-device (§10.6): the seal hides the epoch, so a device behind a
 			// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
 			// at this layer — the epochAhead gate below never gets to see these.
@@ -650,13 +650,13 @@ export async function ingestChatGroupMessages(params: {
 				} catch (synthesisError) {
 					console.warn('[MLS] sibling-commit system-message synthesis failed', {
 						cursor: message.cursor,
-						error: synthesisError instanceof Error ? synthesisError.message : String(synthesisError)
+						error: errorMessage(synthesisError)
 					});
 				}
 				continue;
 			}
 
-			const detail = error instanceof Error ? error.message : String(error);
+			const detail = errorMessage(error);
 			const envelope = extractMlsEnvelopeMetadata(processableBase64);
 			const localEpoch = group.state.groupContext.epoch;
 			const epochAhead = envelope?.epoch !== undefined && envelope.epoch > localEpoch;

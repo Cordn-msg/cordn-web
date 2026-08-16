@@ -32,9 +32,9 @@ import {
 } from 'ts-mls';
 import { verifyEvent, type NostrEvent } from 'nostr-tools';
 
-export const CORDN_GROUP_METADATA_EXTENSION_TYPE = 0xc04d;
-export const APP_DATA_DICTIONARY_EXTENSION_TYPE = 0x0006;
-export const LAST_RESORT_KEY_PACKAGE_COMPONENT_ID = 0x0004;
+const CORDN_GROUP_METADATA_EXTENSION_TYPE = 0xc04d;
+const APP_DATA_DICTIONARY_EXTENSION_TYPE = 0x0006;
+const LAST_RESORT_KEY_PACKAGE_COMPONENT_ID = 0x0004;
 export const CLI_CIPHERSUITE = 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519';
 
 type Decoder<T> = (bytes: Uint8Array, offset: number) => [T, number] | undefined;
@@ -212,7 +212,7 @@ export function ensureLastResortKeyPackageExtension(extensions: CustomExtension[
 	];
 }
 
-export function isLastResortKeyPackageExtension(extension: CustomExtension): boolean {
+function isLastResortKeyPackageExtension(extension: CustomExtension): boolean {
 	if (extension.extensionType !== APP_DATA_DICTIONARY_EXTENSION_TYPE) {
 		return false;
 	}
@@ -248,7 +248,7 @@ export function createCredential(stablePubkey: string) {
 	};
 }
 
-export function encodeCordnGroupMetadata(metadata: CordnGroupMetadata): Uint8Array {
+function encodeCordnGroupMetadata(metadata: CordnGroupMetadata): Uint8Array {
 	const encoder = new TextEncoder();
 	const adminPubkeys = normalizeAdminPubkeys(metadata.adminPubkeys);
 	return new Uint8Array([
@@ -261,7 +261,7 @@ export function encodeCordnGroupMetadata(metadata: CordnGroupMetadata): Uint8Arr
 	]);
 }
 
-export function decodeCordnGroupMetadata(bytes: Uint8Array): CordnGroupMetadata {
+function decodeCordnGroupMetadata(bytes: Uint8Array): CordnGroupMetadata {
 	const version = decodeUint16(bytes, 0);
 	if (version !== 1) {
 		throw new Error(`Unsupported Cordn metadata version: ${version}`);
@@ -328,7 +328,7 @@ export async function getCordnCipherSuite() {
 	return getCiphersuiteImpl(CLI_CIPHERSUITE, nobleCryptoProvider);
 }
 
-export function decodeWelcomeBase64(welcomeBase64: string): Welcome {
+function decodeWelcomeBase64(welcomeBase64: string): Welcome {
 	const message = decodeExact(base64ToBytes(welcomeBase64), mlsMessageDecoder, 'welcome');
 	if (message.wireformat !== wireformats.mls_welcome) {
 		throw new Error('Unable to decode welcome message');

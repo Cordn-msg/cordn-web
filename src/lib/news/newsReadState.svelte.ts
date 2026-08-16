@@ -15,7 +15,7 @@ const LEGACY_READ_KEY = 'cordn.newsLastReadAt';
  * same-day edits, while `createdAt` keeps the day label stable. Donations
  * never count toward the badge.
  */
-export const newsReadStateStore = $state<{ versions: Record<string, number> }>({ versions: {} });
+const newsReadStateStore = $state<{ versions: Record<string, number> }>({ versions: {} });
 
 let loaded = false;
 
@@ -72,8 +72,4 @@ export function getUnreadNewsCount(): number {
 
 export function isNewsItemUnread(item: NewsFeedItem): boolean {
 	return isUnreadRelease(item, newsReadStateStore.versions);
-}
-
-export function hasUnreadNews(): boolean {
-	return getUnreadNewsCount() > 0;
 }

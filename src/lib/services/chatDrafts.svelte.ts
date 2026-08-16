@@ -21,7 +21,3 @@ export function setChatDraft(groupId: string, text: string): void {
 		drafts.set(groupId, text);
 	}
 }
-
-export function clearChatDraft(groupId: string): void {
-	drafts.delete(groupId);
-}

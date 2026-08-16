@@ -38,7 +38,7 @@ export interface EncryptedMedia {
 	readonly plaintextHash: Uint8Array;
 }
 
-export function sha256Bytes(data: Uint8Array): Uint8Array {
+function sha256Bytes(data: Uint8Array): Uint8Array {
 	return sha256(data);
 }
 

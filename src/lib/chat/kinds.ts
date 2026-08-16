@@ -23,7 +23,7 @@ export const ChatKinds = {
 
 /** Annotation kinds never render as a row — they mutate a primary message
  *  (reactions, edits, deletes) and are folded into its view model. */
-export const ANNOTATION_KINDS = new Set<number>([
+const ANNOTATION_KINDS = new Set<number>([
 	ChatKinds.Reaction,
 	ChatKinds.Edit,
 	ChatKinds.Deletion,

@@ -5,7 +5,7 @@
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { capturePhoto, captureVideo, pickImagesFromGallery } from '$lib/services/nativeShims';
-	import { formatBytes, formatClock } from '$lib/utils';
+	import { formatBytes, errorMessage, formatClock } from '$lib/utils';
 	import {
 		createVoiceRecorder,
 		isVoiceRecordingSupported,
@@ -407,7 +407,7 @@
 			if (file) stageFiles([file]);
 		} catch (err) {
 			toast.error('Could not open camera', {
-				description: err instanceof Error ? err.message : String(err)
+				description: errorMessage(err)
 			});
 		}
 	}
@@ -426,7 +426,7 @@
 			if (files.length > 0) stageFiles(files);
 		} catch (err) {
 			toast.error('Could not open gallery', {
-				description: err instanceof Error ? err.message : String(err)
+				description: errorMessage(err)
 			});
 		}
 	}

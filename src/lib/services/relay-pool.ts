@@ -25,5 +25,3 @@ export const metadataRelays = [
 	'wss://profiles.nostr1.com/',
 	'wss://nostr.wine'
 ];
-
-export const devRelay = ['ws://localhost:10547'];

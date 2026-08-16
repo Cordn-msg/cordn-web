@@ -5,7 +5,7 @@ import type { ProfileContent } from 'applesauce-core/helpers';
 
 export type ChatGroupProfileHints = Record<string, ProfileContent>;
 
-export const DIRECT_CHAT_NAME_PREFIX = ':direct_chat:';
+const DIRECT_CHAT_NAME_PREFIX = ':direct_chat:';
 
 export function getProfileDisplayName(
 	pubkey: string,
@@ -201,19 +201,6 @@ function rasterizePngBase64(img: HTMLImageElement, size: number): string {
 	const dh = sh * scale;
 	ctx.drawImage(img, (size - dw) / 2, (size - dh) / 2, dw, dh);
 	return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
-}
-
-/**
- * Render a group's notification icon to uniform PNG bytes (base64, no `data:` prefix) for the
- * native notification `largeIcon` cache. Returns `null` when no icon source is available or the
- * render fails (e.g. a cross-origin image without CORS). All rendering happens here, in the
- * alive WebView — the key-less background worker only decodes the bytes (roadmap §4.4).
- */
-export async function renderGroupNotificationIconBytes(
-	group: StoredChatGroup,
-	ctx: ChatGroupNotificationIconContext = {}
-): Promise<string | null> {
-	return renderNotificationIconFromSrc(getChatGroupNotificationIcon(group, ctx));
 }
 
 /** Rasterize a resolved icon source URL/data-URL to PNG base64 bytes. */

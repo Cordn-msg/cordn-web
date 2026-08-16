@@ -59,7 +59,7 @@ export function hasPendingEpochOperation(
 	return pending.some((operation) => operation.commitMessageBase64 === opaqueMessageBase64);
 }
 
-export async function finalizePendingEpochOperations(
+async function finalizePendingEpochOperations(
 	store: GroupPendingEpochStore,
 	groupId: string,
 	client: Pick<cordnClient, 'StoreWelcome'>,
@@ -95,7 +95,7 @@ export async function finalizePendingEpochOperations(
 	store.set(groupId, remaining);
 }
 
-export function rejectPendingEpochOperations(
+function rejectPendingEpochOperations(
 	store: GroupPendingEpochStore,
 	groupId: string,
 	opaqueMessageBase64s: Iterable<string>

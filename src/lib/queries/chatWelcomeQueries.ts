@@ -48,7 +48,7 @@ export async function fetchCoordinatorWelcomeNotifications(
 // re-evaluates on login/logout — a plain arg is captured once at mount, which
 // leaves always-mounted consumers (ChatActionIcons, the panels) stuck
 // pre-login. Disabled until an account is present.
-export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
+function welcomeNotificationsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
 	const hasStablePubkey = Boolean(stablePubkey?.trim());
 	return {
 		queryKey: hasStablePubkey

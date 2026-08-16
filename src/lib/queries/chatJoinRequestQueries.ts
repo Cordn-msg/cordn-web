@@ -28,7 +28,7 @@ export async function fetchCoordinatorJoinRequests(_stablePubkey: string, coordi
 // login/logout — a plain arg is captured once at mount, which leaves
 // always-mounted consumers (ChatActionIcons, the panels) stuck pre-login.
 // Disabled until an account is present.
-export function joinRequestsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
+function joinRequestsQueryOptions(stablePubkey: string, coordinatorKey?: string) {
 	const hasStablePubkey = Boolean(stablePubkey?.trim());
 	return {
 		queryKey: hasStablePubkey

@@ -14,7 +14,7 @@ export type MarkdownBlock =
 	| { type: 'paragraph'; text: string }
 	| { type: 'list'; items: string[] };
 
-export function inlineMarkdown(text: string): string {
+function inlineMarkdown(text: string): string {
 	return text
 		.replace(/`([^`]+)`/g, '<code>$1</code>')
 		.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')

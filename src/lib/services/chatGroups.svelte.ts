@@ -69,7 +69,7 @@ import {
 	markWelcomeAccepted
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { removeSentJoinRequest } from '$lib/services/chatJoinRequests.svelte';
-import { normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey } from '$lib/utils';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getCoordinatorClient,
@@ -373,7 +373,7 @@ export function decodeStoredGroupState(group: StoredChatGroup): ClientState {
 	return state;
 }
 
-export class RemovedFromGroupError extends Error {
+class RemovedFromGroupError extends Error {
 	constructor(groupId: string) {
 		super(`You were removed from this group and can no longer participate: ${groupId}`);
 		this.name = 'RemovedFromGroupError';
@@ -441,7 +441,7 @@ async function catchUpGroupBeforeOutboundOperation(
 		// Network/fetch errors are transient - log and continue with current state
 		console.warn('[catch-up] failed to fetch messages before outbound operation', {
 			groupId: group.id,
-			error: error instanceof Error ? error.message : String(error)
+			error: errorMessage(error)
 		});
 		return requireChatGroup(group.id);
 	}
@@ -466,9 +466,7 @@ async function catchUpGroupBeforeOutboundOperation(
  * Performs catch-up with the coordinator and validates the group is healthy.
  * Must be called from within a runGroupOperation context.
  */
-export async function assertGroupCanPerformOutboundOperation(
-	groupId: string
-): Promise<StoredChatGroup> {
+async function assertGroupCanPerformOutboundOperation(groupId: string): Promise<StoredChatGroup> {
 	const group = requireChatGroup(groupId);
 	assertChatGroupIsActive(group);
 
@@ -729,7 +727,7 @@ function scheduleSharedLeafRatchetRepair(groupId: string, detectedAtEpoch: strin
 		void repairSharedLeafRatchetDivergence(groupId, detectedAtEpoch).catch((error) => {
 			console.warn('[multi-device] ratchet-divergence repair failed', {
 				groupId,
-				error: error instanceof Error ? error.message : String(error)
+				error: errorMessage(error)
 			});
 		});
 	}, 0);
@@ -1389,42 +1387,6 @@ async function applyIncomingChatGroupMessages(
 	};
 }
 
-export async function fetchChatGroupMessages(groupId: string): Promise<{
-	group: StoredChatGroup;
-	received: StoredChatMessage[];
-	issues: StoredChatSyncIssue[];
-}> {
-	return runGroupOperation(groupId, async () => {
-		const account = requireActiveAccount('You must be logged in to fetch group messages');
-		const group = requireChatGroup(groupId);
-		assertChatGroupIsActive(group);
-
-		const state = decodeStoredGroupState(group);
-
-		const gid = groupIdDecoder.decode(state.groupContext.groupId);
-		const hasCursor = group.fetchCursor > 0;
-		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchManyGroupMessages({
-				groups: [
-					{
-						gid,
-						after: hasCursor ? group.fetchCursor : undefined
-					}
-				]
-			})
-		);
-
-		return applyIncomingChatGroupMessages(
-			group,
-			result.messages.map((message) => ({
-				cursor: message.cursor,
-				createdAt: message.at,
-				opaqueMessageBase64: message.msg_64
-			}))
-		);
-	});
-}
-
 export async function ingestIncomingChatGroupMessages(
 	groupId: string,
 	messages: Array<{
@@ -1564,7 +1526,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 			return false;
 		}
 
-		console.log('[recovery] attempting recovery from healthy snapshot', {
+		console.info('[recovery] attempting recovery from healthy snapshot', {
 			groupId,
 			snapshotEpoch: healthySnapshot.epoch,
 			snapshotCursor: healthySnapshot.cursor
@@ -1615,7 +1577,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 				return false;
 			}
 
-			console.log('[recovery] successful recovery from snapshot', {
+			console.info('[recovery] successful recovery from snapshot', {
 				groupId,
 				recoveredEpoch: healthySnapshot.epoch,
 				messagesReplayed: result.messages.length
@@ -1625,7 +1587,7 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 		} catch (error) {
 			console.warn('[recovery] replay failed with error', {
 				groupId,
-				error: error instanceof Error ? error.message : String(error)
+				error: errorMessage(error)
 			});
 			// Re-persist poisoned status on failure
 			const currentGroup = requireChatGroup(groupId);

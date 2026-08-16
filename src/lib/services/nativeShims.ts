@@ -9,6 +9,7 @@
  * services, background worker). `nativeBridge.ts` re-exports `isNativePlatform` from here.
  */
 import { browser } from '$app/environment';
+import { errorMessage } from '$lib/utils';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { Share } from '@capacitor/share';
@@ -213,8 +214,7 @@ function isMediaCancelError(err: unknown): boolean {
 /** Normalize a non-cancel plugin error into an Error whose message is safe to show in a toast. */
 function friendlyMediaError(err: unknown): Error {
 	const code = (err as { code?: string })?.code;
-	const message =
-		(code && MEDIA_ERROR_MESSAGES[code]) || (err instanceof Error ? err.message : String(err));
+	const message = (code && MEDIA_ERROR_MESSAGES[code]) || errorMessage(err);
 	return new Error(message);
 }
 

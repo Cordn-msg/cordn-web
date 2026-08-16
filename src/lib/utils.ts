@@ -9,6 +9,11 @@ export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+/** Uniform `unknown` error → string for logs, stores, and toasts. */
+export function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WithoutChild<T> = T extends { child?: any } ? Omit<T, 'child'> : T;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,7 +72,7 @@ export async function copyToClipboard(text: string) {
 /**
  * Slugify a string
  */
-export function slugify(text: string): string {
+function slugify(text: string): string {
 	return text
 		.toString() // Convert to string (just in case)
 		.toLowerCase() // Lowercase all characters

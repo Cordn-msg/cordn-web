@@ -10,6 +10,7 @@ import {
 } from '@contextvm/sdk';
 import type { ZodType } from 'zod';
 import { defaultRelays } from './relay-pool';
+import { errorMessage } from '$lib/utils';
 import {
 	type ConsumeKeyPackageInput,
 	consumeKeyPackageOutputSchema,
@@ -347,7 +348,7 @@ export class cordnClient implements coordinatorClient {
 			}
 			return parsed;
 		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
+			const detail = errorMessage(error);
 			this.onHealth?.({ status: 'degraded', error: detail });
 			throw error;
 		}

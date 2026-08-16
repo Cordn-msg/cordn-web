@@ -2,7 +2,7 @@
  * Static, build-time news feed for Cordn.
  *
  * News is a global, read-only broadcast — not an MLS group. Releases are
- * authored in {@link newsReleases}; each release is automatically followed by a
+ * authored in the `newsReleases` array below; each release is automatically followed by a
  * donation item so the donation cadence ("after each news item") stays
  * consistent without repeating boilerplate. A release can override the default
  * donation (or opt out with `donation: false`).
@@ -89,7 +89,7 @@ export const DEFAULT_DONATION: DonationConfig = {
 /**
  * Authored releases. Replace and extend this array to publish announcements.
  */
-export const newsReleases: NewsRelease[] = [
+const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-08-04-multi-device-reliability',
 		createdAt: Date.UTC(2026, 7, 4),

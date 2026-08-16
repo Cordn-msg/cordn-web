@@ -637,7 +637,7 @@ export function shouldReconcilePublishedKeyPackages(ownerPubkey?: string) {
 	return normalizePubKey(ownerPubkey) !== lastReconciledOwnerPubkey;
 }
 
-export async function markKeyPackagePublished(
+async function markKeyPackagePublished(
 	keyPackageRef: string,
 	coordinatorKey: string,
 	isLastResort?: boolean

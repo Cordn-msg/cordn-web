@@ -77,10 +77,10 @@ function isFiniteKind(value: string | undefined): value is string {
 }
 
 // ---------------------------------------------------------------------------
-// Send-side tag builders
+// Send-side tag builders (consumed by resolveOutboundMessage)
 // ---------------------------------------------------------------------------
 
-export function createReplyMessageTags(target: ChatMessageReplyTarget): string[][] {
+function createReplyMessageTags(target: ChatMessageReplyTarget): string[][] {
 	const rootEventTag = findTag(target.tags, 'E');
 	const rootKindTag = findTag(target.tags, 'K');
 	const rootPubkeyTag = findTag(target.tags, 'P');
@@ -99,7 +99,7 @@ export function createReplyMessageTags(target: ChatMessageReplyTarget): string[]
 	];
 }
 
-export function createReactionMessageTags(target: MessageTarget): string[][] {
+function createReactionMessageTags(target: MessageTarget): string[][] {
 	return [
 		['e', target.id, '', target.pubkey],
 		['p', target.pubkey],
@@ -107,7 +107,7 @@ export function createReactionMessageTags(target: MessageTarget): string[][] {
 	];
 }
 
-export function createEditMessageTags(target: MessageTarget, tags: string[][] = []): string[][] {
+function createEditMessageTags(target: MessageTarget, tags: string[][] = []): string[][] {
 	return [
 		['e', target.id, '', target.pubkey],
 		['p', target.pubkey],
@@ -116,14 +116,14 @@ export function createEditMessageTags(target: MessageTarget, tags: string[][] = 
 	];
 }
 
-export function createDeleteMessageTags(target: MessageTarget): string[][] {
+function createDeleteMessageTags(target: MessageTarget): string[][] {
 	return [
 		['e', target.id, '', target.pubkey],
 		['k', String(target.kind)]
 	];
 }
 
-export function createPinMessageTags(target: MessageTarget, op: PinOp): string[][] {
+function createPinMessageTags(target: MessageTarget, op: PinOp): string[][] {
 	return [
 		['e', target.id, '', target.pubkey],
 		['p', target.pubkey],

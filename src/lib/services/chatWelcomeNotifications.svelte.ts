@@ -263,13 +263,6 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 	}
 }
 
-export function markWelcomeNotificationRead(id: string) {
-	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((entry) =>
-		entry.id === id && !entry.readAt ? { ...entry, readAt: Date.now() } : entry
-	);
-	saveNotifications();
-}
-
 export function markAllWelcomeNotificationsRead() {
 	const readAt = Date.now();
 	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((entry) =>
@@ -280,13 +273,6 @@ export function markAllWelcomeNotificationsRead() {
 
 export function getWelcomeNotification(id: string): WelcomeNotificationEntry | undefined {
 	return chatWelcomeNotificationsStore.entries.find((entry) => entry.id === id);
-}
-
-export function removeWelcomeNotification(id: string) {
-	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.filter(
-		(entry) => entry.id !== id
-	);
-	saveNotifications();
 }
 
 export function markWelcomeAccepted(id: string, groupId: string) {

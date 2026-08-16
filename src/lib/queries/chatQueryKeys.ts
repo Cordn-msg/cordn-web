@@ -2,7 +2,7 @@ import { normalizePubKey } from '$lib/utils';
 
 const allCoordinators = 'all-coordinators';
 
-export function normalizeQueryCoordinatorKey(coordinatorKey?: string): string {
+function normalizeQueryCoordinatorKey(coordinatorKey?: string): string {
 	return coordinatorKey?.trim() ? normalizePubKey(coordinatorKey) : allCoordinators;
 }
 

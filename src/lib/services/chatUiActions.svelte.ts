@@ -5,7 +5,6 @@ import {
 	acceptChatWelcome,
 	createChatGroup,
 	deleteChatGroup,
-	getChatGroup,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
 	recoverPoisonedChatGroup,
@@ -222,7 +221,7 @@ export async function sendGroupMessageAction(
 	// backlog ingestion takes that same lock, so awaiting it from inside would
 	// deadlock. The rejection is swallowed so a failed rebuild still gives the
 	// send (and its own error path) a chance rather than aborting outright.
-	const resumePromise = getChatGroupResumePromise(getChatGroup(groupId)?.coordinatorKey);
+	const resumePromise = getChatGroupResumePromise();
 	if (resumePromise) {
 		await resumePromise.catch(() => undefined);
 	}

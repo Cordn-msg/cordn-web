@@ -20,7 +20,7 @@ const PROFILE_STALE_TIME = 5 * 60 * 1000;
  * components (e.g. several `ProfileCard` instances in one `ChatMessageItem`)
  * request the same profile simultaneously.
  */
-export function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
+function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 	const normalizedPubkey = normalizePubKey(pubkey);
 	const relays = hints.length > 0 ? [...new Set([...hints, ...metadataRelays])] : metadataRelays;
 	return {
@@ -79,7 +79,7 @@ const RELAY_LIST_FETCH_TIMEOUT_MS = 10_000;
  * Query, mirroring `profileQueryOptions`. The loader publishes into
  * `eventStore`, which `getUserRelayListFromStore` reads live.
  */
-export function userRelayListQueryOptions(pubkey: string) {
+function userRelayListQueryOptions(pubkey: string) {
 	const normalizedPubkey = normalizePubKey(pubkey);
 	return {
 		queryKey: chatQueryKeys.userRelayList(pubkey),

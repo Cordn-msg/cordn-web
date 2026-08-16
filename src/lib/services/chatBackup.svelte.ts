@@ -35,7 +35,6 @@ import {
 
 import { manager } from '$lib/services/accountManager.svelte';
 import {
-	chatGroupsStore,
 	ensureGroupsLoaded,
 	listChatGroups,
 	reloadChatGroupsForOwner,
@@ -50,8 +49,8 @@ import {
 import { requireActiveAccount } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
-export const BACKUP_MAGIC = 'cordn-web-backup';
-export const BACKUP_SCHEMA_VERSION = 1;
+const BACKUP_MAGIC = 'cordn-web-backup';
+const BACKUP_SCHEMA_VERSION = 1;
 
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
@@ -113,7 +112,7 @@ export interface ImportResult {
 	encrypted: boolean;
 }
 
-export class BackupError extends Error {
+class BackupError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'BackupError';
@@ -394,7 +393,3 @@ function mergeRestoredAccounts(
 
 	return deduped.size;
 }
-
-// Re-exported so callers can read the live group count without pulling the
-// whole groups module (keeps the route file's imports tidy).
-export { chatGroupsStore };

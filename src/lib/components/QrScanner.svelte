@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import CameraOff from '@lucide/svelte/icons/camera-off';
+	import { errorMessage } from '$lib/utils';
 	import { isNativePlatform } from '$lib/services/nativeShims';
 
 	let {
@@ -18,13 +19,13 @@
 
 	type Status = 'starting' | 'scanning' | 'denied' | 'no-camera' | 'error';
 	let status = $state<Status>('starting');
-	let errorMessage = $state('');
+	let errorText = $state('');
 
 	const failed = $derived(status !== 'starting' && status !== 'scanning');
 
 	async function start() {
 		status = 'starting';
-		errorMessage = '';
+		errorText = '';
 		try {
 			if (!scanner) {
 				scanner = new QrScanner(video, (result) => onResult(result.data), {
@@ -48,12 +49,12 @@
 			await scanner.start();
 			status = 'scanning';
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorMessage(err);
 			if (/permission|denied|not.?allowed/i.test(message)) {
 				status = 'denied';
 			} else {
 				status = 'error';
-				errorMessage = message;
+				errorText = message;
 			}
 		}
 	}
@@ -90,7 +91,7 @@
 				{:else if status === 'no-camera'}
 					No camera found on this device.
 				{:else}
-					{errorMessage || 'Could not start the camera.'}
+					{errorText || 'Could not start the camera.'}
 				{/if}
 			</p>
 			<Button type="button" variant="outline" size="sm" onclick={() => void start()}>

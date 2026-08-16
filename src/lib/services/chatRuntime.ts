@@ -11,7 +11,7 @@ import {
 } from '$lib/services/coordinatorServerInfo.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
 import { defaultRelays } from '$lib/services/relay-pool';
-import { normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey } from '$lib/utils';
 import type { NostrSigner } from '@contextvm/sdk';
 import type { IAccount } from 'applesauce-accounts';
 
@@ -180,7 +180,7 @@ export async function disconnectCoordinatorClient(
 }
 
 export function isTransientCoordinatorError(error: unknown): boolean {
-	const detail = error instanceof Error ? error.message : String(error);
+	const detail = errorMessage(error);
 	// `open stream aborted` / `keepalive` covers the CEP-41 probe failures
 	// ("Open stream aborted: Probe timeout" already matches via `timeout`, but
 	// "...Failed to send keepalive ping" only matches via `keepalive`). Without
@@ -204,7 +204,7 @@ export function isTransientCoordinatorError(error: unknown): boolean {
 const SIGNER_READY_RETRY_DELAYS_MS = [500, 1000, 1000, 2000];
 
 export function isSignerUnavailableError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
+	const message = errorMessage(error);
 	return /signer extension missing/i.test(message);
 }
 

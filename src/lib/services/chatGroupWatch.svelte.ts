@@ -48,7 +48,7 @@ import {
 	setChatGroupResumePromise
 } from '$lib/services/chatGroupWatchStatus.svelte';
 import { ensureSignerReady } from '$lib/services/signerReadiness.svelte';
-import { normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey } from '$lib/utils';
 
 /**
  * Level-triggered watch reconciler.
@@ -292,12 +292,7 @@ function toWatchableGroup(groupId: string): WatchableGroup | null {
 
 function getWatchableGroups(input: { includeCurrentWatches: boolean }) {
 	return listChatGroups()
-		.filter(
-			(group) =>
-				(input.includeCurrentWatches || getCurrentWatch(group.id) === undefined) &&
-				!isChatGroupRemoved(group) &&
-				!isChatGroupPoisoned(group)
-		)
+		.filter((group) => input.includeCurrentWatches || getCurrentWatch(group.id) === undefined)
 		.map((group) => toWatchableGroup(group.id))
 		.filter((group): group is WatchableGroup => Boolean(group));
 }
@@ -327,7 +322,7 @@ function createWatchBuffer(input: {
 		if (input.isClosing()) {
 			return;
 		}
-		const detail = error instanceof Error ? error.message : String(error);
+		const detail = errorMessage(error);
 		console.warn('[watch] failed to ingest watched group messages', {
 			groupId: input.groupId,
 			detail
@@ -423,7 +418,7 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 				void advanceNativeCursor(groupId, groupFetchWatermark(result.group));
 			}
 		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
+			const detail = errorMessage(error);
 			console.warn('[watch] failed to ingest coordinator backlog for group', {
 				groupId,
 				messageCount: groupMessages.length,
@@ -477,7 +472,7 @@ function noteStreamFailure(
 	error: unknown,
 	what: string
 ) {
-	const detail = error instanceof Error ? error.message : String(error);
+	const detail = errorMessage(error);
 	// Failures observed on an already-retired client are teardown collateral
 	// from an earlier swap: not evidence, so no degraded mark, no new swap.
 	if (!isCurrentCoordinatorClient(coordinatorKey, client)) {
@@ -542,7 +537,7 @@ async function startCoordinatorWatches(
 			} catch (error) {
 				console.warn('[watch] backlog fetch failed — subscribing anyway', {
 					coordinatorKey,
-					detail: error instanceof Error ? error.message : String(error)
+					detail: errorMessage(error)
 				});
 			}
 			if (handle.closing) return;
@@ -713,7 +708,7 @@ async function startMissingWatches(account: IAccount) {
 					}
 					console.warn('[watch] failed to start coordinator watches', {
 						coordinatorKey,
-						detail: error instanceof Error ? error.message : String(error)
+						detail: errorMessage(error)
 					});
 				});
 			return Promise.resolve();
@@ -756,7 +751,7 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 			}).catch((error) => {
 				console.warn('[watch] catch-up fetch failed', {
 					coordinatorKey,
-					detail: error instanceof Error ? error.message : String(error)
+					detail: errorMessage(error)
 				});
 				return { failedGroupIds: new Set<string>(), ingestedCount: 0 };
 			});

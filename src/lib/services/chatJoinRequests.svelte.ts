@@ -349,13 +349,6 @@ export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string
 	}
 }
 
-export function markJoinRequestRead(id: string) {
-	chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.map((entry) =>
-		entry.id === id && !entry.readAt ? { ...entry, readAt: Date.now() } : entry
-	);
-	saveJoinRequests();
-}
-
 export function markAllJoinRequestsRead() {
 	const readAt = Date.now();
 	chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.map((entry) =>
@@ -368,12 +361,7 @@ export function getJoinRequest(id: string): JoinRequestEntry | undefined {
 	return chatJoinRequestsStore.entries.find((entry) => entry.id === id);
 }
 
-export function removeJoinRequest(id: string) {
-	chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.filter((entry) => entry.id !== id);
-	saveJoinRequests();
-}
-
-export function markJoinRequestAccepted(id: string, groupId: string) {
+function markJoinRequestAccepted(id: string, groupId: string) {
 	chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.map((entry) =>
 		entry.id === id
 			? { ...entry, status: 'accepted', acceptedAt: Date.now(), acceptedGroupId: groupId }
@@ -411,10 +399,6 @@ export function listJoinRequests(): JoinRequestEntry[] {
 	return [...chatJoinRequestsStore.entries]
 		.filter((entry) => entry.status !== 'accepted' && entry.status !== 'dismissed')
 		.sort((a, b) => b.at - a.at);
-}
-
-export function listJoinRequestsForGroup(groupId: string): JoinRequestEntry[] {
-	return listJoinRequests().filter((entry) => entry.groupId === groupId);
 }
 
 export function listJoinRequestsForCoordinator(coordinatorKey: string): JoinRequestEntry[] {
