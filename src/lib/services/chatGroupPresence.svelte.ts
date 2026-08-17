@@ -114,6 +114,11 @@ export function getUnreadChatGroupMessageCount(groupId: string): number {
 	const group = getChatGroup(groupId);
 	if (!group) return 0;
 	const lastReadCursor = getChatGroupLastReadCursor(groupId);
+	// O(1) common case: lastCursor is the high-water mark of every stored
+	// message (ingest advances it via Math.max), so nothing can be unread at or
+	// below the read cursor. Keeps per-message sidebar/title recomputes from
+	// rescanning every group's full history.
+	if (group.lastCursor <= lastReadCursor) return 0;
 	let count = 0;
 	for (const message of group.messages) {
 		if (message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) count++;
@@ -123,6 +128,10 @@ export function getUnreadChatGroupMessageCount(groupId: string): number {
 
 export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
 	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
+	const group = getChatGroup(groupId);
+	// Same O(1) guard as getUnreadChatGroupMessageCount, against the mention
+	// cursor: no message exists past lastCursor, so no unread reference either.
+	if (!group || group.lastCursor <= lastReadMentionCursor) return [];
 	const messages = listChatGroupMessages(groupId);
 	const byEventId = new SvelteMap(messages.map((message) => [message.id, message]));
 

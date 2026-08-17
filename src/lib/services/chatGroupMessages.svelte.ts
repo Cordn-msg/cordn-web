@@ -32,7 +32,7 @@ import {
 	getCordnGroupMetadataFromExtensions,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
-import { errorMessage, normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 
 export interface StoredChatMessage {
 	cursor: number;
@@ -355,8 +355,8 @@ function describeMetadataChanges(
 	if (oldMeta.imageUrl !== newMeta.imageUrl) {
 		changes.push('group image');
 	}
-	const oldAdmins = new Set((oldMeta.adminPubkeys ?? []).map(normalizePubKey));
-	const newAdmins = new Set((newMeta.adminPubkeys ?? []).map(normalizePubKey));
+	const oldAdmins = new Set((oldMeta.adminPubkeys ?? []).map(safeNormalizePubKey).filter(Boolean));
+	const newAdmins = new Set((newMeta.adminPubkeys ?? []).map(safeNormalizePubKey).filter(Boolean));
 	if (oldAdmins.size !== newAdmins.size || ![...oldAdmins].every((admin) => newAdmins.has(admin))) {
 		changes.push('group admins');
 	}

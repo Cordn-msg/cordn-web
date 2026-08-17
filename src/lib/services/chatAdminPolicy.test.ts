@@ -9,6 +9,7 @@ import {
 	getGroupAdminPubkeys,
 	isEgalitarianGroup,
 	isGroupAdmin,
+	listGroupMembers,
 	proposalRequiresAdmin,
 	UnauthorizedGroupAdminActionError
 } from './chatAdminPolicy';
@@ -34,6 +35,17 @@ describe('chat admin policy', () => {
 
 		expect(getGroupAdminPubkeys(metadata)).toEqual(['aa'.repeat(32), 'bb'.repeat(32)]);
 		expect(isEgalitarianGroup(metadata)).toBe(false);
+	});
+
+	test('drops invalid admin pubkeys instead of throwing', () => {
+		const metadata = { name: 'demo', adminPubkeys: ['not-hex', 'aa'.repeat(32), ''] };
+		expect(getGroupAdminPubkeys(metadata)).toEqual(['aa'.repeat(32)]);
+	});
+
+	test('skips members whose credential identity is not a valid pubkey', () => {
+		const state = createStateWithMembers(['aa'.repeat(32), 'not-a-pubkey']);
+		const members = listGroupMembers(state);
+		expect(members).toEqual([{ leafIndex: 0, stablePubkey: 'aa'.repeat(32) }]);
 	});
 
 	test('treats egalitarian groups as open and restricted groups as explicit', () => {

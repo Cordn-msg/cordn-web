@@ -104,11 +104,20 @@ export function areStringArraysEqual(left: string[], right: string[]): boolean {
 }
 
 export function normalizePubKey(pubkey: string): string {
-	const normalized = pubkey.trim().toLowerCase();
-	if (!isHex(normalized)) {
+	const normalized = safeNormalizePubKey(pubkey);
+	if (!normalized) {
 		throw new Error('Coordinator pubkey must be a 64-character hex string');
 	}
 	return normalized;
+}
+
+/** Non-throwing normalizePubKey for peer-controlled values (message senders,
+ *  `p` tags, member credentials, decoded group metadata): returns '' for
+ *  invalid input so hostile or buggy peers can't crash render or ingestion
+ *  paths. */
+export function safeNormalizePubKey(pubkey: string): string {
+	const normalized = pubkey.trim().toLowerCase();
+	return isHex(normalized) ? normalized : '';
 }
 
 /**

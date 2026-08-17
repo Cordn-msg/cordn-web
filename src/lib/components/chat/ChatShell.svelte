@@ -36,7 +36,7 @@
 	} from '$lib/chat/references';
 	import { ChatKinds, SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
-	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
+	import { formatUnixTimestamp, normalizePubKey, samePubKey } from '$lib/utils';
 	import {
 		getChatGroup,
 		isChatGroupRemoved,
@@ -139,6 +139,8 @@
 	});
 	function toChatMessage(message: StoredChatMessage): ChatMessage {
 		const unreadReferenceCursor = unreadReferenceCursorByTargetId.get(message.id);
+		// Sender is peer-controlled: samePubKey can't throw on a malformed sender.
+		const isOwn = samePubKey(message.sender, activePubkey);
 		return {
 			id: `${message.id}:${message.cursor}`,
 			eventId: message.id,
@@ -149,8 +151,8 @@
 			cursor: message.cursor,
 			timeLabel: formatUnixTimestamp(message.createdAt, true, false),
 			dayLabel: formatUnixTimestamp(message.createdAt, false, true),
-			isOwn: normalizePubKey(message.sender) === activePubkey,
-			deliveryState: normalizePubKey(message.sender) === activePubkey ? 'sent' : undefined,
+			isOwn,
+			deliveryState: isOwn ? 'sent' : undefined,
 			unreadReference: Boolean(unreadReferenceCursor),
 			unreadReferenceCursor,
 			tags: message.tags,
@@ -613,9 +615,7 @@
 		// the meantime, drop the reply and resend as plain text.
 		let replyTarget: ChatMessageReplyTarget | undefined;
 		if (message.replyTo) {
-			const stored = listChatGroupMessages(groupId).find(
-				(entry) => entry.id === message.replyTo!.id
-			);
+			const stored = messageMaps.byEventId.get(message.replyTo.id);
 			if (stored) {
 				replyTarget = {
 					id: stored.id,
@@ -639,9 +639,7 @@
 	function handleReply(message: ChatMessage) {
 		if (message.deleted) return;
 
-		const storedMessage = listChatGroupMessages(groupId).find(
-			(entry) => entry.id === message.eventId
-		);
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
 		if (!storedMessage) return;
 
 		replyTarget = {
@@ -668,9 +666,7 @@
 	async function handleReact(message: ChatMessage, reaction: string) {
 		if (message.deleted) return;
 
-		const storedMessage = listChatGroupMessages(groupId).find(
-			(entry) => entry.id === message.eventId
-		);
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
 		if (!storedMessage) return;
 
 		const reactionTarget: MessageTarget = {
@@ -686,10 +682,8 @@
 	function handleEdit(message: ChatMessage) {
 		if (message.deleted) return;
 
-		const storedMessage = listChatGroupMessages(groupId).find(
-			(entry) => entry.id === message.eventId
-		);
-		if (!storedMessage || normalizePubKey(storedMessage.sender) !== activePubkey) return;
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
+		if (!storedMessage || !samePubKey(storedMessage.sender, activePubkey)) return;
 
 		editTarget = {
 			id: storedMessage.id,
@@ -706,10 +700,8 @@
 	async function handleDelete(message: ChatMessage) {
 		if (message.deleted) return;
 
-		const storedMessage = listChatGroupMessages(groupId).find(
-			(entry) => entry.id === message.eventId
-		);
-		if (!storedMessage || normalizePubKey(storedMessage.sender) !== activePubkey) return;
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
+		if (!storedMessage || !samePubKey(storedMessage.sender, activePubkey)) return;
 
 		const deleteTarget: MessageTarget = {
 			id: storedMessage.id,

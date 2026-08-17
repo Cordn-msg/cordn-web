@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools';
 import { isGroupRef } from '@cordn/core';
 
 import type { ChatMentionReference } from '$lib/components/chat/chat.types';
-import { normalizePubKey } from '$lib/utils';
+import { normalizePubKey, samePubKey } from '$lib/utils';
 
 export interface SerializedChatMentions {
 	content: string;
@@ -148,5 +148,8 @@ export function chatMessageReferencesPubkey(tags: string[][], pubkey: string): b
 	const normalizedPubkey = normalizePubKey(pubkey);
 	if (!normalizedPubkey) return false;
 
-	return tags.some((tag) => tag[0] === 'p' && normalizePubKey(tag[1] ?? '') === normalizedPubkey);
+	// `p` tags are peer-controlled: samePubKey (no hex-validation throw) so a
+	// malformed tag can never throw inside the unread/mention scan that the
+	// sidebar and attention deriveds run for every message.
+	return tags.some((tag) => tag[0] === 'p' && samePubKey(tag[1] ?? '', normalizedPubkey));
 }

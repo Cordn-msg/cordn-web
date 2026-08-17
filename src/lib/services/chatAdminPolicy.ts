@@ -1,7 +1,7 @@
 import { defaultProposalTypes, type ClientState, type IncomingMessageCallback } from 'ts-mls';
 
 import type { CordnGroupMetadata } from '$lib/services/chatMlsUtils';
-import { normalizePubKey } from '$lib/utils';
+import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 
 export class UnauthorizedGroupAdminActionError extends Error {
 	constructor(groupId: string) {
@@ -44,9 +44,18 @@ export function listGroupMembers(
 			continue;
 		}
 
+		// Credential identities are peer-controlled bytes: safe-normalize at this
+		// single source so every consumer (UI deriveds, system-message synthesis,
+		// admin checks) sees valid lowercase hex or skips the member entirely,
+		// instead of throwing out of a render or ingestion path.
+		const stablePubkey = safeNormalizePubKey(decodeCredentialIdentity(leaf.credential.identity));
+		if (!stablePubkey) {
+			continue;
+		}
+
 		members.push({
 			leafIndex: index / 2,
-			stablePubkey: decodeCredentialIdentity(leaf.credential.identity)
+			stablePubkey
 		});
 	}
 
@@ -54,7 +63,9 @@ export function listGroupMembers(
 }
 
 export function getGroupAdminPubkeys(metadata?: CordnGroupMetadata): string[] {
-	return (metadata?.adminPubkeys ?? []).map(normalizePubKey);
+	return (metadata?.adminPubkeys ?? [])
+		.map(safeNormalizePubKey)
+		.filter((pubkey): pubkey is string => Boolean(pubkey));
 }
 
 export function isEgalitarianGroup(metadata?: CordnGroupMetadata): boolean {

@@ -41,6 +41,20 @@ const notificationState = {
 	notifiedMessageIds: new Set<string>()
 };
 
+/** Session cap for the notified-id dedup. FIFO (Set preserves insertion order);
+ *  an evicted id could at worst re-notify if the exact same message were
+ *  re-processed in one session — unreachable in practice (cursors gate the
+ *  scan, and lastProcessedCursorByGroup is checked first). */
+const MAX_NOTIFIED_MESSAGE_IDS = 1000;
+
+function rememberNotifiedMessage(messageId: string): void {
+	notificationState.notifiedMessageIds.add(messageId);
+	if (notificationState.notifiedMessageIds.size > MAX_NOTIFIED_MESSAGE_IDS) {
+		const oldest = notificationState.notifiedMessageIds.values().next().value;
+		if (oldest !== undefined) notificationState.notifiedMessageIds.delete(oldest);
+	}
+}
+
 function getBaseTitle(pathname: string) {
 	if (pathname.startsWith('/chat/news')) {
 		return 'News | Cordn';
@@ -186,7 +200,7 @@ export async function notifyForUnreadChatMessages() {
 			if (!activePubkey || samePubKey(message.sender, activePubkey)) continue;
 			if (notificationState.notifiedMessageIds.has(message.id)) continue;
 
-			notificationState.notifiedMessageIds.add(message.id);
+			rememberNotifiedMessage(message.id);
 			await showLocalNotification({
 				title: title || 'Cordn',
 				body: getNotificationBody(message.sender, message.content),

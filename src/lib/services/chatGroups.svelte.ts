@@ -69,7 +69,7 @@ import {
 	markWelcomeAccepted
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { removeSentJoinRequest } from '$lib/services/chatJoinRequests.svelte';
-import { errorMessage, normalizePubKey } from '$lib/utils';
+import { errorMessage, normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
 	getCoordinatorClient,
@@ -1074,7 +1074,9 @@ export function listChatGroupMembers(
 	const adminPubkeys = group.metadata?.adminPubkeys;
 	// No admin list (or empty) means everyone is an admin. Build the normalized
 	// set once instead of re-normalizing the whole list per member.
-	const adminSet = adminPubkeys?.length ? new SvelteSet(adminPubkeys.map(normalizePubKey)) : null;
+	const adminSet = adminPubkeys?.length
+		? new SvelteSet(adminPubkeys.map(safeNormalizePubKey).filter(Boolean))
+		: null;
 	return listGroupMembers(state).map((member) => {
 		const normalizedMember = normalizePubKey(member.stablePubkey);
 		return {

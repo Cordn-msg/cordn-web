@@ -7,7 +7,7 @@
  * the inline view-model fold) and by search (for its own scoping); rich
  * renderers call the parsers directly to self-resolve their context.
  */
-import { normalizePubKey } from '$lib/utils';
+import { safeNormalizePubKey, samePubKey } from '$lib/utils';
 import { ChatKinds } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
@@ -379,13 +379,16 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 		const reference = getMessageReactionReference(message.kind, message.content, message.tags);
 		if (!reference) continue;
 
+		const sender = safeNormalizePubKey(message.sender);
+		if (!sender) continue; // malformed sender: the reaction can't be attributed
+
 		const byEmoji = reactionMap.get(reference.targetId) ?? new Map<string, ReactionIndexEntry>();
 		const entry = byEmoji.get(reference.reaction) ?? {
 			emoji: reference.reaction,
 			authors: new Set<string>()
 		};
 
-		entry.authors.add(normalizePubKey(message.sender));
+		entry.authors.add(sender);
 		byEmoji.set(reference.reaction, entry);
 		reactionMap.set(reference.targetId, byEmoji);
 	}
@@ -397,7 +400,7 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 		const original = byEventId.get(reference.targetId);
 		if (!original) continue;
 		if (reference.targetKind !== original.kind) continue;
-		if (normalizePubKey(original.sender) !== normalizePubKey(message.sender)) continue;
+		if (!samePubKey(original.sender, message.sender)) continue;
 
 		deletedIds.add(reference.targetId);
 	}
@@ -409,7 +412,7 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 
 		const original = byEventId.get(reference.targetId);
 		if (!original) continue;
-		if (normalizePubKey(original.sender) !== normalizePubKey(message.sender)) continue;
+		if (!samePubKey(original.sender, message.sender)) continue;
 
 		const current = editMap.get(reference.targetId);
 		if (!current || message.createdAt > current.createdAt) {
@@ -432,7 +435,7 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 			pinSet.set(reference.targetId, {
 				targetId: reference.targetId,
 				op: reference.op,
-				pinnedBy: normalizePubKey(message.sender),
+				pinnedBy: safeNormalizePubKey(message.sender),
 				pinnedAt: message.createdAt,
 				cursor: message.cursor
 			});

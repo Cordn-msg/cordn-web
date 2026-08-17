@@ -32,8 +32,6 @@ if (browser) {
 			if (manager.getAccount(active)) manager.setActive(active);
 			else localStorage.removeItem('active');
 		}
-
-		// subscribe to active changes
 	}
 	manager.active$.subscribe((account) => {
 		if (account) localStorage.setItem('active', account.id);
@@ -47,8 +45,5 @@ if (browser) {
 }
 
 export const logout = () => {
-	// if (browser) {
-	// 	localStorage.removeItem('accounts');
-	// }
 	manager.clearActive();
 };

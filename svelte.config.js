@@ -16,10 +16,7 @@ const config = {
 		prerender: {
 			entries: ['*'],
 			handleUnseenRoutes: 'ignore'
-		},
-		alias: {
-       		"@/*": "./path/to/lib/*",
-       	},
+		}
 	}
 };
 

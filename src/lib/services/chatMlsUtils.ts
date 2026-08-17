@@ -179,7 +179,11 @@ function decodeAdminPubkeys(bytes: Uint8Array): string[] {
 	for (let index = 0; index < bytes.length; index += 32) {
 		adminPubkeys.push(bytesToHex(bytes.slice(index, index + 32)));
 	}
-	return normalizeAdminPubkeys(adminPubkeys);
+	// Decode boundary (peer Commits): the hex output is always well-formed, but a
+	// hostile payload may repeat entries. normalizeAdminPubkeys' duplicate
+	// rejection is encode-path validation of local input — a throw here aborts
+	// ingestion for every reader of the Commit, so dedupe instead.
+	return [...new Set(adminPubkeys)];
 }
 
 export function createCordnMetadataCapabilities() {
