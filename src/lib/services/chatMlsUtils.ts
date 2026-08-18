@@ -391,9 +391,9 @@ export async function previewGroupMetadataFromWelcome(params: {
 	};
 }
 
-export async function addMemberToGroup(params: {
+export async function addMembersToGroup(params: {
 	state: ClientState;
-	memberKeyPackage: KeyPackage;
+	memberKeyPackages: KeyPackage[];
 }): Promise<{
 	newState: ClientState;
 	welcome: Welcome;
@@ -401,18 +401,19 @@ export async function addMemberToGroup(params: {
 	welcomeBase64: string;
 }> {
 	const cipherSuite = await getCordnCipherSuite();
+	// RFC 9420 §12.4: one Commit may carry multiple Add proposals; §12.3 fixes
+	// leaf assignment to proposal order. ts-mls emits a single Welcome whose
+	// secrets vector covers every added leaf (§12.4.1).
 	const result = await createCommit({
 		context: { cipherSuite, authService: unsafeTestingAuthenticationService },
 		state: params.state,
 		ratchetTreeExtension: true,
-		extraProposals: [
-			{
-				proposalType: 1,
-				add: {
-					keyPackage: params.memberKeyPackage
-				}
+		extraProposals: params.memberKeyPackages.map((keyPackage) => ({
+			proposalType: defaultProposalTypes.add,
+			add: {
+				keyPackage
 			}
-		]
+		}))
 	});
 
 	if (!result.welcome) {

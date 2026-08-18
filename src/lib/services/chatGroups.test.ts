@@ -82,7 +82,7 @@ vi.mock('$lib/services/chatGroupSessions.svelte', () => ({
 }));
 
 vi.mock('$lib/services/chatMlsUtils', () => ({
-	addMemberToGroup: vi.fn(),
+	addMembersToGroup: vi.fn(),
 	encodeWelcomeBase64: vi.fn(),
 	findMemberLeafIndexByStablePubkey: vi.fn(() => 4),
 	getCordnGroupMetadataExtension: vi.fn(),

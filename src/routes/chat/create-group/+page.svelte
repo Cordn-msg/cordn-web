@@ -21,7 +21,7 @@
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-	import { createChatGroup, inviteChatGroupMember } from '$lib/services/chatGroups.svelte';
+	import { createChatGroup, inviteChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { toast } from 'svelte-sonner';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -144,22 +144,17 @@
 				keyPackageRef: selectedKeyPackageRef || undefined,
 				adminPubkeys
 			});
-			// Invite members individually so one failure (typically "no reachable
-			// key package on this coordinator") can't silently abort every later
-			// invite and leave phantom admins in metadata. The group is already
-			// created, so failures are reported via toast and we still navigate in.
-			let failedInvites = 0;
-			for (const pubkey of selectedMemberPubkeys) {
-				try {
-					await inviteChatGroupMember({ groupId: group.id, identifier: pubkey });
-				} catch {
-					failedInvites += 1;
-				}
-			}
-			if (failedInvites) {
+			// Single batch invite: one Commit + one Welcome for every member
+			// (RFC 9420 §12.4). Unreachable members are reported via toast and the
+			// group is still created, same UX as the per-member loop this replaced.
+			const { failures } = await inviteChatGroupMembers({
+				groupId: group.id,
+				identifiers: selectedMemberPubkeys
+			});
+			if (failures.length) {
 				toast.error(
-					`Group created, but ${failedInvites} of ${selectedMemberPubkeys.length} invite${
-						failedInvites === 1 ? '' : 's'
+					`Group created, but ${failures.length} of ${selectedMemberPubkeys.length} invite${
+						failures.length === 1 ? '' : 's'
 					} failed. Make sure each member has published a key package on this coordinator, then add them from the group's info page.`
 				);
 			}

@@ -70,6 +70,7 @@ async function finalizePendingEpochOperations(
 
 	const matched = new Set(opaqueMessageBase64s);
 	const remaining: PendingEpochOperation[] = [];
+	const welcomeStores: Promise<unknown>[] = [];
 
 	for (const operation of pending) {
 		if (!matched.has(operation.commitMessageBase64)) {
@@ -78,14 +79,22 @@ async function finalizePendingEpochOperations(
 		}
 
 		if (operation.kind === 'add-member') {
-			await client.StoreWelcome({
-				target_pk: operation.targetStablePubkey,
-				kp_ref: operation.keyPackageReference,
-				welcome_64: operation.welcomeBase64,
-				after: operation.postedCursor
-			});
+			// StoreWelcome calls are independent per target, so fan them out: a
+			// batch add otherwise pays a sequential round-trip per new member,
+			// each posting the full Welcome. The store is only updated after all
+			// resolve, so a failure leaves the ops pending for retry (unchanged).
+			welcomeStores.push(
+				client.StoreWelcome({
+					target_pk: operation.targetStablePubkey,
+					kp_ref: operation.keyPackageReference,
+					welcome_64: operation.welcomeBase64,
+					after: operation.postedCursor
+				})
+			);
 		}
 	}
+
+	await Promise.all(welcomeStores);
 
 	if (remaining.length === 0) {
 		store.delete(groupId);

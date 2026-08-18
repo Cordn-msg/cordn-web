@@ -5,7 +5,8 @@ import {
 	clientStateDecoder,
 	clientStateEncoder,
 	encode,
-	type ClientState
+	type ClientState,
+	type KeyPackage
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import {
@@ -16,7 +17,7 @@ import {
 } from '$lib/services/multiDevice.svelte';
 import { createChatKeyPackage, pruneZombieKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import {
-	addMemberToGroup,
+	addMembersToGroup,
 	createSelfUpdateCommit,
 	encodeWelcomeBase64,
 	findMemberLeafIndexByStablePubkey,
@@ -907,10 +908,20 @@ export async function listCoordinatorAvailableKeyPackages(
 		.sort((a, b) => b.publishedAt - a.publishedAt);
 }
 
-export async function inviteChatGroupMember(input: {
-	groupId: string;
+export interface ChatGroupInviteFailure {
 	identifier: string;
-}): Promise<StoredChatGroup> {
+	error: string;
+}
+
+export interface ChatGroupInviteResult {
+	group: StoredChatGroup;
+	failures: ChatGroupInviteFailure[];
+}
+
+export async function inviteChatGroupMembers(input: {
+	groupId: string;
+	identifiers: string[];
+}): Promise<ChatGroupInviteResult> {
 	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
 		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
@@ -921,45 +932,91 @@ export async function inviteChatGroupMember(input: {
 		});
 
 		const state = decodeStoredGroupState(group);
+		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);
+		const failures: ChatGroupInviteFailure[] = [];
+		const targets: Array<{
+			targetStablePubkey: string;
+			keyPackageReference: string;
+			keyPackage: KeyPackage;
+		}> = [];
 
-		const consumeResult = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.ConsumeKeyPackage({
-				id: input.identifier.trim()
+		// Consume in parallel: each call targets a distinct identity, so there is
+		// no contention. Failures are collected per identifier so one unreachable
+		// member can't abort the batch.
+		await Promise.all(
+			input.identifiers.map(async (rawIdentifier) => {
+				const identifier = rawIdentifier.trim();
+				if (!identifier) {
+					failures.push({
+						identifier: rawIdentifier,
+						error:
+							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
+					});
+					return;
+				}
+				try {
+					const consumeResult = await withCoordinatorClient(
+						account,
+						group.coordinatorKey,
+						(client) => client.ConsumeKeyPackage({ id: identifier })
+					);
+					if (!consumeResult.keyPackage) {
+						throw new Error(
+							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
+						);
+					}
+					const normalizedIdentifier = normalizePubKey(identifier);
+					const matchedAvailableKeyPackage = availableKeyPackages.find(
+						(entry) =>
+							entry.keyPackageRef === identifier ||
+							normalizePubKey(entry.stablePubkey) === normalizedIdentifier
+					);
+					const targetStablePubkey = normalizePubKey(
+						matchedAvailableKeyPackage?.stablePubkey ?? consumeResult.keyPackage.pk
+					);
+					if (findMemberLeafIndexByStablePubkey(state, targetStablePubkey) >= 0) {
+						throw new Error(
+							'This identity is already a group member. Reinvites are not supported.'
+						);
+					}
+					const memberKeyPackage = await parseConsumedPublishedKeyPackage({
+						stablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
+						publicationEvent: consumeResult.keyPackage.event
+					});
+					targets.push({
+						targetStablePubkey,
+						keyPackageReference: consumeResult.keyPackage.kp_ref,
+						keyPackage: memberKeyPackage
+					});
+				} catch (error) {
+					failures.push({
+						identifier,
+						error: error instanceof Error ? error.message : 'Failed to invite member'
+					});
+				}
 			})
 		);
+
 		void queryClient.invalidateQueries({
 			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey)
 		});
 
-		if (!consumeResult.keyPackage) {
-			throw new Error(
-				'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
-			);
-		}
-
-		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);
-		const normalizedIdentifier = normalizePubKey(input.identifier.trim());
-		const matchedAvailableKeyPackage = availableKeyPackages.find(
-			(entry) =>
-				entry.keyPackageRef === input.identifier.trim() ||
-				normalizePubKey(entry.stablePubkey) === normalizedIdentifier
-		);
-		const targetStablePubkey = normalizePubKey(
-			matchedAvailableKeyPackage?.stablePubkey ?? consumeResult.keyPackage.pk
-		);
-		const existingLeafIndex = findMemberLeafIndexByStablePubkey(state, targetStablePubkey);
-		if (existingLeafIndex >= 0) {
-			throw new Error('This identity is already a group member. Reinvites are not supported.');
-		}
-
-		const memberKeyPackage = await parseConsumedPublishedKeyPackage({
-			stablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
-			publicationEvent: consumeResult.keyPackage.event
+		// Dedupe by stable pubkey: a duplicated key package would make the
+		// proposal list invalid (RFC 9420 §12.2). First occurrence wins.
+		const seenStablePubkeys = new Set<string>();
+		const uniqueTargets = targets.filter((target) => {
+			if (seenStablePubkeys.has(target.targetStablePubkey)) return false;
+			seenStablePubkeys.add(target.targetStablePubkey);
+			return true;
 		});
 
-		const commitResult = await addMemberToGroup({
+		if (uniqueTargets.length === 0) {
+			return { group, failures };
+		}
+
+		const commitResult = await addMembersToGroup({
 			state,
-			memberKeyPackage
+			memberKeyPackages: uniqueTargets.map((target) => target.keyPackage)
 		});
 
 		const sealedAddCommit = await sealForPosting({
@@ -967,28 +1024,38 @@ export async function inviteChatGroupMember(input: {
 			opaqueMessageBase64: commitResult.commitMessageBase64
 		});
 
-		// Hoisted to a local so the posted Commit cursor can be stamped on
-		// directly. enqueuePendingEpochOperation pushes this same reference
-		// (no clone), so mutating it here updates the stored op. Avoids a
+		// One Commit + one Welcome covers every added member (RFC 9420
+		// §12.4.1); each pending op shares them and finalizes per target via
+		// StoreWelcome (finalizePendingEpochOperations matches ops by
+		// commitMessageBase64). enqueuePendingEpochOperation pushes the same
+		// reference (no clone), so mutating the entries below stamps the stored
+		// ops — same trick the single-invite path used to avoid a
 		// fragile re-find by commitMessageBase64 (the stored key is the
 		// sealed form, not the plaintext commit).
-		const addMemberOp: Extract<PendingEpochOperation, { kind: 'add-member' }> = {
-			kind: 'add-member',
-			groupId: group.id,
-			commitMessageBase64: sealedAddCommit.msg_64,
-			targetStablePubkey,
-			keyPackageReference: consumeResult.keyPackage.kp_ref,
-			welcomeBase64: encodeWelcomeBase64(commitResult.welcome)
-		};
-		enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
+		const welcomeBase64 = encodeWelcomeBase64(commitResult.welcome);
+		const addMemberOps: Extract<PendingEpochOperation, { kind: 'add-member' }>[] =
+			uniqueTargets.map((target) => {
+				const addMemberOp: Extract<PendingEpochOperation, { kind: 'add-member' }> = {
+					kind: 'add-member',
+					groupId: group.id,
+					commitMessageBase64: sealedAddCommit.msg_64,
+					targetStablePubkey: target.targetStablePubkey,
+					keyPackageReference: target.keyPackageReference,
+					welcomeBase64
+				};
+				enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
+				return addMemberOp;
+			});
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedAddCommit)
 		);
 
-		// Stamp the Commit cursor on the pending op so the Welcome we store
-		// carries an `after` hint; the invitee uses it to skip pre-join traffic.
-		addMemberOp.postedCursor = posted.cursor;
+		// Stamp the Commit cursor on every pending op so each stored Welcome
+		// carries an `after` hint; invitees use it to skip pre-join traffic.
+		for (const addMemberOp of addMemberOps) {
+			addMemberOp.postedCursor = posted.cursor;
+		}
 
 		const syncBaseGroup: StoredChatGroup = {
 			...group,
@@ -1055,8 +1122,25 @@ export async function inviteChatGroupMember(input: {
 		nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
 
 		replaceGroup(group.id, nextGroup);
-		return nextGroup;
+		return {
+			group: nextGroup,
+			failures
+		};
 	});
+}
+
+export async function inviteChatGroupMember(input: {
+	groupId: string;
+	identifier: string;
+}): Promise<StoredChatGroup> {
+	const result = await inviteChatGroupMembers({
+		groupId: input.groupId,
+		identifiers: [input.identifier]
+	});
+	if (result.failures.length > 0) {
+		throw new Error(result.failures[0].error);
+	}
+	return result.group;
 }
 
 export function listChatGroupMembers(

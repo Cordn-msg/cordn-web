@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-08-18-batch-invites',
+		createdAt: Date.UTC(2026, 7, 18),
+		version: 1,
+		title: 'Faster invites for new groups',
+		body: "- ✨ Creating a group with several members is now much faster: everyone is added in a single batch instead of one member at a time, so a large group no longer waits on a separate invite round for each person.\n- 🔄 Members who can't be invited (for example, no key package published on the coordinator) are still reported one by one, and everyone else joins in the same batch."
+	},
+	{
 		id: 'cordn-news-2026-08-04-multi-device-reliability',
 		createdAt: Date.UTC(2026, 7, 4),
 		version: 1,
