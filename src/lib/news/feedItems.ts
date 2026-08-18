@@ -93,9 +93,9 @@ const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-08-18-batch-invites',
 		createdAt: Date.UTC(2026, 7, 18),
-		version: 1,
-		title: 'Faster invites for new groups',
-		body: "- ✨ Creating a group with several members is now much faster: everyone is added in a single batch instead of one member at a time, so a large group no longer waits on a separate invite round for each person.\n- 🔄 Members who can't be invited (for example, no key package published on the coordinator) are still reported one by one, and everyone else joins in the same batch."
+		version: 2,
+		title: 'Faster invites, tidier key packages',
+		body: "- ✨ Creating a group with several members is now much faster: everyone is added in a single batch instead of one member at a time, so a large group no longer waits on a separate invite round for each person.\n- 🔄 Members who can't be invited (for example, no key package published on the coordinator) are still reported one by one, and everyone else joins in the same batch.\n- 🐛 The key packages settings no longer show a package as published after the coordinator has already let it go (for example, once it was used for an invitation), and removing such a package now always works instead of failing because the coordinator can no longer find it.\n- 🔄 \"Clean up consumed\" now also clears used packages whose publish markers went stale, so the list stops collecting zombies."
 	},
 	{
 		id: 'cordn-news-2026-08-04-multi-device-reliability',

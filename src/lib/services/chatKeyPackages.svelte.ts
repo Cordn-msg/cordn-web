@@ -39,15 +39,6 @@ import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackag
 import { type LastResortKeyPackageEntry } from '$lib/services/multiDevice';
 import { onMetaStateChange } from '$lib/services/multiDevice.svelte';
 
-function isMissingRemoteKeyPackageRemovalError(error: unknown): boolean {
-	if (!(error instanceof Error)) return false;
-	const message = error.message.toLowerCase();
-	return (
-		message.includes('invalid input: expected object, received undefined') ||
-		message.includes('expected object, received undefined')
-	);
-}
-
 export interface StoredKeyPackageRecord {
 	id: string;
 	ownerPubkey: string;
@@ -208,28 +199,44 @@ export function getChatKeyPackage(keyPackageRef: string): StoredKeyPackageRecord
 }
 
 /**
- * Refs of local key packages that are provably dead: already consumed to join
- * an existing group (`consumedRefs`, i.e. some `joinedWithKeyPackageRef`) AND
- * not published to any coordinator. A consumed KP's private bytes are
- * cryptographically spent (the group state is self-contained), and an
- * unpublished KP can never receive a new welcome — so the local record serves
- * no future action. Published KPs (incl. last-resort, which can back multiple
- * welcomes) are always kept. Single source of truth for both the prune and
- * the config-page zombie count.
+ * Refs of local key packages that are provably dead. A dead KP is one whose
+ * private bytes are cryptographically spent (consumed to join an existing
+ * group, i.e. some `joinedWithKeyPackageRef`) AND which no coordinator can
+ * ever deliver a new welcome against:
+ *  - unpublished (`publishedCoordinatorKeys` empty), or
+ *  - marked published but every claimed coordinator was queried and no longer
+ *    lists the ref (`options.remoteAbsentRefs`) — consumed or evicted since.
+ * Last-resort KPs are exempt from the remote-absent branch: they can back
+ * multiple pending welcomes and are replicated via the meta document.
+ * Single source of truth for both the prune and the config-page zombie count.
  */
-export function listZombieKeyPackageRefs(consumedRefs: string[]): string[] {
+export function listZombieKeyPackageRefs(
+	consumedRefs: string[],
+	options: { remoteAbsentRefs?: ReadonlySet<string> } = {}
+): string[] {
 	if (consumedRefs.length === 0) return [];
+	const { remoteAbsentRefs } = options;
 	return chatKeyPackagesStore.keyPackages
-		.filter(
-			(entry) =>
-				entry.publishedCoordinatorKeys.length === 0 && consumedRefs.includes(entry.keyPackageRef)
-		)
+		.filter((entry) => {
+			if (entry.publishedCoordinatorKeys.length === 0) {
+				return consumedRefs.includes(entry.keyPackageRef);
+			}
+			return (
+				!entry.isLastResort &&
+				remoteAbsentRefs !== undefined &&
+				consumedRefs.includes(entry.keyPackageRef) &&
+				remoteAbsentRefs.has(entry.keyPackageRef)
+			);
+		})
 		.map((entry) => entry.keyPackageRef);
 }
 
 /** Drop the zombie key packages identified by {@link listZombieKeyPackageRefs}. */
-export async function pruneZombieKeyPackages(consumedRefs: string[]): Promise<void> {
-	const refs = listZombieKeyPackageRefs(consumedRefs);
+export async function pruneZombieKeyPackages(
+	consumedRefs: string[],
+	options: { remoteAbsentRefs?: ReadonlySet<string> } = {}
+): Promise<void> {
+	const refs = listZombieKeyPackageRefs(consumedRefs, options);
 	if (refs.length === 0) return;
 	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.filter((entry) => !refs.includes(entry.keyPackageRef))
@@ -542,14 +549,27 @@ export async function removeChatKeyPackage(
 			: dedupeStrings(record?.publishedCoordinatorKeys ?? []);
 
 		for (const coordinatorKey of coordinatorKeys) {
+			// Fast path: the shared available-key-packages query already says this
+			// ref is gone from this coordinator (consumed / quota-evicted / data
+			// loss), so skip the RPC that would only answer "not found".
+			const cached = queryClient.getQueryData<{ kp_ref: string }[]>(
+				chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
+			);
+			if (cached && !cached.some((entry) => entry.kp_ref === keyPackageRef)) continue;
 			try {
 				await withCoordinatorClient(account, coordinatorKey, (client) =>
 					client.RemoveKeyPackages({ kp_refs: [keyPackageRef] })
 				);
 			} catch (error) {
-				if (!isMissingRemoteKeyPackageRemovalError(error)) {
-					throw error;
-				}
+				// Idempotent removal: a KP that no longer exists remotely must not
+				// block local cleanup, later coordinators, or invalidation. Treat any
+				// failure as already-removed; a copy that somehow survives shows up as
+				// an orphaned remote entry on the config page, where it can be removed
+				// again.
+				console.warn(
+					`Key package ${keyPackageRef} already absent (or coordinator unreachable) on ${coordinatorKey}:`,
+					error instanceof Error ? error.message : error
+				);
 			}
 		}
 

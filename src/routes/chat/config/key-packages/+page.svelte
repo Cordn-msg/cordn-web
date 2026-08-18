@@ -15,16 +15,14 @@
 		type AvailableKeyPackageWithCoordinator
 	} from '$lib/queries/chatKeyPackageQueries';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import {
-		listChatGroups,
-		pruneConsumedKeyPackagesForActiveGroups
-	} from '$lib/services/chatGroups.svelte';
+	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { refreshAvailableKeyPackagesAction } from '$lib/services/chatUiActions.svelte';
 	import {
 		createChatKeyPackage,
 		ensureLastResortPublished,
 		listChatKeyPackages,
 		listZombieKeyPackageRefs,
+		pruneZombieKeyPackages,
 		publishChatKeyPackage,
 		removeChatKeyPackage,
 		takeOverLastResort
@@ -97,12 +95,44 @@
 	const orphanedRemoteKeyPackageCount = $derived.by(
 		() => ownedRemoteKeyPackages.filter((entry) => !entry.localCopy).length
 	);
-	const localZombieKeyPackageCount = $derived.by(() => {
-		const consumedRefs = chatGroups
+	const consumedKeyPackageRefs = $derived.by(() =>
+		chatGroups
 			.map((group) => group.joinedWithKeyPackageRef)
-			.filter((ref): ref is string => Boolean(ref));
-		return listZombieKeyPackageRefs(consumedRefs).length;
+			.filter((ref): ref is string => Boolean(ref))
+	);
+	// Refs per coordinator from the shared remote read (unfiltered — includes
+	// other identities' KPs, so a coordinator that has none of ours still
+	// counts as queried). A coordinator absent from this map was never fetched,
+	// and its local publish markers stay authoritative.
+	const remoteKeyPackageRefsByCoordinator = $derived.by(() => {
+		const map = new Map<string, Set<string>>();
+		for (const entry of availableKeyPackagesQuery.data ?? []) {
+			let refs = map.get(entry.coordinatorKey);
+			if (!refs) map.set(entry.coordinatorKey, (refs = new Set()));
+			refs.add(entry.kp_ref);
+		}
+		return map;
 	});
+	// KPs whose local publish markers are provably stale: every claimed
+	// coordinator was queried and none lists the ref anymore. Display and the
+	// zombie prune both derive from this instead of trusting the marker.
+	const remoteAbsentKeyPackageRefs = $derived.by(() => {
+		const absent = new Set<string>();
+		for (const keyPackage of keyPackages) {
+			if (keyPackage.publishedCoordinatorKeys.length === 0) continue;
+			const verifiedAbsent = keyPackage.publishedCoordinatorKeys.every((coordinatorKey) => {
+				const refs = remoteKeyPackageRefsByCoordinator.get(normalizePubKey(coordinatorKey));
+				return refs !== undefined && !refs.has(keyPackage.keyPackageRef);
+			});
+			if (verifiedAbsent) absent.add(keyPackage.keyPackageRef);
+		}
+		return absent;
+	});
+	const localZombieKeyPackageCount = $derived.by(() =>
+		listZombieKeyPackageRefs(consumedKeyPackageRefs, {
+			remoteAbsentRefs: remoteAbsentKeyPackageRefs
+		}).length
+	);
 
 	async function handleCreate() {
 		try {
@@ -181,7 +211,11 @@
 		try {
 			pruningLocal = true;
 			error = '';
-			await pruneConsumedKeyPackagesForActiveGroups();
+			// Local-only drop by construction: zombies are unpublished or provably
+			// absent remotely, so no RemoveKeyPackages round-trip is needed.
+			await pruneZombieKeyPackages(consumedKeyPackageRefs, {
+				remoteAbsentRefs: remoteAbsentKeyPackageRefs
+			});
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to clean up key packages';
 		} finally {
@@ -388,17 +422,25 @@
 							</div>
 						{:else}
 							{#each keyPackages as keyPackage (keyPackage.keyPackageRef)}
+							{@const publishedCoordinatorKeys = keyPackage.publishedCoordinatorKeys.filter(
+								(coordinatorKey) => {
+									const refs = remoteKeyPackageRefsByCoordinator.get(
+										normalizePubKey(coordinatorKey)
+									);
+									// Queried and absent → stale marker, hide it; never queried → keep it.
+									return refs === undefined || refs.has(keyPackage.keyPackageRef);
+								}
+							)}
 								<div class="space-y-2 rounded-xl border border-border px-4 py-3">
 									<KeyPackageCard entry={keyPackage} />
 									<p class="text-xs text-muted-foreground">
-										Published to {keyPackage.publishedCoordinatorKeys.length} coordinator{keyPackage
-											.publishedCoordinatorKeys.length === 1
+										Published to {publishedCoordinatorKeys.length} coordinator{publishedCoordinatorKeys.length === 1
 											? ''
 											: 's'}
 									</p>
-									{#if keyPackage.publishedCoordinatorKeys.length > 0}
+									{#if publishedCoordinatorKeys.length > 0}
 										<div class="space-y-2 pt-1">
-											{#each keyPackage.publishedCoordinatorKeys as coordinatorKey (coordinatorKey)}
+											{#each publishedCoordinatorKeys as coordinatorKey (coordinatorKey)}
 												<a
 													href={resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey })}
 													class="block rounded-lg border border-border/60 px-3 py-2 transition-colors hover:bg-background"
@@ -430,11 +472,11 @@
 													variant="outline"
 													size="xs"
 													disabled={publishingKeyPackageRef === keyPackage.keyPackageRef ||
-														keyPackage.publishedCoordinatorKeys.includes(coordinator.pubkey)}
+														publishedCoordinatorKeys.includes(coordinator.pubkey)}
 													onclick={() =>
 														handlePublish(keyPackage.keyPackageRef, coordinator.pubkey)}
 												>
-													{keyPackage.publishedCoordinatorKeys.includes(coordinator.pubkey)
+													{publishedCoordinatorKeys.includes(coordinator.pubkey)
 														? `Published: ${coordinator.label}`
 														: `Publish to ${coordinator.label}`}
 												</Button>
