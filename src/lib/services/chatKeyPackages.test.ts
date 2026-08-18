@@ -145,20 +145,15 @@ describe('removeChatKeyPackage()', () => {
 	beforeEach(() => {
 		withCoordinatorClientMock.mockReset();
 		withCoordinatorClientMock.mockImplementation(
-			<T>(
-				_account: unknown,
-				_coordinatorKey: string,
-				operation: (client: T) => Promise<unknown>
-			) => operation({ RemoveKeyPackages: vi.fn().mockResolvedValue({}) } as unknown as T)
+			<T>(_account: unknown, _coordinatorKey: string, operation: (client: T) => Promise<unknown>) =>
+				operation({ RemoveKeyPackages: vi.fn().mockResolvedValue({}) } as unknown as T)
 		);
 		invalidateQueriesMock.mockClear();
 		getQueryDataMock.mockReset();
 	});
 
 	test('is idempotent when the coordinator no longer has the key package', async () => {
-		const { chatKeyPackagesStore, removeChatKeyPackage } = await import(
-			'./chatKeyPackages.svelte'
-		);
+		const { chatKeyPackagesStore, removeChatKeyPackage } = await import('./chatKeyPackages.svelte');
 		chatKeyPackagesStore.keyPackages = [makeRecord('kp-a', [COORD_A, COORD_B])];
 		withCoordinatorClientMock.mockRejectedValue(
 			new Error('key package not found') // unrecognized "missing" phrasing
@@ -173,9 +168,7 @@ describe('removeChatKeyPackage()', () => {
 	});
 
 	test('skips the RPC for coordinators whose cached list already lacks the ref', async () => {
-		const { chatKeyPackagesStore, removeChatKeyPackage } = await import(
-			'./chatKeyPackages.svelte'
-		);
+		const { chatKeyPackagesStore, removeChatKeyPackage } = await import('./chatKeyPackages.svelte');
 		chatKeyPackagesStore.keyPackages = [makeRecord('kp-a', [COORD_A, COORD_B])];
 		getQueryDataMock.mockImplementation((queryKey: readonly string[]) => {
 			const coordinatorKey = queryKey[queryKey.length - 2];
@@ -193,9 +186,8 @@ describe('removeChatKeyPackage()', () => {
 
 describe('listZombieKeyPackageRefs()', () => {
 	test('consumed + stale-marker KPs are zombies only when remotely absent, never last-resorts', async () => {
-		const { chatKeyPackagesStore, listZombieKeyPackageRefs } = await import(
-			'./chatKeyPackages.svelte'
-		);
+		const { chatKeyPackagesStore, listZombieKeyPackageRefs } =
+			await import('./chatKeyPackages.svelte');
 		chatKeyPackagesStore.keyPackages = [
 			makeRecord('kp-a', [COORD_A]),
 			{ ...makeRecord('kp-b', [COORD_A]), isLastResort: true },
@@ -209,9 +201,6 @@ describe('listZombieKeyPackageRefs()', () => {
 		// With verified remote absence: consumed non-last-resorts are prunable;
 		// the last-resort stays exempt.
 		const remoteAbsentRefs = new Set(['kp-a', 'kp-b', 'kp-c']);
-		expect(listZombieKeyPackageRefs(consumedRefs, { remoteAbsentRefs })).toEqual([
-			'kp-a',
-			'kp-c'
-		]);
+		expect(listZombieKeyPackageRefs(consumedRefs, { remoteAbsentRefs })).toEqual(['kp-a', 'kp-c']);
 	});
 });

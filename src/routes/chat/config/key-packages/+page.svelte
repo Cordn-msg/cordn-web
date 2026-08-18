@@ -128,10 +128,11 @@
 		}
 		return absent;
 	});
-	const localZombieKeyPackageCount = $derived.by(() =>
-		listZombieKeyPackageRefs(consumedKeyPackageRefs, {
-			remoteAbsentRefs: remoteAbsentKeyPackageRefs
-		}).length
+	const localZombieKeyPackageCount = $derived.by(
+		() =>
+			listZombieKeyPackageRefs(consumedKeyPackageRefs, {
+				remoteAbsentRefs: remoteAbsentKeyPackageRefs
+			}).length
 	);
 
 	async function handleCreate() {
@@ -422,19 +423,20 @@
 							</div>
 						{:else}
 							{#each keyPackages as keyPackage (keyPackage.keyPackageRef)}
-							{@const publishedCoordinatorKeys = keyPackage.publishedCoordinatorKeys.filter(
-								(coordinatorKey) => {
-									const refs = remoteKeyPackageRefsByCoordinator.get(
-										normalizePubKey(coordinatorKey)
-									);
-									// Queried and absent → stale marker, hide it; never queried → keep it.
-									return refs === undefined || refs.has(keyPackage.keyPackageRef);
-								}
-							)}
+								{@const publishedCoordinatorKeys = keyPackage.publishedCoordinatorKeys.filter(
+									(coordinatorKey) => {
+										const refs = remoteKeyPackageRefsByCoordinator.get(
+											normalizePubKey(coordinatorKey)
+										);
+										// Queried and absent → stale marker, hide it; never queried → keep it.
+										return refs === undefined || refs.has(keyPackage.keyPackageRef);
+									}
+								)}
 								<div class="space-y-2 rounded-xl border border-border px-4 py-3">
 									<KeyPackageCard entry={keyPackage} />
 									<p class="text-xs text-muted-foreground">
-										Published to {publishedCoordinatorKeys.length} coordinator{publishedCoordinatorKeys.length === 1
+										Published to {publishedCoordinatorKeys.length} coordinator{publishedCoordinatorKeys.length ===
+										1
 											? ''
 											: 's'}
 									</p>
