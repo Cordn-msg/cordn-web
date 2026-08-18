@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.3.0 — 2026-08-18
+
+### Features
+
+- **chat:** add multiple members in one MLS commit
+- **chat:** pull-to-refresh on the chat list
+- web storage disclaimer banner and consistency pass
+- **onboarding:** calm logged-out home with one clear first step
+- chat-wide UI/UX refresh, Android stability fixes, crash diagnostics
+- voice notes with hold-to-record and inline playback
+- native camera capture, Android back button, and chat media polish
+- portable cordn1 group links and foreground notification cleanup
+- add keyboard plugin and edge-to-edge support
+- add skater and bitcoin_sikho to .well-known/nostr.json
+
+### Fixes
+
+- **chat:** stop showing and failing to remove zombie key packages
+- **chat:** harden peer-data parsing and skip redundant unread rescans
+- **chat:** steadier reconnection lifecycle and calmer coordinator handling
+- **chat:** bound the coordinator connect wait
+- **chat:** steady-state ticks must be silent and never block sends
+- **chat:** make watch reconnection convergent and signer-gated
+- **ui:** coordinator dot only on active sidebar row; hide scrollbar gutter in sidebar nav
+- **multi-device:** prevent cursor advance on sealed decrypt failure
+
+### Refactor
+
+- pre-release dead-code sweep and consistency pass
+- **profile:** dedupe metadata and relay-list loading through Svelte Query
+
+### Other
+
+- publish to Zapstore manually via zsp, drop the CI publish job
+
 ## 0.2.4 — 2026-07-24
 
 ### Fixes
