@@ -72,6 +72,15 @@ public class SaveAsPlugin extends Plugin {
             call.reject("could not stage payload: " + e.getMessage());
             return;
         }
+        // The payload must not ride in the call options past this point. Capacitor persists the
+        // last activity-result call's options into onSaveInstanceState (Bridge's
+        // capacitorLastPluginCallOptions + the plugin bundle's _json), and when this activity
+        // stops behind the SAF picker Android ships that Bundle over binder — ~1 MB cap →
+        // TransactionTooLargeException kills the process the moment the picker opens (our Aug
+        // backup crash; upstream: ionic-team/capacitor#6211, still unfixed). The payload is on
+        // disk now and onPicked never reads `data`, so drop it. Same pattern as shareBlob:
+        // big bytes go to a file, only small refs cross the bridge.
+        call.getData().remove("data");
 
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
