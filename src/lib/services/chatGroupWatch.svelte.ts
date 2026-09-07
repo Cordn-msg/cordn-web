@@ -14,8 +14,11 @@ import {
 	getCoordinatorClient,
 	isCurrentCoordinatorClient,
 	isTransientCoordinatorError,
+	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient
 } from '$lib/services/chatRuntime';
+import { suspensionDriftMs, type SuspensionStamps } from '$lib/services/appSuspension';
+import { App } from '@capacitor/app';
 import type { IAccount } from 'applesauce-accounts';
 import type { coordinatorClient } from '$lib/services/coordinatorClient';
 import {
@@ -59,14 +62,18 @@ import { errorMessage, normalizePubKey } from '$lib/utils';
  * just a trigger for `requestTick()`; each tick re-derives the diff between
  * desired and actual and converges:
  *
- *   1. Reap   — teardown watches whose setup exceeded its deadline or whose
- *               stream went stale past the keepalive window; those coordinators
- *               get a fresh client identity.
+ *   1. Reap   — teardown watches whose setup exceeded its deadline; those
+ *               coordinators get a fresh client identity.
  *   2. Diff   — open subscriptions for watchable groups that lack one,
  *               respecting per-coordinator backoff after failed starts.
  *   3. Catch-up — re-fetch backlogs for already-watched groups (closes gaps
  *               from backgrounding); a coordinator whose stream missed messages
  *               it should have delivered is proven a zombie and rebuilt.
+ *
+ * Suspension recovery is NOT detect-and-reap: after a phone background / tab
+ * freeze / OS sleep the process was frozen, so every in-page staleness signal
+ * was frozen with it. `rebuildForeground()` handles that class instead —
+ * assume dead, tear down locally, swap fresh clients, converge from cursors.
  *
  * Convergence rests on cursor idempotency: ingestion dedups by cursor, so
  * "tear everything down and restart from cursors" is always safe. Teardown is
@@ -97,8 +104,6 @@ type GroupWatchTask = {
 	abort?: (reason?: string) => Promise<void>;
 	ready: Promise<void>;
 	task: Promise<void>;
-	/** Reads the SDK session's staleness once the subscription is live. */
-	isStale?: () => boolean;
 	/**
 	 * Wall-clock ms of the last delivered *chunk* (not any keepalive frame).
 	 * Undefined until the first message arrives. The catch-up phase pairs a
@@ -149,15 +154,25 @@ const CATCH_UP_MIN_INTERVAL_MS = 5_000;
 /** Hides the "Updating chats…" banner for ticks that finish quickly. */
 const BANNER_DELAY_MS = 500;
 /**
- * Extra slack over the SDK keepalive window (idle + probe) before a
- * still-active subscription is treated as a server-killed zombie. Background
- * tabs throttle keepalive timers so the session never reaches its own abort.
+ * Extra slack added to the chunk-silence window (`DELIVERY_STALE_MS`) before a
+ * delivery gap counts as zombie proof — headroom for a legitimately quiet
+ * stream plus clock skew, so the catch-up phase doesn't rebuild healthy
+ * coordinators on the natural fetch-vs-stream race in busy groups.
  */
 const STALE_STREAM_MARGIN_MS = 10_000;
 /** Same window measured from the last delivered chunk (zombie proof, see above). */
 const DELIVERY_STALE_MS = 30_000 + 20_000 + STALE_STREAM_MARGIN_MS;
 /** Reconnect backoff per coordinator after a failed watch start. */
 const COORDINATOR_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000];
+/** Min spacing between foreground rebuilds (resume fires several events). */
+const REBUILD_DEBOUNCE_MS = 5_000;
+/**
+ * Wall-vs-monotonic drift proving process suspension while hidden (see
+ * appSuspension.ts). A false positive costs one parallel reconnect; a false
+ * negative (e.g. Windows sleep, where the monotonic clock ticks) falls back
+ * to keepalive-driven recovery.
+ */
+const SUSPENSION_DRIFT_MS = 10_000;
 const WATCH_INGEST_BATCH_SIZE = 50;
 const WATCH_INGEST_FLUSH_MS = 0;
 
@@ -243,6 +258,37 @@ export function stopWatchingGroup(groupId?: string, reason = 'group stopped'): P
 	clearCurrentWatch(watch);
 	if (watch) closeWatch(watch, reason);
 	return Promise.resolve();
+}
+
+/** Stamps taken when the page went hidden; fed to the suspension oracle. */
+let hiddenStamps: SuspensionStamps | null = null;
+let lastRebuildAt = 0;
+
+/**
+ * Post-suspension recovery. After a phone background / tab freeze / OS sleep
+ * every stream and socket is dead by assumption — frozen JS cannot keep
+ * keepalives alive, and liveness detection from inside the suspended process
+ * is unreliable. So instead of forensics: close all watches locally (instant;
+ * aborts are fire-and-forget hints), swap every existing client for a fresh
+ * identity so reconnects start at resume time (not after the user's first
+ * send times out), and let the catch-up tick close delivery gaps from
+ * cursors — which are idempotent, so this is always safe.
+ */
+function rebuildForeground(reason: string): void {
+	const account = manager.getActive();
+	if (!account) return;
+	if (Date.now() - lastRebuildAt < REBUILD_DEBOUNCE_MS) {
+		// Debounce-skipped rebuild still owes its lifecycle tick (coalesced,
+		// rate-limited): a rapid background→foreground pair must not leave the
+		// app unwatched for want of a catch-up.
+		void requestTick(reason, { catchUp: true });
+		return;
+	}
+	lastRebuildAt = Date.now();
+	hiddenStamps = null;
+	void stopWatchingGroup(undefined, 'foreground rebuild');
+	rebuildAllCoordinatorClients(account);
+	void requestTick(reason, { catchUp: true });
 }
 
 function backoffBlocks(coordinatorKey: string): boolean {
@@ -577,7 +623,6 @@ async function startCoordinatorWatches(
 			);
 
 			handle.abort = (reason?: string) => subscription.abort(reason);
-			handle.isStale = () => subscription.isStale(STALE_STREAM_MARGIN_MS);
 
 			handle.task = (async () => {
 				void subscription.result.catch((error) => {
@@ -652,24 +697,16 @@ async function startCoordinatorWatches(
 	return readyPromise;
 }
 
-/** Phase 1: teardown watches that are provably dead, rebuild their clients. */
-function reapUnhealthyWatches(account: IAccount) {
+/** Phase 1: teardown watches whose setup provably wedged, rebuild their clients. */
+function reapUnhealthyWatches(account: IAccount): void {
 	const reapedCoordinators = new Set<string>();
 	for (const handle of new Set(currentWatches.values())) {
-		if (handle.closing) continue;
-		if (!handle.live) {
-			if (Date.now() - handle.startedAt <= WATCH_SETUP_DEADLINE_MS) continue;
-			console.warn('[watch] setup exceeded deadline — reaping watch', {
-				coordinatorKey: handle.coordinatorKey,
-				ms: WATCH_SETUP_DEADLINE_MS
-			});
-		} else if (!handle.isStale?.()) {
-			continue;
-		} else {
-			console.warn('[watch] stream stale past keepalive window — reaping watch', {
-				coordinatorKey: handle.coordinatorKey
-			});
-		}
+		if (handle.closing || handle.live) continue;
+		if (Date.now() - handle.startedAt <= WATCH_SETUP_DEADLINE_MS) continue;
+		console.warn('[watch] setup exceeded deadline — reaping watch', {
+			coordinatorKey: handle.coordinatorKey,
+			ms: WATCH_SETUP_DEADLINE_MS
+		});
 		closeWatch(handle, 'watch reaped');
 		reapedCoordinators.add(handle.coordinatorKey);
 	}
@@ -678,7 +715,6 @@ function reapUnhealthyWatches(account: IAccount) {
 	for (const coordinatorKey of reapedCoordinators) {
 		replaceCoordinatorClient(coordinatorKey, account);
 	}
-	return reapedCoordinators;
 }
 
 /** Phase 2: open subscriptions for watchable groups that lack one. */
@@ -952,11 +988,66 @@ if (browser) {
 		clearAllCoordinatorBackoff();
 		requestTick('browser online', { catchUp: true });
 	});
-	window.addEventListener('pageshow', () => requestTick('page show', { catchUp: true }));
+	// bfcache restore: browsers close every WebSocket on bfcache entry, and
+	// clock behavior across bfcache is inconsistent — rebuild unconditionally,
+	// no oracle.
+	window.addEventListener('pageshow', (event) => {
+		if (event.persisted) rebuildForeground('restored from back/forward cache');
+		else requestTick('page show', { catchUp: true });
+	});
 	window.addEventListener('focus', () => requestTick('window focus', { catchUp: true }));
 	document.addEventListener('visibilitychange', () => {
-		if (document.visibilityState === 'visible') requestTick('page visible', { catchUp: true });
+		if (document.visibilityState === 'visible') {
+			// Native: suspension while hidden is guaranteed (Android stops
+			// WebView JS execution in background) → rebuild. Web: the drift
+			// oracle separates a benign hide (streams alive, notifications
+			// kept flowing) from real suspension; no drift → cheap catch-up
+			// tick only.
+			if (
+				isNativePlatform() ||
+				(hiddenStamps && suspensionDriftMs(hiddenStamps) > SUSPENSION_DRIFT_MS)
+			) {
+				rebuildForeground(
+					isNativePlatform() ? 'native page visible' : 'page visible after suspension'
+				);
+			} else {
+				requestTick('page visible', { catchUp: true });
+			}
+		} else {
+			hiddenStamps = { wall: Date.now(), mono: performance.now() };
+		}
 	});
+	// Chrome may fire the Page Lifecycle `resume` event (not visibilitychange)
+	// when unfreezing a frozen tab.
+	document.addEventListener('resume', () => {
+		// Freeze→thaw can fire `resume` while the tab is STILL HIDDEN. A rebuild
+		// there would tear down healthy streams and rebuild under hidden-tab
+		// timer throttling (slow setup, setup-deadline reap churn); instead let
+		// the pool's own reconnect self-heal, fire only the cheap catch-up tick
+		// (fetches are not throttled), and let the drift oracle do any rebuild
+		// at the unthrottled visible transition.
+		if (document.visibilityState !== 'visible') {
+			requestTick('page resume while hidden', { catchUp: true });
+			return;
+		}
+		if (
+			!isNativePlatform() &&
+			hiddenStamps &&
+			suspensionDriftMs(hiddenStamps) > SUSPENSION_DRIFT_MS
+		) {
+			rebuildForeground('page resumed after suspension');
+		} else {
+			requestTick('page resume', { catchUp: true });
+		}
+	});
+	if (isNativePlatform()) {
+		// Native resume fast path: delivered via the Capacitor bridge even when
+		// the WebView's own visibilitychange is late or missed. Unconditional —
+		// the same debounce dedupes with the visibilitychange rebuild above.
+		void App.addListener('appStateChange', ({ isActive }) => {
+			if (isActive) rebuildForeground('native app resumed');
+		}).catch(() => undefined);
+	}
 
 	// Convergence heartbeat: the catch-up sweep is the only signal that can
 	// prove a keepalive-green zombie (server pings flow, chunks don't), so run

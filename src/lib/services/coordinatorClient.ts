@@ -5,6 +5,7 @@ import {
 	NostrClientTransport,
 	type NostrTransportOptions,
 	PrivateKeySigner,
+	type RelayHandler,
 	ApplesauceRelayPool,
 	GiftWrapMode
 } from '@contextvm/sdk';
@@ -89,7 +90,6 @@ export type coordinatorClient = {
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeManyGroupMessagesOutput>;
 		abort: (reason?: string) => Promise<void>;
-		isStale: (marginMs?: number) => boolean;
 	}>;
 };
 
@@ -170,6 +170,100 @@ export async function withConnectDeadline(
 	}
 }
 
+/**
+ * App-wide shared relay pools, keyed by sorted relay set (trailing slashes
+ * normalized). Relay sockets are the expensive layer (WS connect + handshake
+ * per relay); coordinator client identities are stateless and disposable, so
+ * sharing one pool per relay set means foreground rebuilds / client swaps
+ * reuse warm sockets instead of re-dialing every relay per client, and the
+ * pool's own machinery (per-relay auto-reconnect, liveness-driven rebuild)
+ * owns socket health for everyone. Coordinators with different relay sets
+ * simply get different pools — sharing never crosses relay sets.
+ *
+ * Refcounted lifetime: a pool lives exactly while at least one client uses
+ * it. The last release terminal-disconnects it and drops the cache entry, so
+ * relay-set edits / coordinator removal / account switch-away don't strand
+ * warm sockets and a ping monitor forever. Client swaps can never hit zero
+ * mid-flight: `replaceCoordinatorClient` acquires the replacement's ref
+ * before releasing the old client's (async, fire-and-forget) one.
+ */
+const sharedRelayPools = new Map<string, { pool: ApplesauceRelayPool; refs: number }>();
+
+/**
+ * Delegating wrapper around a shared pool. `disconnect()` is a RELEASE, not
+ * a teardown: transport `close()` unconditionally calls
+ * `relayHandler.disconnect()`, which on a raw pool is terminal and would kill
+ * the sockets of every other client on the pool. Both transports of one
+ * `cordnClient` share a single wrapper, so the release is guarded to fire
+ * once per wrapper. `transport.close()` still releases its own subscriptions
+ * and request state (`unsubscribeAll` is separate from relay disconnect by
+ * SDK design), so nothing leaks per client.
+ */
+class SharedRelayHandler implements RelayHandler {
+	private released = false;
+
+	constructor(
+		private readonly key: string,
+		private readonly entry: { pool: ApplesauceRelayPool; refs: number }
+	) {}
+
+	connect(): Promise<void> {
+		// Validation-only on the pool (relay group is built lazily); safe per call.
+		return this.entry.pool.connect();
+	}
+
+	disconnect(): Promise<void> {
+		if (this.released) return Promise.resolve();
+		this.released = true;
+		this.entry.refs -= 1;
+		if (this.entry.refs > 0) return Promise.resolve();
+		// Last user gone: terminal teardown in the background (bounded
+		// internally; a hung close must not block the transport's close path).
+		// The cache entry is dropped first — a disconnected pool is terminal,
+		// so the next user must build a fresh one.
+		sharedRelayPools.delete(this.key);
+		void this.entry.pool.disconnect().catch(() => undefined);
+		return Promise.resolve();
+	}
+
+	publish(...args: Parameters<ApplesauceRelayPool['publish']>): Promise<void> {
+		return this.entry.pool.publish(...args);
+	}
+
+	subscribe(...args: Parameters<ApplesauceRelayPool['subscribe']>): Promise<() => void> {
+		return this.entry.pool.subscribe(...args);
+	}
+
+	/** No-op: the SDK's client transports never call the global unsubscribe. */
+	unsubscribe(): void {}
+
+	getRelayUrls(): string[] {
+		return this.entry.pool.getRelayUrls();
+	}
+}
+
+/**
+ * The shared relay handler for a relay set (creating the pool on first use).
+ * Empty relay sets get a private pool instead: the SDK resolves those through
+ * runtime discovery (which swaps the transport's handler) and a shared pool
+ * would be silently stranded. No current call site passes empty — relay
+ * resolution always falls back to `defaultRelays`.
+ */
+function getSharedRelayHandler(relays: string[]): RelayHandler {
+	if (relays.length === 0) return new ApplesauceRelayPool(relays);
+	const key = [...relays]
+		.map((url) => url.replace(/\/+$/, ''))
+		.sort()
+		.join(',');
+	let entry = sharedRelayPools.get(key);
+	if (!entry) {
+		entry = { pool: new ApplesauceRelayPool(relays), refs: 0 };
+		sharedRelayPools.set(key, entry);
+	}
+	entry.refs += 1;
+	return new SharedRelayHandler(key, entry);
+}
+
 export class cordnClient implements coordinatorClient {
 	private stableClient: Client | null = null;
 	private stableTransport: NostrClientTransport | null = null;
@@ -188,6 +282,8 @@ export class cordnClient implements coordinatorClient {
 			privateKey?: string;
 			ephemeralPrivateKey?: string;
 			relays?: string[];
+			/** Shared relay pool wrapper (see getSharedRelayHandler); omit for a private pool. */
+			relayHandler?: RelayHandler;
 			onHealth?: (signal: CoordinatorHealthSignal) => void;
 			onServerInfo?: (info: CoordinatorServerInfo) => void;
 		} = {}
@@ -201,8 +297,9 @@ export class cordnClient implements coordinatorClient {
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
 		const relays = options.relays || [];
-		// SDK ≥ 0.13.11: the pool cancels in-flight publish retries on disconnect.
-		const relayHandler = new ApplesauceRelayPool(relays);
+		// Shared pool by default so client swaps/rebuilds reuse warm relay
+		// sockets; a private per-client pool only when explicitly injected.
+		const relayHandler = options.relayHandler ?? getSharedRelayHandler(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {
 			throw new Error(
@@ -535,7 +632,6 @@ export class cordnClient implements coordinatorClient {
 		stream: AsyncIterable<GroupMessage>;
 		result: Promise<SubscribeManyGroupMessagesOutput>;
 		abort: (reason?: string) => Promise<void>;
-		isStale: (marginMs?: number) => boolean;
 	}> {
 		await this.ephemeralConnected;
 
@@ -567,11 +663,7 @@ export class cordnClient implements coordinatorClient {
 				} catch {
 					return;
 				}
-			},
-			// Only a still-active stream is a rebuild candidate: once finalized
-			// (abort/close/fail) its own error path drives the resume, so gate on
-			// isActive to skip streams already tearing down.
-			isStale: (marginMs?: number) => call.stream.isActive && call.stream.isStale(marginMs)
+			}
 		};
 	}
 }

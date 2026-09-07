@@ -12,18 +12,10 @@ overrides:
   ws: ^8.21.0
 
 patchedDependencies:
-  applesauce-accounts@6.0.0:
-    hash: c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab
-    path: patches/applesauce-accounts@6.0.0.patch
-  applesauce-signers@6.0.1:
-    hash: c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545
-    path: patches/applesauce-signers@6.0.1.patch
-  bits-ui@2.18.1:
-    hash: 9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d
-    path: patches/bits-ui@2.18.1.patch
-  nostr-signer-capacitor-plugin@0.0.5:
-    hash: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
-    path: patches/nostr-signer-capacitor-plugin@0.0.5.patch
+  applesauce-accounts@6.0.0: c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab
+  applesauce-signers@6.0.1: c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545
+  bits-ui@2.18.1: 9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d
+  nostr-signer-capacitor-plugin@0.0.5: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
 
 importers:
 
@@ -70,7 +62,7 @@ importers:
         version: 1.30.0(zod@4.4.3)
       '@contextvm/sdk':
         specifier: ^0.13.11
-        version: 0.13.11(typescript@6.0.3)
+        version: 0.13.11(supports-color@5.5.0)(typescript@6.0.3)
       '@cordn/core':
         specifier: ^0.5.5
         version: 0.5.5
@@ -91,22 +83,22 @@ importers:
         version: 3.13.25(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       applesauce-accounts:
         specifier: ^6
-        version: 6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(supports-color@5.5.0)(typescript@6.0.3)
       applesauce-common:
         specifier: ^6
-        version: 6.0.2(typescript@6.0.3)
+        version: 6.0.2(supports-color@5.5.0)(typescript@6.0.3)
       applesauce-core:
         specifier: ^6
-        version: 6.2.0(typescript@6.0.3)
+        version: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       applesauce-loaders:
         specifier: ^6
-        version: 6.0.0(typescript@6.0.3)
+        version: 6.0.0(supports-color@5.5.0)(typescript@6.0.3)
       applesauce-relay:
         specifier: ^6
-        version: 6.2.0(typescript@6.0.3)
+        version: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       applesauce-signers:
         specifier: ^6
-        version: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(supports-color@5.5.0)(typescript@6.0.3)
       cordn-background:
         specifier: workspace:*
         version: link:packages/cordn-background
@@ -137,16 +129,16 @@ importers:
     devDependencies:
       '@capacitor/assets':
         specifier: ^3.0.5
-        version: 3.0.5(@types/node@22.19.19)(typescript@6.0.3)
+        version: 3.0.5(@types/node@22.19.19)(supports-color@5.5.0)(typescript@6.0.3)
       '@capacitor/cli':
         specifier: ^8.4.2
-        version: 8.4.2
+        version: 8.4.2(supports-color@5.5.0)
       '@eslint/compat':
         specifier: latest
-        version: 2.1.0(eslint@10.3.0(jiti@2.7.0))
+        version: 2.1.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       '@eslint/js':
         specifier: latest
-        version: 10.0.1(eslint@10.3.0(jiti@2.7.0))
+        version: 10.0.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       '@fontsource-variable/inter':
         specifier: ^5.2.8
         version: 5.2.8
@@ -185,13 +177,13 @@ importers:
         version: 2.1.1
       eslint:
         specifier: ^10.2.0
-        version: 10.3.0(jiti@2.7.0)
+        version: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       eslint-config-prettier:
         specifier: ^10.1.8
-        version: 10.1.8(eslint@10.3.0(jiti@2.7.0))
+        version: 10.1.8(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       eslint-plugin-svelte:
         specifier: ^3.17.0
-        version: 3.17.1(eslint@10.3.0(jiti@2.7.0))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(ts-node@10.9.2(@types/node@22.19.19)(typescript@6.0.3))
+        version: 3.17.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(ts-node@10.9.2(@types/node@22.19.19)(typescript@6.0.3))
       globals:
         specifier: ^17.4.0
         version: 17.6.0
@@ -236,7 +228,7 @@ importers:
         version: 6.0.3
       typescript-eslint:
         specifier: ^8.58.1
-        version: 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
+        version: 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
       vite:
         specifier: ^8.1.5
         version: 8.1.5(@types/node@22.19.19)(esbuild@0.27.3)(jiti@2.7.0)
@@ -532,8 +524,8 @@ packages:
     resolution: {integrity: sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew==}
     engines: {node: ^12.0.0 || ^14.0.0 || >=16.0.0}
 
-  '@eslint/compat@2.1.0':
-    resolution: {integrity: sha512-LgaSCymEpw7tF53xvDw9SNsraPb1IBHxpdABIOM0hW8UAlP8znrjYtuxfR58FSJ3L9BhwD+FaPRFQpZq84Nh6g==}
+  '@eslint/compat@2.1.1':
+    resolution: {integrity: sha512-rMcy8GSrwNzcISX/BlTDY/GLB4eCopEuy9woIls3To+15OLxykZrxxq+WUcylCPCQ6F4MujjBM1DX5V1aqI3Vw==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
     peerDependencies:
       eslint: ^8.40 || 9 || 10
@@ -1178,6 +1170,7 @@ packages:
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
+    deprecated: this version has critical issues, please update to the latest version
 
   JSONStream@1.3.5:
     resolution: {integrity: sha512-E+iruNOY8VV9s4JEbe1aNEm6MiszPRr/UfcHMz0TQh1BXSxHK+ASV1R6W4HpjBhSeS+54PIsAMCBmwD06LLsqQ==}
@@ -3546,14 +3539,14 @@ snapshots:
     dependencies:
       '@capacitor/core': 8.4.2
 
-  '@capacitor/assets@3.0.5(@types/node@22.19.19)(typescript@6.0.3)':
+  '@capacitor/assets@3.0.5(@types/node@22.19.19)(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
-      '@capacitor/cli': 5.7.8
-      '@ionic/utils-array': 2.1.6
-      '@ionic/utils-fs': 3.1.7
-      '@trapezedev/project': 7.1.4(@types/node@22.19.19)(typescript@6.0.3)
+      '@capacitor/cli': 5.7.8(supports-color@5.5.0)
+      '@ionic/utils-array': 2.1.6(supports-color@5.5.0)
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@trapezedev/project': 7.1.4(@types/node@22.19.19)(supports-color@5.5.0)(typescript@6.0.3)
       commander: 8.3.0
-      debug: 4.3.4
+      debug: 4.3.4(supports-color@5.5.0)
       fs-extra: 10.1.0
       node-fetch: 2.7.0
       node-html-parser: 5.4.2
@@ -3579,17 +3572,17 @@ snapshots:
     dependencies:
       '@capacitor/core': 8.4.2
 
-  '@capacitor/cli@5.7.8':
+  '@capacitor/cli@5.7.8(supports-color@5.5.0)':
     dependencies:
-      '@ionic/cli-framework-output': 2.2.8
-      '@ionic/utils-fs': 3.1.7
-      '@ionic/utils-subprocess': 2.1.14
-      '@ionic/utils-terminal': 2.3.5
+      '@ionic/cli-framework-output': 2.2.8(supports-color@5.5.0)
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-subprocess': 2.1.14(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
       commander: 9.5.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       env-paths: 2.2.1
       kleur: 4.1.5
-      native-run: 2.0.3
+      native-run: 2.0.3(supports-color@5.5.0)
       open: 8.4.2
       plist: 3.1.1
       prompts: 2.4.2
@@ -3601,17 +3594,17 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@capacitor/cli@8.4.2':
+  '@capacitor/cli@8.4.2(supports-color@5.5.0)':
     dependencies:
-      '@ionic/cli-framework-output': 2.2.8
-      '@ionic/utils-subprocess': 3.0.1
-      '@ionic/utils-terminal': 2.3.5
+      '@ionic/cli-framework-output': 2.2.8(supports-color@5.5.0)
+      '@ionic/utils-subprocess': 3.0.1(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
       commander: 12.1.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       env-paths: 2.2.1
       fs-extra: 11.3.6
       kleur: 4.1.5
-      native-run: 2.0.3
+      native-run: 2.0.3(supports-color@5.5.0)
       open: 8.4.2
       plist: 3.1.1
       prompts: 2.4.2
@@ -3666,11 +3659,11 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
 
-  '@contextvm/sdk@0.13.11(typescript@6.0.3)':
+  '@contextvm/sdk@0.13.11(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.4.3)
       '@noble/hashes': 2.2.0
-      applesauce-relay: 6.2.1(typescript@6.0.3)
+      applesauce-relay: 6.2.1(supports-color@5.5.0)(typescript@6.0.3)
       canonicalize: 2.1.0
       nostr-tools: 2.23.9(typescript@6.0.3)
       pino: 10.3.1
@@ -3796,23 +3789,23 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
-  '@eslint-community/eslint-utils@4.9.1(eslint@10.3.0(jiti@2.7.0))':
+  '@eslint-community/eslint-utils@4.9.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))':
     dependencies:
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       eslint-visitor-keys: 3.4.3
 
   '@eslint-community/regexpp@4.12.2': {}
 
-  '@eslint/compat@2.1.0(eslint@10.3.0(jiti@2.7.0))':
+  '@eslint/compat@2.1.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))':
     dependencies:
       '@eslint/core': 1.2.1
     optionalDependencies:
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
 
-  '@eslint/config-array@0.23.5':
+  '@eslint/config-array@0.23.5(supports-color@5.5.0)':
     dependencies:
       '@eslint/object-schema': 3.0.5
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       minimatch: 3.1.5
     transitivePeerDependencies:
       - supports-color
@@ -3825,9 +3818,9 @@ snapshots:
     dependencies:
       '@types/json-schema': 7.0.15
 
-  '@eslint/js@10.0.1(eslint@10.3.0(jiti@2.7.0))':
+  '@eslint/js@10.0.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))':
     optionalDependencies:
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
 
   '@eslint/object-schema@3.0.5': {}
 
@@ -3877,105 +3870,105 @@ snapshots:
     dependencies:
       '@swc/helpers': 0.5.21
 
-  '@ionic/cli-framework-output@2.2.8':
+  '@ionic/cli-framework-output@2.2.8(supports-color@5.5.0)':
     dependencies:
-      '@ionic/utils-terminal': 2.3.5
-      debug: 4.4.3
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
   '@ionic/pwa-elements@3.4.0': {}
 
-  '@ionic/utils-array@2.1.6':
+  '@ionic/utils-array@2.1.6(supports-color@5.5.0)':
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-fs@3.1.7':
+  '@ionic/utils-fs@3.1.7(supports-color@5.5.0)':
     dependencies:
       '@types/fs-extra': 8.1.5
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       fs-extra: 9.1.0
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-object@2.1.6':
+  '@ionic/utils-object@2.1.6(supports-color@5.5.0)':
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-process@2.1.11':
+  '@ionic/utils-process@2.1.11(supports-color@5.5.0)':
     dependencies:
-      '@ionic/utils-object': 2.1.6
-      '@ionic/utils-terminal': 2.3.4
-      debug: 4.4.3
+      '@ionic/utils-object': 2.1.6(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.4(supports-color@5.5.0)
+      debug: 4.4.3(supports-color@5.5.0)
       signal-exit: 3.0.7
       tree-kill: 1.2.2
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-process@2.1.12':
+  '@ionic/utils-process@2.1.12(supports-color@5.5.0)':
     dependencies:
-      '@ionic/utils-object': 2.1.6
-      '@ionic/utils-terminal': 2.3.5
-      debug: 4.4.3
+      '@ionic/utils-object': 2.1.6(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
+      debug: 4.4.3(supports-color@5.5.0)
       signal-exit: 3.0.7
       tree-kill: 1.2.2
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-stream@3.1.6':
+  '@ionic/utils-stream@3.1.6(supports-color@5.5.0)':
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-stream@3.1.7':
+  '@ionic/utils-stream@3.1.7(supports-color@5.5.0)':
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-subprocess@2.1.14':
+  '@ionic/utils-subprocess@2.1.14(supports-color@5.5.0)':
     dependencies:
-      '@ionic/utils-array': 2.1.6
-      '@ionic/utils-fs': 3.1.7
-      '@ionic/utils-process': 2.1.11
-      '@ionic/utils-stream': 3.1.6
-      '@ionic/utils-terminal': 2.3.4
+      '@ionic/utils-array': 2.1.6(supports-color@5.5.0)
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-process': 2.1.11(supports-color@5.5.0)
+      '@ionic/utils-stream': 3.1.6(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.4(supports-color@5.5.0)
       cross-spawn: 7.0.6
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-subprocess@3.0.1':
+  '@ionic/utils-subprocess@3.0.1(supports-color@5.5.0)':
     dependencies:
-      '@ionic/utils-array': 2.1.6
-      '@ionic/utils-fs': 3.1.7
-      '@ionic/utils-process': 2.1.12
-      '@ionic/utils-stream': 3.1.7
-      '@ionic/utils-terminal': 2.3.5
+      '@ionic/utils-array': 2.1.6(supports-color@5.5.0)
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-process': 2.1.12(supports-color@5.5.0)
+      '@ionic/utils-stream': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
       cross-spawn: 7.0.6
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-terminal@2.3.4':
+  '@ionic/utils-terminal@2.3.4(supports-color@5.5.0)':
     dependencies:
       '@types/slice-ansi': 4.0.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       signal-exit: 3.0.7
       slice-ansi: 4.0.0
       string-width: 4.2.3
@@ -3986,10 +3979,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@ionic/utils-terminal@2.3.5':
+  '@ionic/utils-terminal@2.3.5(supports-color@5.5.0)':
     dependencies:
       '@types/slice-ansi': 4.0.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       signal-exit: 3.0.7
       slice-ansi: 4.0.0
       string-width: 4.2.3
@@ -4270,10 +4263,10 @@ snapshots:
 
   '@trapezedev/gradle-parse@7.1.3': {}
 
-  '@trapezedev/project@7.1.4(@types/node@22.19.19)(typescript@6.0.3)':
+  '@trapezedev/project@7.1.4(@types/node@22.19.19)(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
-      '@ionic/utils-fs': 3.1.7
-      '@ionic/utils-subprocess': 2.1.14
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-subprocess': 2.1.14(supports-color@5.5.0)
       '@prettier/plugin-xml': 2.2.0
       '@trapezedev/gradle-parse': 7.1.3
       '@xmldom/xmldom': 0.9.10
@@ -4349,15 +4342,15 @@ snapshots:
 
   '@types/trusted-types@2.0.7': {}
 
-  '@typescript-eslint/eslint-plugin@8.59.3(@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3))(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)':
+  '@typescript-eslint/eslint-plugin@8.59.3(@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3))(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
       '@eslint-community/regexpp': 4.12.2
-      '@typescript-eslint/parser': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
+      '@typescript-eslint/parser': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
       '@typescript-eslint/scope-manager': 8.59.3
-      '@typescript-eslint/type-utils': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
-      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
+      '@typescript-eslint/type-utils': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
+      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
       '@typescript-eslint/visitor-keys': 8.59.3
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       ignore: 7.0.5
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@6.0.3)
@@ -4365,23 +4358,23 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)':
+  '@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/scope-manager': 8.59.3
       '@typescript-eslint/types': 8.59.3
-      '@typescript-eslint/typescript-estree': 8.59.3(typescript@6.0.3)
+      '@typescript-eslint/typescript-estree': 8.59.3(supports-color@5.5.0)(typescript@6.0.3)
       '@typescript-eslint/visitor-keys': 8.59.3
-      debug: 4.4.3
-      eslint: 10.3.0(jiti@2.7.0)
+      debug: 4.4.3(supports-color@5.5.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/project-service@8.59.3(typescript@6.0.3)':
+  '@typescript-eslint/project-service@8.59.3(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/tsconfig-utils': 8.59.3(typescript@6.0.3)
       '@typescript-eslint/types': 8.59.3
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
@@ -4395,13 +4388,13 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  '@typescript-eslint/type-utils@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)':
+  '@typescript-eslint/type-utils@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/types': 8.59.3
-      '@typescript-eslint/typescript-estree': 8.59.3(typescript@6.0.3)
-      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
-      debug: 4.4.3
-      eslint: 10.3.0(jiti@2.7.0)
+      '@typescript-eslint/typescript-estree': 8.59.3(supports-color@5.5.0)(typescript@6.0.3)
+      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
+      debug: 4.4.3(supports-color@5.5.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       ts-api-utils: 2.5.0(typescript@6.0.3)
       typescript: 6.0.3
     transitivePeerDependencies:
@@ -4409,13 +4402,13 @@ snapshots:
 
   '@typescript-eslint/types@8.59.3': {}
 
-  '@typescript-eslint/typescript-estree@8.59.3(typescript@6.0.3)':
+  '@typescript-eslint/typescript-estree@8.59.3(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
-      '@typescript-eslint/project-service': 8.59.3(typescript@6.0.3)
+      '@typescript-eslint/project-service': 8.59.3(supports-color@5.5.0)(typescript@6.0.3)
       '@typescript-eslint/tsconfig-utils': 8.59.3(typescript@6.0.3)
       '@typescript-eslint/types': 8.59.3
       '@typescript-eslint/visitor-keys': 8.59.3
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       minimatch: 3.1.5
       semver: 7.8.0
       tinyglobby: 0.2.16
@@ -4424,13 +4417,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/utils@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)':
+  '@typescript-eslint/utils@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)':
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0))
+      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       '@typescript-eslint/scope-manager': 8.59.3
       '@typescript-eslint/types': 8.59.3
-      '@typescript-eslint/typescript-estree': 8.59.3(typescript@6.0.3)
-      eslint: 10.3.0(jiti@2.7.0)
+      '@typescript-eslint/typescript-estree': 8.59.3(supports-color@5.5.0)(typescript@6.0.3)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
@@ -4562,10 +4555,10 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  applesauce-accounts@6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-accounts@6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
-      applesauce-core: 6.2.0(typescript@6.0.3)
-      applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
+      applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(supports-color@5.5.0)(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
     optionalDependencies:
@@ -4575,10 +4568,10 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-common@6.0.2(typescript@6.0.3):
+  applesauce-common@6.0.2(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
       '@scure/base': 1.2.6
-      applesauce-core: 6.2.0(typescript@6.0.3)
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       hash-sum: 2.0.0
       light-bolt11-decoder: 3.2.0
       nanoid: 5.1.11
@@ -4587,9 +4580,9 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-core@6.2.0(typescript@6.0.3):
+  applesauce-core@6.2.0(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       fast-deep-equal: 3.1.3
       hash-sum: 2.0.0
       nanoid: 5.1.11
@@ -4599,19 +4592,19 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-loaders@6.0.0(typescript@6.0.3):
+  applesauce-loaders@6.0.0(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
-      applesauce-core: 6.2.0(typescript@6.0.3)
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       nanoid: 5.1.11
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color
       - typescript
 
-  applesauce-relay@6.2.0(typescript@6.0.3):
+  applesauce-relay@6.2.0(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
       '@noble/hashes': 2.2.0
-      applesauce-core: 6.2.0(typescript@6.0.3)
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       nanoid: 5.1.11
       nostr-tools: 2.23.9(typescript@6.0.3)
       rxjs: 7.8.2
@@ -4619,10 +4612,10 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-relay@6.2.1(typescript@6.0.3):
+  applesauce-relay@6.2.1(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
       '@noble/hashes': 2.2.0
-      applesauce-core: 6.2.0(typescript@6.0.3)
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
       nanoid: 5.1.11
       nostr-tools: 2.23.9(typescript@6.0.3)
       rxjs: 7.8.2
@@ -4630,11 +4623,11 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-signers@6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-signers@6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
       '@noble/secp256k1': 1.7.2
-      applesauce-core: 6.2.0(typescript@6.0.3)
-      debug: 4.4.3
+      applesauce-core: 6.2.0(supports-color@5.5.0)(typescript@6.0.3)
+      debug: 4.4.3(supports-color@5.5.0)
       nanoid: 5.1.11
       rxjs: 7.8.2
     optionalDependencies:
@@ -4964,13 +4957,17 @@ snapshots:
 
   dateformat@3.0.3: {}
 
-  debug@4.3.4:
+  debug@4.3.4(supports-color@5.5.0):
     dependencies:
       ms: 2.1.2
+    optionalDependencies:
+      supports-color: 5.5.0
 
-  debug@4.4.3:
+  debug@4.4.3(supports-color@5.5.0):
     dependencies:
       ms: 2.1.3
+    optionalDependencies:
+      supports-color: 5.5.0
 
   decamelize-keys@1.1.1:
     dependencies:
@@ -5088,15 +5085,15 @@ snapshots:
 
   escape-string-regexp@4.0.0: {}
 
-  eslint-config-prettier@10.1.8(eslint@10.3.0(jiti@2.7.0)):
+  eslint-config-prettier@10.1.8(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0)):
     dependencies:
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
 
-  eslint-plugin-svelte@3.17.1(eslint@10.3.0(jiti@2.7.0))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(ts-node@10.9.2(@types/node@22.19.19)(typescript@6.0.3)):
+  eslint-plugin-svelte@3.17.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(svelte@5.56.6(@typescript-eslint/types@8.59.3))(ts-node@10.9.2(@types/node@22.19.19)(typescript@6.0.3)):
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0))
+      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       '@jridgewell/sourcemap-codec': 1.5.5
-      eslint: 10.3.0(jiti@2.7.0)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       esutils: 2.0.3
       globals: 16.5.0
       known-css-properties: 0.37.0
@@ -5128,11 +5125,11 @@ snapshots:
 
   eslint-visitor-keys@5.0.1: {}
 
-  eslint@10.3.0(jiti@2.7.0):
+  eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0):
     dependencies:
-      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0))
+      '@eslint-community/eslint-utils': 4.9.1(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))
       '@eslint-community/regexpp': 4.12.2
-      '@eslint/config-array': 0.23.5
+      '@eslint/config-array': 0.23.5(supports-color@5.5.0)
       '@eslint/config-helpers': 0.5.5
       '@eslint/core': 1.2.1
       '@eslint/plugin-kit': 0.7.1
@@ -5142,7 +5139,7 @@ snapshots:
       '@types/estree': 1.0.9
       ajv: 6.15.0
       cross-spawn: 7.0.6
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       escape-string-regexp: 4.0.0
       eslint-scope: 9.1.2
       eslint-visitor-keys: 5.0.1
@@ -5650,12 +5647,12 @@ snapshots:
 
   napi-build-utils@2.0.0: {}
 
-  native-run@2.0.3:
+  native-run@2.0.3(supports-color@5.5.0):
     dependencies:
-      '@ionic/utils-fs': 3.1.7
-      '@ionic/utils-terminal': 2.3.5
+      '@ionic/utils-fs': 3.1.7(supports-color@5.5.0)
+      '@ionic/utils-terminal': 2.3.5(supports-color@5.5.0)
       bplist-parser: 0.3.2
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@5.5.0)
       elementtree: 0.1.7
       ini: 4.1.3
       plist: 3.1.1
@@ -6530,13 +6527,13 @@ snapshots:
 
   type-fest@2.19.0: {}
 
-  typescript-eslint@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3):
+  typescript-eslint@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3):
     dependencies:
-      '@typescript-eslint/eslint-plugin': 8.59.3(@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3))(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
-      '@typescript-eslint/parser': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
-      '@typescript-eslint/typescript-estree': 8.59.3(typescript@6.0.3)
-      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0))(typescript@6.0.3)
-      eslint: 10.3.0(jiti@2.7.0)
+      '@typescript-eslint/eslint-plugin': 8.59.3(@typescript-eslint/parser@8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3))(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
+      '@typescript-eslint/parser': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
+      '@typescript-eslint/typescript-estree': 8.59.3(supports-color@5.5.0)(typescript@6.0.3)
+      '@typescript-eslint/utils': 8.59.3(eslint@10.3.0(jiti@2.7.0)(supports-color@5.5.0))(supports-color@5.5.0)(typescript@6.0.3)
+      eslint: 10.3.0(jiti@2.7.0)(supports-color@5.5.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color

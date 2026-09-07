@@ -84,6 +84,11 @@ class AccountCoordinatorClientRegistry {
 		return this.clients.get(resolveCoordinatorTarget(coordinatorKey).serverPubkey);
 	}
 
+	/** Snapshot of this registry's coordinator keys (normalized pubkeys). */
+	coordinatorKeys(): string[] {
+		return [...this.clients.keys()];
+	}
+
 	/**
 	 * Swaps in a fresh client for a single coordinator and returns the previous
 	 * one for the caller to disconnect. Used by the resume path to bring up a
@@ -177,6 +182,25 @@ export async function disconnectCoordinatorClient(
 	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
 	if (!registry) return;
 	await registry.disconnectCoordinator(coordinatorKey);
+}
+
+/**
+ * Replace every existing coordinator client for this account with a fresh
+ * identity, disconnecting the old sockets in the background. The
+ * foreground-rebuild path uses this after a process suspension (phone
+ * background / tab freeze / OS sleep): every socket is assumed dead, so
+ * reconnects start immediately instead of waiting for in-flight calls to
+ * fail. Preserves laziness — coordinators without a client keep having none.
+ */
+export function rebuildAllCoordinatorClients(
+	account: IAccount | undefined = manager.getActive()
+): void {
+	if (!account) return;
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	if (!registry) return;
+	for (const coordinatorKey of registry.coordinatorKeys()) {
+		replaceCoordinatorClient(coordinatorKey, account);
+	}
 }
 
 export function isTransientCoordinatorError(error: unknown): boolean {
