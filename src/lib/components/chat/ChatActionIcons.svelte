@@ -218,7 +218,7 @@
      Settings lives one box below (ProfileCard → /chat/config), Share and New
      conversation have tab/FAB equivalents on mobile — but desktop and the
      drawer still need one-tap access, and the Notifications inbox lives here. -->
-<div class={`flex gap-1 ${collapsed ? 'flex-col items-center' : 'flex-row'}`}>
+<div class={`flex gap-1 ${collapsed ? 'flex-col items-center' : 'w-full justify-between'}`}>
 	{#each actions as action (action.id)}
 		<button
 			type="button"
