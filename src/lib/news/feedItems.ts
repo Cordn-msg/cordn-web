@@ -269,9 +269,9 @@ const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-09-08-mark-all-read',
 		createdAt: Date.UTC(2026, 8, 8),
-		version: 1,
-		title: 'Mark all read, and steadier coordinator names',
-		body: "- ✨ A “Mark all read” button now clears every chat's unread badges in one tap — it sits next to the chat search and on chat home, and only appears when something is actually unread.\n- 🔄 Coordinator names are consistent everywhere: cards, settings, and prompts all prefer your custom label, then the server-announced name, and background saves (like starting a chat from a profile) can no longer overwrite a name you set yourself.\n- ✨ The “Create group” button on a coordinator's page now pre-selects that coordinator in the new-group form."
+		version: 2,
+		title: 'Mark all read, and a friendlier mobile app',
+		body: "- ✨ A “Mark all read” button now clears every chat's unread badges in one tap — it sits next to the chat search and on chat home, and only appears when something is actually unread.\n- 🔄 Coordinator names are consistent everywhere: cards, settings, and prompts all prefer your custom label, then the server-announced name, and background saves (like starting a chat from a profile) can no longer overwrite a name you set yourself.\n- ✨ The “Create group” button on a coordinator's page now pre-selects that coordinator in the new-group form.\n- ✨ On phones, a bottom bar — Chats, Share, Settings — and a floating “+” on chat home put the main actions one thumb-tap away.\n- ✨ Every screen now has a back arrow at the top left on mobile, so you can always find your way back to your chats.\n- 🔄 Chat home is calmer: the chats list lost its boxy frame and sits edge to edge, and quick actions shrank to a compact icon row in the sidebar.\n- 🔄 Group actions on mobile (info, invite, share) now open a bottom sheet sized for your thumb instead of a small dropdown.\n- 🔄 “Join group” is now “Open link”, and it also accepts bare profile identifiers (npub or nprofile) — paste one to open that profile."
 	}
 ];
 

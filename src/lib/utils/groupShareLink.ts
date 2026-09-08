@@ -312,6 +312,20 @@ export function parseShareTarget(raw: string): ParsedShareTarget | null {
 		return { kind: 'internal', path: trimmed };
 	}
 
+	// Bare profile identifiers (npub / nprofile) open the profile page, not the
+	// permissive group-join fallback.
+	try {
+		const decoded = nip19.decode(trimmed);
+		if (decoded.type === 'npub') {
+			return { kind: 'internal', path: `/p/${trimmed}` };
+		}
+		if (decoded.type === 'nprofile') {
+			return { kind: 'internal', path: `/p/${nip19.npubEncode(decoded.data.pubkey)}` };
+		}
+	} catch {
+		// Not a nip19 identifier — fall through to the bare-id form.
+	}
+
 	return { kind: 'internal', path: `/chat/${encodeURIComponent(trimmed)}` };
 }
 

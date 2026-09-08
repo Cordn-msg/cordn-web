@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -444,6 +445,7 @@
 	<header class="border-b border-border bg-background/95 px-4 pt-safe pb-3 backdrop-blur md:px-6">
 		<div class="flex items-center justify-between gap-4">
 			<div class="flex min-w-0 items-center gap-3">
+				<ChatMobileSidebarButton />
 				<div
 					class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
 				>
@@ -457,7 +459,7 @@
 				</div>
 			</div>
 
-			<Button href={resolve('/chat')} variant="outline">
+			<Button href={resolve('/chat')} variant="outline" class="hidden md:inline-flex">
 				<ArrowLeft class="mr-2 size-4" />
 				Back to chat
 			</Button>

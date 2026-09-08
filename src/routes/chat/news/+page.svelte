@@ -52,10 +52,8 @@
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<header
-		class="border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80"
-	>
-		<div class="flex items-center gap-3 px-4 py-3 md:px-6">
+	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
+		<div class="flex items-center gap-3">
 			<ChatMobileSidebarButton />
 			<Avatar class="h-10 w-10 shrink-0 border border-border bg-card">
 				<AvatarFallback class="bg-card">
@@ -64,7 +62,7 @@
 			</Avatar>
 			<div class="min-w-0">
 				<h1 class="truncate text-lg font-semibold tracking-tight">News &amp; updates</h1>
-				<p class="truncate text-xs text-muted-foreground">Release notes and product news</p>
+				<p class="truncate text-sm text-muted-foreground">Release notes and product news</p>
 			</div>
 		</div>
 	</header>

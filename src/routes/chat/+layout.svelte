@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+	import MobileTabBar from '$lib/components/chat/MobileTabBar.svelte';
 	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
 	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
 	import MigrationBanner from '$lib/components/chat/MigrationBanner.svelte';
@@ -147,8 +148,9 @@
 
 	<!-- pt-safe here is the single status-bar clearance for EVERY /chat/* page (chat header,
 	     config, coordinators, news, create-group, …). ChatHeader does NOT add its own — that
-	     would double-pad /chat/[id]. -->
-	<div class="relative min-w-0 flex-1 overflow-hidden pt-safe">
+	     would double-pad /chat/[id]. Flex column: page content (min-h-0 flex-1) scrolls inside,
+	     the mobile tab bar takes flow space at the bottom instead of overlapping content. -->
+	<div class="relative flex min-w-0 flex-1 flex-col overflow-hidden pt-safe">
 		{#if signerReadinessStore.waiting}
 			<!-- Identity gate (NIP-07 injection race) takes precedence over the sync
 		     banner: waiting on the signer, not on coordinators. -->
@@ -166,7 +168,10 @@
 		{/if}
 
 		<MigrationBanner />
-		{@render children()}
+		<div class="min-h-0 flex-1">
+			{@render children()}
+		</div>
+		<MobileTabBar />
 	</div>
 
 	<MediaLightbox />

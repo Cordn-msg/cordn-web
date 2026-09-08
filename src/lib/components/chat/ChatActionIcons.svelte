@@ -1,26 +1,15 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { browser } from '$app/environment';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import JoinRequestCard from '$lib/components/chat/JoinRequestCard.svelte';
 	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import {
-		getChatCoordinator,
-		getCoordinatorColor,
-		getCoordinatorLabel
-	} from '$lib/services/chatCoordinators.svelte';
-	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
-	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
-	import { publicWebOrigin } from '$lib/utils/appOrigin';
+	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
+	import { defaultProfileShareUrl, listProfileShareOptions } from '$lib/utils/profileShareOptions';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
 		getUnreadWelcomeNotificationCount,
@@ -51,10 +40,7 @@
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
-	import { nip19 } from 'nostr-tools';
-	import Bolt from '@lucide/svelte/icons/bolt';
 	import Inbox from '@lucide/svelte/icons/inbox';
-	import Menu from '@lucide/svelte/icons/menu';
 	import Plus from '@lucide/svelte/icons/plus';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 
@@ -62,16 +48,7 @@
 		| { type: 'welcome'; data: WelcomeNotificationEntry }
 		| { type: 'join-request'; data: JoinRequestEntry };
 
-	let {
-		collapsed = false,
-		layout = 'vertical',
-		onNavigate = () => {}
-	}: {
-		collapsed?: boolean;
-		/** vertical: labeled rows (sidebar); horizontal: labeled tiles (chat home). */
-		layout?: 'vertical' | 'horizontal';
-		onNavigate?: () => void;
-	} = $props();
+	let { collapsed = false }: { collapsed?: boolean } = $props();
 
 	let notificationsOpen = $state(false);
 	let profileShareOpen = $state(false);
@@ -91,63 +68,10 @@
 	// never see the re-request until the user sends twice. Mirrors welcomes.
 	useJoinRequests(() => $activeAccount?.pubkey);
 
-	// Profile share link for a given coordinator. The default coordinator omits
-	// `c=` (short link, matching group-share links); any other coordinator is
-	// encoded as an nprofile in `c=` so the receiver's client registers it.
-	function profileSharePathForCoordinator(coordinatorKey: string, relays: string[]): string {
-		const base = resolve('/p/[identifier]', {
-			identifier: nip19.npubEncode($activeAccount!.pubkey)
-		});
-		if (normalizePubKey(coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY)) {
-			return base;
-		}
-		return `${base}?c=${nip19.nprofileEncode({ pubkey: coordinatorKey, relays })}`;
-	}
-
-	function toAbsoluteProfileUrl(path: string): string {
-		return browser ? new URL(path, publicWebOrigin()).toString() : path;
-	}
-
-	// Coordinators the active account can actually be reached on: those with a
-	// published (and reconciled-available) key package. Derived from local
-	// key-package records so it stays reactive without extra remote reads.
-	const profileShareOptions = $derived.by<{ label: string; value: string }[]>(() => {
-		if (!$activeAccount) return [];
-		const owner = normalizePubKey($activeAccount.pubkey);
-		const defaultKey = normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY);
-		const allKeys = listChatKeyPackages(owner).flatMap((kp) =>
-			kp.publishedCoordinatorKeys.map(normalizePubKey)
-		);
-		// ponytail: O(n²) dedupe, n is coordinator count (single digits) — fine here;
-		// default coordinator first so its tab yields the short (no `c=`) link.
-		const coordinatorKeys = allKeys
-			.filter((key, index) => allKeys.indexOf(key) === index)
-			.sort((a, b) => {
-				const aDefault = a === defaultKey ? 0 : 1;
-				const bDefault = b === defaultKey ? 0 : 1;
-				return aDefault - bDefault;
-			});
-		return coordinatorKeys.map((coordinatorKey) => ({
-			label: getCoordinatorLabel(coordinatorKey),
-			color: getCoordinatorColor({ pubkey: coordinatorKey, color: undefined }),
-			value: toAbsoluteProfileUrl(
-				profileSharePathForCoordinator(
-					coordinatorKey,
-					getChatCoordinator(coordinatorKey)?.relays ?? []
-				)
-			)
-		}));
-	});
-
-	const profileShareUrl = $derived.by(() => {
-		if (!$activeAccount) return '';
-		// Prefer the first shareable coordinator (default → short link); fall back
-		// to the plain npub link before any key package is published.
-		if (profileShareOptions.length > 0) return profileShareOptions[0].value;
-		return toAbsoluteProfileUrl(
-			resolve('/p/[identifier]', { identifier: nip19.npubEncode($activeAccount.pubkey) })
-		);
-	});
+	// Profile-share links live in $lib/utils/profileShareOptions (shared with the
+	// mobile Share tab); these thin deriveds keep the reactivity seam local.
+	const profileShareOptions = $derived.by(() => listProfileShareOptions($activeAccount?.pubkey));
+	const profileShareUrl = $derived.by(() => defaultProfileShareUrl($activeAccount?.pubkey));
 
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const joinRequests = $derived.by(() => listJoinRequests());
@@ -189,10 +113,6 @@
 		{ relays: metadataRelays }
 	);
 
-	function isActive(href: string) {
-		return page.url.pathname === href;
-	}
-
 	function getNotificationsButtonLabel() {
 		if (unreadNotificationTotal > 0) {
 			const parts: string[] = [];
@@ -207,11 +127,6 @@
 			return `${unreadNotificationTotal} unread: ${parts.join(', ')}`;
 		}
 		return 'No unread notifications';
-	}
-
-	async function navigateToConfig() {
-		onNavigate();
-		await goto(resolve('/chat/config'));
 	}
 
 	async function refreshAll() {
@@ -256,13 +171,8 @@
 	type QuickAction = {
 		id: string;
 		icon: typeof Plus;
-		/** Row + dropdown label. */
-		text: string;
-		/** Tile caption (short). */
-		caption: string;
 		aria: string;
 		title?: string;
-		href?: string;
 		onclick?: () => void;
 		active: boolean;
 		badge: number;
@@ -276,8 +186,6 @@
 			{
 				id: 'new',
 				icon: Plus,
-				text: 'New conversation',
-				caption: 'Chat',
 				aria: 'New conversation',
 				onclick: () => (newConversationOpen = true),
 				active: newConversationOpen,
@@ -286,8 +194,6 @@
 			{
 				id: 'notifications',
 				icon: Inbox,
-				text: 'Notifications',
-				caption: 'Notifications',
 				aria: 'Open notifications',
 				title: getNotificationsButtonLabel(),
 				onclick: () => (notificationsOpen = true),
@@ -297,127 +203,43 @@
 			{
 				id: 'share',
 				icon: QrCodeIcon,
-				text: 'Share',
-				caption: 'Share',
 				aria: 'Share profile',
 				onclick: () => (profileShareOpen = true),
 				active: profileShareOpen,
 				badge: 0,
 				visible: Boolean($activeAccount)
-			},
-			{
-				id: 'settings',
-				icon: Bolt,
-				text: 'Settings',
-				caption: 'Settings',
-				aria: 'Open settings',
-				href: resolve('/chat/config'),
-				onclick: onNavigate,
-				active: isActive('/chat/config'),
-				badge: 0
 			}
 		];
 		return list.filter((action) => action.visible !== false);
 	});
 </script>
 
-{#if collapsed}
-	<div class="flex justify-center">
-		<DropdownMenu.Root>
-			<DropdownMenu.Trigger>
-				{#snippet child({ props })}
-					<Button
-						{...props}
-						type="button"
-						variant="ghost"
-						size="icon"
-						class="h-12 w-12 rounded-xl"
-						aria-label="Open actions"
-						title="Open actions"
-					>
-						<Menu class="size-5" />
-					</Button>
-				{/snippet}
-			</DropdownMenu.Trigger>
-			<DropdownMenu.Content align="end" class="w-56">
-				{#each actions as action (action.id)}
-					<DropdownMenu.Item
-						onclick={action.href ? navigateToConfig : action.onclick}
-						class="gap-2"
-					>
-						<action.icon class="size-4" />
-						<span>{action.text}</span>
-						{#if action.badge > 0}
-							<span
-								class="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-							>
-								{action.badge}
-							</span>
-						{/if}
-					</DropdownMenu.Item>
-				{/each}
-			</DropdownMenu.Content>
-		</DropdownMenu.Root>
-	</div>
-{:else if layout === 'horizontal'}
-	<div class="grid gap-2 {$activeAccount ? 'grid-cols-4' : 'grid-cols-3'}">
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		{#each actions as action (action.id)}
-			<svelte:element
-				this={action.href ? 'a' : 'button'}
-				href={action.href}
-				type={action.href ? undefined : 'button'}
-				onclick={action.onclick}
-				class="flex flex-col items-center gap-2 rounded-xl border px-2 py-3 transition-colors {action.active
-					? 'border-primary bg-primary/10'
-					: 'border-transparent hover:border-border hover:bg-background'}"
-				aria-label={action.aria}
-				title={action.title ?? action.aria}
-			>
-				<div
-					class="relative flex h-12 w-12 items-center justify-center rounded-full border border-border bg-background"
+<!-- One compact icon row replaces the old labeled rows + collapsed ⋯ menu:
+     Settings lives one box below (ProfileCard → /chat/config), Share and New
+     conversation have tab/FAB equivalents on mobile — but desktop and the
+     drawer still need one-tap access, and the Notifications inbox lives here. -->
+<div class={`flex gap-1 ${collapsed ? 'flex-col items-center' : 'flex-row'}`}>
+	{#each actions as action (action.id)}
+		<button
+			type="button"
+			onclick={action.onclick}
+			class="relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors {action.active
+				? 'bg-primary/10 text-foreground'
+				: 'text-muted-foreground hover:bg-background hover:text-foreground'}"
+			aria-label={action.aria}
+			title={action.title ?? action.aria}
+		>
+			<action.icon class="size-4 shrink-0" />
+			{#if action.badge > 0}
+				<span
+					class="absolute top-0 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none font-semibold text-primary-foreground"
 				>
-					<action.icon class="size-5" />
-					{#if action.badge > 0}
-						<span
-							class="absolute -top-1 -right-1 min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-						>
-							{action.badge}
-						</span>
-					{/if}
-				</div>
-				<span class="text-xs text-muted-foreground">{action.caption}</span>
-			</svelte:element>
-		{/each}
-	</div>
-{:else}
-	<div class="space-y-1">
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		{#each actions as action (action.id)}
-			<svelte:element
-				this={action.href ? 'a' : 'button'}
-				href={action.href}
-				type={action.href ? undefined : 'button'}
-				onclick={action.onclick}
-				class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors {action.active
-					? 'bg-primary/10 text-foreground'
-					: 'text-muted-foreground hover:bg-background hover:text-foreground'}"
-				aria-label={action.aria}
-				title={action.title ?? action.aria}
-			>
-				<action.icon class="size-4 shrink-0" />
-				<span class="truncate">{action.text}</span>
-				{#if action.badge > 0}
-					<span
-						class="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] leading-none font-semibold text-primary-foreground"
-					>
-						{action.badge}
-					</span>
-				{/if}
-			</svelte:element>
-		{/each}
-	</div>
-{/if}
+					{action.badge > 99 ? '99+' : action.badge}
+				</span>
+			{/if}
+		</button>
+	{/each}
+</div>
 
 <Dialog.Root bind:open={notificationsOpen}>
 	<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),42rem)] sm:max-w-2xl">
@@ -529,8 +351,7 @@
 		shareOptions={profileShareOptions}
 		copyLabel="Copy profile link"
 		copiedLabel="Copied profile link"
-		{onNavigate}
 	/>
 {/if}
 
-<NewConversationDialog bind:open={newConversationOpen} {onNavigate} />
+<NewConversationDialog bind:open={newConversationOpen} />

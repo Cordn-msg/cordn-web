@@ -8,6 +8,7 @@ import {
 	resolveGroupLocator
 } from '$lib/utils/groupShareLink';
 import { encodeGroupRef } from '@cordn/core';
+import { nip19 } from 'nostr-tools';
 
 const COORD = '92753cbe63e943d0c4a0c61d745437892af6e98f179ce04a7a863aad4e00b1a5';
 
@@ -164,6 +165,25 @@ describe('parseShareTarget cordn1 + bare host', () => {
 		const t = parseShareTarget('cordn.net/chat/some-id?m=abc');
 		if (!t || t.kind !== 'internal') throw new Error('expected internal');
 		expect(t.path).toBe('/chat/some-id?m=abc');
+	});
+
+	it('routes a bare npub/nprofile to the profile page, not the join flow', () => {
+		const npub = nip19.npubEncode(
+			'52753cbe63e943d0c4a0c61d745437892af6e98f179ce04a7a863aad4e00b1a5'
+		);
+		let t = parseShareTarget(npub);
+		if (!t || t.kind !== 'internal') throw new Error('expected internal');
+		expect(t.path).toBe(`/p/${npub}`);
+
+		t = parseShareTarget(
+			nip19.nprofileEncode({
+				pubkey: '52753cbe63e943d0c4a0c61d745437892af6e98f179ce04a7a863aad4e00b1a5',
+				relays: ['wss://r.example']
+			})
+		);
+		if (!t || t.kind !== 'internal') throw new Error('expected internal');
+		// nprofile re-encodes to its npub form (the /p route's identifier).
+		expect(t.path).toBe(`/p/${npub}`);
 	});
 
 	it('splits a trailing ?m=… query off a bare cordn1 ref (not into the id)', () => {

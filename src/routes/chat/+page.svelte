@@ -1,6 +1,5 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
-	import QuickActions from '$lib/components/chat/QuickActions.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
@@ -35,6 +34,8 @@
 	import { refreshChatFeedAction } from '$lib/services/chatUiActions.svelte';
 	import { appUpdateStore, reloadForUpdate } from '$lib/services/appUpdate.svelte';
 	import CheckCheck from '@lucide/svelte/icons/check-check';
+	import Plus from '@lucide/svelte/icons/plus';
+	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 
 	// Pull-to-refresh on the chat list (native shell + standalone PWA only — a plain
 	// browser tab keeps the browser's own PTR as the emergency reload). When a web
@@ -100,6 +101,7 @@
 	// so warn once (dismiss is permanent — the fact is about the browser, not the
 	// account). Hidden entirely in the Android native app, where it is false.
 	const WEB_STORAGE_DISCLAIMER_KEY = 'cordn.webStorageDisclaimerDismissed';
+	let newConversationOpen = $state(false);
 	let storageDisclaimerDismissed = $state(
 		browser ? localStorage.getItem(WEB_STORAGE_DISCLAIMER_KEY) === '1' : false
 	);
@@ -193,16 +195,25 @@
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<header class="border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:px-6">
-		<div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
-			<div class="flex items-start gap-3">
-				<ChatMobileSidebarButton />
-				{#if hasAccount}
-					<div class="space-y-1">
-						<h1 class="text-xl font-semibold tracking-tight">Chats</h1>
-					</div>
+	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
+		<div class="mx-auto flex w-full max-w-6xl items-center gap-3">
+			<ChatMobileSidebarButton />
+			{#if hasAccount}
+				<h1 class="text-lg font-semibold tracking-tight">Chats</h1>
+				{#if hasUnreadChats}
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						class="ml-auto h-9 w-9 shrink-0 rounded-lg"
+						aria-label="Mark all chats read"
+						title="Mark all chats read"
+						onclick={markAllChatGroupsRead}
+					>
+						<CheckCheck class="size-4" />
+					</Button>
 				{/if}
-			</div>
+			{/if}
 		</div>
 	</header>
 
@@ -270,80 +281,53 @@
 					</Card.Root>
 				{/if}
 
-				<QuickActions
-					storageKey="cordn.homeQuickActionsOpen"
-					layout="horizontal"
-					defaultOpen={browser ? !window.matchMedia('(max-width: 767px)').matches : true}
-				/>
-
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Chats</Card.Title>
-						{#if hasUnreadChats}
-							<Card.Action>
-								<Button
-									variant="ghost"
-									size="sm"
-									class="h-8 px-2 text-xs text-muted-foreground"
-									onclick={markAllChatGroupsRead}
-								>
-									<CheckCheck class="mr-1 size-4" />
-									Mark all read
-								</Button>
-							</Card.Action>
-						{/if}
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						{#if feedRows.length > 0}
-							<div class="space-y-3">
-								{#each feedRows as row (row.kind === 'news' ? 'news' : row.group.id)}
-									{#if row.kind === 'news'}
-										<NewsListItem
-											href={resolve('/chat/news')}
-											variant="card"
-											unreadCount={newsUnreadCount}
-										/>
-									{:else}
-										{@const summary = getChatGroupSummary(row.group.id, $activeAccount?.pubkey)}
-										<ChatGroupListItem
-											group={row.group}
-											href={getGroupHref(row.group.id)}
-											preview={summary.preview}
-											unreadCount={summary.unreadCount}
-											unreadReferenceCount={summary.unreadReferenceCount}
-										/>
-									{/if}
-								{/each}
-							</div>
-						{/if}
-						{#if !hasGroups}
-							<div
-								class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-							>
-								No chats yet. Create one or join the Cordn group to get started.
-							</div>
-						{/if}
-					</Card.Content>
-					<Card.Footer class="flex-col items-start gap-3 pt-0">
-						<div class="flex flex-wrap gap-2">
-							<Button
-								href={resolve('/chat/create-group')}
-								variant={hasGroups ? 'outline' : 'default'}
-							>
-								Create group
-							</Button>
-							{#if !inCordnGroup}
-								<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
+				<!-- Flat feed: group/news rows are self-sufficient bordered cards — no
+     outer card chrome or duplicate "Chats" heading (the page header owns
+     it), so the content surface stays as wide as possible. -->
+				{#if feedRows.length > 0}
+					<div class="space-y-3">
+						{#each feedRows as row (row.kind === 'news' ? 'news' : row.group.id)}
+							{#if row.kind === 'news'}
+								<NewsListItem
+									href={resolve('/chat/news')}
+									variant="card"
+									unreadCount={newsUnreadCount}
+								/>
+							{:else}
+								{@const summary = getChatGroupSummary(row.group.id, $activeAccount?.pubkey)}
+								<ChatGroupListItem
+									group={row.group}
+									href={getGroupHref(row.group.id)}
+									preview={summary.preview}
+									unreadCount={summary.unreadCount}
+									unreadReferenceCount={summary.unreadReferenceCount}
+								/>
 							{/if}
-						</div>
-						<a
-							href={resolve('/chat/config')}
-							class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-						>
-							Manage coordinators &amp; key packages →
-						</a>
-					</Card.Footer>
-				</Card.Root>
+						{/each}
+					</div>
+				{/if}
+				{#if !hasGroups}
+					<div
+						class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
+					>
+						No chats yet. Create one or join the Cordn group to get started.
+					</div>
+				{/if}
+
+				<div class="flex flex-wrap items-center gap-2">
+					<Button href={resolve('/chat/create-group')} variant={hasGroups ? 'outline' : 'default'}>
+						Create group
+					</Button>
+					{#if !inCordnGroup}
+						<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
+					{/if}
+					<a
+						href={resolve('/chat/config')}
+						class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+					>
+						Manage coordinators &amp; key packages →
+					</a>
+				</div>
 			</div>
 		{:else}
 			<!-- Logged-out home is the last step of the landing page: one job (get an
@@ -373,3 +357,17 @@
 		{/if}
 	</div>
 </div>
+
+{#if hasAccount}
+	<Button
+		type="button"
+		size="icon"
+		aria-label="New conversation"
+		title="New conversation"
+		class="fixed right-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-40 size-14 rounded-full shadow-lg transition-transform active:scale-95 md:hidden"
+		onclick={() => (newConversationOpen = true)}
+	>
+		<Plus class="size-6" />
+	</Button>
+	<NewConversationDialog bind:open={newConversationOpen} />
+{/if}

@@ -61,7 +61,7 @@
 			>
 				<Bolt class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Settings</h1>
 			</div>
 			<div class="ml-auto">

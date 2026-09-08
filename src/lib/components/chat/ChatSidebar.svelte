@@ -11,8 +11,7 @@
 	import { Metadata } from 'nostr-tools/kinds';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
-	import ChatActionIcons from '$lib/components/chat/ChatActionIcons.svelte';
-	import QuickActions from '$lib/components/chat/QuickActions.svelte';
+	import ChatActionIcons from './ChatActionIcons.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -514,11 +513,7 @@
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
 		{#if $activeAccount}
-			{#if collapsed}
-				<ChatActionIcons {collapsed} onNavigate={closeMobileSidebar} />
-			{:else}
-				<QuickActions storageKey="cordn.sidebarQuickActionsOpen" onNavigate={closeMobileSidebar} />
-			{/if}
+			<ChatActionIcons {collapsed} />
 		{/if}
 
 		{#if $activeAccount}

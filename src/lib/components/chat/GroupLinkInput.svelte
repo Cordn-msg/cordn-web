@@ -6,7 +6,7 @@
 
 	let {
 		onNavigate = () => {},
-		placeholder = 'Paste a group link or ID',
+		placeholder = 'Paste a cordn link, ID, or profile URL',
 		submitLabel = 'Open'
 	}: {
 		onNavigate?: () => void;

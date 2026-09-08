@@ -9,7 +9,7 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
@@ -72,6 +72,7 @@
 		groupId ? resolve('/chat/[id]/info', { id: groupRouteId(groupId) }) : '/chat'
 	);
 	let groupShareOpen = $state(false);
+	let mobileActionsOpen = $state(false);
 
 	const groupShareUrl = $derived.by(() => {
 		if (!groupId || !group?.coordinatorKey) return '';
@@ -210,8 +211,10 @@
 			</div>
 
 			<div class="sm:hidden">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
+				<!-- Mobile: group actions as a bottom sheet (thumb zone) instead of a
+				     top-right dropdown. Same three actions as the desktop menu above. -->
+				<Sheet.Root bind:open={mobileActionsOpen}>
+					<Sheet.Trigger>
 						{#snippet child({ props })}
 							<Button
 								{...props}
@@ -225,30 +228,52 @@
 								<MoreHorizontal class="size-4" />
 							</Button>
 						{/snippet}
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end" class="w-56">
-						<DropdownMenu.Item onclick={navigateToInfo} class="gap-2">
-							<Info class="size-4" />
-							<span>Group info</span>
-						</DropdownMenu.Item>
-						<DropdownMenu.Item
-							disabled={!$activeAccount || !canInvite}
-							onclick={() => (chatHeaderActionsStore.inviteOpen = true)}
-							class="gap-2"
-						>
-							<UserPlus class="size-4" />
-							<span>Invite member</span>
-						</DropdownMenu.Item>
-						<DropdownMenu.Item
-							disabled={!$activeAccount || !groupId}
-							onclick={() => (groupShareOpen = true)}
-							class="gap-2"
-						>
-							<Share2 class="size-4" />
-							<span>Share group link</span>
-						</DropdownMenu.Item>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+					</Sheet.Trigger>
+					<Sheet.Content side="bottom" class="pb-safe">
+						<Sheet.Header>
+							<Sheet.Title>Chat actions</Sheet.Title>
+							<Sheet.Description class="sr-only">Actions for this group</Sheet.Description>
+						</Sheet.Header>
+						<div class="flex flex-col gap-1 px-4 pb-4">
+							<button
+								type="button"
+								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+								onclick={() => {
+									mobileActionsOpen = false;
+									void navigateToInfo();
+								}}
+							>
+								<Info class="size-4 shrink-0 text-muted-foreground" />
+								<span>Group info</span>
+							</button>
+							<button
+								type="button"
+								disabled={!$activeAccount || !canInvite}
+								title={inviteLabel}
+								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40 disabled:opacity-50"
+								onclick={() => {
+									mobileActionsOpen = false;
+									chatHeaderActionsStore.inviteOpen = true;
+								}}
+							>
+								<UserPlus class="size-4 shrink-0 text-muted-foreground" />
+								<span>Invite member</span>
+							</button>
+							<button
+								type="button"
+								disabled={!$activeAccount || !groupId}
+								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40 disabled:opacity-50"
+								onclick={() => {
+									mobileActionsOpen = false;
+									groupShareOpen = true;
+								}}
+							>
+								<Share2 class="size-4 shrink-0 text-muted-foreground" />
+								<span>Share group link</span>
+							</button>
+						</div>
+					</Sheet.Content>
+				</Sheet.Root>
 			</div>
 		{/if}
 	</div>

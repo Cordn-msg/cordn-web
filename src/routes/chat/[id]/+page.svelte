@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatShell from '$lib/components/chat/ChatShell.svelte';
+	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
@@ -218,6 +219,11 @@
 	</div>
 
 	<div class="flex h-full min-h-0 flex-col bg-background text-foreground">
+		<!-- Cold deep-link state: give the join card a back arrow (mobile) so
+		     "not interested" is one tap instead of browser back. -->
+		<div class="flex items-center px-4 py-3">
+			<ChatMobileSidebarButton />
+		</div>
 		<div class="flex flex-1 items-center justify-center px-4 py-12">
 			<Card.Root class="w-full max-w-md">
 				<Card.Header>

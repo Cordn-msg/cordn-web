@@ -189,9 +189,11 @@
 			>
 				<Plus class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Create group</h1>
-				<p class="text-sm text-muted-foreground">Your messages are end-to-end encrypted.</p>
+				<p class="truncate text-sm text-muted-foreground">
+					Your messages are end-to-end encrypted.
+				</p>
 			</div>
 		</div>
 	</header>

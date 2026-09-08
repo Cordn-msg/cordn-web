@@ -57,10 +57,10 @@
 			>
 				<Server class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Coordinators</h1>
-				<p class="text-sm text-muted-foreground">
-					Manage coordinator profiles, defaults, relays, and remote inspection entry points.
+				<p class="truncate text-sm text-muted-foreground">
+					Manage coordinator profiles, defaults, and relays.
 				</p>
 			</div>
 		</div>

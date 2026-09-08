@@ -254,9 +254,9 @@
 			>
 				<KeyRound class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Key packages</h1>
-				<p class="text-sm text-muted-foreground">
+				<p class="truncate text-sm text-muted-foreground">
 					Generate and inspect the MLS key packages available for your active identity.
 				</p>
 			</div>

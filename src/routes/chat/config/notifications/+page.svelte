@@ -97,14 +97,12 @@
 		class="flex items-center gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6"
 	>
 		<ChatMobileSidebarButton />
-		<div
-			class="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-muted/30"
-		>
+		<div class="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card">
 			<Bell class="size-4" />
 		</div>
-		<div>
+		<div class="min-w-0">
 			<h1 class="text-lg font-semibold tracking-tight">Notifications</h1>
-			<p class="text-sm text-muted-foreground">
+			<p class="truncate text-sm text-muted-foreground">
 				How Cordn checks for new messages in the background.
 			</p>
 		</div>

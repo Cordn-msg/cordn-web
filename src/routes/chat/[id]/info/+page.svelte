@@ -229,7 +229,11 @@
 					</div>
 				</div>
 
-				<Button href={resolve('/chat/[id]', { id: groupRouteId(group.id) })} variant="outline">
+				<Button
+					href={resolve('/chat/[id]', { id: groupRouteId(group.id) })}
+					variant="outline"
+					class="hidden md:inline-flex"
+				>
 					<ArrowLeft class="mr-2 size-4" />
 					Back to chat
 				</Button>

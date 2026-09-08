@@ -9,7 +9,7 @@
 	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import { startChatWithKeyPackageAction } from '$lib/services/chatUiActions.svelte';
 	import Users from '@lucide/svelte/icons/users';
-	import LogIn from '@lucide/svelte/icons/log-in';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
 	let {
@@ -63,7 +63,7 @@
 	<Dialog.Content class="max-h-[90vh] w-[min(calc(100vw-1.5rem),36rem)] sm:max-w-xl">
 		<Dialog.Header>
 			<Dialog.Title>New conversation</Dialog.Title>
-			<Dialog.Description>Message someone, start a group, or join with a link.</Dialog.Description>
+			<Dialog.Description>Message someone, start a group, or open a link.</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="flex flex-col gap-2">
@@ -84,8 +84,8 @@
 							type="button"
 							class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors hover:bg-muted/40"
 						>
-							<LogIn class="size-4 shrink-0 text-muted-foreground" />
-							<span class="font-medium">Join group</span>
+							<ExternalLink class="size-4 shrink-0 text-muted-foreground" />
+							<span class="font-medium">Open link</span>
 							<ChevronDown
 								class="ml-auto size-4 text-muted-foreground transition-transform {joinOpen
 									? 'rotate-180'

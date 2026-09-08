@@ -69,9 +69,9 @@
 			>
 				<Images class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Media</h1>
-				<p class="text-sm text-muted-foreground">
+				<p class="truncate text-sm text-muted-foreground">
 					Blossom server used to store the encrypted media you send.
 				</p>
 			</div>

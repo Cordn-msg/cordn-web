@@ -61,14 +61,16 @@
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
-	<header class="border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:px-6">
-		<div class="mx-auto flex w-full max-w-3xl items-start gap-3">
+	<header class="border-b border-border bg-background/95 px-4 py-3 backdrop-blur md:px-6">
+		<div class="mx-auto flex w-full max-w-3xl items-center gap-3">
 			<ChatMobileSidebarButton />
-			<div class="min-w-0 flex-1 space-y-1">
-				<h1 class="flex items-center gap-2 text-xl font-semibold tracking-tight">
-					<Share2 class="size-5 text-muted-foreground" />
-					Share to…
-				</h1>
+			<div
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card"
+			>
+				<Share2 class="size-4" />
+			</div>
+			<div class="min-w-0">
+				<h1 class="truncate text-lg font-semibold tracking-tight">Share to…</h1>
 				<p class="truncate text-sm text-muted-foreground">Pick a group to send it to.</p>
 			</div>
 		</div>

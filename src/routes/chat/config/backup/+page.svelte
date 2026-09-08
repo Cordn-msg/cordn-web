@@ -159,9 +159,9 @@
 			>
 				<DatabaseBackup class="size-4" />
 			</div>
-			<div>
+			<div class="min-w-0">
 				<h1 class="text-lg font-semibold tracking-tight">Backup & recovery</h1>
-				<p class="text-sm text-muted-foreground">
+				<p class="truncate text-sm text-muted-foreground">
 					Export your account, group secrets, and coordinators for recovery.
 				</p>
 			</div>
