@@ -102,5 +102,6 @@
 		"svelte-sonner": "^1.1.1",
 		"ts-mls": "2.0.0-rc.13",
 		"zod": "^4.4.3"
-	}
+	},
+	"packageManager": "pnpm@10.11.1"
 }
