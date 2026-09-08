@@ -17,3 +17,4 @@ patchedDependencies:
   applesauce-accounts@6.0.0: patches/applesauce-accounts@6.0.0.patch
   applesauce-signers@6.0.1: patches/applesauce-signers@6.0.1.patch
   bits-ui@2.18.1: patches/bits-ui@2.18.1.patch
+  ts-mls@2.0.0-rc.13: patches/ts-mls@2.0.0-rc.13.patch

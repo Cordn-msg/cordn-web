@@ -16,6 +16,7 @@ patchedDependencies:
   applesauce-signers@6.0.1: c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545
   bits-ui@2.18.1: 9d5f1f34da9744b75c84f11eee64e23b40fa69e99f4390b8af6a8ca5c82ec92d
   nostr-signer-capacitor-plugin@0.0.5: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
+  ts-mls@2.0.0-rc.13: 07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c
 
 importers:
 
@@ -122,7 +123,7 @@ importers:
         version: 1.1.1(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       ts-mls:
         specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(@noble/ciphers@2.2.0)
+        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -6480,7 +6481,7 @@ snapshots:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
 
-  ts-mls@2.0.0-rc.13(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
