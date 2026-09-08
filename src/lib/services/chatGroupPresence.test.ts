@@ -18,6 +18,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 import {
 	getUnreadChatGroupMessageCount,
 	listUnreadChatGroupReferenceTargets,
+	markAllChatGroupsRead,
 	markChatGroupMentionsRead,
 	markChatGroupRead
 } from './chatGroupPresence.svelte';
@@ -75,5 +76,17 @@ describe('chat group presence unread scans', () => {
 	test('mention scan ignores messages from the referenced account itself', () => {
 		seedGroup('presence-g3', [10]);
 		expect(listUnreadChatGroupReferenceTargets('presence-g3', MEMBER)).toEqual([]);
+	});
+
+	test('markAllChatGroupsRead clears every group, unread or not, without touching storage shape', () => {
+		seedGroup('presence-all-1', [10]);
+		seedGroup('presence-all-2', [5, 15]);
+		// One group already partially read — must still end fully read.
+		markChatGroupRead('presence-all-1', 5);
+		markAllChatGroupsRead();
+		expect(getUnreadChatGroupMessageCount('presence-all-1')).toBe(0);
+		expect(getUnreadChatGroupMessageCount('presence-all-2')).toBe(0);
+		expect(listUnreadChatGroupReferenceTargets('presence-all-1', MENTIONED)).toEqual([]);
+		expect(listUnreadChatGroupReferenceTargets('presence-all-2', MENTIONED)).toEqual([]);
 	});
 });

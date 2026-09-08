@@ -110,6 +110,16 @@ export function markChatGroupMentionsRead(groupId: string, cursor: number) {
 	savePresence();
 }
 
+/** Mark every local group fully read (messages + mentions), across all
+ *  coordinators. Idempotent: the per-group cursor guards no-op on groups that
+ *  are already current. News and invitation badges keep their own read state. */
+export function markAllChatGroupsRead() {
+	for (const group of listChatGroups()) {
+		markChatGroupRead(group.id, group.lastCursor);
+		markChatGroupMentionsRead(group.id, group.lastCursor);
+	}
+}
+
 export function getUnreadChatGroupMessageCount(groupId: string): number {
 	const group = getChatGroup(groupId);
 	if (!group) return 0;

@@ -265,6 +265,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Backups no longer crash on Android',
 		body: '- 🐛 On Android, exporting a backup with your message history no longer crashes the app the moment the save dialog opens. The August fix stopped the crash for smaller backups, but larger ones still took the app down — any size now saves cleanly to the spot you pick.'
+	},
+	{
+		id: 'cordn-news-2026-09-08-mark-all-read',
+		createdAt: Date.UTC(2026, 8, 8),
+		version: 1,
+		title: 'Mark all read, and steadier coordinator names',
+		body: "- ✨ A “Mark all read” button now clears every chat's unread badges in one tap — it sits next to the chat search and on chat home, and only appears when something is actually unread.\n- 🔄 Coordinator names are consistent everywhere: cards, settings, and prompts all prefer your custom label, then the server-announced name, and background saves (like starting a chat from a profile) can no longer overwrite a name you set yourself.\n- ✨ The “Create group” button on a coordinator's page now pre-selects that coordinator in the new-group form."
 	}
 ];
 

@@ -26,7 +26,6 @@
 			const saved = getChatCoordinator(pubkey);
 			return {
 				pubkey,
-				label: saved?.label || `Coordinator ${pubkey.slice(0, 8)}`,
 				color: getCoordinatorColor(saved ?? { pubkey, color: undefined }),
 				relays: saved?.relays ?? [],
 				isDefault: saved?.isDefault ?? false,

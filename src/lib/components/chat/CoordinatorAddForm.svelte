@@ -7,7 +7,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getChatCoordinator, upsertChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+	import {
+		getChatCoordinator,
+		getCoordinatorLabel,
+		upsertChatCoordinator
+	} from '$lib/services/chatCoordinators.svelte';
 	import { decodeCoordinatorQueryParam } from '$lib/utils/groupShareLink';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
@@ -148,7 +152,7 @@
 					<p
 						class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400"
 					>
-						Already saved as “{existing.label}”. Saving will update it.
+						Already saved as “{getCoordinatorLabel(existing.pubkey)}”. Saving will update it.
 					</p>
 				{/if}
 

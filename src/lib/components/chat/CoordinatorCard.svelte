@@ -3,7 +3,10 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { setDefaultChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+	import {
+		setDefaultChatCoordinator,
+		getCoordinatorLabel
+	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import CoordinatorPurgeDialog from './CoordinatorPurgeDialog.svelte';
@@ -13,7 +16,6 @@
 
 	export interface CoordinatorCardEntry {
 		pubkey: string;
-		label: string;
 		color: string;
 		relays: string[];
 		isDefault: boolean;
@@ -23,6 +25,10 @@
 	let { coordinator }: { coordinator: CoordinatorCardEntry } = $props();
 
 	let showPurgeDialog = $state(false);
+
+	// Single display-name seam: user label → server-announced name → auto
+	// default. No raw stored labels in render, matching every other surface.
+	const displayLabel = $derived(getCoordinatorLabel(coordinator.pubkey));
 
 	const groupCount = $derived(
 		listChatGroups().filter((group) => group.coordinatorKey === coordinator.pubkey).length
@@ -44,7 +50,7 @@
 						style={`background-color: ${coordinator.color};`}
 						aria-hidden="true"
 					></span>
-					<p class="truncate font-medium">{coordinator.label}</p>
+					<p class="truncate font-medium">{displayLabel}</p>
 					{#if coordinator.isDefault}
 						<span
 							class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
@@ -138,5 +144,5 @@
 <CoordinatorPurgeDialog
 	bind:open={showPurgeDialog}
 	pubkey={coordinator.pubkey}
-	label={coordinator.label}
+	label={displayLabel}
 />

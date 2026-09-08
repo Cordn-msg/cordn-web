@@ -24,13 +24,17 @@
 		listChatKeyPackages
 	} from '$lib/services/chatKeyPackages.svelte';
 	import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
-	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
+	import {
+		getChatGroupSummary,
+		markAllChatGroupsRead
+	} from '$lib/services/chatGroupPresence.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { refreshChatFeedAction } from '$lib/services/chatUiActions.svelte';
 	import { appUpdateStore, reloadForUpdate } from '$lib/services/appUpdate.svelte';
+	import CheckCheck from '@lucide/svelte/icons/check-check';
 
 	// Pull-to-refresh on the chat list (native shell + standalone PWA only — a plain
 	// browser tab keeps the browser's own PTR as the emergency reload). When a web
@@ -90,6 +94,7 @@
 	});
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
+	const hasUnreadChats = $derived(feedRows.some((row) => row.kind === 'group' && row.unread));
 	const hasAccount = $derived.by(() => Boolean($activeAccount));
 	// Web-only storage disclaimer: browser storage is the source of truth on web,
 	// so warn once (dismiss is permanent — the fact is about the browser, not the
@@ -274,6 +279,19 @@
 				<Card.Root>
 					<Card.Header>
 						<Card.Title>Chats</Card.Title>
+						{#if hasUnreadChats}
+							<Card.Action>
+								<Button
+									variant="ghost"
+									size="sm"
+									class="h-8 px-2 text-xs text-muted-foreground"
+									onclick={markAllChatGroupsRead}
+								>
+									<CheckCheck class="mr-1 size-4" />
+									Mark all read
+								</Button>
+							</Card.Action>
+						{/if}
 					</Card.Header>
 					<Card.Content class="space-y-4">
 						{#if feedRows.length > 0}

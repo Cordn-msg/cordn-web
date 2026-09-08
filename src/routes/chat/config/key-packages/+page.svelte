@@ -309,7 +309,7 @@
 											size="xs"
 											onclick={() => (publishCoordinatorKey = coordinator.pubkey)}
 										>
-											{coordinator.label}
+											{getCoordinatorLabel(coordinator.pubkey)}
 										</Button>
 									{/each}
 								</div>
@@ -479,8 +479,8 @@
 														handlePublish(keyPackage.keyPackageRef, coordinator.pubkey)}
 												>
 													{publishedCoordinatorKeys.includes(coordinator.pubkey)
-														? `Published: ${coordinator.label}`
-														: `Publish to ${coordinator.label}`}
+														? `Published: ${getCoordinatorLabel(coordinator.pubkey)}`
+														: `Publish to ${getCoordinatorLabel(coordinator.pubkey)}`}
 												</Button>
 											{/each}
 										</div>

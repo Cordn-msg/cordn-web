@@ -16,7 +16,10 @@
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
-	import { getChatGroupSummary } from '$lib/services/chatGroupPresence.svelte';
+	import {
+		getChatGroupSummary,
+		markAllChatGroupsRead
+	} from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import { activeGroupId } from '$lib/utils/groupShareLink';
@@ -30,6 +33,7 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import CheckCheck from '@lucide/svelte/icons/check-check';
 	import Search from '@lucide/svelte/icons/search';
 	import X from '@lucide/svelte/icons/x';
 	import {
@@ -113,6 +117,8 @@
 	function isActive(href: string) {
 		return page.url.pathname === href;
 	}
+
+	const anyUnreadChats = $derived(chats.some((chat) => hasUnreadActivity(chat.id)));
 
 	// gid-based: the [id] segment may be a cordn1 ref or a bare gid, so compare the
 	// decoded gid instead of a raw path string (cordn1 URLs would break isActive).
@@ -353,25 +359,40 @@
 
 	{#if !collapsed && chats.length > 0}
 		<div class="pb-3">
-			<InputGroup.Root>
-				<InputGroup.Input
-					bind:ref={searchInputRef}
-					bind:value={searchQuery}
-					type="search"
-					placeholder="Search messages…"
-					aria-label="Search messages"
-					oninput={handleSearchInput}
-					onkeydown={handleSearchKeydown}
-				/>
-				<InputGroup.Addon>
-					<Search class="size-4" />
-				</InputGroup.Addon>
-				{#if isSearching}
-					<InputGroup.Addon align="inline-end">
-						<InputGroup.Text>{searchResults.length} results</InputGroup.Text>
+			<div class="flex items-center gap-2">
+				<InputGroup.Root class="min-w-0 flex-1">
+					<InputGroup.Input
+						bind:ref={searchInputRef}
+						bind:value={searchQuery}
+						type="search"
+						placeholder="Search messages…"
+						aria-label="Search messages"
+						oninput={handleSearchInput}
+						onkeydown={handleSearchKeydown}
+					/>
+					<InputGroup.Addon>
+						<Search class="size-4" />
 					</InputGroup.Addon>
+					{#if isSearching}
+						<InputGroup.Addon align="inline-end">
+							<InputGroup.Text>{searchResults.length} results</InputGroup.Text>
+						</InputGroup.Addon>
+					{/if}
+				</InputGroup.Root>
+				{#if anyUnreadChats}
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						class="h-9 w-9 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
+						onclick={markAllChatGroupsRead}
+						aria-label="Mark all chats read"
+						title="Mark all read"
+					>
+						<CheckCheck class="size-4" />
+					</Button>
 				{/if}
-			</InputGroup.Root>
+			</div>
 			{#if activeKeyword && keywordMatches.length > 0}
 				<div class="relative">
 					<div

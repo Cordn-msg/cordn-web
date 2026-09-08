@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatPubkeyMultiSelect from '$lib/components/chat/ChatPubkeyMultiSelect.svelte';
@@ -22,6 +23,7 @@
 	} from '$lib/services/chatCoordinators.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import { createChatGroup, inviteChatGroupMembers } from '$lib/services/chatGroups.svelte';
+	import { safeNormalizePubKey } from '$lib/utils';
 	import { toast } from 'svelte-sonner';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -34,9 +36,15 @@
 	let description = $state('');
 	let icon = $state('');
 	let imageUrl = $state('');
-	let coordinatorKey = $state(
-		getDefaultChatCoordinator()?.pubkey ?? listChatCoordinators()[0]?.pubkey ?? ''
-	);
+	// Seed from ?coordinator= (the "Create group" buttons on coordinator cards
+	// and the detail page), else the flagged default. One-shot at mount — a
+	// reactive seed would clobber manual edits.
+	function resolveInitialCoordinatorKey() {
+		const fromUrl = safeNormalizePubKey(page.url.searchParams.get('coordinator') ?? '');
+		if (fromUrl) return fromUrl;
+		return getDefaultChatCoordinator()?.pubkey ?? listChatCoordinators()[0]?.pubkey ?? '';
+	}
+	let coordinatorKey = $state(resolveInitialCoordinatorKey());
 	let selectedKeyPackageRef = $state('');
 	let selectedMemberPubkeys = $state<string[]>([]);
 	let selectedAdminPubkeys = $state<string[]>([]);

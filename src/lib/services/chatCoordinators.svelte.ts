@@ -197,7 +197,14 @@ export function upsertChatCoordinator(input: {
 }): StoredCoordinator {
 	const pubkey = normalizePubKey(input.pubkey);
 	const existing = getChatCoordinator(pubkey);
-	const nextLabel = input.label?.trim() || `Coordinator ${pubkey.slice(0, 8)}`;
+	// Undefined label = "not provided": keep the existing label so pubkey-only
+	// upserts (profile start-chat, share-link registration) can't clobber a
+	// user-set name. Explicit empty/blank resets to the auto default (edit-form
+	// clear). This makes upsertChatCoordinator({ pubkey }) idempotent.
+	const nextLabel =
+		input.label === undefined
+			? (existing?.label ?? `Coordinator ${pubkey.slice(0, 8)}`)
+			: input.label.trim() || `Coordinator ${pubkey.slice(0, 8)}`;
 	const nextIsDefault = input.isDefault ?? existing?.isDefault ?? false;
 	const nextRelays = normalizeRelays(input.relays ?? existing?.relays);
 	const nextColor = normalizeColor(input.color ?? existing?.color, pubkey);
@@ -205,7 +212,7 @@ export function upsertChatCoordinator(input: {
 	if (existing) {
 		const updated: StoredCoordinator = {
 			...existing,
-			label: nextLabel || existing.label,
+			label: nextLabel,
 			relays: nextRelays,
 			isDefault: nextIsDefault,
 			color: nextColor

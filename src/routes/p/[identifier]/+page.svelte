@@ -409,12 +409,12 @@
 			const coordinatorKey = profileKeyPackage.coordinatorKey;
 
 			if (!defaultCoordinator || defaultCoordinator.pubkey !== coordinatorKey) {
+				// No label: keeps any existing user label; only the seeded default
+				// coordinator gets a name, matching first-run seeding.
 				upsertChatCoordinator({
 					pubkey: coordinatorKey,
 					label:
-						coordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY
-							? 'Default coordinator'
-							: `Coordinator ${coordinatorKey.slice(0, 8)}`
+						coordinatorKey === DEFAULT_CHAT_COORDINATOR_PUBKEY ? 'Default coordinator' : undefined
 				});
 			}
 
