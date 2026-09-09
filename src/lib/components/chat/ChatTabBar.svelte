@@ -2,10 +2,12 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
+	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import NotificationsDialog from '$lib/components/chat/NotificationsDialog.svelte';
 	import Bolt from '@lucide/svelte/icons/bolt';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import MessageCircle from '@lucide/svelte/icons/message-circle';
+	import Plus from '@lucide/svelte/icons/plus';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { hasUnreadChatAttention } from '$lib/services/chatAttention.svelte';
@@ -13,15 +15,16 @@
 	import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 	import { defaultProfileShareUrl, listProfileShareOptions } from '$lib/utils/profileShareOptions';
 
-	// Primary navigation on every viewport (desktop included): two tab
-	// destinations, two dialog actions (Notifications, Share), plus the home
-	// FAB. Immersive conversation views ([id], [id]/info, …) hide it so the
+	// Primary navigation on every viewport (desktop included): four tab
+	// destinations plus a center “+” action (the old floating FAB, folded into
+	// the bar). Immersive conversation views ([id], [id]/info, …) hide it so the
 	// composer owns the bottom edge; on desktop the persistent sidebar also
 	// navigates out of those.
 	const isConversationRoute = $derived(page.route.id?.startsWith('/chat/[id]') ?? false);
 
 	let shareOpen = $state(false);
 	let notificationsOpen = $state(false);
+	let newConversationOpen = $state(false);
 
 	// Chats dot mirrors the hamburger exactly (same attention source in
 	// chatAttention: messages, references, invites, join requests, news).
@@ -53,7 +56,7 @@
 
 {#if !isConversationRoute}
 	<nav aria-label="Primary" class="z-40 shrink-0 border-t border-border bg-background pb-safe">
-		<div class="mx-auto grid max-w-md grid-cols-4">
+		<div class="mx-auto grid max-w-md grid-cols-5">
 			<a
 				href={chatsHref}
 				class="{itemClass} {isChatsActive
@@ -90,6 +93,19 @@
 			</button>
 			<button
 				type="button"
+				title="New conversation"
+				aria-label="New conversation"
+				class="flex min-h-14 items-center justify-center px-2"
+				onclick={() => (newConversationOpen = true)}
+			>
+				<span
+					class="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-transform active:scale-95"
+				>
+					<Plus class="size-5" aria-hidden="true" />
+				</span>
+			</button>
+			<button
+				type="button"
 				disabled={!$activeAccount}
 				title={$activeAccount ? 'Share your profile' : 'Log in to share your profile'}
 				class="{itemClass} {$activeAccount
@@ -114,6 +130,8 @@
 			</a>
 		</div>
 	</nav>
+
+	<NewConversationDialog bind:open={newConversationOpen} />
 
 	{#if $activeAccount}
 		<NotificationsDialog bind:open={notificationsOpen} />

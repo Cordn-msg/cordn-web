@@ -34,8 +34,6 @@
 	import { refreshChatFeedAction } from '$lib/services/chatUiActions.svelte';
 	import { appUpdateStore, reloadForUpdate } from '$lib/services/appUpdate.svelte';
 	import CheckCheck from '@lucide/svelte/icons/check-check';
-	import Plus from '@lucide/svelte/icons/plus';
-	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 
 	// Pull-to-refresh on the chat list (native shell + standalone PWA only — a plain
 	// browser tab keeps the browser's own PTR as the emergency reload). When a web
@@ -101,7 +99,6 @@
 	// so warn once (dismiss is permanent — the fact is about the browser, not the
 	// account). Hidden entirely in the Android native app, where it is false.
 	const WEB_STORAGE_DISCLAIMER_KEY = 'cordn.webStorageDisclaimerDismissed';
-	let newConversationOpen = $state(false);
 	let storageDisclaimerDismissed = $state(
 		browser ? localStorage.getItem(WEB_STORAGE_DISCLAIMER_KEY) === '1' : false
 	);
@@ -357,17 +354,3 @@
 		{/if}
 	</div>
 </div>
-
-{#if hasAccount}
-	<Button
-		type="button"
-		size="icon"
-		aria-label="New conversation"
-		title="New conversation"
-		class="fixed right-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-40 size-14 rounded-full shadow-lg transition-transform active:scale-95"
-		onclick={() => (newConversationOpen = true)}
-	>
-		<Plus class="size-6" />
-	</Button>
-	<NewConversationDialog bind:open={newConversationOpen} />
-{/if}

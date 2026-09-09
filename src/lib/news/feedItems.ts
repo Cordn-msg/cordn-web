@@ -278,7 +278,7 @@ const newsReleases: NewsRelease[] = [
 		createdAt: Date.UTC(2026, 8, 9),
 		version: 1,
 		title: 'One navigation bar for every screen',
-		body: "- ✨ The bottom bar — Chats, Notifications, Share, Settings — now appears on desktop too, so Settings is reachable there for the first time, and the floating “+” for new chats shows on desktop as well.\n- ✨ Invitations and join requests now live in that bar as a Notifications tab with a red dot when something is waiting, instead of hiding behind a small icon in the sidebar.\n- 🔄 Unread signals on the bar are quiet red dots, matching the attention cues used across the app.\n- 🔄 Back arrows now go up one level — coordinators returns to Settings, not your chats — and desktop screens get a back arrow too instead of only the browser's.\n- 🐛 The Refresh button in the notifications dialog is no longer stuck on “Refreshing…”."
+		body: "- ✨ The bottom bar — Chats, Notifications, Share, Settings — now appears on desktop too, so Settings is reachable there for the first time, and a “+” for new chats sits in the middle of the bar instead of a floating button.\n- ✨ Invitations and join requests now live in that bar as a Notifications tab with a red dot when something is waiting, instead of hiding behind a small icon in the sidebar.\n- 🔄 Unread signals on the bar are quiet red dots, matching the attention cues used across the app.\n- 🔄 Back arrows now go up one level — coordinators returns to Settings, not your chats — and desktop screens get a back arrow too instead of only the browser's.\n- 🐛 The Refresh button in the notifications dialog is no longer stuck on “Refreshing…”."
 	},
 	{
 		id: 'cordn-news-2026-09-08-mark-all-read',
