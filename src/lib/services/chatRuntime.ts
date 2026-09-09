@@ -50,11 +50,19 @@ class AccountCoordinatorClientRegistry {
 	private createClient(coordinatorKey: string): cordnClient {
 		const target = resolveCoordinatorTarget(coordinatorKey);
 		const serverPubkey = target.serverPubkey;
-		return new cordnClient({
+		// Assigned right after construction: the health/server-info callbacks
+		// close over it and must ignore signals from a client that has since
+		// been swapped out — in-flight calls on a retired client reject with
+		// teardown collateral ("Connection closed") during disconnect, which
+		// is no evidence about the coordinator.
+		// eslint-disable-next-line prefer-const -- closures need the late-bound self reference
+		let client: cordnClient | undefined;
+		const created = new cordnClient({
 			signer: this.signer,
 			serverPubkey,
 			relays: target.relays,
 			onHealth: (signal) => {
+				if (client && this.peekClient(serverPubkey) !== client) return;
 				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
 				// A signer that cannot sign means no request ever reached the
 				// coordinator — that is local identity state, not reachability, so it
@@ -62,8 +70,13 @@ class AccountCoordinatorClientRegistry {
 				else if (!isSignerUnavailableError(signal.error))
 					markCoordinatorDegraded(serverPubkey, signal.error);
 			},
-			onServerInfo: (info) => setCoordinatorServerInfo(serverPubkey, info)
+			onServerInfo: (info) => {
+				if (client && this.peekClient(serverPubkey) !== client) return;
+				setCoordinatorServerInfo(serverPubkey, info);
+			}
 		} as ConstructorParameters<typeof cordnClient>[0]);
+		client = created;
+		return created;
 	}
 
 	getClient(coordinatorKey: string): cordnClient {
@@ -105,12 +118,17 @@ class AccountCoordinatorClientRegistry {
 	}
 
 	async disconnect(): Promise<void> {
-		for (const serverPubkey of this.clients.keys()) {
+		const entries = [...this.clients.entries()];
+		// Drop every client from the map BEFORE awaiting teardown: in-flight
+		// calls rejecting during disconnect are collateral, and the guarded
+		// onHealth must already see these clients as retired so a torn-down
+		// account cannot leave spurious degraded marks behind.
+		this.clients.clear();
+		for (const [serverPubkey] of entries) {
 			resetCoordinatorHealth(serverPubkey);
 			resetCoordinatorServerInfo(serverPubkey);
 		}
-		await Promise.allSettled([...this.clients.values()].map((client) => client.disconnect()));
-		this.clients.clear();
+		await Promise.allSettled(entries.map(([, client]) => client.disconnect()));
 	}
 
 	async disconnectCoordinator(coordinatorKey: string): Promise<void> {
@@ -128,6 +146,11 @@ const accountClientRegistries = new Map<string, AccountCoordinatorClientRegistry
 
 /** Coordinators with an old client disconnecting in the background. */
 const rebuildingClients = new Set<string>();
+
+/** Upper bound on how long a background old-client teardown may pin the
+ * rebuild gate — the swap itself is synchronous, this only covers a hung
+ * transport close on the retired client. */
+const REBUILD_PIN_MAX_MS = 30_000;
 
 function getAccountRegistryKey(account: IAccount): string {
 	return account.id;
@@ -155,8 +178,16 @@ export function getCoordinatorClient(account: IAccount, coordinatorKey: string) 
 	return getAccountCoordinatorClientRegistry(account).getClient(coordinatorKey);
 }
 
-export function isCoordinatorClientRefreshInProgress(): boolean {
-	return rebuildingClients.size > 0;
+export function isCoordinatorClientRefreshInProgress(coordinatorKey?: string): boolean {
+	// Scoped when a coordinator key is given: only THAT coordinator's rebuild
+	// pauses its queries — a hard-down coordinator's constant client swaps
+	// must not flap `enabled` (and polling) for healthy coordinators app-wide.
+	if (!coordinatorKey?.trim()) return rebuildingClients.size > 0;
+	const account = manager.getActive();
+	if (!account) return false;
+	return rebuildingClients.has(
+		`${getAccountRegistryKey(account)}::${normalizePubKey(coordinatorKey)}`
+	);
 }
 
 export async function disconnectCoordinatorClients(account?: IAccount): Promise<void> {
@@ -241,11 +272,12 @@ export function isSignerUnavailableError(error: unknown): boolean {
 export async function withCoordinatorClientRetry<T>(
 	account: IAccount,
 	coordinatorKey: string,
-	operation: (client: coordinatorClient) => Promise<T>
+	operation: (client: coordinatorClient) => Promise<T>,
+	options: { transientRetries?: boolean } = {}
 ): Promise<T> {
 	for (let attempt = 0; ; attempt += 1) {
 		try {
-			return await withCoordinatorClient(account, coordinatorKey, operation);
+			return await withCoordinatorClient(account, coordinatorKey, operation, options);
 		} catch (error) {
 			const delay = SIGNER_READY_RETRY_DELAYS_MS[attempt];
 			if (!isSignerUnavailableError(error) || delay === undefined) {
@@ -302,8 +334,26 @@ const TRANSIENT_RETRY_BACKOFF_MS = [500, 1000, 2000];
 export async function withCoordinatorClient<T>(
 	account: IAccount,
 	coordinatorKey: string,
-	operation: (client: coordinatorClient) => Promise<T>
+	operation: (client: coordinatorClient) => Promise<T>,
+	options: { transientRetries?: boolean } = {}
 ): Promise<T> {
+	// Polling reads opt out of the transient-retry ladder: the next poll is the
+	// retry, so a dead coordinator costs one attempt instead of four. Still swap
+	// a fresh client on a transient failure so a wedged socket doesn't survive
+	// the read-backoff window (coordinatorHealth).
+	if (options.transientRetries === false) {
+		return runCoordinatorOperation(account, coordinatorKey, async () => {
+			const client = getCoordinatorClient(account, coordinatorKey);
+			try {
+				return await operation(client);
+			} catch (error) {
+				if (isTransientCoordinatorError(error)) {
+					replaceCoordinatorClient(coordinatorKey, account, client);
+				}
+				throw error;
+			}
+		});
+	}
 	return runCoordinatorOperation(account, coordinatorKey, async () => {
 		let rebuilt = false;
 		let client: coordinatorClient | undefined;
@@ -388,8 +438,12 @@ export function replaceCoordinatorClient(
 
 	const chainKey = getCoordinatorOperationKey(account, coordinatorKey);
 	rebuildingClients.add(chainKey);
+	// Safety net: a transport close that never settles must not pin the
+	// rebuild gate (and its query pause) on this coordinator forever.
+	const unpin = () => rebuildingClients.delete(chainKey);
+	setTimeout(unpin, REBUILD_PIN_MAX_MS);
 	void oldClient
 		.disconnect()
 		.catch(() => undefined)
-		.finally(() => rebuildingClients.delete(chainKey));
+		.finally(unpin);
 }

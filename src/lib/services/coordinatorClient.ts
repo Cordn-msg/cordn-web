@@ -296,16 +296,19 @@ export class cordnClient implements coordinatorClient {
 		const resolvedPrivateKey = options.privateKey || '';
 		const resolvedEphemeralPrivateKey = options.ephemeralPrivateKey;
 
-		const relays = options.relays || [];
-		// Shared pool by default so client swaps/rebuilds reuse warm relay
-		// sockets; a private per-client pool only when explicitly injected.
-		const relayHandler = options.relayHandler ?? getSharedRelayHandler(relays);
 		const serverPubkey = options.serverPubkey;
 		if (!serverPubkey) {
 			throw new Error(
 				'Missing coordinator server pubkey. Pass serverPubkey explicitly or configure the CLI entrypoint to provide one.'
 			);
 		}
+
+		const relays = options.relays || [];
+		// Shared pool by default so client swaps/rebuilds reuse warm relay
+		// sockets; a private per-client pool only when explicitly injected.
+		// Acquired only after all constructor throws are past: a throw after
+		// acquisition would leak the pool refcount forever.
+		const relayHandler = options.relayHandler ?? getSharedRelayHandler(relays);
 		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
 		this.onHealth = onHealth;
 		this.onServerInfo = onServerInfo;

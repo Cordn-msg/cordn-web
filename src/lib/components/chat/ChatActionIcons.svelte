@@ -8,7 +8,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
+	import {
+		getCoordinatorLabel,
+		listKnownCoordinatorKeys
+	} from '$lib/services/chatCoordinators.svelte';
 	import { defaultProfileShareUrl, listProfileShareOptions } from '$lib/utils/profileShareOptions';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
@@ -35,8 +38,9 @@
 		rejectJoinRequestAction,
 		refreshJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
-	import { useWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
-	import { useJoinRequests } from '$lib/queries/chatJoinRequestQueries';
+	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
+	import { joinRequestsQueryOptions } from '$lib/queries/chatJoinRequestQueries';
+	import { createQueries } from '@tanstack/svelte-query';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -59,14 +63,26 @@
 	const unreadNotificationTotal = $derived.by(
 		() => unreadWelcomeNotifications + unreadJoinRequests
 	);
-	useWelcomeNotifications(() => $activeAccount?.pubkey);
+	// Per-coordinator observers (AGENTS.md): each coordinator polls and merges
+	// into the welcome store on its own schedule — a faulty coordinator can't
+	// stall the rest. The UI reads the store, not these query results.
+	const notificationCoordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
+	createQueries(() => ({
+		queries: notificationCoordinatorKeys.map((key) =>
+			welcomeNotificationsQueryOptions($activeAccount?.pubkey ?? '', key)
+		)
+	}));
 	// Observe the join-requests query so invalidation (e.g. after accepting a
 	// request) triggers a refetch and the `consumed` ack retires the accepted
 	// row on the coordinator promptly. Without a persistent observer the ack
 	// is deferred, the original row lingers, and a re-request from a user who
 	// left/re-deleted the group is silently deduped against it — so admins
 	// never see the re-request until the user sends twice. Mirrors welcomes.
-	useJoinRequests(() => $activeAccount?.pubkey);
+	createQueries(() => ({
+		queries: notificationCoordinatorKeys.map((key) =>
+			joinRequestsQueryOptions($activeAccount?.pubkey ?? '', key)
+		)
+	}));
 
 	// Profile-share links live in $lib/utils/profileShareOptions (shared with the
 	// mobile Share tab); these thin deriveds keep the reactivity seam local.

@@ -1546,6 +1546,17 @@ export async function sendChatGroupMessage(input: {
 			client.PostGroupMessage(sealedOutbound)
 		);
 
+		// The server put our message at `posted.cursor`; anything between the
+		// pre-send cursor and it was posted by others but never delivered to us
+		// (e.g. a keepalive-green zombie subscription). The successful send
+		// proves the coordinator is alive, so demand a catch-up sweep right
+		// away — ingestion dedups by cursor, so an over-eager trigger is
+		// harmless. Dynamic import: chatGroupWatch pulls the browser/Capacitor
+		// graph, which must not land in this module's unit tests.
+		if (group.fetchCursor > 0 && posted.cursor > group.fetchCursor + 1) {
+			void import('./chatGroupWatch.svelte').then((watch) => watch.refreshWatchedGroups());
+		}
+
 		const stored: StoredChatMessage = {
 			cursor: posted.cursor,
 			createdAt: posted.at,

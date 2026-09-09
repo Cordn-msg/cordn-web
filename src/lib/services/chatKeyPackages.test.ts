@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import {
+	CoordinatorReadBackoffError,
+	isCoordinatorReadBackoffError
+} from './coordinatorHealth.svelte';
 import type { StoredKeyPackageRecord } from './chatKeyPackages.svelte';
 
 const withCoordinatorClientMock = vi.fn(
@@ -28,7 +32,9 @@ vi.mock('$lib/services/chatRuntime', () => ({
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
-	markCoordinatorUsed: markCoordinatorUsedMock
+	markCoordinatorUsed: markCoordinatorUsedMock,
+	listKnownCoordinatorKeys: vi.fn(() => []),
+	getCoordinatorLabel: vi.fn((key: string) => `Coordinator ${key.slice(0, 8)}`)
 }));
 
 vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
@@ -202,5 +208,68 @@ describe('listZombieKeyPackageRefs()', () => {
 		// the last-resort stays exempt.
 		const remoteAbsentRefs = new Set(['kp-a', 'kp-b', 'kp-c']);
 		expect(listZombieKeyPackageRefs(consumedRefs, { remoteAbsentRefs })).toEqual(['kp-a', 'kp-c']);
+	});
+});
+
+describe('read-backoff breaker error identity', () => {
+	test('matches only the thrown class, not lookalike messages', () => {
+		expect(isCoordinatorReadBackoffError(new CoordinatorReadBackoffError())).toBe(true);
+		expect(
+			isCoordinatorReadBackoffError(
+				new Error('Coordinator unreachable (recent failure; retrying soon)')
+			)
+		).toBe(false);
+	});
+});
+
+describe('reconcilePublishedKeyPackagesForActiveAccount()', () => {
+	beforeEach(() => {
+		fetchQueryMock.mockReset();
+		fetchQueryMock.mockResolvedValue([]);
+	});
+
+	test('keeps publish markers for coordinators that could not be verified', async () => {
+		const { chatKeyPackagesStore, reconcilePublishedKeyPackagesForActiveAccount } =
+			await import('./chatKeyPackages.svelte');
+
+		// COORD_A unreachable, COORD_B healthy and holding kp-b.
+		fetchQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
+			const coordinatorKey = opts.queryKey[opts.queryKey.length - 2];
+			return coordinatorKey === COORD_A
+				? Promise.reject(new Error('coordinator offline'))
+				: Promise.resolve([{ pk: OWNER, kp_ref: 'kp-b' }]);
+		});
+
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-a', [COORD_A]),
+			makeRecord('kp-b', [COORD_B])
+		];
+
+		await reconcilePublishedKeyPackagesForActiveAccount();
+
+		// Unverifiable ≠ unpublished: A's marker stays; B's verified marker stays.
+		expect(
+			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-a')!
+				.publishedCoordinatorKeys
+		).toEqual([COORD_A]);
+		expect(
+			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-b')!
+				.publishedCoordinatorKeys
+		).toEqual([COORD_B]);
+	});
+
+	test('drops markers verified absent by a healthy coordinator', async () => {
+		const { chatKeyPackagesStore, reconcilePublishedKeyPackagesForActiveAccount } =
+			await import('./chatKeyPackages.svelte');
+
+		fetchQueryMock.mockResolvedValue([{ pk: OWNER, kp_ref: 'other' }]);
+		chatKeyPackagesStore.keyPackages = [makeRecord('kp-a', [COORD_B])];
+
+		await reconcilePublishedKeyPackagesForActiveAccount();
+
+		expect(
+			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-a')!
+				.publishedCoordinatorKeys
+		).toEqual([]);
 	});
 });

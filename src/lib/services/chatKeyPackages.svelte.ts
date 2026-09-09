@@ -19,14 +19,20 @@ import {
 	isLastResortKeyPackage,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
-import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
-import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import {
+	listKnownCoordinatorKeys,
+	markCoordinatorUsed,
+	getCoordinatorLabel
+} from '$lib/services/chatCoordinators.svelte';
 import {
 	requireActiveAccount,
 	withCoordinatorClient,
 	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
-import { getCoordinatorHealthTone } from '$lib/services/coordinatorHealth.svelte';
+import {
+	getCoordinatorHealthTone,
+	isCoordinatorReadBackoffError
+} from '$lib/services/coordinatorHealth.svelte';
 import {
 	getChatStorage,
 	type StoredChatKeyPackageRecord as StoredBinaryChatKeyPackageRecord
@@ -625,13 +631,35 @@ export async function reconcilePublishedKeyPackagesForActiveAccount() {
 	}
 
 	const availableRefsByCoordinator: Record<string, string[]> = {};
-	for (const coordinatorKey of coordinatorKeys) {
-		const result = await queryClient.fetchQuery({
-			queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, coordinatorKey),
-			queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
-			staleTime: 30 * 1000
-		});
-		availableRefsByCoordinator[coordinatorKey] = result
+	// Parallel: one offline coordinator must not stall drift-repair for the
+	// rest (previously serial, and a failure aborted the whole reconcile).
+	const outcomes = await Promise.all(
+		coordinatorKeys.map(async (coordinatorKey) => {
+			try {
+				const result = await queryClient.fetchQuery({
+					queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, coordinatorKey),
+					queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
+					staleTime: 30 * 1000
+				});
+				return { coordinatorKey, result, error: undefined as unknown };
+			} catch (error) {
+				return { coordinatorKey, result: undefined, error };
+			}
+		})
+	);
+	for (const { coordinatorKey, result, error } of outcomes) {
+		if (error !== undefined) {
+			// Unverifiable (offline/unreachable): keep that coordinator's markers —
+			// absent from a response is not the same as unpublished. The breaker
+			// fast-failing is expected while the coordinator is down — debug only.
+			const log = isCoordinatorReadBackoffError(error) ? console.debug : console.warn;
+			log(
+				`[key-packages] reconcile: ${getCoordinatorLabel(coordinatorKey)} unreachable, keeping local publish markers`,
+				error instanceof Error ? error.message : error
+			);
+			continue;
+		}
+		availableRefsByCoordinator[coordinatorKey] = result!
 			.filter((entry) => normalizePubKey(entry.pk) === ownerPubkey)
 			.map((entry) => entry.kp_ref);
 	}
@@ -639,11 +667,11 @@ export async function reconcilePublishedKeyPackagesForActiveAccount() {
 	await setKeyPackages(
 		chatKeyPackagesStore.keyPackages.map((entry) => {
 			if (normalizePubKey(entry.ownerPubkey) !== ownerPubkey) return entry;
-			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.filter((coordinatorKey) =>
-				(availableRefsByCoordinator[normalizePubKey(coordinatorKey)] ?? []).includes(
-					entry.keyPackageRef
-				)
-			);
+			const publishedCoordinatorKeys = entry.publishedCoordinatorKeys.filter((coordinatorKey) => {
+				const refs = availableRefsByCoordinator[normalizePubKey(coordinatorKey)];
+				// undefined = never verified in this pass (failed leg): marker stays.
+				return refs === undefined || refs.includes(entry.keyPackageRef);
+			});
 			return publishedCoordinatorKeys.length === entry.publishedCoordinatorKeys.length
 				? entry
 				: { ...entry, publishedCoordinatorKeys };

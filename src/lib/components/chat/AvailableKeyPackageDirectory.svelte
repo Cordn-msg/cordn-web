@@ -11,15 +11,16 @@
 		availableKeyPackagesQueryOptions,
 		type AvailableKeyPackageWithCoordinator
 	} from '$lib/queries/chatKeyPackageQueries';
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createQueries } from '@tanstack/svelte-query';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import {
 		getChatCoordinator,
 		getCoordinatorColor,
-		getCoordinatorLabel
+		getCoordinatorLabel,
+		listKnownCoordinatorKeys
 	} from '$lib/services/chatCoordinators.svelte';
-	import { areStringArraysEqual, cn, normalizePubKey } from '$lib/utils';
+	import { areStringArraysEqual, cn, errorMessage, normalizePubKey } from '$lib/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Filter from '@lucide/svelte/icons/filter';
 
@@ -61,10 +62,34 @@
 	let visibleKeyPackageIds = $state<string[]>([]);
 
 	const activePubkey = $derived($activeAccount ? normalizePubKey($activeAccount.pubkey) : '');
-	const availableKeyPackagesQuery = createQuery(() =>
-		availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', coordinatorKey)
+	// Per-coordinator queries (AGENTS.md): every coordinator resolves
+	// independently and the list below is a derived merge — a faulty
+	// coordinator is a leg that contributes nothing, never a gate.
+	const directoryCoordinatorKeys = $derived.by(() =>
+		coordinatorKey ? [normalizePubKey(coordinatorKey)] : [...new Set(listKnownCoordinatorKeys())]
 	);
-	const remoteKeyPackages = $derived(availableKeyPackagesQuery.data ?? []);
+	const availableKeyPackagesQueries = createQueries(() => ({
+		queries: directoryCoordinatorKeys.map((key) =>
+			availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', key)
+		)
+	}));
+	const remoteKeyPackages = $derived(
+		availableKeyPackagesQueries.flatMap((query) => query.data ?? []).sort((a, b) => b.at - a.at)
+	);
+	const isFetchingKeyPackages = $derived(
+		availableKeyPackagesQueries.some((query) => query.isFetching)
+	);
+	// Name the failing coordinator — a raw "Request timed out" with several
+	// coordinators configured says nothing about which one is at fault.
+	const keyPackagesErrorMessage = $derived.by(() => {
+		for (let i = 0; i < availableKeyPackagesQueries.length; i += 1) {
+			const error = availableKeyPackagesQueries[i].error;
+			if (error) {
+				return `${getCoordinatorLabel(directoryCoordinatorKeys[i])}: ${errorMessage(error)}`;
+			}
+		}
+		return undefined;
+	});
 
 	// Dialog lists others only (people you can start a chat with); the chat home
 	// directory includes your own packages with a "You" badge. Normalized compare
@@ -237,16 +262,10 @@
 			aria-label="Search available key packages"
 		/>
 
-		{#if availableKeyPackagesQuery.isFetching && scopedKeyPackages.length === 0}
+		{#if isFetchingKeyPackages && scopedKeyPackages.length === 0}
 			<div class="flex justify-center py-8">
 				<Spinner class="size-6" />
 			</div>
-		{:else if availableKeyPackagesQuery.error}
-			<p class="text-sm text-destructive">
-				{availableKeyPackagesQuery.error instanceof Error
-					? availableKeyPackagesQuery.error.message
-					: 'Failed to load remote key packages'}
-			</p>
 		{:else if filteredKeyPackages.length > 0}
 			<VirtualKeyPackageList
 				{items}
@@ -263,6 +282,8 @@
 			>
 				No key packages match your search.
 			</div>
+		{:else if keyPackagesErrorMessage}
+			<p class="text-sm text-destructive">{keyPackagesErrorMessage}</p>
 		{:else}
 			<div
 				class="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground"

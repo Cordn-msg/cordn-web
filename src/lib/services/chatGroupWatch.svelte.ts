@@ -26,7 +26,10 @@ import {
 	failChatReconnectStatus,
 	setChatReconnectStatus
 } from '$lib/services/chatReconnectStatus.svelte';
-import { markCoordinatorDegraded } from '$lib/services/coordinatorHealth.svelte';
+import {
+	getCoordinatorHealthTone,
+	markCoordinatorDegraded
+} from '$lib/services/coordinatorHealth.svelte';
 import {
 	awaitMultiDeviceReconciled,
 	resetMultiDeviceSession
@@ -99,10 +102,14 @@ type GroupWatchTask = {
 	client?: coordinatorClient;
 	/** Live once the subscription is wired; false while backlog/subscribe setup runs. */
 	live: boolean;
+	/** True only once the SERVER acked the subscription — publish alone proves
+	 * nothing (relays accept publishes to a dead coordinator), so liveness
+	 * decisions (backoff-clear, catch-up eligibility) wait for the ack. */
+	acked: boolean;
 	closing: boolean;
 	/** Best-effort abort publish, available once the subscription exists. */
 	abort?: (reason?: string) => Promise<void>;
-	ready: Promise<void>;
+	ready: Promise<boolean>;
 	task: Promise<void>;
 	/**
 	 * Wall-clock ms of the last delivered *chunk* (not any keepalive frame).
@@ -162,8 +169,16 @@ const BANNER_DELAY_MS = 500;
 const STALE_STREAM_MARGIN_MS = 10_000;
 /** Same window measured from the last delivered chunk (zombie proof, see above). */
 const DELIVERY_STALE_MS = 30_000 + 20_000 + STALE_STREAM_MARGIN_MS;
-/** Reconnect backoff per coordinator after a failed watch start. */
-const COORDINATOR_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000];
+/**
+ * Reconnect backoff per coordinator after a failed watch start. Unbounded-
+ * ish ladder capped at 5min: a hard-down coordinator gets ~1 bounded probe
+ * cycle per 5min instead of a fresh dial every 15s, while recovery latency
+ * stays instant — any successful RPC marks the coordinator healthy and
+ * `backoffBlocks` immediately un-blocks the next watch retry.
+ */
+const COORDINATOR_BACKOFF_MS = [
+	1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000
+];
 /** Min spacing between foreground rebuilds (resume fires several events). */
 const REBUILD_DEBOUNCE_MS = 5_000;
 /**
@@ -293,12 +308,30 @@ function rebuildForeground(reason: string): void {
 
 function backoffBlocks(coordinatorKey: string): boolean {
 	const entry = coordinatorBackoff.get(coordinatorKey);
-	return Boolean(entry && Date.now() < entry.notBefore);
+	if (!entry || Date.now() >= entry.notBefore) return false;
+	// The outage is over: any successful coordinator call marked it healthy,
+	// so retry the watch immediately instead of idling out the long-cap
+	// ladder. Passive probe cadence remains bounded by the schedule above.
+	if (getCoordinatorHealthTone(coordinatorKey) === 'healthy') return false;
+	return true;
 }
 
 function recordCoordinatorFailure(coordinatorKey: string) {
+	// Hidden-tab stream aborts are our own timer throttling, not coordinator
+	// evidence: after 5min hidden Chrome wakes chained timers at most once a
+	// minute, so the 30/30 keepalive starves and aborts healthy streams.
+	// Recording those arms the ladder while nothing can clear it (interval
+	// polls pause while hidden), spacing hidden restarts out to 5min and
+	// stopping message delivery until focus. While hidden, restarts stay
+	// prompt — Chrome's own 1-wake/min throttling bounds the dead-coordinator
+	// probe rate, and the ladder re-engages on the first visible failure.
+	if (browser && document.visibilityState !== 'visible') return;
 	const entry = coordinatorBackoff.get(coordinatorKey) ?? { failures: 0, notBefore: 0 };
-	entry.failures += 1;
+	// A coordinator already marked degraded failed elsewhere too (reads, ack
+	// timeout): it is known-down, so climb two ladder steps per recorded
+	// failure — the post-reload ramp reaches the 5min cap in ~4 cycles instead
+	// of ~9. The healthy override in backoffBlocks still un-blocks instantly.
+	entry.failures += getCoordinatorHealthTone(coordinatorKey) === 'degraded' ? 2 : 1;
 	const delay =
 		COORDINATOR_BACKOFF_MS[Math.min(entry.failures - 1, COORDINATOR_BACKOFF_MS.length - 1)] ??
 		COORDINATOR_BACKOFF_MS[COORDINATOR_BACKOFF_MS.length - 1];
@@ -506,11 +539,13 @@ async function fetchCoordinatorGroupBacklog(input: {
 }
 
 /**
- * Record an unexpected subscription termination. Transient failures mark the
- * coordinator degraded and swap in a fresh client identity — the dead stream's
- * ephemeral key may hold zombie server state on pre-.10 coordinators, which
- * would poison the resubscribe. The stream loop's finally block schedules the
- * restart tick.
+ * Record an unexpected subscription termination. A transient failure on the
+ * CURRENT client swaps in a fresh identity immediately: the dead stream's
+ * ephemeral key may hold zombie server state on pre-.10 coordinators, and a
+ * resubscribe on the same key "succeeds" locally (relays accept the publish)
+ * while never being acked or delivered — an invisible zombie that only a
+ * fresh key avoids. The swap is cheap and bounded by the probe cadence; the
+ * stream loop's finally block schedules the restart tick.
  */
 function noteStreamFailure(
 	coordinatorKey: string,
@@ -529,15 +564,20 @@ function noteStreamFailure(
 		});
 		return;
 	}
+	// A subscription that died on the CURRENT client is a failed watch: advance
+	// the retry ladder so the replacement start is spaced. Cleared again by the
+	// next server ack (or any successful call — backoffBlocks' healthy
+	// override), so a healthy coordinator's stream blip never idles.
+	recordCoordinatorFailure(coordinatorKey);
 	if (isTransientCoordinatorError(error)) {
 		// First-domino visibility: the swap itself is silent by design, but the
 		// original transient error should be findable when debugging.
+		markCoordinatorDegraded(coordinatorKey, detail);
 		console.debug('[watch] transient stream failure — swapping client', {
 			coordinatorKey,
 			what,
 			detail
 		});
-		markCoordinatorDegraded(coordinatorKey, detail);
 		const account = manager.getActive();
 		if (account) replaceCoordinatorClient(coordinatorKey, account, client);
 	} else {
@@ -549,15 +589,16 @@ async function startCoordinatorWatches(
 	account: IAccount,
 	coordinatorKey: string,
 	groups: WatchableGroup[]
-): Promise<void> {
+): Promise<boolean> {
 	const groupIds = groups.map((group) => group.id);
 	const handle: GroupWatchTask = {
 		groupIds,
 		coordinatorKey,
 		startedAt: Date.now(),
 		live: false,
+		acked: false,
 		closing: false,
-		ready: Promise.resolve(),
+		ready: Promise.resolve(false),
 		task: Promise.resolve()
 	};
 
@@ -568,7 +609,11 @@ async function startCoordinatorWatches(
 		markGroupWatched(groupId);
 	}
 
-	const readyPromise = (async () => {
+	// `true` only when the subscription went live — every failed start
+	// (thrown, reap-torn-down, retired-client collateral, nothing to
+	// subscribe) resolves or rejects WITHOUT live so the caller keeps the
+	// watch-backoff ladder engaged instead of clearing it.
+	const readyPromise = (async (): Promise<boolean> => {
 		try {
 			// Backlog first: bring the local cursor up to the server tip before
 			// the stream opens (the stream only delivers what arrives after
@@ -586,14 +631,14 @@ async function startCoordinatorWatches(
 					detail: errorMessage(error)
 				});
 			}
-			if (handle.closing) return;
+			if (handle.closing) return false;
 			const subscriptionGroups = groupIds
 				.filter((groupId) => !failedGroupIds.has(groupId))
 				.map((groupId) => toWatchableGroup(groupId))
 				.filter((group): group is WatchableGroup => Boolean(group));
 			if (subscriptionGroups.length === 0) {
 				clearCurrentWatch(handle);
-				return;
+				return false;
 			}
 			// Setup is deadline-bounded inside the client: a wedged socket rejects
 			// as a transient error instead of hanging the watch forever.
@@ -606,7 +651,7 @@ async function startCoordinatorWatches(
 			if (handle.closing) {
 				void subscription.abort('teardown during setup').catch(() => undefined);
 				clearCurrentWatch(handle);
-				return;
+				return false;
 			}
 			handle.live = true;
 
@@ -625,15 +670,25 @@ async function startCoordinatorWatches(
 			handle.abort = (reason?: string) => subscription.abort(reason);
 
 			handle.task = (async () => {
-				void subscription.result.catch((error) => {
-					if (handle.closing) return;
-					noteStreamFailure(
-						coordinatorKey,
-						client,
-						error,
-						'coordinator subscription result failed'
-					);
-				});
+				void subscription.result
+					.then(() => {
+						// Server acked: proof the coordinator is alive. Clear the watch
+						// backoff here — NOT on setup completion, which only proves the
+						// publish landed on relays (they accept publishes to a dead
+						// coordinator, which otherwise cleared the ladder every ~80s
+						// and looped cold starts forever).
+						handle.acked = true;
+						clearCoordinatorBackoff(coordinatorKey);
+					})
+					.catch((error) => {
+						if (handle.closing) return;
+						noteStreamFailure(
+							coordinatorKey,
+							client,
+							error,
+							'coordinator subscription result failed'
+						);
+					});
 
 				try {
 					for await (const message of subscription.stream) {
@@ -676,16 +731,17 @@ async function startCoordinatorWatches(
 				}
 			})();
 			void handle.task.catch(() => undefined);
+			return true;
 		} catch (error) {
 			// Backlog fetch or subscribe threw. If torn down mid-start, resolve
 			// cleanly — the background client teardown interrupts in-flight calls
 			// and the diff will re-open the watch on the next tick.
 			clearCurrentWatch(handle);
-			if (handle.closing) return;
+			if (handle.closing) return false;
 			// Same for a retired client: the failure is collateral from an earlier
 			// swap — record nothing, swap nothing, warn nothing; the next tick's
 			// diff re-opens the watch on the replacement client.
-			if (handle.client && !isCurrentCoordinatorClient(coordinatorKey, handle.client)) return;
+			if (handle.client && !isCurrentCoordinatorClient(coordinatorKey, handle.client)) return false;
 			throw error;
 		}
 	})();
@@ -732,7 +788,15 @@ async function startMissingWatches(account: IAccount) {
 			// whole tick. Synchronous registration keeps the diff idempotent
 			// while setups are in flight.
 			void startCoordinatorWatches(account, coordinatorKey, groups)
-				.then(() => clearCoordinatorBackoff(coordinatorKey))
+				.then((started) => {
+					if (started) return;
+					// Resolved without a wired subscription: retired-client collateral,
+					// reap teardown, or a start with nothing left to subscribe. Still
+					// a failed attempt — advance the ladder, or the long-cap backoff
+					// never engages. A started watch is neutral here: the ladder
+					// clears on the server's ack (see subscription.result above).
+					recordCoordinatorFailure(coordinatorKey);
+				})
 				.catch((error) => {
 					recordCoordinatorFailure(coordinatorKey);
 					// A failed start often means the client itself is dead — a connect
@@ -810,8 +874,21 @@ async function tickBody(account: IAccount, options: TickOptions): Promise<void> 
 	// session-cached, and bounded; a no-op when multi-device is off.
 	await awaitMultiDeviceReconciled();
 
-	const watchedBefore = [...currentWatches.keys()];
-
+	// Catch-up covers subscriptions that are either SERVER-ACKED or on a
+	// HEALTHY coordinator. `live` (publish landed) alone is not proof — relays
+	// accept subscribes to a dead coordinator, and a catch-up on such a handle
+	// is a doomed RPC every heartbeat; a dead coordinator is marked degraded
+	// (only a successful call lifts it), which keeps those handles excluded.
+	// But an UN-ACKED handle on a healthy coordinator is exactly the
+	// keepalive-green zombie class (ack timed out or was lost, server keeps
+	// pinging, chunks stop) — excluding it made a silent subscription
+	// unrecoverable short of a page refresh: the diff saw it as covered and
+	// the zombie-proof never ran on it.
+	const watchedBefore = [...currentWatches]
+		.filter(
+			([, handle]) => handle.acked || getCoordinatorHealthTone(handle.coordinatorKey) === 'healthy'
+		)
+		.map(([groupId]) => groupId);
 	reapUnhealthyWatches(account);
 
 	// Both convergence phases run DETACHED from the tick. Every step inside
@@ -1049,12 +1126,17 @@ if (browser) {
 		}).catch(() => undefined);
 	}
 
-	// Convergence heartbeat: the catch-up sweep is the only signal that can
-	// prove a keepalive-green zombie (server pings flow, chunks don't), so run
-	// it on a slow foreground-only cadence. Background sweeps are skipped
-	// (throttled timers + battery); the next foreground closes that gap.
+	// Convergence heartbeat — the universal recovery. Runs REGARDLESS of
+	// visibility: a hidden tab's throttled timers still fire on Chrome's
+	// ~1-wake/min budget, and the sweep is event-driven (WS RPCs, cursor-dedup
+	// idempotent), so it bounds message loss from ANY failure mode — zombie
+	// stream, lost ack, aborted restart, blocked ladder — to ~1-2 minutes in
+	// background. This is the correctness backstop; every other health
+	// mechanism (ladder, swaps, ack gates) is latency optimization on top.
+	// ponytail: a killswitch/simplification pass on those layers is the
+	// upgrade path if this backstop proves sufficient in practice.
 	setInterval(() => {
-		if (document.visibilityState !== 'visible' || !warmed) return;
+		if (!warmed) return;
 		requestTick('heartbeat', { catchUp: true });
 	}, HEARTBEAT_INTERVAL_MS);
 }

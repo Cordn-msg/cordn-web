@@ -11,7 +11,7 @@
 	import KeyPackageCard from '$lib/components/chat/KeyPackageCard.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import {
-		useAvailableKeyPackages,
+		availableKeyPackagesQueryOptions,
 		type AvailableKeyPackageWithCoordinator
 	} from '$lib/queries/chatKeyPackageQueries';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -28,8 +28,13 @@
 		takeOverLastResort
 	} from '$lib/services/chatKeyPackages.svelte';
 	import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
-	import { getCoordinatorLabel, listChatCoordinators } from '$lib/services/chatCoordinators.svelte';
-	import { normalizePubKey } from '$lib/utils';
+	import {
+		getCoordinatorLabel,
+		listChatCoordinators,
+		listKnownCoordinatorKeys
+	} from '$lib/services/chatCoordinators.svelte';
+	import { createQueries } from '@tanstack/svelte-query';
+	import { errorMessage, normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -63,12 +68,36 @@
 	const activePubkey = $derived.by(() =>
 		$activeAccount ? normalizePubKey($activeAccount.pubkey) : ''
 	);
-	// Query-managed remote read (AGENTS.md): shares the same cache as the
-	// directory/dialog/coordinator page instead of an imperative snapshot, so
-	// this card can no longer drift out of sync with the other surfaces.
-	const availableKeyPackagesQuery = useAvailableKeyPackages(() => $activeAccount?.pubkey);
+	// Per-coordinator queries (AGENTS.md): every coordinator resolves
+	// independently and the aggregate below is a derived value — a faulty
+	// coordinator is just a leg that contributes nothing, never a gate on the
+	// healthy ones.
+	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
+	const availableKeyPackagesQueries = createQueries(() => ({
+		queries: coordinatorKeys.map((key) =>
+			availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', key)
+		)
+	}));
+	const remoteKeyPackageEntries = $derived(
+		availableKeyPackagesQueries.flatMap((query) => query.data ?? []).sort((a, b) => b.at - a.at)
+	);
+	const isFetchingRemoteKeyPackages = $derived(
+		availableKeyPackagesQueries.some((query) => query.isFetching)
+	);
+	// Name the failing coordinator(s) — a raw timeout says nothing about which
+	// one is at fault when several are configured.
+	const remoteKeyPackagesErrorMessage = $derived.by(() => {
+		const failedLabels = availableKeyPackagesQueries
+			.map((query, index) =>
+				query.error ? getCoordinatorLabel(coordinatorKeys[index]) : undefined
+			)
+			.filter((label): label is string => Boolean(label));
+		if (failedLabels.length === 0) return undefined;
+		const first = availableKeyPackagesQueries.find((query) => query.error)?.error;
+		return `${failedLabels.join(', ')}: ${errorMessage(first)}`;
+	});
 	const ownedRemoteKeyPackages = $derived.by<OwnedRemoteKeyPackage[]>(() =>
-		(availableKeyPackagesQuery.data ?? [])
+		remoteKeyPackageEntries
 			.filter((entry) => normalizePubKey(entry.pk) === activePubkey)
 			.map((entry) => ({
 				...entry,
@@ -106,7 +135,7 @@
 	// and its local publish markers stay authoritative.
 	const remoteKeyPackageRefsByCoordinator = $derived.by(() => {
 		const map = new Map<string, Set<string>>();
-		for (const entry of availableKeyPackagesQuery.data ?? []) {
+		for (const entry of remoteKeyPackageEntries) {
 			let refs = map.get(entry.coordinatorKey);
 			if (!refs) map.set(entry.coordinatorKey, (refs = new Set()));
 			refs.add(entry.kp_ref);
@@ -551,7 +580,7 @@
 												{orphanedRemoteKeyPackageCount} orphaned
 											</span>
 										{/if}
-									{:else if availableKeyPackagesQuery.isFetching}
+									{:else if isFetchingRemoteKeyPackages}
 										Loading remote key packages…
 									{:else}
 										No remote key packages owned by the active identity on saved coordinators.
@@ -560,31 +589,25 @@
 								<Button
 									type="button"
 									onclick={() => refreshAvailableKeyPackagesAction()}
-									disabled={availableKeyPackagesQuery.isFetching}
+									disabled={isFetchingRemoteKeyPackages}
 								>
-									{#if availableKeyPackagesQuery.isFetching}
+									{#if isFetchingRemoteKeyPackages}
 										<Spinner class="mr-2 size-4" />
 									{:else}
 										<Boxes class="mr-2 size-4" />
 									{/if}
-									{availableKeyPackagesQuery.isFetching
-										? 'Loading…'
-										: 'Refresh remote key packages'}
+									{isFetchingRemoteKeyPackages ? 'Loading…' : 'Refresh remote key packages'}
 								</Button>
 							</div>
 
-							{#if availableKeyPackagesQuery.error}
-								<p class="text-sm text-destructive">
-									{availableKeyPackagesQuery.error instanceof Error
-										? availableKeyPackagesQuery.error.message
-										: 'Failed to load remote key packages'}
-								</p>
+							{#if remoteKeyPackagesErrorMessage}
+								<p class="text-sm text-destructive">{remoteKeyPackagesErrorMessage}</p>
 							{/if}
 							{#if remoteKeyPackageError}
 								<p class="text-sm text-destructive">{remoteKeyPackageError}</p>
 							{/if}
 
-							{#if availableKeyPackagesQuery.isFetching && ownedRemoteKeyPackages.length === 0}
+							{#if isFetchingRemoteKeyPackages && ownedRemoteKeyPackages.length === 0}
 								<div class="flex justify-center py-8">
 									<Spinner class="size-6" />
 								</div>

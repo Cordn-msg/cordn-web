@@ -17,6 +17,8 @@ export type CoordinatorHealthStatus = 'unknown' | 'healthy' | 'degraded';
 export type CoordinatorHealth = {
 	status: CoordinatorHealthStatus;
 	lastError: string | undefined;
+	/** Wall-clock ms of the most recent degraded mark; drives read backoff. */
+	lastFailureAt?: number;
 };
 
 export const coordinatorHealthStore = $state<{
@@ -48,12 +50,24 @@ export function markCoordinatorHealthy(coordinatorKey: string) {
 export function markCoordinatorDegraded(coordinatorKey: string, error: string) {
 	writeHealth(coordinatorKey, {
 		status: 'degraded',
-		lastError: error
+		lastError: error,
+		lastFailureAt: Date.now()
 	});
 }
 
 export function resetCoordinatorHealth(coordinatorKey: string) {
-	coordinatorHealthStore.byCoordinator.delete(normalizePubKey(coordinatorKey));
+	const normalized = normalizePubKey(coordinatorKey);
+	const previous = coordinatorHealthStore.byCoordinator.get(normalized);
+	if (!previous) return;
+	// A client swap is a fresh LOCAL identity, not evidence the server
+	// recovered: keep the read-backoff memory so polling reads keep
+	// fast-failing a hard-down coordinator across swaps (only a successful
+	// call or window expiry lifts it).
+	coordinatorHealthStore.byCoordinator.set(normalized, {
+		status: 'unknown',
+		lastError: undefined,
+		lastFailureAt: previous.lastFailureAt
+	});
 }
 
 export function getCoordinatorHealthTone(coordinatorKey: string): CoordinatorHealthStatus {
@@ -65,4 +79,50 @@ export function getCoordinatorHealthLabel(coordinatorKey: string): string {
 	if (health.status === 'healthy') return 'Connected';
 	if (health.status === 'degraded') return health.lastError ?? 'Connection issue';
 	return 'Connecting…';
+}
+
+/** Read-backoff window: skip re-dialing a coordinator that just failed. */
+const COORDINATOR_READ_BACKOFF_MS = 60_000;
+
+/** Thrown by the read-backoff breaker ({@link throwIfCoordinatorInReadBackoff}). */
+export class CoordinatorReadBackoffError extends Error {
+	constructor() {
+		super('Coordinator unreachable (recent failure; retrying soon)');
+		this.name = 'CoordinatorReadBackoffError';
+	}
+}
+
+/**
+ * Read-seam circuit breaker. A coordinator that failed a call within the
+ * backoff window is skipped by polling reads (key packages, welcomes, join
+ * requests) instead of hanging to the RPC timeout every poll. Self-healing:
+ * any successful call through the registry marks the coordinator healthy
+ * (onHealth) and the window expires on its own — no probing added.
+ *
+ * Deliberately status-agnostic: client swaps reset the status to `unknown`
+ * (replaceCoordinatorClient), and a swap is no evidence the server
+ * recovered — only lastFailureAt decides.
+ *
+ * Throws (never "return empty") so the failure surfaces as a per-coordinator
+ * query error while Svelte Query keeps serving stale cached data; an empty
+ * success would wipe retained local state (e.g. welcome entries).
+ */
+export function throwIfCoordinatorInReadBackoff(coordinatorKey: string): void {
+	const health = readHealth(coordinatorKey);
+	if (
+		health.lastFailureAt !== undefined &&
+		Date.now() - health.lastFailureAt < COORDINATOR_READ_BACKOFF_MS
+	) {
+		throw new CoordinatorReadBackoffError();
+	}
+}
+
+/**
+ * Whether an error is the breaker doing its job (fast-fail) rather than a
+ * real fetch failure — callers keep these quiet (console.debug) instead of
+ * warning every poll for a permanently down coordinator. Identity check, not
+ * message matching: immune to wrapping and message edits.
+ */
+export function isCoordinatorReadBackoffError(error: unknown): boolean {
+	return error instanceof CoordinatorReadBackoffError;
 }

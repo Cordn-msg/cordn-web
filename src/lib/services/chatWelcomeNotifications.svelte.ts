@@ -1,9 +1,16 @@
 import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { PendingWelcome } from '$lib/contracts';
-import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
+import {
+	listKnownCoordinatorKeys,
+	getCoordinatorLabel
+} from '$lib/services/chatCoordinators.svelte';
 import { ensureGroupsLoaded } from '$lib/services/chatGroups.svelte';
 import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
+import {
+	isCoordinatorReadBackoffError,
+	throwIfCoordinatorInReadBackoff
+} from '$lib/services/coordinatorHealth.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
 import {
@@ -215,6 +222,9 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 		const outcomes = await Promise.all(
 			keys.map(async (coordinatorKey) => {
 				try {
+					// Read seam: fast-fail while the coordinator is in read backoff, and
+					// skip the transient-retry ladder — the next poll is the retry.
+					throwIfCoordinatorInReadBackoff(coordinatorKey);
 					// Retire accepted/dismissed welcomes on the coordinator via the
 					// `consumed` ack. The ack is atomic-before-fetch and idempotent;
 					// mergeFetchedWelcomes then drops them locally since the response
@@ -226,8 +236,11 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 								(entry.status === 'accepted' || entry.status === 'dismissed')
 						)
 						.map((entry) => ({ kp_ref: entry.kpRef, at: entry.at }));
-					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
-						client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {})
+					const result = await withCoordinatorClientRetry(
+						account,
+						coordinatorKey,
+						(client) => client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {}),
+						{ transientRetries: false }
 					);
 					return {
 						coordinatorKey,
@@ -245,8 +258,11 @@ export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
 				continue;
 			}
 			if (isSignerUnavailableError(outcome.error)) return;
-			console.warn(
-				`Failed to fetch welcomes from coordinator ${outcome.coordinatorKey}:`,
+			// The breaker doing its job is expected while a coordinator is down —
+			// keep it out of the warn noise; real fetch failures still warn.
+			const log = isCoordinatorReadBackoffError(outcome.error) ? console.debug : console.warn;
+			log(
+				`Failed to fetch welcomes from ${getCoordinatorLabel(outcome.coordinatorKey)}:`,
 				outcome.error instanceof Error ? outcome.error.message : outcome.error
 			);
 		}

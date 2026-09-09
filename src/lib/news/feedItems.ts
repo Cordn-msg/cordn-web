@@ -267,6 +267,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- 🐛 On Android, exporting a backup with your message history no longer crashes the app the moment the save dialog opens. The August fix stopped the crash for smaller backups, but larger ones still took the app down — any size now saves cleanly to the spot you pick.'
 	},
 	{
+		id: 'cordn-news-2026-09-09-coordinator-independence',
+		createdAt: Date.UTC(2026, 8, 9),
+		version: 1,
+		title: 'Chats keep working when a coordinator is down',
+		body: '- 🐛 A coordinator that goes offline no longer disturbs anything else: chats on healthy coordinators, the key-package directory, invitations, and join requests all keep loading, and lists no longer briefly empty or flicker while an unreachable coordinator is being retried.\n- 🔄 An unreachable coordinator is now retried gently, with growing pauses, instead of being hammered continuously — and it is picked back up the moment it responds again. Any error message now names which coordinator is having trouble instead of a bare “Request timed out”.\n- 🐛 Messages keep arriving while the Cordn window sits unfocused or in the background — previously it could quietly stop receiving new messages until you focused it or refreshed the page.\n- 🐛 A chat that quietly went silent no longer needs a page refresh: sending a message in it pulls in anything missed, and silent connections are detected and rebuilt on their own.- 🔄 When a chat connection does drop, it is rebuilt right away with a fresh identity — a reconnect can no longer leave a group quietly missing messages until you interact with it again.'
+	},
+	{
 		id: 'cordn-news-2026-09-08-mark-all-read',
 		createdAt: Date.UTC(2026, 8, 8),
 		version: 3,

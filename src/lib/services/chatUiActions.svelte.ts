@@ -181,24 +181,27 @@ export const chatComposerActionsStore = $state<{ error: string }>({
 });
 
 export async function loadAvailableKeyPackagesAction() {
-	const account = requireActiveAccount('You must be logged in to inspect coordinators');
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey),
-		queryFn: () => fetchCoordinatorAvailableKeyPackages(undefined),
-		staleTime: 60 * 1000
-	});
+	requireActiveAccount('You must be logged in to inspect coordinators');
+	// Direct fan-out: warms every per-coordinator cache entry (the observers'
+	// data source) without a throwaway aggregate cache entry.
+	await fetchCoordinatorAvailableKeyPackages();
 }
 
 export async function refreshAvailableKeyPackagesAction(coordinatorKey?: string) {
 	const account = requireActiveAccount('You must be logged in to inspect coordinators');
-	await queryClient.invalidateQueries({
-		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
-	});
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
-		queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey, { force: true }),
-		staleTime: 0
-	});
+	if (coordinatorKey?.trim()) {
+		await queryClient.invalidateQueries({
+			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey)
+		});
+		await queryClient.fetchQuery({
+			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
+			queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey, { force: true }),
+			staleTime: 0
+		});
+		return;
+	}
+	// Aggregate refresh = forced fan-out over every per-coordinator cache entry.
+	await fetchCoordinatorAvailableKeyPackages(undefined, { force: true });
 }
 
 export async function sendGroupMessageAction(
@@ -256,37 +259,21 @@ export async function startChatWithKeyPackageAction(keyPackage: {
 
 export async function refreshWelcomeNotificationsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
-	// A forced fetchQuery fans out to every coordinator and repopulates the
-	// cache; mounted observers re-render from the cache write. invalidateQueries
-	// here would trigger a SECOND parallel fan-out (the active observer's
-	// refetch), doubling welcome_take calls per refresh.
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
-		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey, undefined, { force: true }),
-		staleTime: 0
-	});
+	// The helper fans out per coordinator (forced) and writes each
+	// per-coordinator cache entry; mounted observers re-render from those
+	// writes. invalidateQueries here would trigger a SECOND parallel fan-out
+	// (the observers' refetch), doubling welcome_take calls per refresh.
+	await fetchCoordinatorWelcomeNotifications(account.pubkey, undefined, { force: true });
 }
 
 export async function loadWelcomeNotificationsAction() {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey),
-		queryFn: () => fetchCoordinatorWelcomeNotifications(account.pubkey),
-		staleTime: 60 * 1000
-	});
+	await fetchCoordinatorWelcomeNotifications(account.pubkey);
 }
 
 export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKey: string) {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
-	await queryClient.invalidateQueries({
-		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey, coordinatorKey)
-	});
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.welcomeNotifications(account.pubkey, coordinatorKey),
-		queryFn: () =>
-			fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey, { force: true }),
-		staleTime: 0
-	});
+	await fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey, { force: true });
 }
 
 export async function acceptWelcomeAction(welcomeId: string) {
@@ -331,23 +318,14 @@ export async function rejectWelcomeAction(welcomeId: string) {
 }
 
 export async function loadJoinRequestsAction() {
-	const account = requireActiveAccount('You must be logged in to fetch join requests');
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.joinRequests(account.pubkey),
-		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey),
-		staleTime: 60 * 1000
-	});
+	requireActiveAccount('You must be logged in to fetch join requests');
+	// Concurrent per-coordinator legs; merges land in the store as each leg
+	// settles, so one slow coordinator never gates the rest.
+	await fetchCoordinatorJoinRequests();
 }
 
 export async function refreshJoinRequestsAction() {
-	const account = requireActiveAccount('You must be logged in to fetch join requests');
-	// See refreshWelcomeNotificationsAction: invalidateQueries would double the
-	// per-coordinator fan-out. The forced fetchQuery alone repopulates the cache.
-	await queryClient.fetchQuery({
-		queryKey: chatQueryKeys.joinRequests(account.pubkey),
-		queryFn: () => fetchCoordinatorJoinRequests(account.pubkey, undefined),
-		staleTime: 0
-	});
+	await loadJoinRequestsAction();
 }
 
 /**

@@ -14,8 +14,14 @@ import {
 	requireActiveAccount,
 	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
+import {
+	isCoordinatorReadBackoffError,
+	throwIfCoordinatorInReadBackoff
+} from '$lib/services/coordinatorHealth.svelte';
+import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 import { manager } from '$lib/services/accountManager.svelte';
 import { normalizePubKey } from '$lib/utils';
+import type { IAccount } from 'applesauce-accounts';
 
 const STORAGE_KEY = 'cordn-chat-join-requests';
 const SENT_STORAGE_KEY = 'cordn-chat-sent-join-requests';
@@ -160,7 +166,88 @@ function mergeFetchedJoinRequests(
 	saveJoinRequests();
 }
 
-export async function fetchJoinRequestsForAdminGroups() {
+/**
+ * Fetch + merge pending join requests for one coordinator's admin groups.
+ * The merge happens inside the leg so results land in the store as each
+ * coordinator responds — one slow/dead coordinator never gates the others.
+ * Merges are synchronous, so concurrent legs cannot interleave.
+ */
+async function fetchAndMergeCoordinatorJoinRequests(
+	account: IAccount,
+	pubkey: string,
+	coordinatorKey: string,
+	groups: { gid: string }[]
+): Promise<void> {
+	// Read seam: fast-fail while the coordinator is in read backoff, and skip
+	// the transient-retry ladder — the next poll is the retry.
+	throwIfCoordinatorInReadBackoff(coordinatorKey);
+	try {
+		// Retire accepted/dismissed join requests on the coordinator via the
+		// `consumed` ack (atomic-before-fetch, idempotent). mergeFetchedJoinRequests
+		// then drops them locally since the response no longer echoes them.
+		const consumed = chatJoinRequestsStore.entries
+			.filter(
+				(entry) =>
+					normalizePubKey(entry.coordinatorKey) === normalizePubKey(coordinatorKey) &&
+					(entry.status === 'accepted' || entry.status === 'dismissed')
+			)
+			.map((entry) => ({
+				gid: entry.groupId,
+				pk: entry.requesterStablePubkey,
+				at: entry.at
+			}));
+		const result = await withCoordinatorClientRetry(
+			account,
+			coordinatorKey,
+			(client) =>
+				client.FetchManyPendingJoinRequests(
+					consumed.length > 0 ? { groups, consumed } : { groups }
+				),
+			{ transientRetries: false }
+		);
+		const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
+		for (const request of result.requests) {
+			const list = requestsByGroup.get(request.gid);
+			if (list) {
+				list.push({ pk: request.pk, kp_ref: request.kp_ref, at: request.at });
+			} else {
+				requestsByGroup.set(request.gid, [
+					{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
+				]);
+			}
+		}
+		for (const group of groups) {
+			// Never surface a user's own join request back to themselves.
+			// Egalitarian groups make every member an admin, so a (re-)added
+			// member would otherwise fetch their own still-pending request —
+			// including ones another admin already accepted, since cross-client
+			// consume is deferred to the accepter's next poll. Filtering here is
+			// also the merge choke point: merge's drop logic retires any
+			// own-request entry that slipped in from a prior fetch.
+			const requests = (requestsByGroup.get(group.gid) ?? []).filter(
+				(request) => normalizePubKey(request.pk) !== pubkey
+			);
+			mergeFetchedJoinRequests(coordinatorKey, group.gid, requests);
+		}
+	} catch (error) {
+		if (isSignerUnavailableError(error)) return;
+		// The breaker doing its job is expected while a coordinator is down —
+		// keep it out of the warn noise; real fetch failures still warn.
+		const log = isCoordinatorReadBackoffError(error) ? console.debug : console.warn;
+		log(
+			`Failed to fetch join requests from ${getCoordinatorLabel(coordinatorKey)}:`,
+			error instanceof Error ? error.message : error
+		);
+	}
+}
+
+/**
+ * Sync join requests for the active account's admin groups. With no
+ * `coordinatorKey`, every coordinator's legs run concurrently and merge as
+ * they land; with one, only that coordinator is fetched (its observer must
+ * not sweep the others).
+ */
+export async function fetchJoinRequestsForAdminGroups(coordinatorKey?: string) {
 	await ensureGroupsLoaded();
 
 	const account = requireActiveAccount('You must be logged in to fetch join requests');
@@ -188,9 +275,6 @@ export async function fetchJoinRequestsForAdminGroups() {
 		return;
 	}
 
-	chatJoinRequestsStore.loading = true;
-	chatJoinRequestsStore.error = '';
-
 	const groupsByCoordinator = new SvelteMap<string, { gid: string }[]>();
 	for (const group of adminGroups) {
 		const list = groupsByCoordinator.get(group.coordinatorKey);
@@ -200,85 +284,19 @@ export async function fetchJoinRequestsForAdminGroups() {
 			groupsByCoordinator.set(group.coordinatorKey, [{ gid: group.id }]);
 		}
 	}
+	const normalizedFilter = coordinatorKey?.trim() ? normalizePubKey(coordinatorKey) : undefined;
+	const targets = [...groupsByCoordinator].filter(
+		([key]) => !normalizedFilter || normalizePubKey(key) === normalizedFilter
+	);
 
+	chatJoinRequestsStore.loading = true;
+	chatJoinRequestsStore.error = '';
 	try {
-		// Fetch concurrently across coordinators (the slow part) but merge
-		// sequentially (store mutation) so concurrent merges can't lose updates.
-		const outcomes = await Promise.all(
-			[...groupsByCoordinator].map(async ([coordinatorKey, groups]) => {
-				try {
-					// Retire accepted/dismissed join requests on the coordinator via the
-					// `consumed` ack (atomic-before-fetch, idempotent). mergeFetchedJoinRequests
-					// then drops them locally since the response no longer echoes them.
-					const consumed = chatJoinRequestsStore.entries
-						.filter(
-							(entry) =>
-								normalizePubKey(entry.coordinatorKey) === normalizePubKey(coordinatorKey) &&
-								(entry.status === 'accepted' || entry.status === 'dismissed')
-						)
-						.map((entry) => ({
-							gid: entry.groupId,
-							pk: entry.requesterStablePubkey,
-							at: entry.at
-						}));
-					const result = await withCoordinatorClientRetry(account, coordinatorKey, (client) =>
-						client.FetchManyPendingJoinRequests(
-							consumed.length > 0 ? { groups, consumed } : { groups }
-						)
-					);
-					const requestsByGroup = new SvelteMap<string, JoinRequest[]>();
-					for (const request of result.requests) {
-						const list = requestsByGroup.get(request.gid);
-						if (list) {
-							list.push({ pk: request.pk, kp_ref: request.kp_ref, at: request.at });
-						} else {
-							requestsByGroup.set(request.gid, [
-								{ pk: request.pk, kp_ref: request.kp_ref, at: request.at }
-							]);
-						}
-					}
-					return {
-						coordinatorKey,
-						groups,
-						requestsByGroup,
-						error: undefined as Error | undefined
-					};
-				} catch (error) {
-					return {
-						coordinatorKey,
-						groups,
-						requestsByGroup: new SvelteMap<string, JoinRequest[]>(),
-						error: error as Error
-					};
-				}
-			})
+		await Promise.all(
+			targets.map(([key, groups]) =>
+				fetchAndMergeCoordinatorJoinRequests(account, pubkey, key, groups)
+			)
 		);
-		for (const outcome of outcomes) {
-			if (outcome.error) {
-				if (isSignerUnavailableError(outcome.error)) return;
-				console.warn(
-					`Failed to fetch join requests from coordinator ${outcome.coordinatorKey}:`,
-					outcome.error instanceof Error ? outcome.error.message : outcome.error
-				);
-				continue;
-			}
-			for (const group of outcome.groups) {
-				// Never surface a user's own join request back to themselves.
-				// Egalitarian groups make every member an admin, so a (re-)added
-				// member would otherwise fetch their own still-pending request —
-				// including ones another admin already accepted, since cross-client
-				// consume is deferred to the accepter's next poll. Filtering here is
-				// also the merge choke point: merge's drop logic retires any
-				// own-request entry that slipped in from a prior fetch.
-				const requests = (outcome.requestsByGroup.get(group.gid) ?? []).filter(
-					(request) => normalizePubKey(request.pk) !== pubkey
-				);
-				mergeFetchedJoinRequests(outcome.coordinatorKey, group.gid, requests);
-			}
-		}
-	} catch (error) {
-		chatJoinRequestsStore.error =
-			error instanceof Error ? error.message : 'Failed to fetch join requests';
 	} finally {
 		chatJoinRequestsStore.loading = false;
 	}
