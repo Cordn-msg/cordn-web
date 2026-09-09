@@ -274,6 +274,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- 🐛 A coordinator that goes offline no longer disturbs anything else: chats on healthy coordinators, the key-package directory, invitations, and join requests all keep loading, and lists no longer briefly empty or flicker while an unreachable coordinator is being retried.\n- 🔄 An unreachable coordinator is now retried gently, with growing pauses, instead of being hammered continuously — and it is picked back up the moment it responds again. Any error message now names which coordinator is having trouble instead of a bare “Request timed out”.\n- 🐛 Messages keep arriving while the Cordn window sits unfocused or in the background — previously it could quietly stop receiving new messages until you focused it or refreshed the page.\n- 🐛 A chat that quietly went silent no longer needs a page refresh: sending a message in it pulls in anything missed, and silent connections are detected and rebuilt on their own.- 🔄 When a chat connection does drop, it is rebuilt right away with a fresh identity — a reconnect can no longer leave a group quietly missing messages until you interact with it again.'
 	},
 	{
+		id: 'cordn-news-2026-09-09-nav-bar',
+		createdAt: Date.UTC(2026, 8, 9),
+		version: 1,
+		title: 'One navigation bar for every screen',
+		body: "- ✨ The bottom bar — Chats, Notifications, Share, Settings — now appears on desktop too, so Settings is reachable there for the first time, and the floating “+” for new chats shows on desktop as well.\n- ✨ Invitations and join requests now live in that bar as a Notifications tab with a red dot when something is waiting, instead of hiding behind a small icon in the sidebar.\n- 🔄 Unread signals on the bar are quiet red dots, matching the attention cues used across the app.\n- 🔄 Back arrows now go up one level — coordinators returns to Settings, not your chats — and desktop screens get a back arrow too instead of only the browser's.\n- 🐛 The Refresh button in the notifications dialog is no longer stuck on “Refreshing…”."
+	},
+	{
 		id: 'cordn-news-2026-09-08-mark-all-read',
 		createdAt: Date.UTC(2026, 8, 8),
 		version: 3,

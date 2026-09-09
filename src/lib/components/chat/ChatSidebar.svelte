@@ -11,7 +11,6 @@
 	import { Metadata } from 'nostr-tools/kinds';
 	import ChatGroupAvatar from '$lib/components/chat/ChatGroupAvatar.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
-	import ChatActionIcons from './ChatActionIcons.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -512,10 +511,6 @@
 	</nav>
 
 	<div class="mt-auto flex flex-col gap-2 border-t border-border pt-4">
-		{#if $activeAccount}
-			<ChatActionIcons {collapsed} />
-		{/if}
-
 		{#if $activeAccount}
 			<div
 				class={`rounded-xl border border-border bg-background px-3 py-3 transition-colors ${collapsed ? 'flex justify-center overflow-hidden px-2' : 'block'} ${isActive('/chat/config') ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:border-border hover:bg-background hover:text-foreground'}`}

@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { hasUnreadChatAttention } from '$lib/services/chatAttention.svelte';
 	import { getChatLayoutContext } from '$lib/components/chat/chatLayoutContext';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import PanelLeft from '@lucide/svelte/icons/panel-left';
 
@@ -21,12 +22,25 @@
 	// one component, so all chat pages get back navigation for free.
 	const isHome = $derived(page.url.pathname === resolve('/chat'));
 
-	function handleBack() {
-		// SvelteKit tags its history entries with an index; a cold-opened deep
-		// link has none, so fall back to an explicit jump home.
-		if (history.state?.index > 0) history.back();
-		else void goto(resolve('/chat'));
-	}
+	// Hierarchical back: a deterministic "up one level" link, independent of
+	// how this page was entered. history.back() meant "wherever you came from"
+	// — which exits to the home feed on cold-opened deep links and reloads.
+	const backHref = $derived.by(() => {
+		const routeId = page.route.id ?? '';
+		if (routeId === '/chat/[id]/info') {
+			const gid = page.params.id
+				? resolveGroupLocator(page.params.id, page.url.searchParams).gid
+				: undefined;
+			return gid ? resolve('/chat/[id]', { id: groupRouteId(gid) }) : resolve('/chat');
+		}
+		if (routeId === '/chat/coordinators/[coordinatorKey]') return resolve('/chat/coordinators');
+		// Coordinators lives outside /chat/config but its only entry is the
+		// settings card, so "up" is settings (matches user expectation).
+		if (routeId === '/chat/coordinators' || routeId.startsWith('/chat/config/')) {
+			return resolve('/chat/config');
+		}
+		return resolve('/chat');
+	});
 </script>
 
 {#if isHome}
@@ -49,11 +63,10 @@
 	</Button>
 {:else}
 	<Button
-		type="button"
+		href={backHref}
 		variant="outline"
 		size="icon"
-		class="h-10 w-10 shrink-0 rounded-xl md:hidden"
-		onclick={handleBack}
+		class="h-10 w-10 shrink-0 rounded-xl"
 		aria-label="Back"
 		title="Back"
 	>

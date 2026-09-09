@@ -364,7 +364,7 @@
 		size="icon"
 		aria-label="New conversation"
 		title="New conversation"
-		class="fixed right-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-40 size-14 rounded-full shadow-lg transition-transform active:scale-95 md:hidden"
+		class="fixed right-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-40 size-14 rounded-full shadow-lg transition-transform active:scale-95"
 		onclick={() => (newConversationOpen = true)}
 	>
 		<Plus class="size-6" />

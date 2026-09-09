@@ -12,8 +12,8 @@ import {
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 
 /**
- * Profile-share link building, shared by the sidebar Share action
- * (ChatActionIcons) and the mobile Share tab (MobileTabBar).
+ * Profile-share link building, shared by the chat tab bar's Share action
+ * and other share surfaces.
  *
  * Reads reactive stores (coordinator/key-package state); call from `$derived`
  * contexts so changes propagate.

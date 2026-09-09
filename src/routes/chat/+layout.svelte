@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
-	import MobileTabBar from '$lib/components/chat/MobileTabBar.svelte';
+	import ChatTabBar from '$lib/components/chat/ChatTabBar.svelte';
 	import MediaLightbox from '$lib/components/chat/MediaLightbox.svelte';
 	import LastResortConflictDialog from '$lib/components/chat/LastResortConflictDialog.svelte';
 	import MigrationBanner from '$lib/components/chat/MigrationBanner.svelte';
@@ -171,7 +171,7 @@
 		<div class="min-h-0 flex-1">
 			{@render children()}
 		</div>
-		<MobileTabBar />
+		<ChatTabBar />
 	</div>
 
 	<MediaLightbox />
