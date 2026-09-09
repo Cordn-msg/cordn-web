@@ -1,26 +1,10 @@
 <script lang="ts" module>
 	let sharedSavedReactions = $state<string[] | null>(null);
-	let activeTouchActionsMessageId = $state<string | null>(null);
-
-	// One document-level listener dismisses the touch action bar when the user
-	// presses anywhere that isn't the bar itself or a message bubble (bubbles own
-	// their tap-to-toggle). Registered once; the visible id is module-scoped.
-	let globalDismissBound = false;
-	function bindGlobalDismiss() {
-		if (globalDismissBound || typeof document === 'undefined') return;
-		globalDismissBound = true;
-		document.addEventListener('pointerdown', (event) => {
-			const target = event.target;
-			if (!(target instanceof Element)) return;
-			if (target.closest('[data-message-actions],[data-message-bubble]')) return;
-			activeTouchActionsMessageId = null;
-		});
-	}
-	bindGlobalDismiss();
 </script>
 
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import {
 		DropdownMenuRoot,
 		DropdownMenuContent,
@@ -46,7 +30,6 @@
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import Info from '@lucide/svelte/icons/info';
 	import Pencil from '@lucide/svelte/icons/pencil';
-	import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import Pin from '@lucide/svelte/icons/pin';
 	import X from '@lucide/svelte/icons/x';
@@ -106,9 +89,10 @@
 	let customReaction = $state('');
 	let customReactionInput: HTMLInputElement | null = $state(null);
 	let interactionControlsActive = $state(false);
-	let placeActionsBelow = $state(false);
-	let bubbleEl: HTMLElement | null = $state(null);
-	let wasMobileActionsVisible = false;
+	let mobileSheetOpen = $state(false);
+	let isHolding = $state(false);
+	let holdTimer: ReturnType<typeof setTimeout> | null = null;
+	let coarsePointerActive = false;
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -117,25 +101,13 @@
 	const SWIPE_REPLY_THRESHOLD = 56;
 	const SWIPE_MAX_OFFSET = 72;
 	const GESTURE_MOVE_TOLERANCE = 10;
+	const LONG_PRESS_MS = 400;
 
 	const isOwn = $derived(message.isOwn ?? false);
-	const actionSideClass = $derived.by(() => {
-		const side = isOwn ? 'right-0 sm:right-full sm:mr-2' : 'left-0 sm:left-full sm:ml-2';
-		const mobile = placeActionsBelow
-			? 'top-full translate-y-[0.35rem]'
-			: 'top-0 -translate-y-[calc(100%+0.35rem)]';
-		const desktop = placeActionsBelow ? 'sm:top-auto sm:bottom-3' : 'sm:top-3';
-		return `${side} ${mobile} ${desktop} sm:translate-y-0`;
-	});
 	const savedReactions = $derived(sharedSavedReactions ?? []);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
-	const mobileActionsVisible = $derived(activeTouchActionsMessageId === message.id);
 	const shouldMountInteractionControls = $derived(
-		interactionControlsActive ||
-			reactionMenuOpen ||
-			actionsMenuOpen ||
-			customReactionOpen ||
-			mobileActionsVisible
+		interactionControlsActive || reactionMenuOpen || actionsMenuOpen || customReactionOpen
 	);
 	const replySwipeDirection = $derived(isOwn ? -1 : 1);
 	const replySwipeProgress = $derived(Math.min(Math.abs(swipeOffset) / SWIPE_REPLY_THRESHOLD, 1));
@@ -183,7 +155,7 @@
 	);
 
 	$effect(() => {
-		if (!reactionMenuOpen || !customReactionOpen || !customReactionInput) return;
+		if (!customReactionOpen || !customReactionInput) return;
 		customReactionInput.focus();
 	});
 
@@ -191,17 +163,6 @@
 		if (sharedSavedReactions === null) {
 			sharedSavedReactions = loadCustomChatReactions();
 		}
-	});
-
-	// When touch actions get dismissed elsewhere (global pointerdown or another
-	// row taking the active id), release this row's hover latch so its action
-	// subtree actually unmounts instead of accumulating hidden across the session.
-	$effect(() => {
-		const visible = mobileActionsVisible;
-		if (wasMobileActionsVisible && !visible) {
-			maybeDeactivateInteractionControls();
-		}
-		wasMobileActionsVisible = visible;
 	});
 
 	function normalizeCustomReaction(value: string) {
@@ -223,44 +184,30 @@
 	}
 
 	function activateInteractionControls() {
-		refreshActionPlacement();
 		interactionControlsActive = true;
 	}
 
 	function maybeDeactivateInteractionControls() {
-		if (reactionMenuOpen || actionsMenuOpen || customReactionOpen || mobileActionsVisible) return;
+		if (reactionMenuOpen || actionsMenuOpen || customReactionOpen) return;
 		interactionControlsActive = false;
 	}
 
-	// Anchor the action bar to whichever end of the bubble is in view, so a tall
-	// message scrolled to its bottom still shows the actions within reach.
-	function refreshActionPlacement() {
-		if (!bubbleEl) return;
-		placeActionsBelow = bubbleEl.getBoundingClientRect().top < 48;
+	// Every action lands through one of three surfaces (dropdowns auto-close on
+	// select, the sheet does not) — one dismiss helper keeps them in lockstep.
+	function dismissActionSurfaces() {
+		actionsMenuOpen = false;
+		mobileSheetOpen = false;
 	}
 
-	function showTouchActions() {
-		activateInteractionControls();
-		activeTouchActionsMessageId = message.id;
-	}
-
-	function clearTouchActions() {
-		if (activeTouchActionsMessageId === message.id) {
-			activeTouchActionsMessageId = null;
-		}
+	async function chooseReaction(reaction: string) {
+		await onReact(message, reaction);
+		dismissActionSurfaces();
 	}
 
 	function handleReplyAction() {
 		if (message.deleted) return;
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		onReply(message);
-	}
-
-	function handleShowCustomReactionInput() {
-		showTouchActions();
-		reactionMenuOpen = true;
-		customReactionOpen = true;
 	}
 
 	async function handleCustomReaction() {
@@ -273,21 +220,17 @@
 		customReaction = '';
 		customReactionOpen = false;
 		reactionMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 	}
 
 	function startEditing() {
 		if (!isOwn || message.deleted) return;
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		onEdit(message);
 	}
 
 	function handleReactionMenuOpenChange(open: boolean) {
 		reactionMenuOpen = open;
-		if (open) {
-			showTouchActions();
-		}
 		if (!open) {
 			customReactionOpen = false;
 			customReaction = '';
@@ -296,25 +239,21 @@
 
 	function handleActionsMenuOpenChange(open: boolean) {
 		actionsMenuOpen = open;
-		if (open) showTouchActions();
 		if (!open) {
 			reactionMenuOpen = false;
 			customReactionOpen = false;
 			customReaction = '';
-			clearTouchActions();
 		}
 	}
 
 	function openRich() {
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		onOpenRich(message.eventId);
 	}
 
 	async function handleCopyMessage() {
 		if (message.deleted) return;
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		await copyToClipboard(message.text);
 	}
 
@@ -323,8 +262,7 @@
 	);
 
 	async function handleDownloadMedia() {
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		// Optimistic (still uploading): fall back to the local preview if present.
 		if (message.media) {
 			if (message.media.previewUrl)
@@ -342,15 +280,13 @@
 
 	async function deleteMessage() {
 		if (!isOwn || message.deleted) return;
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		await onDelete(message);
 	}
 
 	function handlePinAction() {
 		if (message.deleted) return;
-		actionsMenuOpen = false;
-		clearTouchActions();
+		dismissActionSurfaces();
 		onPin(message);
 	}
 
@@ -360,8 +296,31 @@
 	}
 
 	function resetGesture() {
+		cancelHoldTimer();
 		isDragging = false;
 		swipeOffset = 0;
+	}
+
+	// Long-press opens the mobile action sheet (WhatsApp/Telegram convention);
+	// any movement beyond the gesture tolerance cancels it so scrolling stays pure.
+	function startHoldTimer() {
+		cancelHoldTimer();
+		isHolding = true;
+		holdTimer = setTimeout(() => {
+			holdTimer = null;
+			isHolding = false;
+			swipeOffset = 0;
+			mobileSheetOpen = true;
+			navigator.vibrate?.(10);
+		}, LONG_PRESS_MS);
+	}
+
+	function cancelHoldTimer() {
+		if (holdTimer) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+		isHolding = false;
 	}
 
 	function isCoarsePointer(event: PointerEvent) {
@@ -369,6 +328,7 @@
 	}
 
 	function handleBubblePointerDown(event: PointerEvent) {
+		coarsePointerActive = event.pointerType !== 'mouse';
 		if (!isCoarsePointer(event)) return;
 		if (event.button !== 0) return;
 
@@ -376,6 +336,7 @@
 		touchStartY = event.clientY;
 		swipeOffset = 0;
 		isDragging = false;
+		startHoldTimer();
 	}
 
 	function handleBubblePointerMove(event: PointerEvent) {
@@ -392,6 +353,8 @@
 
 		if (horizontalDistance <= GESTURE_MOVE_TOLERANCE) return;
 
+		cancelHoldTimer();
+
 		const directedOffset = deltaX * replySwipeDirection > 0 ? deltaX : 0;
 		isDragging = directedOffset !== 0;
 		swipeOffset = Math.max(-SWIPE_MAX_OFFSET, Math.min(SWIPE_MAX_OFFSET, directedOffset));
@@ -406,14 +369,7 @@
 			return;
 		}
 
-		if (Math.abs(swipeOffset) < GESTURE_MOVE_TOLERANCE) {
-			if (mobileActionsVisible) {
-				clearTouchActions();
-			} else {
-				showTouchActions();
-			}
-		}
-
+		// Plain tap is a no-op: long-press opens the action sheet, swipe replies.
 		resetGesture();
 	}
 
@@ -423,6 +379,71 @@
 </script>
 
 <div class="flex flex-col gap-2">
+	{#snippet reactionChoices(touch = false)}
+		<!-- One strip, two renderings: DropdownMenuItems inside menus, larger plain
+	     buttons (44px touch targets) in the mobile sheet. -->
+		<div
+			class={touch
+				? 'flex items-center gap-1 overflow-x-auto'
+				: 'flex max-w-[15rem] items-start gap-1 overflow-x-auto p-0.5'}
+			role="group"
+			aria-label="Quick reactions"
+		>
+			{#each availableReactions as reaction (reaction)}
+				{#if touch}
+					<button
+						type="button"
+						class="flex size-11 shrink-0 items-center justify-center rounded-xl text-xl transition-colors hover:bg-muted/40"
+						aria-label={`React ${reaction}`}
+						onclick={() => void chooseReaction(reaction)}
+					>
+						{reaction}
+					</button>
+				{:else}
+					<DropdownMenuItem
+						onSelect={() => void chooseReaction(reaction)}
+						class="flex size-10 shrink-0 items-center justify-center rounded-xl p-0 text-lg"
+					>
+						{reaction}
+					</DropdownMenuItem>
+				{/if}
+			{/each}
+			<div
+				class={touch
+					? 'ml-1 flex shrink-0 items-center gap-1 border-l border-border/70 pl-3'
+					: 'flex shrink-0 items-center gap-1 border-l border-border/70 pl-2'}
+			>
+				<form
+					class="flex items-center gap-1"
+					onsubmit={async (event) => {
+						event.preventDefault();
+						await handleCustomReaction();
+					}}
+				>
+					<Input
+						bind:ref={customReactionInput}
+						bind:value={customReaction}
+						class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
+						placeholder="🙂"
+						maxlength={8}
+						aria-label="Custom reaction"
+						oninput={() => {
+							customReaction = normalizeCustomReaction(customReaction);
+						}}
+					/>
+					<Button
+						type="submit"
+						variant="ghost"
+						size="icon-sm"
+						class="rounded-xl bg-background"
+						aria-label="Confirm custom reaction"
+					>
+						<Plus class="size-4" />
+					</Button>
+				</form>
+			</div>
+		</div>
+	{/snippet}
 	{#if showDayLabel}
 		<p class="px-2 text-center text-[11px] font-medium text-muted-foreground">{message.dayLabel}</p>
 	{/if}
@@ -519,7 +540,15 @@
 
 			<div
 				role="presentation"
-				class="group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2"
+				class={cn(
+					'group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2',
+					// Signal-style: reserve a gutter beside the bubble so the hover action
+					// bar never overlaps the bubble and never runs past the message list —
+					// full bar width on comfortable screens, a single "…" below sm.
+					isOwn
+						? 'hoverfine:max-sm:pl-10 hoverfine:sm:pl-[8.5rem]'
+						: 'hoverfine:max-sm:pr-10 hoverfine:sm:pr-[8.5rem]'
+				)}
 				class:flex-row-reverse={isOwn}
 				onpointerenter={activateInteractionControls}
 				onfocusin={activateInteractionControls}
@@ -531,11 +560,11 @@
 							<div
 								data-message-actions
 								class={cn(
-									'pointer-events-none absolute z-10 flex items-center gap-1 transition-opacity sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100',
-									mobileActionsVisible || reactionMenuOpen || actionsMenuOpen
-										? 'pointer-events-auto opacity-100'
-										: 'opacity-0 sm:opacity-0',
-									actionSideClass
+									'pointer-events-none absolute top-2 z-20 hidden items-center gap-1 opacity-0 transition-opacity hoverfine:flex hoverfine:group-focus-within:pointer-events-auto hoverfine:group-focus-within:opacity-100 hoverfine:group-hover:pointer-events-auto hoverfine:group-hover:opacity-100',
+									reactionMenuOpen || actionsMenuOpen ? 'pointer-events-auto opacity-100' : '',
+									// Beside the bubble, growing toward the center of the screen
+									// into the reserved gutter (see the row padding above).
+									isOwn ? 'right-full mr-1.5' : 'left-full ml-1.5'
 								)}
 							>
 								{#if !message.deleted}
@@ -560,22 +589,6 @@
 								{/if}
 
 								{#if !message.deleted}
-									<Button
-										type="button"
-										variant="ghost"
-										size="icon-sm"
-										class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:hidden"
-										onclick={(event) => {
-											event.stopPropagation();
-											handleReplyAction();
-										}}
-										aria-label="Reply to message"
-									>
-										<MessageCirclePlus class="size-4" />
-									</Button>
-								{/if}
-
-								{#if !message.deleted}
 									<DropdownMenuRoot
 										bind:open={reactionMenuOpen}
 										onOpenChange={handleReactionMenuOpenChange}
@@ -590,7 +603,7 @@
 																type="button"
 																variant="ghost"
 																size="icon-sm"
-																class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+																class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
 																aria-label="Add reaction"
 																onclick={(event) => event.stopPropagation()}
 															>
@@ -604,67 +617,12 @@
 										</Tooltip>
 
 										<DropdownMenuContent
-											side="top"
+											side="bottom"
 											align={isOwn ? 'start' : 'end'}
 											sideOffset={8}
 											class="flex min-w-0 flex-row items-start gap-1 rounded-2xl p-1"
 										>
-											<div class="grid max-h-[172px] grid-cols-6 gap-1 overflow-y-auto">
-												{#each availableReactions as reaction (reaction)}
-													<DropdownMenuItem
-														onSelect={async () => {
-															await onReact(message, reaction);
-															clearTouchActions();
-														}}
-														class="flex size-10 items-center justify-center rounded-xl p-0 text-lg"
-													>
-														{reaction}
-													</DropdownMenuItem>
-												{/each}
-											</div>
-											<div class="flex items-center gap-1 border-l border-border/70 pl-2">
-												{#if customReactionOpen}
-													<form
-														class="flex items-center gap-1"
-														onsubmit={async (event) => {
-															event.preventDefault();
-															await handleCustomReaction();
-														}}
-													>
-														<Input
-															bind:ref={customReactionInput}
-															bind:value={customReaction}
-															class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-															placeholder=""
-															maxlength={8}
-															aria-label="Custom reaction"
-															oninput={() => {
-																customReaction = normalizeCustomReaction(customReaction);
-															}}
-														/>
-														<Button
-															type="submit"
-															variant="ghost"
-															size="icon-sm"
-															class="rounded-xl bg-background"
-															aria-label="Confirm custom reaction"
-														>
-															<Plus class="size-4" />
-														</Button>
-													</form>
-												{:else}
-													<Button
-														type="button"
-														variant="ghost"
-														size="icon-sm"
-														class="rounded-xl bg-background"
-														aria-label="Show custom reaction input"
-														onclick={handleShowCustomReactionInput}
-													>
-														<Plus class="size-4" />
-													</Button>
-												{/if}
-											</div>
+											{@render reactionChoices()}
 										</DropdownMenuContent>
 									</DropdownMenuRoot>
 								{/if}
@@ -677,7 +635,7 @@
 												type="button"
 												variant="ghost"
 												size="icon-sm"
-												class="rounded-lg bg-background/90 shadow-sm backdrop-blur-sm"
+												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
 												onclick={() => openRich()}
 												aria-label="Message info"
 											>
@@ -716,15 +674,32 @@
 									</Tooltip>
 
 									<DropdownMenuContent
-										side="top"
+										side="bottom"
 										align={isOwn ? 'start' : 'end'}
 										sideOffset={8}
-										class="w-44 rounded-xl"
+										class="w-64 rounded-xl sm:w-44"
 									>
-										<DropdownMenuItem onSelect={handleCopyMessage} class="gap-2">
-											<Copy class="size-4" />
-											<span>Copy</span>
-										</DropdownMenuItem>
+										<!-- Collapsed-bar mode (<sm, fine pointer): the "…" menu carries
+										     everything the full bar exposes as icons. -->
+										<div class="flex flex-col gap-1 border-b border-border/70 pb-1 sm:hidden">
+											{#if !message.deleted}
+												{@render reactionChoices()}
+												<DropdownMenuItem onSelect={handleReplyAction} class="mt-1 gap-2">
+													<CornerUpLeft class="size-4" />
+													<span>Reply</span>
+												</DropdownMenuItem>
+											{/if}
+											<DropdownMenuItem onSelect={openRich} class="gap-2">
+												<Info class="size-4" />
+												<span>Message info</span>
+											</DropdownMenuItem>
+										</div>
+										{#if !message.deleted}
+											<DropdownMenuItem onSelect={handleCopyMessage} class="gap-2">
+												<Copy class="size-4" />
+												<span>Copy</span>
+											</DropdownMenuItem>
+										{/if}
 
 										{#if hasDownloadableMedia}
 											<DropdownMenuItem onSelect={handleDownloadMedia} class="gap-2">
@@ -737,13 +712,6 @@
 											<DropdownMenuItem onSelect={handlePinAction} class="gap-2">
 												<Pin class="size-4" />
 												<span>{message.pinned ? 'Unpin' : 'Pin'}</span>
-											</DropdownMenuItem>
-										{/if}
-
-										{#if !message.deleted}
-											<DropdownMenuItem onSelect={handleReplyAction} class="gap-2 sm:hidden">
-												<CornerUpLeft class="size-4" />
-												<span>Reply</span>
 											</DropdownMenuItem>
 										{/if}
 
@@ -774,13 +742,16 @@
 					<div class="relative max-w-full min-w-0">
 						<div
 							role="group"
-							bind:this={bubbleEl}
 							data-message-bubble
 							data-message-id={message.id}
 							class={cn(
 								bubbleClass,
-								'relative z-10 w-full max-w-full min-w-0 touch-pan-y select-text'
+								'relative z-10 w-full max-w-full min-w-0 touch-pan-y',
+								isHolding ? 'select-none [-webkit-touch-callout:none]' : 'select-text'
 							)}
+							oncontextmenu={(event) => {
+								if (coarsePointerActive) event.preventDefault();
+							}}
 							style={`transform: ${swipeTransform}; ${
 								isDragging ? '' : 'transition: transform 150ms ease-out;'
 							}`}
@@ -985,6 +956,93 @@
 					{/if}
 				</div>
 			</div>
+
+			{#if mobileSheetOpen}
+				<!-- Mobile long-press actions as a bottom sheet: portals + fixed positioning
+		     mean it can never be clipped by the scroll container or panes, and the
+		     thumb-zone placement matches the rest of the mobile UI. -->
+				<Sheet.Root bind:open={mobileSheetOpen}>
+					<Sheet.Content side="bottom" class="pb-safe">
+						<Sheet.Header>
+							<Sheet.Title>Message actions</Sheet.Title>
+							<Sheet.Description class="sr-only"
+								>React, reply, or manage this message</Sheet.Description
+							>
+						</Sheet.Header>
+						<div class="flex flex-col gap-3 px-4 pb-4">
+							{#if !message.deleted}
+								{@render reactionChoices(true)}
+							{/if}
+							<div class="flex flex-col gap-1">
+								{#if !message.deleted}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={handleReplyAction}
+									>
+										<CornerUpLeft class="size-4 shrink-0 text-muted-foreground" />
+										<span>Reply</span>
+									</button>
+								{/if}
+								<button
+									type="button"
+									class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+									onclick={handleCopyMessage}
+								>
+									<Copy class="size-4 shrink-0 text-muted-foreground" />
+									<span>Copy</span>
+								</button>
+								{#if hasDownloadableMedia}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={handleDownloadMedia}
+									>
+										<Download class="size-4 shrink-0 text-muted-foreground" />
+										<span>Download</span>
+									</button>
+								{/if}
+								{#if !message.deleted}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={handlePinAction}
+									>
+										<Pin class="size-4 shrink-0 text-muted-foreground" />
+										<span>{message.pinned ? 'Unpin' : 'Pin'}</span>
+									</button>
+								{/if}
+								<button
+									type="button"
+									class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+									onclick={openRich}
+								>
+									<Info class="size-4 shrink-0 text-muted-foreground" />
+									<span>Message info</span>
+								</button>
+								{#if isOwn && !message.deleted}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={startEditing}
+									>
+										<Pencil class="size-4 shrink-0 text-muted-foreground" />
+										<span>Edit</span>
+									</button>
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={deleteMessage}
+									>
+										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
+										<span>Delete</span>
+									</button>
+								{/if}
+							</div>
+						</div>
+					</Sheet.Content>
+				</Sheet.Root>
+			{/if}
 		</article>
 	{/if}
 </div>

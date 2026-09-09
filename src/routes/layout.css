@@ -4,6 +4,10 @@
 @import '@fontsource-variable/inter';
 
 @custom-variant dark (&:is(.dark *));
+/* Fine-pointer (mouse/trackpad) devices: hover-capable UI regardless of
+   viewport width — narrow desktop windows keep hover affordances, while
+   touch devices use long-press instead. Keyed to input modality, not size. */
+@custom-variant hoverfine (@media (hover: hover) and (pointer: fine));
 @plugin '@tailwindcss/typography';
 
 :root {
