@@ -290,9 +290,9 @@ const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-09-10-send-faster',
 		createdAt: Date.UTC(2026, 8, 10),
-		version: 3,
+		version: 4,
 		title: 'Snappier chats, quieter background',
-		body: '- ✨ Messages send a beat faster in busy conversations: when a group is already receiving live updates in real time, the app no longer makes an extra network check before sending.\n- 🔄 Long chat histories load more smoothly — repeated crypto work that used to run per message now runs once per conversation update instead.\n- 🔄 Busy groups stay smooth while messages stream in: a conversation holding thousands of messages no longer stutters each time something arrives.\n- 🔄 Incoming messages trigger far less redundant copying and UI bookkeeping, and background coordinator status updates no longer stir the interface when nothing has actually changed.\n- 🐛 On Android, the update banner no longer hides behind the status bar and notch at the top of the screen — its Reload button stays in reach — and toasts now clear the gesture bar at the bottom.'
+		body: '- ✨ Messages send a beat faster in busy conversations: when a group is already receiving live updates in real time, the app no longer makes an extra network check before sending.\n- 🔄 Long chat histories load more smoothly — repeated crypto work that used to run per message now runs once per conversation update instead.\n- 🔄 Busy groups stay smooth while messages stream in: a conversation holding thousands of messages no longer stutters each time something arrives.\n- 🔄 Incoming messages trigger far less redundant copying and UI bookkeeping, and background coordinator status updates no longer stir the interface when nothing has actually changed.\n- 🐛 On Android, the update banner no longer hides behind the status bar and notch at the top of the screen — its Reload button stays in reach — and toasts now clear the gesture bar at the bottom.\n- 🐛 Inviting someone could fail with "key package not available" when linked devices ended up with different invite keys than the coordinator — devices now keep that key in sync automatically and repair past mismatches on their own, so invites work from any of your devices.'
 	}
 ];
 
