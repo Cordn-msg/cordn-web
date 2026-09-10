@@ -21,24 +21,49 @@ export type WithoutChildren<T> = T extends { children?: any } ? Omit<T, 'childre
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
 export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };
 
+// Label formatting runs 2× per stored message on every message-derived rebuild
+// (full history, not just visible rows), so it is memoized twice: formatter
+// instances per option combo, and result strings per inputs — a timestamp's
+// label is pure per inputs, so a hit can never be stale.
+// ponytail: the default locale/timezone is resolved at first use and pinned for
+// the tab's lifetime (key uses the passed locale, usually undefined). A system
+// locale change mid-session shows old labels until reload; cap bounds memory.
+const FORMAT_CACHE_MAX = 10_000;
+const formattedTimestampCache = new Map<string, string>();
+const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
 export function formatUnixTimestamp(
 	timestamp: number,
 	showTime?: boolean,
 	showDate: boolean = true,
 	locale?: string
 ): string {
-	const date = new Date(timestamp);
-	const options: Intl.DateTimeFormatOptions = {};
+	const cacheKey = `${timestamp}|${showTime ? 1 : 0}|${showDate ? 1 : 0}|${locale ?? ''}`;
+	const cached = formattedTimestampCache.get(cacheKey);
+	if (cached !== undefined) return cached;
 
+	const options: Intl.DateTimeFormatOptions = {};
 	if (showDate) {
 		options.dateStyle = 'medium';
 	}
-
 	if (showTime) {
 		options.timeStyle = 'short';
 	}
 
-	return date.toLocaleString(locale, options);
+	const formatterKey = `${showTime ? 1 : 0}|${showDate ? 1 : 0}|${locale ?? ''}`;
+	let formatter = timestampFormatterCache.get(formatterKey);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(locale, options);
+		timestampFormatterCache.set(formatterKey, formatter);
+	}
+
+	const formatted = formatter.format(timestamp);
+	formattedTimestampCache.set(cacheKey, formatted);
+	if (formattedTimestampCache.size > FORMAT_CACHE_MAX) {
+		const oldest = formattedTimestampCache.keys().next().value;
+		if (oldest !== undefined) formattedTimestampCache.delete(oldest);
+	}
+	return formatted;
 }
 
 /**

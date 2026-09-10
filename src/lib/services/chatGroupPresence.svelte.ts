@@ -1,5 +1,4 @@
 import { browser } from '$app/environment';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import {
 	areChatGroupsLoaded,
 	getChatGroup,
@@ -143,7 +142,7 @@ export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: str
 	// cursor: no message exists past lastCursor, so no unread reference either.
 	if (!group || group.lastCursor <= lastReadMentionCursor) return [];
 	const messages = listChatGroupMessages(groupId);
-	const byEventId = new SvelteMap(messages.map((message) => [message.id, message]));
+	const byEventId = new Map(messages.map((message) => [message.id, message]));
 
 	return messages
 		.filter(
@@ -210,7 +209,7 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 export function pruneChatGroupPresence() {
 	if (!areChatGroupsLoaded()) return;
 
-	const validGroupIds = new SvelteSet(listChatGroups().map((group) => group.id));
+	const validGroupIds = new Set(listChatGroups().map((group) => group.id));
 	const nextEntries = Object.entries(chatGroupPresenceStore.groups).filter(([groupId]) =>
 		validGroupIds.has(groupId)
 	);
