@@ -19,7 +19,7 @@
 
 {#if nativeAppUpdateStore.available}
 	<div
-		class="fixed inset-x-0 top-0 z-[100] flex items-center justify-center gap-3 border-b border-primary-foreground/15 bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg"
+		class="fixed inset-x-0 top-0 z-[100] flex items-center justify-center gap-3 border-b border-primary-foreground/15 bg-primary px-4 pt-safe-2 pb-2 text-sm text-primary-foreground shadow-lg"
 		role="status"
 		aria-live="polite"
 	>

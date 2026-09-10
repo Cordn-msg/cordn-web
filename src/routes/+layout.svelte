@@ -13,6 +13,17 @@
 
 	let { children } = $props();
 
+	// Safe-area-aware toast offsets: keep svelte-sonner's stock bases (24px desktop / 16px mobile)
+	// and add the bar insets on top, so toasts clear the gesture/nav bar in the native edge-to-edge
+	// shell. Inert on web — insets resolve to 0px and rendering matches library defaults exactly.
+	// Per-side calcs (not one string) because a single string value is assigned to all four sides.
+	const toastInsets = (base: string) => ({
+		top: `calc(${base} + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)))`,
+		right: `calc(${base} + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)))`,
+		bottom: `calc(${base} + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))`,
+		left: `calc(${base} + var(--safe-area-inset-left, env(safe-area-inset-left, 0px)))`
+	});
+
 	// Native cold-start lands on /chat via capacitor.config.ts `server.appStartPath` (the
 	// WebView's first URL is https://localhost/chat), so no client redirect is needed here.
 	// Deep links and notification taps override it via their launch URL.
@@ -26,7 +37,7 @@
 	});
 </script>
 
-<Toaster />
+<Toaster offset={toastInsets('24px')} mobileOffset={toastInsets('16px')} />
 <ModeWatcher />
 <AppUpdateBanner />
 <NativeAppUpdateBanner />
