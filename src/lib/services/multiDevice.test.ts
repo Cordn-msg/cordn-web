@@ -31,6 +31,7 @@ import {
 	documentAddress,
 	groupEpoch,
 	metaViewHash,
+	planLastResortRepair,
 	openDocument,
 	publishGroupDocument,
 	publishMetaDocument,
@@ -921,5 +922,85 @@ describe('metaViewHash (spec §4.2 content signal for meta-ahead diff)', () => {
 		expect(noKp).not.toBe(withKp);
 		// `removed` defaults to [] when undefined, so omitting it matches an explicit empty.
 		expect(metaViewHash({})).toBe(metaViewHash({ removed: [] }));
+	});
+});
+
+describe('planLastResortRepair (spec §11.5 resolution order)', () => {
+	test('no pick, or an unreachable coordinator → conservative none', () => {
+		expect(
+			planLastResortRepair({
+				pickRef: undefined,
+				coordinatorLastResortRef: 'a',
+				reachable: true,
+				heldLocally: false,
+				implicated: true
+			})
+		).toEqual({ kind: 'none' });
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: 'b',
+				reachable: false,
+				heldLocally: false,
+				implicated: true
+			})
+		).toEqual({ kind: 'none' });
+	});
+
+	test('coordinator serves the pick → none (steady state)', () => {
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: 'a',
+				reachable: true,
+				heldLocally: true,
+				implicated: false
+			})
+		).toEqual({ kind: 'none' });
+	});
+
+	test('coordinator serves a locally-held entry → re-adopt it, zero publish', () => {
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: 'b',
+				reachable: true,
+				heldLocally: true,
+				implicated: false
+			})
+		).toEqual({ kind: 'remark', keyPackageRef: 'b' });
+	});
+
+	test('coordinator serves a foreign entry → publish the pick (quota eviction replaces it)', () => {
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: 'b',
+				reachable: true,
+				heldLocally: false,
+				implicated: false
+			})
+		).toEqual({ kind: 'publish', keyPackageRef: 'a' });
+	});
+
+	test('coordinator empty: publish only when the pick claims it, else skip', () => {
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: undefined,
+				reachable: true,
+				heldLocally: false,
+				implicated: true
+			})
+		).toEqual({ kind: 'publish', keyPackageRef: 'a' });
+		expect(
+			planLastResortRepair({
+				pickRef: 'a',
+				coordinatorLastResortRef: undefined,
+				reachable: true,
+				heldLocally: false,
+				implicated: false
+			})
+		).toEqual({ kind: 'skip' });
 	});
 });

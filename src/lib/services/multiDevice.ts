@@ -630,6 +630,49 @@ export function metaViewHash(params: {
 	return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify({ kp, removed }))));
 }
 
+/** One coordinator's repair decision under the §11.5 resolution order. */
+export type LastResortRepairPlan =
+	| { kind: 'none' }
+	| { kind: 'remark'; keyPackageRef: string }
+	| { kind: 'publish'; keyPackageRef: string }
+	| { kind: 'skip' };
+
+/**
+ * Plan the §11.5 resolution for one coordinator: converge "the coordinator's
+ * served last-resort is processable by every device" onto (or from) the local
+ * pick. Private key material never flows through the coordinator — the meta
+ * document is the only channel that distributes it — so convergence is:
+ * re-adopt the coordinator's entry when it is held locally (restoring its
+ * publish claim, no coordinator write), else publish the pick (quota eviction
+ * replaces the foreign entry; a Welcome already stored against it stays
+ * processable by its holders since Welcome processing is local). `skip`
+ * leaves untouched coordinators to the demand-driven publish path.
+ */
+export function planLastResortRepair(params: {
+	/** Local canonical pick ref (published-first, newest-mint tie-break); absent → nothing to converge. */
+	pickRef?: string;
+	/** Ref the coordinator serves as our last-resort; absent when it holds none. */
+	coordinatorLastResortRef?: string;
+	/** The observation succeeded. Unverifiable (offline) → conservative none:
+	 * absent from a response is not the same as unpublished. */
+	reachable: boolean;
+	/** The coordinator's served ref is held locally (adoption persistence). */
+	heldLocally: boolean;
+	/** The pick claims this coordinator (post-reconcile publish markers). */
+	implicated: boolean;
+}): LastResortRepairPlan {
+	if (!params.pickRef || !params.reachable) return { kind: 'none' };
+	const served = params.coordinatorLastResortRef;
+	if (!served) {
+		return params.implicated
+			? { kind: 'publish', keyPackageRef: params.pickRef }
+			: { kind: 'skip' };
+	}
+	if (served === params.pickRef) return { kind: 'none' };
+	if (params.heldLocally) return { kind: 'remark', keyPackageRef: served };
+	return { kind: 'publish', keyPackageRef: params.pickRef };
+}
+
 /** Next carry-forward + reap state after a publish (spec §10.5 + §12). Pure so
  * the tombstone-durability invariants — pending cleared, the just-published
  * `removed` union carried forward, a superseded meta queued for reap exactly

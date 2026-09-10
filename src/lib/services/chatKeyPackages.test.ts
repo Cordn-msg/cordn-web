@@ -9,15 +9,29 @@ const withCoordinatorClientMock = vi.fn(
 	<T>(_account: unknown, _coordinatorKey: string, operation: (client: T) => Promise<unknown>) =>
 		operation({ RemoveKeyPackages: vi.fn().mockResolvedValue({}) } as unknown as T)
 );
+const publishKeyPackageMock = vi.fn().mockResolvedValue({ last_resort: true });
+const withCoordinatorClientRetryMock = vi.fn(
+	<T>(_account: unknown, _coordinatorKey: string, operation: (client: T) => Promise<unknown>) =>
+		operation({ PublishKeyPackage: publishKeyPackageMock } as unknown as T)
+);
 const requireActiveAccountMock = vi.fn(() => ({ pubkey: 'aa'.repeat(32) }));
 const fetchQueryMock = vi.fn();
 const invalidateQueriesMock = vi.fn().mockResolvedValue(undefined);
 const getQueryDataMock = vi.fn();
 const markCoordinatorUsedMock = vi.fn();
+const listKnownCoordinatorKeysMock = vi.fn((): string[] => []);
+const keyPackageDecoderMock = vi.fn();
+const privateKeyPackageDecoderMock = vi.fn();
+const makeKeyPackageRefMock = vi.fn();
 
 vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
-	return { ...actual };
+	return {
+		...actual,
+		keyPackageDecoder: keyPackageDecoderMock,
+		privateKeyPackageDecoder: privateKeyPackageDecoderMock,
+		makeKeyPackageRef: makeKeyPackageRefMock
+	};
 });
 
 vi.mock('$app/environment', () => ({ browser: false }));
@@ -28,12 +42,13 @@ vi.mock('$lib/services/accountManager.svelte', () => ({
 
 vi.mock('$lib/services/chatRuntime', () => ({
 	requireActiveAccount: requireActiveAccountMock,
-	withCoordinatorClient: withCoordinatorClientMock
+	withCoordinatorClient: withCoordinatorClientMock,
+	withCoordinatorClientRetry: withCoordinatorClientRetryMock
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
 	markCoordinatorUsed: markCoordinatorUsedMock,
-	listKnownCoordinatorKeys: vi.fn(() => []),
+	listKnownCoordinatorKeys: listKnownCoordinatorKeysMock,
 	getCoordinatorLabel: vi.fn((key: string) => `Coordinator ${key.slice(0, 8)}`)
 }));
 
@@ -74,7 +89,11 @@ const OWNER = 'aa'.repeat(32);
 const COORD_A = 'bb'.repeat(32);
 const COORD_B = 'cc'.repeat(32);
 
-function makeRecord(ref: string, coordinators: string[]): StoredKeyPackageRecord {
+function makeRecord(
+	ref: string,
+	coordinators: string[],
+	overrides: Partial<StoredKeyPackageRecord> = {}
+): StoredKeyPackageRecord {
 	return {
 		id: ref,
 		ownerPubkey: OWNER,
@@ -85,7 +104,8 @@ function makeRecord(ref: string, coordinators: string[]): StoredKeyPackageRecord
 		privateKeyPackageBase64: 'AA==',
 		cipherSuite: '1',
 		createdAt: 1,
-		publishedCoordinatorKeys: coordinators
+		publishedCoordinatorKeys: coordinators,
+		...overrides
 	} as StoredKeyPackageRecord;
 }
 
@@ -271,5 +291,251 @@ describe('reconcilePublishedKeyPackagesForActiveAccount()', () => {
 			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-a')!
 				.publishedCoordinatorKeys
 		).toEqual([]);
+	});
+});
+
+describe('getLastResortKeyPackageEntry() pick (spec §11.5)', () => {
+	beforeEach(async () => {
+		const { chatKeyPackagesStore } = await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [];
+	});
+
+	test('prefers a published record over a newer unpublished mint', async () => {
+		const { chatKeyPackagesStore, getLastResortKeyPackageEntry } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-new', [], { isLastResort: true, createdAt: 300, keyPackageBase64: 'kp-new' }),
+			makeRecord('kp-published', [COORD_A], {
+				isLastResort: true,
+				createdAt: 100,
+				keyPackageBase64: 'kp-published'
+			})
+		];
+		// The published record is the invite surface; a local-only mint must
+		// never displace it in the meta document.
+		expect(getLastResortKeyPackageEntry()?.keyPackage).toBe('kp-published');
+	});
+
+	test('newest mint wins among published records', async () => {
+		const { chatKeyPackagesStore, getLastResortKeyPackageEntry } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-old', [COORD_A], {
+				isLastResort: true,
+				createdAt: 100,
+				keyPackageBase64: 'kp-old'
+			}),
+			makeRecord('kp-new', [COORD_B], {
+				isLastResort: true,
+				createdAt: 200,
+				keyPackageBase64: 'kp-new'
+			})
+		];
+		expect(getLastResortKeyPackageEntry()?.keyPackage).toBe('kp-new');
+	});
+
+	test('falls back to an unpublished record when it is the only one', async () => {
+		const { chatKeyPackagesStore, getLastResortKeyPackageEntry } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-only', [], { isLastResort: true, createdAt: 100, keyPackageBase64: 'kp-only' })
+		];
+		expect(getLastResortKeyPackageEntry()?.keyPackage).toBe('kp-only');
+	});
+
+	test('undefined when the account holds no last-resort', async () => {
+		const { chatKeyPackagesStore, getLastResortKeyPackageEntry } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [makeRecord('kp-consumable', [COORD_A])];
+		expect(getLastResortKeyPackageEntry()).toBeUndefined();
+	});
+});
+
+describe('loadLastResortKeyPackage() adoption (spec §11.5)', () => {
+	beforeEach(() => {
+		keyPackageDecoderMock.mockReset();
+		privateKeyPackageDecoderMock.mockReset();
+		makeKeyPackageRefMock.mockReset();
+	});
+
+	test('derives createdAt from the key package mint time, not adoption time', async () => {
+		const { chatKeyPackagesStore, loadLastResortKeyPackage } =
+			await import('./chatKeyPackages.svelte');
+		keyPackageDecoderMock.mockReturnValue([
+			{ leafNode: { lifetime: { notBefore: 1_700_000_000n } } },
+			0
+		]);
+		privateKeyPackageDecoderMock.mockReturnValue([{}, 0]);
+		makeKeyPackageRefMock.mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+		chatKeyPackagesStore.keyPackages = [];
+		const loaded = await loadLastResortKeyPackage({
+			keyPackage: 'AA==',
+			privateKeyPackage: 'AA==',
+			coordinators: [COORD_A]
+		});
+
+		expect(loaded).toBe(true);
+		expect(chatKeyPackagesStore.keyPackages).toHaveLength(1);
+		const record = chatKeyPackagesStore.keyPackages[0];
+		// Mint time rides inside the authenticated bytes (notBefore, seconds);
+		// adoption must not reorder the canonical-pick tie-break via Date.now().
+		expect(record.createdAt).toBe(1_700_000_000_000);
+		expect(record.publishedCoordinatorKeys).toEqual([COORD_A]);
+		expect(record.isLastResort).toBe(true);
+	});
+
+	test('idempotent by ref: a held package is not re-added', async () => {
+		const { chatKeyPackagesStore, loadLastResortKeyPackage } =
+			await import('./chatKeyPackages.svelte');
+		keyPackageDecoderMock.mockReturnValue([
+			{ leafNode: { lifetime: { notBefore: 1_700_000_000n } } },
+			0
+		]);
+		privateKeyPackageDecoderMock.mockReturnValue([{}, 0]);
+		makeKeyPackageRefMock.mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+		chatKeyPackagesStore.keyPackages = [];
+		const entry = { keyPackage: 'AA==', privateKeyPackage: 'AA==', coordinators: [COORD_A] };
+		expect(await loadLastResortKeyPackage(entry)).toBe(true);
+		expect(await loadLastResortKeyPackage(entry)).toBe(false);
+		expect(chatKeyPackagesStore.keyPackages).toHaveLength(1);
+	});
+});
+
+describe('repairLastResortAlignment() (spec §11.5 resolution order)', () => {
+	beforeEach(() => {
+		fetchQueryMock.mockReset();
+		invalidateQueriesMock.mockClear();
+		markCoordinatorUsedMock.mockClear();
+		withCoordinatorClientRetryMock.mockClear();
+		publishKeyPackageMock.mockClear();
+		listKnownCoordinatorKeysMock.mockReturnValue([COORD_A]);
+	});
+
+	test('foreign served entry → publishes the pick over it (the reported incident)', async () => {
+		const { chatKeyPackagesStore, repairLastResortAlignment } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-pick', [COORD_A], {
+				isLastResort: true,
+				createdAt: 200,
+				keyPackageBase64: 'kp-pick'
+			})
+		];
+		fetchQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
+			const coordinatorKey = opts.queryKey[opts.queryKey.length - 2];
+			return Promise.resolve(
+				coordinatorKey === COORD_A
+					? [{ pk: OWNER, kp_ref: 'kp-foreign', last_resort: true, at: 1 }]
+					: []
+			);
+		});
+
+		await repairLastResortAlignment();
+
+		// One publish, of the fleet-held pick, to the diverged coordinator.
+		expect(withCoordinatorClientRetryMock).toHaveBeenCalledTimes(1);
+		expect(withCoordinatorClientRetryMock.mock.calls[0][1]).toBe(COORD_A);
+		expect(publishKeyPackageMock).toHaveBeenCalledWith({
+			kp_ref: 'kp-pick',
+			kp_64: 'kp-pick'
+		});
+		// The marker survives the round trip (reconcile pruned it, publish restored it).
+		expect(
+			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-pick')!
+				.publishedCoordinatorKeys
+		).toContain(COORD_A);
+	});
+
+	test('held-but-not-pick served entry → re-adopts it as canonical, zero coordinator writes', async () => {
+		const { chatKeyPackagesStore, repairLastResortAlignment, getLastResortKeyPackageEntry } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-new', [], { isLastResort: true, createdAt: 200, keyPackageBase64: 'kp-new' }),
+			makeRecord('kp-old', [], { isLastResort: true, createdAt: 100, keyPackageBase64: 'kp-old' })
+		];
+		fetchQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
+			const coordinatorKey = opts.queryKey[opts.queryKey.length - 2];
+			return Promise.resolve(
+				coordinatorKey === COORD_A
+					? [{ pk: OWNER, kp_ref: 'kp-old', last_resort: true, at: 1 }]
+					: []
+			);
+		});
+
+		await repairLastResortAlignment();
+
+		// The coordinator's entry is held locally → restoring its claim flips the
+		// pick to it (published beats unpublished); no PublishKeyPackage needed.
+		expect(withCoordinatorClientRetryMock).not.toHaveBeenCalled();
+		expect(getLastResortKeyPackageEntry()?.keyPackage).toBe('kp-old');
+		expect(
+			chatKeyPackagesStore.keyPackages.find((e) => e.keyPackageRef === 'kp-old')!
+				.publishedCoordinatorKeys
+		).toContain(COORD_A);
+	});
+
+	test('serves the pick → steady-state no-op', async () => {
+		const { chatKeyPackagesStore, repairLastResortAlignment } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-pick', [COORD_A], {
+				isLastResort: true,
+				createdAt: 200,
+				keyPackageBase64: 'kp-pick'
+			})
+		];
+		fetchQueryMock.mockImplementation((opts: { queryKey: string[] }) => {
+			const coordinatorKey = opts.queryKey[opts.queryKey.length - 2];
+			return Promise.resolve(
+				coordinatorKey === COORD_A
+					? [{ pk: OWNER, kp_ref: 'kp-pick', last_resort: true, at: 1 }]
+					: []
+			);
+		});
+
+		await repairLastResortAlignment();
+
+		expect(withCoordinatorClientRetryMock).not.toHaveBeenCalled();
+		expect(markCoordinatorUsedMock).not.toHaveBeenCalled();
+	});
+
+	test('empty coordinators: no publish — publish claims pruned by reconcile stay demand-driven', async () => {
+		const { chatKeyPackagesStore, repairLastResortAlignment } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-pick', [COORD_A], {
+				isLastResort: true,
+				createdAt: 200,
+				keyPackageBase64: 'kp-pick'
+			})
+		];
+		listKnownCoordinatorKeysMock.mockReturnValue([COORD_A, COORD_B]);
+		// Both coordinators verified to hold nothing for us: reconcile prunes the
+		// stale claim, so nothing implicates either — untouched coordinators are
+		// left to ensureLastResortPublished's demand-driven path.
+		fetchQueryMock.mockResolvedValue([]);
+
+		await repairLastResortAlignment();
+
+		expect(withCoordinatorClientRetryMock).not.toHaveBeenCalled();
+	});
+
+	test('unreachable coordinator → conservative no-op', async () => {
+		const { chatKeyPackagesStore, repairLastResortAlignment } =
+			await import('./chatKeyPackages.svelte');
+		chatKeyPackagesStore.keyPackages = [
+			makeRecord('kp-pick', [], {
+				isLastResort: true,
+				createdAt: 200,
+				keyPackageBase64: 'kp-pick'
+			})
+		];
+		fetchQueryMock.mockRejectedValue(new Error('coordinator down'));
+
+		await repairLastResortAlignment();
+
+		expect(withCoordinatorClientRetryMock).not.toHaveBeenCalled();
 	});
 });

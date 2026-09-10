@@ -42,7 +42,7 @@ import { bytesToHex } from 'applesauce-core/helpers';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
-import { type LastResortKeyPackageEntry } from '$lib/services/multiDevice';
+import { planLastResortRepair, type LastResortKeyPackageEntry } from '$lib/services/multiDevice';
 import { onMetaStateChange } from '$lib/services/multiDevice.svelte';
 
 export interface StoredKeyPackageRecord {
@@ -448,7 +448,12 @@ export async function ensureLastResortPublished(
 			return { kind: 'ready', keyPackageRef: coordinatorLastResort.kp_ref };
 		}
 		// Foreign: another device published it. Publishing our own would evict
-		// it and strand its pending invites — caller must prompt link/take-over.
+		// it: future Welcomes would cite ours instead, while a Welcome already
+		// stored against the foreign entry stays processable only by devices
+		// holding its private key (Welcome processing is local — eviction strands
+		// future citations, not stored ones). Caller must prompt link/take-over;
+		// the meta-doc repair path (§11.5, repairLastResortAlignment) resolves
+		// this case automatically for linked devices.
 		return {
 			kind: 'foreign',
 			keyPackageRef: coordinatorLastResort.kp_ref,
@@ -741,11 +746,21 @@ async function markKeyPackagePublished(
  * document (spec §4.2/§11.5). Returns undefined when the device holds none.
  * Both fields are the base64 the record already stores.
  */
+/**
+ * The canonical last-resort record (§11.5): prefer one carrying at least one
+ * publish claim — it is the invite surface coordinators serve — with newest
+ * mint as tie-break; an unpublished local mint is the fallback, never the
+ * winner over a published one. Explicit sort: do not rely on store order.
+ */
+function pickLastResortRecord(ownerPubkey: string): StoredKeyPackageRecord | undefined {
+	const candidates = chatKeyPackagesStore.keyPackages
+		.filter((kp) => kp.isLastResort && normalizePubKey(kp.ownerPubkey) === ownerPubkey)
+		.sort((a, b) => b.createdAt - a.createdAt);
+	return candidates.find((kp) => kp.publishedCoordinatorKeys.length > 0) ?? candidates[0];
+}
+
 export function getLastResortKeyPackageEntry(): LastResortKeyPackageEntry | undefined {
-	const ownerPubkey = normalizePubKey(getActivePubkey());
-	const record = chatKeyPackagesStore.keyPackages.find(
-		(kp) => kp.isLastResort && kp.ownerPubkey === ownerPubkey
-	);
+	const record = pickLastResortRecord(normalizePubKey(getActivePubkey()));
 	if (!record) return undefined;
 	return {
 		keyPackage: record.keyPackageBase64,
@@ -784,7 +799,13 @@ export async function loadLastResortKeyPackage(entry: LastResortKeyPackageEntry)
 	// on adoption; fires only on first load (early-return above), so once-per-kp —
 	// same frequency profile as seedGroup.
 	const coordinators = (entry.coordinators ?? []).map((c) => normalizePubKey(c));
-	const timestamp = Date.now();
+	// Mint time travels inside the authenticated KeyPackage bytes
+	// (leafNode.lifetime.notBefore, seconds, mint − 24h slack): derive createdAt
+	// from it instead of adoption time so store order reflects mint order on
+	// every device — adoption must never reorder the canonical-pick tie-break.
+	const mintedAtSeconds = keyPackageDecoded[0].leafNode.lifetime?.notBefore;
+	const timestamp =
+		mintedAtSeconds && mintedAtSeconds > 0n ? Number(mintedAtSeconds) * 1000 : Date.now();
 	const record: StoredKeyPackageRecord = {
 		id: `${ownerPubkey.slice(0, 8)}-lr-${timestamp}`,
 		ownerPubkey,
@@ -802,4 +823,88 @@ export async function loadLastResortKeyPackage(entry: LastResortKeyPackageEntry)
 	// list + operational queries — idempotent if already known.
 	for (const c of coordinators) markCoordinatorUsed(c);
 	return true;
+}
+
+let lastResortRepairInFlight = false;
+
+/**
+ * Repair the §11.5 invariant after a meta adoption: the last-resort each
+ * coordinator serves must be processable by every device — it either IS the
+ * fleet-held pick, or we hold the coordinator's entry so it can become the
+ * pick. Order matters: marker reconcile FIRST, because stale markers poison
+ * both the pick and the planner. Coordinator IO is bounded to known
+ * coordinators (markers alone never implicate — a removed coordinator is
+ * never resurrected), cached, offline-tolerant. Publishes/re-marks ride the
+ * existing onMetaStateChange → meta republish lane, so the repaired state
+ * propagates and peers converge; the loop terminates because the next pass
+ * sees coordinator == pick (or the re-adopted entry as the pick).
+ */
+export async function repairLastResortAlignment(): Promise<void> {
+	if (lastResortRepairInFlight) return;
+	lastResortRepairInFlight = true;
+	try {
+		const ownerPubkey = normalizePubKey(getActivePubkey());
+		// (a) true up markers: prune claims the coordinator no longer serves.
+		await reconcilePublishedKeyPackagesForActiveAccount();
+		// (b) the pick, over post-reconcile truth.
+		const pick = pickLastResortRecord(ownerPubkey);
+		if (!pick) return;
+		const implicated = pick.publishedCoordinatorKeys.map(normalizePubKey);
+		// (c) observe every known coordinator in parallel (cached; one offline
+		// leg must not stall the rest).
+		const observations = await Promise.all(
+			dedupeStrings(listKnownCoordinatorKeys().map(normalizePubKey)).map(async (coordinatorKey) => {
+				try {
+					const available = await queryClient.fetchQuery({
+						queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, coordinatorKey),
+						queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
+						staleTime: 30 * 1000
+					});
+					const served = available
+						.filter((entry) => normalizePubKey(entry.pk) === ownerPubkey && entry.last_resort)
+						.sort((a, b) => b.at - a.at)[0];
+					return { coordinatorKey, servedRef: served?.kp_ref, unreachable: false };
+				} catch (error) {
+					const log = isCoordinatorReadBackoffError(error) ? console.debug : console.warn;
+					log(
+						`[key-packages] repair: ${getCoordinatorLabel(coordinatorKey)} unreachable, skipping`,
+						error instanceof Error ? error.message : error
+					);
+					return { coordinatorKey, servedRef: undefined, unreachable: true };
+				}
+			})
+		);
+		// (d+e) plan per coordinator and execute.
+		for (const observation of observations) {
+			const plan = planLastResortRepair({
+				pickRef: pick.keyPackageRef,
+				coordinatorLastResortRef: observation.servedRef,
+				reachable: !observation.unreachable,
+				heldLocally: observation.servedRef
+					? chatKeyPackagesStore.keyPackages.some(
+							(kp) => kp.keyPackageRef === observation.servedRef
+						)
+					: false,
+				implicated: implicated.includes(observation.coordinatorKey)
+			});
+			if (plan.kind === 'remark') {
+				// Zero coordinator writes: the served entry is held locally, so
+				// re-adopt it as canonical (marker restore flips the pick to it).
+				markCoordinatorUsed(observation.coordinatorKey);
+				await markKeyPackagePublished(plan.keyPackageRef, observation.coordinatorKey, true);
+				console.debug(
+					`[key-packages] repair: re-adopted ${plan.keyPackageRef.slice(0, 12)}… as canonical on ${getCoordinatorLabel(observation.coordinatorKey)}`
+				);
+			} else if (plan.kind === 'publish') {
+				await publishChatKeyPackage(plan.keyPackageRef, observation.coordinatorKey);
+				console.debug(
+					`[key-packages] repair: published ${plan.keyPackageRef.slice(0, 12)}… over a foreign/absent last-resort on ${getCoordinatorLabel(observation.coordinatorKey)}`
+				);
+			}
+		}
+	} catch (error) {
+		console.warn('[key-packages] last-resort repair failed', error);
+	} finally {
+		lastResortRepairInFlight = false;
+	}
 }

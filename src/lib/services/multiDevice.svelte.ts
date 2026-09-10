@@ -80,7 +80,8 @@ import {
 } from '$lib/services/multiDevice';
 import {
 	getLastResortKeyPackageEntry,
-	loadLastResortKeyPackage
+	loadLastResortKeyPackage,
+	repairLastResortAlignment
 } from '$lib/services/chatKeyPackages.svelte';
 
 /**
@@ -1201,6 +1202,11 @@ async function applyTip(
 				lastResortKeyPackage: doc.lastResortKeyPackage,
 				removed: doc.removed
 			});
+			// §11.5 repair: converge the last-resort each coordinator serves with
+			// the adopted entry (re-adopt theirs when held, else publish ours).
+			// Fire-and-forget: coordinator IO bounded to known coordinators,
+			// terminates on the next pass, fires only on meta tip moves.
+			void repairLastResortAlignment();
 		} catch (error) {
 			dbg('applyTip meta reconcile failed', { error });
 		}
