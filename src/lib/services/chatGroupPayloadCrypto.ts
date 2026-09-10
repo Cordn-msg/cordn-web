@@ -12,15 +12,26 @@ const GROUP_PAYLOAD_KEY_BYTES = 32;
 const GROUP_PAYLOAD_NONCE_BYTES = 12;
 const GROUP_PAYLOAD_TAG_BYTES = 16;
 
+const payloadKeyCache = new WeakMap<Uint8Array, Uint8Array>();
+
 async function deriveGroupPayloadKey(state: ClientState): Promise<Uint8Array> {
+	// Per-epoch cache keyed on the exporterSecret object reference: every
+	// decode of a state creates a fresh secret object, so this is one HKDF per
+	// epoch instead of one per message (measured ~0.25ms per derivation).
+	// Concurrent first-derives produce the same deterministic key, so the
+	// miss-miss-set race is harmless.
+	const cached = payloadKeyCache.get(state.keySchedule.exporterSecret);
+	if (cached) return cached;
 	const cipherSuite = await getCordnCipherSuite();
-	return mlsExporter(
+	const key = await mlsExporter(
 		state.keySchedule.exporterSecret,
 		GROUP_PAYLOAD_EXPORTER_LABEL,
 		encoder.encode(GROUP_PAYLOAD_EXPORTER_CONTEXT),
 		GROUP_PAYLOAD_KEY_BYTES,
 		cipherSuite
 	);
+	payloadKeyCache.set(state.keySchedule.exporterSecret, key);
+	return key;
 }
 
 /** Seal a serialized MLS message (base64) under the current epoch's exporter

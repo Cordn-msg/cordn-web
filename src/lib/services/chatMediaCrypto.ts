@@ -20,13 +20,22 @@ const EXPORTER_LENGTH = 32;
 
 const encoder = new TextEncoder();
 
+const mediaKeyCache = new WeakMap<Uint8Array, Uint8Array>();
+
 export async function deriveMediaKey(state: ClientState): Promise<Uint8Array> {
+	// Per-epoch cache keyed on the exporterSecret object reference — same
+	// rationale as the payload key in chatGroupPayloadCrypto: one HKDF per
+	// epoch instead of one per media-bearing message.
+	const cached = mediaKeyCache.get(state.keySchedule.exporterSecret);
+	if (cached) return cached;
 	const cipherSuite = await getCordnCipherSuite();
-	return mlsExporter(
+	const key = await mlsExporter(
 		state.keySchedule.exporterSecret,
 		EXPORTER_LABEL,
 		encoder.encode(EXPORTER_CONTEXT),
 		EXPORTER_LENGTH,
 		cipherSuite
 	);
+	mediaKeyCache.set(state.keySchedule.exporterSecret, key);
+	return key;
 }

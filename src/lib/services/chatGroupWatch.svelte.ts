@@ -49,6 +49,9 @@ import {
 } from '$lib/services/nativeBridge';
 import {
 	markAllGroupsUnwatched,
+	markGroupFeedLive,
+	markGroupsBacklogComplete,
+	markGroupsBacklogIncomplete,
 	markGroupUnwatched,
 	markGroupWatched,
 	setChatGroupResumePromise
@@ -189,7 +192,11 @@ const REBUILD_DEBOUNCE_MS = 5_000;
  */
 const SUSPENSION_DRIFT_MS = 10_000;
 const WATCH_INGEST_BATCH_SIZE = 50;
-const WATCH_INGEST_FLUSH_MS = 0;
+/** Live-stream flush window. 0 flushed every message individually (a full
+ * ingest cycle + persist + reactive invalidation per message); a short window
+ * coalesces a burst into one cycle at ≤40ms delivery latency. Bursts beyond
+ * the batch size still flush immediately. */
+const WATCH_INGEST_FLUSH_MS = 40;
 
 const currentWatches = new Map<string, GroupWatchTask>();
 const groupIdDecoder = new TextDecoder();
@@ -625,12 +632,15 @@ async function startCoordinatorWatches(
 			let failedGroupIds = new Set<string>();
 			try {
 				({ failedGroupIds } = await fetchCoordinatorGroupBacklog({ client, groups }));
+				markGroupsBacklogComplete(groupIds.filter((id) => !failedGroupIds.has(id)));
 			} catch (error) {
 				console.warn('[watch] backlog fetch failed — subscribing anyway', {
 					coordinatorKey,
 					detail: errorMessage(error)
 				});
+				markGroupsBacklogIncomplete(groupIds);
 			}
+			if (failedGroupIds.size > 0) markGroupsBacklogIncomplete([...failedGroupIds]);
 			if (handle.closing) return false;
 			const subscriptionGroups = groupIds
 				.filter((groupId) => !failedGroupIds.has(groupId))
@@ -694,8 +704,9 @@ async function startCoordinatorWatches(
 					for await (const message of subscription.stream) {
 						const group = groupsByGid.get(message.gid);
 						const buffer = group ? buffers.get(group.id) : undefined;
-						if (!buffer) continue;
+						if (!group || !buffer) continue;
 						handle.lastChunkAt = Date.now();
+						markGroupFeedLive(group.id);
 
 						if (
 							await buffer.push({
@@ -845,7 +856,7 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 	await Promise.all(
 		[...groupsByCoordinator.entries()].map(async ([coordinatorKey, groups]) => {
 			const client = getCoordinatorClient(account, coordinatorKey);
-			const { ingestedCount } = await fetchCoordinatorGroupBacklog({
+			const { failedGroupIds, ingestedCount } = await fetchCoordinatorGroupBacklog({
 				client,
 				groups
 			}).catch((error) => {
@@ -853,8 +864,18 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 					coordinatorKey,
 					detail: errorMessage(error)
 				});
-				return { failedGroupIds: new Set<string>(), ingestedCount: 0 };
+				// Whole-fetch failure: the backlog is entirely unknown for these
+				// groups — conservatively mark them incomplete (never vouch for them
+				// on the MD send path) until a fetch succeeds.
+				return {
+					failedGroupIds: new Set<string>(groups.map((group) => group.id)),
+					ingestedCount: 0
+				};
 			});
+			markGroupsBacklogComplete(
+				groups.filter((group) => !failedGroupIds.has(group.id)).map((group) => group.id)
+			);
+			markGroupsBacklogIncomplete([...failedGroupIds]);
 			if (ingestedCount === 0) return;
 			const handle = findWatchHandleByCoordinator(coordinatorKey);
 			if (handle && !isDeliveryStale(handle)) return;

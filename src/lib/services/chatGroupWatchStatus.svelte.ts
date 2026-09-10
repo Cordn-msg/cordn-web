@@ -17,16 +17,58 @@ import { SvelteSet } from 'svelte/reactivity';
 
 const watchedGroupIds = new SvelteSet<string>();
 
+/** Wall-clock ms of the last message chunk the live stream delivered per group.
+ * The MD send path reads this as its proof the feed is alive-and-delivering
+ * (see `isGroupFeedLive`); a plain Map, not reactive — only read at send time. */
+const groupFeedLastChunkAt = new Map<string, number>();
+
+/** Groups whose most recent backlog fetch failed. A failed backlog leaves a
+ * hole the live stream cannot fill (it only delivers post-subscribe
+ * arrivals), so feed liveness alone must not vouch for state completeness
+ * until some fetch succeeds (watch restart or the heartbeat catch-up) — see
+ * the mark call sites in chatGroupWatch.svelte. */
+const groupBacklogIncomplete = new Set<string>();
+
+/** How recent a delivered chunk keeps a feed considered "live" for the MD
+ * send-path catch-up skip. Short on purpose: the skip's residual risk is a
+ * sibling message landing inside this window after silent stream death, and
+ * active conversations re-stamp it on every message. */
+const GROUP_FEED_LIVE_MS = 5_000;
+
+export function markGroupFeedLive(groupId: string): void {
+	groupFeedLastChunkAt.set(groupId, Date.now());
+}
+
+export function markGroupsBacklogComplete(groupIds: string[]): void {
+	for (const groupId of groupIds) groupBacklogIncomplete.delete(groupId);
+}
+
+export function markGroupsBacklogIncomplete(groupIds: string[]): void {
+	for (const groupId of groupIds) groupBacklogIncomplete.add(groupId);
+}
+
+export function isGroupFeedLive(groupId: string): boolean {
+	const lastChunkAt = groupFeedLastChunkAt.get(groupId);
+	return (
+		!groupBacklogIncomplete.has(groupId) &&
+		lastChunkAt !== undefined &&
+		Date.now() - lastChunkAt < GROUP_FEED_LIVE_MS
+	);
+}
+
 export function markGroupWatched(groupId: string): void {
 	watchedGroupIds.add(groupId);
 }
 
 export function markGroupUnwatched(groupId: string): void {
 	watchedGroupIds.delete(groupId);
+	groupFeedLastChunkAt.delete(groupId);
 }
 
 export function markAllGroupsUnwatched(): void {
 	watchedGroupIds.clear();
+	groupFeedLastChunkAt.clear();
+	groupBacklogIncomplete.clear();
 }
 
 export function isGroupActivelyWatched(groupId: string): boolean {

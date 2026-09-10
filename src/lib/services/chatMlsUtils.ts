@@ -328,8 +328,19 @@ export function getCordnGroupMetadataExtension(state: ClientState): CordnGroupMe
 	return getCordnGroupMetadataFromExtensions(state.groupContext.extensions);
 }
 
-export async function getCordnCipherSuite() {
-	return getCiphersuiteImpl(CLI_CIPHERSUITE, nobleCryptoProvider);
+let cordnCipherSuitePromise: Promise<Awaited<ReturnType<typeof getCiphersuiteImpl>>> | undefined;
+
+export function getCordnCipherSuite() {
+	// Memoized: a pure function of constants, but called per MLS op — twice per
+	// message in the ingest loop — so rebuilds are pure waste (~0.02ms each).
+	// A rejected build (never expected for fixed constants) un-caches to retry.
+	cordnCipherSuitePromise ??= getCiphersuiteImpl(CLI_CIPHERSUITE, nobleCryptoProvider).catch(
+		(error) => {
+			cordnCipherSuitePromise = undefined;
+			throw error;
+		}
+	);
+	return cordnCipherSuitePromise;
 }
 
 function decodeWelcomeBase64(welcomeBase64: string): Welcome {

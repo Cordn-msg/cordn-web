@@ -16,7 +16,21 @@ export const coordinatorServerInfoStore = $state<{
 });
 
 export function setCoordinatorServerInfo(coordinatorKey: string, info: CoordinatorServerInfo) {
-	coordinatorServerInfoStore.byCoordinator.set(normalizePubKey(coordinatorKey), info);
+	const normalized = normalizePubKey(coordinatorKey);
+	const previous = coordinatorServerInfoStore.byCoordinator.get(normalized);
+	// No-op when unchanged: the onServerInfo harvest fires after every
+	// successful coordinator call; an unconditional reactive write invalidates
+	// observers per RPC for metadata that almost never changes.
+	if (
+		previous &&
+		previous.name === info.name &&
+		previous.about === info.about &&
+		previous.website === info.website &&
+		previous.picture === info.picture
+	) {
+		return;
+	}
+	coordinatorServerInfoStore.byCoordinator.set(normalized, info);
 }
 
 export function resetCoordinatorServerInfo(coordinatorKey: string) {

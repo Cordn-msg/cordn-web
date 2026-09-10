@@ -37,7 +37,21 @@ function readHealth(coordinatorKey: string): CoordinatorHealth {
 }
 
 function writeHealth(coordinatorKey: string, next: CoordinatorHealth) {
-	coordinatorHealthStore.byCoordinator.set(normalizePubKey(coordinatorKey), next);
+	const normalized = normalizePubKey(coordinatorKey);
+	const previous = coordinatorHealthStore.byCoordinator.get(normalized);
+	// No-op when unchanged: markCoordinatorHealthy fires after EVERY successful
+	// coordinator call (posts, polls, heartbeat fetches), and an unconditional
+	// reactive write invalidates every observer per RPC even when nothing
+	// changed. Skipping identical writes keeps the reactive graph quiet.
+	if (
+		previous &&
+		previous.status === next.status &&
+		previous.lastError === next.lastError &&
+		previous.lastFailureAt === next.lastFailureAt
+	) {
+		return;
+	}
+	coordinatorHealthStore.byCoordinator.set(normalized, next);
 }
 
 export function markCoordinatorHealthy(coordinatorKey: string) {

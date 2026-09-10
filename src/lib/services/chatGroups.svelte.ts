@@ -86,7 +86,7 @@ import {
 import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackageQueries';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { isGroupActivelyWatched } from '$lib/services/chatGroupWatchStatus.svelte';
+import { isGroupActivelyWatched, isGroupFeedLive } from '$lib/services/chatGroupWatchStatus.svelte';
 import {
 	createOutboundTentativeSnapshot,
 	getNewestHealthySnapshot,
@@ -179,11 +179,13 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
 		stateBytes: base64ToBytes(group.stateBase64),
-		// Shallow spread only: both storage backends deep-clone the messages they
-		// actually persist, so re-cloning every tag array here was redundant work
-		// on every persist (including single-message ingests).
-		messages: group.messages.map((message) => ({ ...message })),
-		syncIssues: group.syncIssues.map((issue) => ({ ...issue })),
+		// Passed through un-cloned: both storage backends clone what they
+		// actually persist (IDB per written message, memory backend on write),
+		// so a per-message shallow map here was redundant O(n) work per persist.
+		// Store arrays are copy-on-write (every mutation path produces a new
+		// array), so the reference stays stable while the write is queued.
+		messages: group.messages,
+		syncIssues: group.syncIssues,
 		snapshots: group.snapshots.map((snapshot) => ({
 			groupId: snapshot.groupId,
 			status: snapshot.status,
@@ -494,22 +496,33 @@ async function assertGroupCanPerformOutboundOperation(groupId: string): Promise<
  * pre-send catch-up fetch is redundant: the subscription keeps local state
  * current up to the last delivered message, and this runs inside the
  * serialized group operation chain so it always sees the post-ingestion
- * state.
+ * state. (Single-device has no generation risk at all: the own leaf ratchet
+ * advances only on this device's own sends, so missed inbound traffic cannot
+ * make an outbound app message fail.)
  *
- * Multi-device groups always take the catch-up path instead (spec
- * multi-device §10.6: "behind" has a generation dimension). In the
- * shared-leaf model "watched" is not "current": the watch flag outlives the
- * subscription itself (backgrounded tabs freeze timers/sockets, suspended
- * webviews), and a document fast-forward leaves the ratchet behind until the
- * backlog is processed. Sending from a stale shared-leaf ratchet reuses
- * generations a sibling already consumed, so the message fails on every
- * sibling ("Desired gen in the past") and is lost — send-consumed generations
- * are never retained. One `after: fetchCursor` round-trip per send is the
- * cheap guard; it is near-empty when current.
+ * Multi-device groups take the same skip but only under PROOF the feed is
+ * alive-and-delivering (`isGroupFeedLive`: a chunk within the last 5s AND no
+ * failed backlog fetch outstanding), not merely watched — in the shared-leaf
+ * model "watched" is not "current" (spec multi-device §10.6: "behind" has a
+ * generation dimension — a shared-leaf send from a behind ratchet reuses
+ * generations a sibling already consumed and is lost as "Desired gen in the
+ * past"). The proof rests on the single-active-device usage model plus
+ * backlog completeness: while this device is in use, siblings are passive,
+ * so a current-epoch ratchet cannot drift behind; and a failed watch-start
+ * backlog fetch clears feed liveness until some fetch succeeds (watch
+ * restart or the 60s heartbeat catch-up), so a hole from a suspended
+ * sibling's messages can never hide behind a live-looking stream. Residual
+ * risk: a sibling message posted inside the 5s window after silent stream
+ * death — concurrent-device use, outside the model, and the same in-flight
+ * race the per-send fetch already fails to prevent (a post landing at the
+ * coordinator during encrypt+post collides regardless). Quiet groups and
+ * zombie streams deliver no chunks, never skip, and keep the fetch exactly
+ * as before.
  */
 async function prepareGroupForApplicationMessage(groupId: string): Promise<StoredChatGroup> {
 	const account = requireActiveAccount('You must be logged in to send a message');
-	if (!isMultiDeviceActive(normalizePubKey(account.pubkey)) && isGroupActivelyWatched(groupId)) {
+	const mdActive = isMultiDeviceActive(normalizePubKey(account.pubkey));
+	if (isGroupActivelyWatched(groupId) && (!mdActive || isGroupFeedLive(groupId))) {
 		const group = requireChatGroup(groupId);
 		assertChatGroupIsActive(group);
 		return group;
