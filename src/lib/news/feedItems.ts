@@ -286,6 +286,13 @@ const newsReleases: NewsRelease[] = [
 		version: 3,
 		title: 'Mark all read, and a friendlier mobile app',
 		body: "- ✨ A “Mark all read” button now clears every chat's unread badges in one tap — it sits next to the chat search and on chat home, and only appears when something is actually unread.\n- 🔄 Coordinator names are consistent everywhere: cards, settings, and prompts all prefer your custom label, then the server-announced name, and background saves (like starting a chat from a profile) can no longer overwrite a name you set yourself.\n- ✨ The “Create group” button on a coordinator's page now pre-selects that coordinator in the new-group form.\n- ✨ On phones, a bottom bar — Chats, Share, Settings — and a floating “+” on chat home put the main actions one thumb-tap away.\n- ✨ Every screen now has a back arrow at the top left on mobile, so you can always find your way back to your chats.\n- 🔄 Chat home is calmer: the chats list lost its boxy frame and sits edge to edge, and quick actions shrank to a compact icon row in the sidebar.\n- 🔄 Group actions on mobile (info, invite, share) now open a bottom sheet sized for your thumb instead of a small dropdown.\n- 🔄 “Join group” is now “Open link”, and it also accepts bare profile identifiers (npub or nprofile) — paste one to open that profile.\n- 🔄 Message actions have a new home on desktop: a small toolbar floats beside the bubble on hover — never on top of it, and never cut off — and on narrow windows it folds into a single “…” that opens the full menu.\n- ✨ On touch screens, press and hold a message to react, reply, copy, pin, or edit it from a bottom sheet; the quick swipe-to-reply still works.\n- ✨ The emoji reaction picker is the same simple strip everywhere — the reaction button, the “…” menu, and the press-and-hold sheet."
+	},
+	{
+		id: 'cordn-news-2026-09-10-send-faster',
+		createdAt: Date.UTC(2026, 8, 10),
+		version: 1,
+		title: 'Snappier chats, quieter background',
+		body: '- ✨ Messages send a beat faster in busy conversations: when a group is already receiving live updates in real time, the app no longer makes an extra network check before sending.\n- 🔄 Long chat histories load more smoothly — repeated crypto work that used to run per message now runs once per conversation update instead.\n- 🔄 Incoming messages trigger far less redundant copying and UI bookkeeping, and background coordinator status updates no longer stir the interface when nothing has actually changed.'
 	}
 ];
 
