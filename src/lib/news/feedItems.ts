@@ -290,9 +290,9 @@ const newsReleases: NewsRelease[] = [
 	{
 		id: 'cordn-news-2026-09-10-send-faster',
 		createdAt: Date.UTC(2026, 8, 10),
-		version: 1,
+		version: 2,
 		title: 'Snappier chats, quieter background',
-		body: '- ✨ Messages send a beat faster in busy conversations: when a group is already receiving live updates in real time, the app no longer makes an extra network check before sending.\n- 🔄 Long chat histories load more smoothly — repeated crypto work that used to run per message now runs once per conversation update instead.\n- 🔄 Incoming messages trigger far less redundant copying and UI bookkeeping, and background coordinator status updates no longer stir the interface when nothing has actually changed.'
+		body: '- ✨ Messages send a beat faster in busy conversations: when a group is already receiving live updates in real time, the app no longer makes an extra network check before sending.\n- 🔄 Long chat histories load more smoothly — repeated crypto work that used to run per message now runs once per conversation update instead.\n- 🔄 Busy groups stay smooth while messages stream in: a conversation holding thousands of messages no longer stutters each time something arrives.\n- 🔄 Incoming messages trigger far less redundant copying and UI bookkeeping, and background coordinator status updates no longer stir the interface when nothing has actually changed.'
 	}
 ];
 
