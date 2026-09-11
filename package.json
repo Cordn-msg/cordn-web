@@ -80,7 +80,7 @@
 		"@capacitor/splash-screen": "^8.0.2",
 		"@capacitor/status-bar": "^8.0.3",
 		"@contextvm/mcp-sdk": "^1.30",
-		"@contextvm/sdk": "^0.13.11",
+		"@contextvm/sdk": "^0.13.15",
 		"@cordn/core": "^0.5.5",
 		"@ionic/pwa-elements": "^3.4.0",
 		"@noble/ciphers": "2.2.0",
@@ -101,7 +101,7 @@
 		"qr-scanner": "^1.4.2",
 		"svelte-sonner": "^1.1.1",
 		"ts-mls": "2.0.0-rc.13",
-		"zod": "^4.4.3"
+		"zod": "^4.6.2"
 	},
 	"packageManager": "pnpm@10.11.1"
 }

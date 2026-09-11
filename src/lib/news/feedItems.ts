@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-11-foreground-reliability',
+		createdAt: Date.UTC(2026, 8, 11),
+		version: 1,
+		title: 'No more stalls when you come back',
+		body: '- 🐛 Coming back to Cordn after it sat in the background no longer leaves you stuck waiting on a healthy coordinator — sending a message, invitations, and key packages now go through fresh connections right away, where the app previously could hang on stale ones until you restarted it.\n- 🔄 Connections are only rebuilt when something actually went wrong while you were away (a real suspension, or a connection that stopped responding) instead of on every return, so ordinary tab switches no longer cause reconnect churn.\n- 🔄 Every coordinator call now has a firm time limit: anything that would hang fails fast and its connection is replaced cleanly, instead of leaving a spinner forever.\n- 🐛 A laptop sleep that keeps the tab “open” is detected too — returning from it rebuilds your chat connections and pulls in anything you missed.\n- 🔄 Recovery waits for your signer (like Amber) to wake up before reconnecting, avoiding a burst of failed calls right after you return.\n- 🐛 Deleting a group that was not connected at that moment no longer disturbs the connections of your other chats.'
+	},
+	{
 		id: 'cordn-news-2026-08-18-batch-invites',
 		createdAt: Date.UTC(2026, 7, 18),
 		version: 2,

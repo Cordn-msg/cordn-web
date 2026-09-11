@@ -1,20 +1,14 @@
 import { browser } from '$app/environment';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { PendingWelcome } from '$lib/contracts';
-import {
-	listKnownCoordinatorKeys,
-	getCoordinatorLabel
-} from '$lib/services/chatCoordinators.svelte';
+import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
 import { ensureGroupsLoaded } from '$lib/services/chatGroups.svelte';
 import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
-import {
-	isCoordinatorReadBackoffError,
-	throwIfCoordinatorInReadBackoff
-} from '$lib/services/coordinatorHealth.svelte';
+import { throwIfCoordinatorInReadBackoff } from '$lib/services/coordinatorHealth.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
 import {
-	isSignerUnavailableError,
+	assertCoordinatorOperationActive,
 	requireActiveAccount,
 	withCoordinatorClientRetry
 } from '$lib/services/chatRuntime';
@@ -46,13 +40,11 @@ type PersistedWelcomeNotifications = {
 export const chatWelcomeNotificationsStore = $state<{
 	entries: WelcomeNotificationEntry[];
 	lastFetchedAtByCoordinator: Record<string, number>;
-	loading: boolean;
 	submittingIds: Record<string, boolean>;
 	error: string;
 }>({
 	entries: [],
 	lastFetchedAtByCoordinator: {},
-	loading: false,
 	submittingIds: {},
 	error: ''
 });
@@ -169,7 +161,7 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 	saveNotifications();
 }
 
-async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
+async function resolveWelcomePreview(entry: WelcomeNotificationEntry, assertActive: () => void) {
 	if (entry.preview) return entry.preview;
 
 	const record = getChatKeyPackage(entry.kpRef);
@@ -182,6 +174,7 @@ async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
 		privateKeyPackage
 	});
 	if (!preview) return undefined;
+	assertActive();
 
 	chatWelcomeNotificationsStore.entries = chatWelcomeNotificationsStore.entries.map((candidate) =>
 		candidate.id === entry.id ? { ...candidate, preview } : candidate
@@ -189,94 +182,54 @@ async function resolveWelcomePreview(entry: WelcomeNotificationEntry) {
 	return preview;
 }
 
-async function resolveFetchedWelcomePreviews() {
+async function resolveFetchedWelcomePreviews(assertActive: () => void) {
 	let updated = false;
 	for (const entry of chatWelcomeNotificationsStore.entries) {
+		assertActive();
 		try {
-			const preview = await resolveWelcomePreview(entry);
+			const preview = await resolveWelcomePreview(entry, assertActive);
 			if (preview !== undefined) updated = true;
 		} catch {
 			// Ignore preview failures so the welcome remains accept/reject capable.
 		}
 	}
+	assertActive();
 	if (updated) saveNotifications();
 	return chatWelcomeNotificationsStore.entries;
 }
 
-export async function fetchWelcomeNotifications(coordinatorKeys?: string[]) {
-	if (!coordinatorKeys) {
-		await ensureGroupsLoaded();
-	}
+export async function fetchWelcomeNotifications(
+	coordinatorKeys?: string[],
+	options: { signal?: AbortSignal; force?: boolean } = {}
+) {
+	const account = requireActiveAccount('You must be logged in to fetch welcomes');
+	const assertActive = () => assertCoordinatorOperationActive(account, options.signal);
+	if (!coordinatorKeys) await ensureGroupsLoaded();
+	assertActive();
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);
-	if (keys.length === 0) {
-		chatWelcomeNotificationsStore.error = '';
-		return;
-	}
-
-	chatWelcomeNotificationsStore.loading = true;
-	chatWelcomeNotificationsStore.error = '';
-	try {
-		const account = requireActiveAccount('You must be logged in to fetch welcomes');
-		// Fetch from every coordinator concurrently (the slow part) but merge
-		// sequentially (store mutation) so concurrent merges can't lose updates.
-		const outcomes = await Promise.all(
-			keys.map(async (coordinatorKey) => {
-				try {
-					// Read seam: fast-fail while the coordinator is in read backoff, and
-					// skip the transient-retry ladder — the next poll is the retry.
-					throwIfCoordinatorInReadBackoff(coordinatorKey);
-					// Retire accepted/dismissed welcomes on the coordinator via the
-					// `consumed` ack. The ack is atomic-before-fetch and idempotent;
-					// mergeFetchedWelcomes then drops them locally since the response
-					// no longer echoes them.
-					const consumed = chatWelcomeNotificationsStore.entries
-						.filter(
-							(entry) =>
-								entry.coordinatorKey === coordinatorKey &&
-								(entry.status === 'accepted' || entry.status === 'dismissed')
-						)
-						.map((entry) => ({ kp_ref: entry.kpRef, at: entry.at }));
-					const result = await withCoordinatorClientRetry(
-						account,
-						coordinatorKey,
-						(client) => client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {}),
-						{ transientRetries: false }
-					);
-					return {
-						coordinatorKey,
-						welcomes: result.welcomes,
-						error: undefined as Error | undefined
-					};
-				} catch (error) {
-					return { coordinatorKey, welcomes: [], error: error as Error };
-				}
-			})
-		);
-		for (const outcome of outcomes) {
-			if (!outcome.error) {
-				mergeFetchedWelcomes(outcome.coordinatorKey, outcome.welcomes);
-				continue;
-			}
-			if (isSignerUnavailableError(outcome.error)) return;
-			// The breaker doing its job is expected while a coordinator is down —
-			// keep it out of the warn noise; real fetch failures still warn.
-			const log = isCoordinatorReadBackoffError(outcome.error) ? console.debug : console.warn;
-			log(
-				`Failed to fetch welcomes from ${getCoordinatorLabel(outcome.coordinatorKey)}:`,
-				outcome.error instanceof Error ? outcome.error.message : outcome.error
+	await Promise.all(
+		keys.map(async (coordinatorKey) => {
+			if (!options.force) throwIfCoordinatorInReadBackoff(coordinatorKey);
+			// Consumed acknowledgements are idempotent; failed reads retain local rows.
+			const consumed = chatWelcomeNotificationsStore.entries
+				.filter(
+					(entry) =>
+						entry.coordinatorKey === coordinatorKey &&
+						(entry.status === 'accepted' || entry.status === 'dismissed')
+				)
+				.map((entry) => ({ kp_ref: entry.kpRef, at: entry.at }));
+			const result = await withCoordinatorClientRetry(
+				account,
+				coordinatorKey,
+				(client) => client.FetchPendingWelcomes(consumed.length > 0 ? { consumed } : {}),
+				{ signal: options.signal }
 			);
-		}
-		await resolveFetchedWelcomePreviews();
-	} catch (error) {
-		if (isSignerUnavailableError(error)) {
-			return;
-		}
-
-		chatWelcomeNotificationsStore.error =
-			error instanceof Error ? error.message : 'Failed to fetch welcome notifications';
-	} finally {
-		chatWelcomeNotificationsStore.loading = false;
-	}
+			assertActive();
+			mergeFetchedWelcomes(coordinatorKey, result.welcomes);
+		})
+	);
+	// Per-coordinator failures propagate to Query; aggregation happens outside this seam.
+	await resolveFetchedWelcomePreviews(assertActive);
 }
 
 export function markAllWelcomeNotificationsRead() {

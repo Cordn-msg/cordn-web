@@ -13,11 +13,13 @@ import {
 	disconnectCoordinatorClients,
 	getCoordinatorClient,
 	isCurrentCoordinatorClient,
+	isCoordinatorSignerActive,
 	isTransientCoordinatorError,
 	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient
 } from '$lib/services/chatRuntime';
-import { suspensionDriftMs, type SuspensionStamps } from '$lib/services/appSuspension';
+import { shouldRebuildAfterBackground } from '$lib/services/appSuspension';
+import { focusManager } from '@tanstack/svelte-query';
 import { App } from '@capacitor/app';
 import type { IAccount } from 'applesauce-accounts';
 import type { coordinatorClient } from '$lib/services/coordinatorClient';
@@ -48,7 +50,6 @@ import {
 	isNativePlatform
 } from '$lib/services/nativeBridge';
 import {
-	markAllGroupsUnwatched,
 	markGroupFeedLive,
 	markGroupsBacklogComplete,
 	markGroupsBacklogIncomplete,
@@ -103,12 +104,8 @@ type GroupWatchTask = {
 	startedAt: number;
 	/** The client this watch's calls run on — used to ignore stale-client collateral. */
 	client?: coordinatorClient;
-	/** Live once the subscription is wired; false while backlog/subscribe setup runs. */
+	/** Live only once the server's stream-start frame has arrived. */
 	live: boolean;
-	/** True only once the SERVER acked the subscription — publish alone proves
-	 * nothing (relays accept publishes to a dead coordinator), so liveness
-	 * decisions (backoff-clear, catch-up eligibility) wait for the ack. */
-	acked: boolean;
 	closing: boolean;
 	/** Best-effort abort publish, available once the subscription exists. */
 	abort?: (reason?: string) => Promise<void>;
@@ -184,13 +181,6 @@ const COORDINATOR_BACKOFF_MS = [
 ];
 /** Min spacing between foreground rebuilds (resume fires several events). */
 const REBUILD_DEBOUNCE_MS = 5_000;
-/**
- * Wall-vs-monotonic drift proving process suspension while hidden (see
- * appSuspension.ts). A false positive costs one parallel reconnect; a false
- * negative (e.g. Windows sleep, where the monotonic clock ticks) falls back
- * to keepalive-driven recovery.
- */
-const SUSPENSION_DRIFT_MS = 10_000;
 const WATCH_INGEST_BATCH_SIZE = 50;
 /** Live-stream flush window. 0 flushed every message individually (a full
  * ingest cycle + persist + reactive invalidation per message); a short window
@@ -233,13 +223,7 @@ function isDeliveryStale(handle: GroupWatchTask): boolean {
 	return Date.now() - since > DELIVERY_STALE_MS;
 }
 
-function clearCurrentWatch(handle?: GroupWatchTask | null) {
-	if (!handle) {
-		currentWatches.clear();
-		markAllGroupsUnwatched();
-		return;
-	}
-
+function clearCurrentWatch(handle: GroupWatchTask) {
 	for (const groupId of handle.groupIds) {
 		if (currentWatches.get(groupId) === handle) {
 			currentWatches.delete(groupId);
@@ -276,15 +260,37 @@ export function stopWatchingGroup(groupId?: string, reason = 'group stopped'): P
 		return Promise.resolve();
 	}
 
-	const watch = currentWatches.get(groupId) ?? null;
-	clearCurrentWatch(watch);
+	const watch = currentWatches.get(groupId);
 	if (watch) closeWatch(watch, reason);
 	return Promise.resolve();
 }
 
-/** Stamps taken when the page went hidden; fed to the suspension oracle. */
-let hiddenStamps: SuspensionStamps | null = null;
+let hiddenAt: number | null = null;
+let wasFrozen = false;
+let signerRoundTrip = false;
 let lastRebuildAt = 0;
+let lastHeartbeatAt = Date.now();
+
+function noteBackground(): void {
+	hiddenAt ??= Date.now();
+	// Latch at departure: the signer result can arrive before the resume event.
+	signerRoundTrip ||= isNativePlatform() && isCoordinatorSignerActive();
+}
+
+function resumeForeground(reason: string): void {
+	// A handled departure must not be detected again by an overdue heartbeat.
+	if (hiddenAt !== null || wasFrozen) lastHeartbeatAt = Date.now();
+	const rebuild =
+		wasFrozen ||
+		shouldRebuildAfterBackground(hiddenAt) ||
+		(isNativePlatform() && hiddenAt !== null);
+	const returningFromSigner = signerRoundTrip;
+	hiddenAt = null;
+	wasFrozen = false;
+	signerRoundTrip = false;
+	if (rebuild && !returningFromSigner) rebuildForeground(reason);
+	else void requestTick(reason, { catchUp: true });
+}
 
 /**
  * Post-suspension recovery. After a phone background / tab freeze / OS sleep
@@ -307,7 +313,9 @@ function rebuildForeground(reason: string): void {
 		return;
 	}
 	lastRebuildAt = Date.now();
-	hiddenStamps = null;
+	hiddenAt = null;
+	wasFrozen = false;
+	clearAllCoordinatorBackoff();
 	void stopWatchingGroup(undefined, 'foreground rebuild');
 	rebuildAllCoordinatorClients(account);
 	void requestTick(reason, { catchUp: true });
@@ -429,6 +437,10 @@ function createWatchBuffer(input: {
 			})
 			.then(async () => {
 				clearFlushTimer();
+				if (input.isClosing()) {
+					pendingMessages.length = 0;
+					return false; // the replacement catches up from the persisted cursor
+				}
 				if (pendingMessages.length === 0) return false;
 
 				const batch = pendingMessages.splice(0, pendingMessages.length);
@@ -477,7 +489,8 @@ function createWatchBuffer(input: {
 
 async function ingestGroupMessagesFromCoordinatorFetch(
 	groupsByGid: Map<string, WatchableGroup>,
-	messages: WatchFetchedMessage[]
+	messages: WatchFetchedMessage[],
+	account: IAccount
 ): Promise<Set<string>> {
 	const messagesByGroupId = new Map<string, WatchIncomingMessage[]>();
 	const failedGroupIds = new Set<string>();
@@ -495,6 +508,7 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 	}
 
 	for (const [groupId, groupMessages] of messagesByGroupId) {
+		if (manager.getActive()?.id !== account.id) break;
 		try {
 			const result = await ingestIncomingChatGroupMessages(groupId, groupMessages);
 			if (isChatGroupPoisoned(result.group)) {
@@ -518,6 +532,7 @@ async function ingestGroupMessagesFromCoordinatorFetch(
 }
 
 async function fetchCoordinatorGroupBacklog(input: {
+	account: IAccount;
 	client: coordinatorClient;
 	groups: WatchableGroup[];
 }): Promise<{ failedGroupIds: Set<string>; ingestedCount: number }> {
@@ -531,6 +546,12 @@ async function fetchCoordinatorGroupBacklog(input: {
 		},
 		{ timeout: WATCH_BACKLOG_FETCH_TIMEOUT_MS }
 	);
+	if (
+		manager.getActive()?.id !== input.account.id ||
+		!isCurrentCoordinatorClient(input.groups[0].coordinatorKey, input.client, input.account)
+	) {
+		throw new Error('Connection closed during backlog fetch');
+	}
 	if (result.messages.length === 0) return { failedGroupIds: new Set(), ingestedCount: 0 };
 
 	const failedGroupIds = await ingestGroupMessagesFromCoordinatorFetch(
@@ -540,7 +561,8 @@ async function fetchCoordinatorGroupBacklog(input: {
 			cursor: message.cursor,
 			createdAt: message.at,
 			opaqueMessageBase64: message.msg_64
-		}))
+		})),
+		input.account
 	);
 	return { failedGroupIds, ingestedCount: result.messages.length };
 }
@@ -573,7 +595,7 @@ function noteStreamFailure(
 	}
 	// A subscription that died on the CURRENT client is a failed watch: advance
 	// the retry ladder so the replacement start is spaced. Cleared again by the
-	// next server ack (or any successful call — backoffBlocks' healthy
+	// next stream start (or any successful call — backoffBlocks' healthy
 	// override), so a healthy coordinator's stream blip never idles.
 	recordCoordinatorFailure(coordinatorKey);
 	if (isTransientCoordinatorError(error)) {
@@ -603,7 +625,6 @@ async function startCoordinatorWatches(
 		coordinatorKey,
 		startedAt: Date.now(),
 		live: false,
-		acked: false,
 		closing: false,
 		ready: Promise.resolve(false),
 		task: Promise.resolve()
@@ -631,9 +652,12 @@ async function startCoordinatorWatches(
 			handle.client = client;
 			let failedGroupIds = new Set<string>();
 			try {
-				({ failedGroupIds } = await fetchCoordinatorGroupBacklog({ client, groups }));
+				({ failedGroupIds } = await fetchCoordinatorGroupBacklog({ account, client, groups }));
+				if (handle.closing) return false;
 				markGroupsBacklogComplete(groupIds.filter((id) => !failedGroupIds.has(id)));
 			} catch (error) {
+				if (handle.closing || !isCurrentCoordinatorClient(coordinatorKey, client, account))
+					return false;
 				console.warn('[watch] backlog fetch failed — subscribing anyway', {
 					coordinatorKey,
 					detail: errorMessage(error)
@@ -664,6 +688,7 @@ async function startCoordinatorWatches(
 				return false;
 			}
 			handle.live = true;
+			clearCoordinatorBackoff(coordinatorKey);
 
 			const groupsByGid = new Map(subscriptionGroups.map((group) => [group.gid, group]));
 			const buffers = new Map(
@@ -671,7 +696,7 @@ async function startCoordinatorWatches(
 					group.id,
 					createWatchBuffer({
 						groupId: group.id,
-						isClosing: () => handle.closing,
+						isClosing: () => handle.closing || manager.getActive()?.id !== account.id,
 						abort: (reason?: string) => void handle.abort?.(reason)
 					})
 				])
@@ -680,28 +705,13 @@ async function startCoordinatorWatches(
 			handle.abort = (reason?: string) => subscription.abort(reason);
 
 			handle.task = (async () => {
-				void subscription.result
-					.then(() => {
-						// Server acked: proof the coordinator is alive. Clear the watch
-						// backoff here — NOT on setup completion, which only proves the
-						// publish landed on relays (they accept publishes to a dead
-						// coordinator, which otherwise cleared the ladder every ~80s
-						// and looped cold starts forever).
-						handle.acked = true;
-						clearCoordinatorBackoff(coordinatorKey);
-					})
-					.catch((error) => {
-						if (handle.closing) return;
-						noteStreamFailure(
-							coordinatorKey,
-							client,
-							error,
-							'coordinator subscription result failed'
-						);
-					});
+				// The client routes result failure into the stream, so one failure
+				// path below owns recovery (result is not a subscription ack).
+				void subscription.result.catch(() => undefined);
 
 				try {
 					for await (const message of subscription.stream) {
+						if (handle.closing || manager.getActive()?.id !== account.id) break;
 						const group = groupsByGid.get(message.gid);
 						const buffer = group ? buffers.get(group.id) : undefined;
 						if (!group || !buffer) continue;
@@ -747,13 +757,36 @@ async function startCoordinatorWatches(
 			// Backlog fetch or subscribe threw. If torn down mid-start, resolve
 			// cleanly — the background client teardown interrupts in-flight calls
 			// and the diff will re-open the watch on the next tick.
-			clearCurrentWatch(handle);
 			if (handle.closing) return false;
 			// Same for a retired client: the failure is collateral from an earlier
 			// swap — record nothing, swap nothing, warn nothing; the next tick's
 			// diff re-opens the watch on the replacement client.
-			if (handle.client && !isCurrentCoordinatorClient(coordinatorKey, handle.client)) return false;
-			throw error;
+			if (manager.getActive()?.id !== account.id) return false;
+			if (handle.client) {
+				noteStreamFailure(
+					coordinatorKey,
+					handle.client,
+					error,
+					'failed to start coordinator watch'
+				);
+			} else {
+				recordCoordinatorFailure(coordinatorKey);
+				console.warn('[watch] failed to create coordinator client', error);
+			}
+			return false;
+		} finally {
+			// Every failed/retired setup must relinquish its watched-status mirror,
+			// including early returns from the backlog path.
+			if (!handle.live) {
+				clearCurrentWatch(handle);
+				if (
+					!handle.closing &&
+					handle.client &&
+					manager.getActive()?.id === account.id &&
+					!isCurrentCoordinatorClient(coordinatorKey, handle.client, account)
+				)
+					void requestTick('client replaced during watch setup');
+			}
 		}
 	})();
 
@@ -766,7 +799,6 @@ async function startCoordinatorWatches(
 
 /** Phase 1: teardown watches whose setup provably wedged, rebuild their clients. */
 function reapUnhealthyWatches(account: IAccount): void {
-	const reapedCoordinators = new Set<string>();
 	for (const handle of new Set(currentWatches.values())) {
 		if (handle.closing || handle.live) continue;
 		if (Date.now() - handle.startedAt <= WATCH_SETUP_DEADLINE_MS) continue;
@@ -775,12 +807,7 @@ function reapUnhealthyWatches(account: IAccount): void {
 			ms: WATCH_SETUP_DEADLINE_MS
 		});
 		closeWatch(handle, 'watch reaped');
-		reapedCoordinators.add(handle.coordinatorKey);
-	}
-	// Fresh identity for reaped coordinators: the socket is suspect, and a
-	// pre-.10 server may hold zombie state for the old ephemeral key.
-	for (const coordinatorKey of reapedCoordinators) {
-		replaceCoordinatorClient(coordinatorKey, account);
+		replaceCoordinatorClient(handle.coordinatorKey, account, handle.client);
 	}
 }
 
@@ -798,30 +825,12 @@ async function startMissingWatches(account: IAccount) {
 			// Awaiting full setups here would let one slow coordinator pin the
 			// whole tick. Synchronous registration keeps the diff idempotent
 			// while setups are in flight.
-			void startCoordinatorWatches(account, coordinatorKey, groups)
-				.then((started) => {
-					if (started) return;
-					// Resolved without a wired subscription: retired-client collateral,
-					// reap teardown, or a start with nothing left to subscribe. Still
-					// a failed attempt — advance the ladder, or the long-cap backoff
-					// never engages. A started watch is neutral here: the ladder
-					// clears on the server's ack (see subscription.result above).
-					recordCoordinatorFailure(coordinatorKey);
-				})
-				.catch((error) => {
-					recordCoordinatorFailure(coordinatorKey);
-					// A failed start often means the client itself is dead — a connect
-					// timeout leaves the rejected connect promise cached on the client
-					// forever, and a closed transport rejects every call. Swap a fresh
-					// identity so the backoff-spaced retry isn't pounding a corpse.
-					if (isTransientCoordinatorError(error)) {
-						replaceCoordinatorClient(coordinatorKey, account);
-					}
-					console.warn('[watch] failed to start coordinator watches', {
-						coordinatorKey,
-						detail: errorMessage(error)
-					});
+			void startCoordinatorWatches(account, coordinatorKey, groups).catch((error) => {
+				console.warn('[watch] failed to start coordinator watches', {
+					coordinatorKey,
+					detail: errorMessage(error)
 				});
+			});
 			return Promise.resolve();
 		})
 	);
@@ -857,6 +866,7 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 		[...groupsByCoordinator.entries()].map(async ([coordinatorKey, groups]) => {
 			const client = getCoordinatorClient(account, coordinatorKey);
 			const { failedGroupIds, ingestedCount } = await fetchCoordinatorGroupBacklog({
+				account,
 				client,
 				groups
 			}).catch((error) => {
@@ -872,6 +882,11 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 					ingestedCount: 0
 				};
 			});
+			if (
+				manager.getActive()?.id !== account.id ||
+				!isCurrentCoordinatorClient(coordinatorKey, client, account)
+			)
+				return;
 			markGroupsBacklogComplete(
 				groups.filter((group) => !failedGroupIds.has(group.id)).map((group) => group.id)
 			);
@@ -894,21 +909,11 @@ async function tickBody(account: IAccount, options: TickOptions): Promise<void> 
 	// §10.6: reconcile the MD tip before delivery streams open. Idempotent,
 	// session-cached, and bounded; a no-op when multi-device is off.
 	await awaitMultiDeviceReconciled();
+	if (manager.getActive()?.id !== account.id) return;
 
-	// Catch-up covers subscriptions that are either SERVER-ACKED or on a
-	// HEALTHY coordinator. `live` (publish landed) alone is not proof — relays
-	// accept subscribes to a dead coordinator, and a catch-up on such a handle
-	// is a doomed RPC every heartbeat; a dead coordinator is marked degraded
-	// (only a successful call lifts it), which keeps those handles excluded.
-	// But an UN-ACKED handle on a healthy coordinator is exactly the
-	// keepalive-green zombie class (ack timed out or was lost, server keeps
-	// pinging, chunks stop) — excluding it made a silent subscription
-	// unrecoverable short of a page refresh: the diff saw it as covered and
-	// the zombie-proof never ran on it.
+	// A server start frame establishes readiness; final RPC results do not.
 	const watchedBefore = [...currentWatches]
-		.filter(
-			([, handle]) => handle.acked || getCoordinatorHealthTone(handle.coordinatorKey) === 'healthy'
-		)
+		.filter(([, handle]) => handle.live)
 		.map(([groupId]) => groupId);
 	reapUnhealthyWatches(account);
 
@@ -1082,10 +1087,7 @@ if (browser) {
 	// Foreground recovery: a backgrounded/throttled tab can leave a
 	// server-killed stream as a locally-active zombie, so on return to
 	// foreground the tick reaps stale streams and closes delivery gaps.
-	window.addEventListener('online', () => {
-		clearAllCoordinatorBackoff();
-		requestTick('browser online', { catchUp: true });
-	});
+	window.addEventListener('online', () => rebuildForeground('browser online'));
 	// bfcache restore: browsers close every WebSocket on bfcache entry, and
 	// clock behavior across bfcache is inconsistent — rebuild unconditionally,
 	// no oracle.
@@ -1093,57 +1095,29 @@ if (browser) {
 		if (event.persisted) rebuildForeground('restored from back/forward cache');
 		else requestTick('page show', { catchUp: true });
 	});
-	window.addEventListener('focus', () => requestTick('window focus', { catchUp: true }));
-	document.addEventListener('visibilitychange', () => {
-		if (document.visibilityState === 'visible') {
-			// Native: suspension while hidden is guaranteed (Android stops
-			// WebView JS execution in background) → rebuild. Web: the drift
-			// oracle separates a benign hide (streams alive, notifications
-			// kept flowing) from real suspension; no drift → cheap catch-up
-			// tick only.
-			if (
-				isNativePlatform() ||
-				(hiddenStamps && suspensionDriftMs(hiddenStamps) > SUSPENSION_DRIFT_MS)
-			) {
-				rebuildForeground(
-					isNativePlatform() ? 'native page visible' : 'page visible after suspension'
-				);
-			} else {
-				requestTick('page visible', { catchUp: true });
-			}
-		} else {
-			hiddenStamps = { wall: Date.now(), mono: performance.now() };
-		}
+	window.addEventListener('focus', () => {
+		if (document.visibilityState === 'visible') resumeForeground('window focus');
 	});
-	// Chrome may fire the Page Lifecycle `resume` event (not visibilitychange)
-	// when unfreezing a frozen tab.
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'visible') resumeForeground('page visible');
+		else noteBackground();
+	});
+	document.addEventListener('freeze', () => {
+		wasFrozen = true;
+		noteBackground();
+	});
 	document.addEventListener('resume', () => {
-		// Freeze→thaw can fire `resume` while the tab is STILL HIDDEN. A rebuild
-		// there would tear down healthy streams and rebuild under hidden-tab
-		// timer throttling (slow setup, setup-deadline reap churn); instead let
-		// the pool's own reconnect self-heal, fire only the cheap catch-up tick
-		// (fetches are not throttled), and let the drift oracle do any rebuild
-		// at the unthrottled visible transition.
-		if (document.visibilityState !== 'visible') {
-			requestTick('page resume while hidden', { catchUp: true });
-			return;
-		}
-		if (
-			!isNativePlatform() &&
-			hiddenStamps &&
-			suspensionDriftMs(hiddenStamps) > SUSPENSION_DRIFT_MS
-		) {
-			rebuildForeground('page resumed after suspension');
-		} else {
-			requestTick('page resume', { catchUp: true });
-		}
+		wasFrozen = true;
+		// Resume can precede visibility; retain the reset until the page is attended.
+		if (document.visibilityState === 'visible') resumeForeground('page resumed');
 	});
 	if (isNativePlatform()) {
-		// Native resume fast path: delivered via the Capacitor bridge even when
-		// the WebView's own visibilitychange is late or missed. Unconditional —
-		// the same debounce dedupes with the visibilitychange rebuild above.
 		void App.addListener('appStateChange', ({ isActive }) => {
-			if (isActive) rebuildForeground('native app resumed');
+			if (isActive) resumeForeground('native app resumed');
+			else noteBackground();
+			// Native lifecycle can arrive without a matching DOM visibility event.
+			// Never infer online status from focus; browser connectivity still owns it.
+			focusManager.setFocused(isActive);
 		}).catch(() => undefined);
 	}
 
@@ -1157,7 +1131,20 @@ if (browser) {
 	// ponytail: a killswitch/simplification pass on those layers is the
 	// upgrade path if this backstop proves sufficient in practice.
 	setInterval(() => {
+		const now = Date.now();
+		const missedHeartbeat = now - lastHeartbeatAt > HEARTBEAT_INTERVAL_MS + 30_000;
+		lastHeartbeatAt = now;
 		if (!warmed) return;
-		requestTick('heartbeat', { catchUp: true });
+		// OS sleep can leave a page visible throughout, with no visibility event.
+		if (
+			missedHeartbeat &&
+			document.visibilityState === 'visible' &&
+			!signerRoundTrip &&
+			!isCoordinatorSignerActive()
+		) {
+			rebuildForeground('heartbeat after suspension');
+		} else {
+			requestTick('heartbeat', { catchUp: true });
+		}
 	}, HEARTBEAT_INTERVAL_MS);
 }

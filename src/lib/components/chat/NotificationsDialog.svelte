@@ -53,7 +53,7 @@
 	// into the welcome store on its own schedule — a faulty coordinator can't
 	// stall the rest. The UI reads the store, not these query results.
 	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
-	createQueries(() => ({
+	const welcomeQueries = createQueries(() => ({
 		queries: coordinatorKeys.map((key) =>
 			welcomeNotificationsQueryOptions($activeAccount?.pubkey ?? '', key)
 		)
@@ -64,7 +64,7 @@
 	// is deferred, the original row lingers, and a re-request from a user who
 	// left/re-deleted the group is silently deduped against it — so admins
 	// never see the re-request until the user sends twice. Mirrors welcomes.
-	createQueries(() => ({
+	const joinQueries = createQueries(() => ({
 		queries: coordinatorKeys.map((key) =>
 			joinRequestsQueryOptions($activeAccount?.pubkey ?? '', key)
 		)
@@ -79,15 +79,17 @@
 	});
 
 	const useScrollableList = $derived(unifiedItems.length > 2);
-	const isLoading = $derived.by(
-		() => chatWelcomeNotificationsStore.loading || chatJoinRequestsStore.loading
-	);
-	const hasError = $derived.by(
-		() => chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error
-	);
-	const errorMessage = $derived(
-		() => chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error || ''
-	);
+	const isLoading = $derived([...welcomeQueries, ...joinQueries].some((query) => query.isFetching));
+	const errorMessage = $derived.by(() => {
+		const failures = coordinatorKeys.flatMap((key, index) => {
+			const error = welcomeQueries[index]?.error ?? joinQueries[index]?.error;
+			return error ? [`${getCoordinatorLabel(key)}: ${error.message}`] : [];
+		});
+		return (
+			chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error || failures.join('; ')
+		);
+	});
+	const hasError = $derived(Boolean(errorMessage));
 
 	const profileHints = useProfileHints(
 		() => {

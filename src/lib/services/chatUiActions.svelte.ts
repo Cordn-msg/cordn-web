@@ -195,7 +195,8 @@ export async function refreshAvailableKeyPackagesAction(coordinatorKey?: string)
 		});
 		await queryClient.fetchQuery({
 			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, coordinatorKey),
-			queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey, { force: true }),
+			queryFn: ({ signal }) =>
+				fetchCoordinatorAvailableKeyPackages(coordinatorKey, { force: true, signal }),
 			staleTime: 0
 		});
 		return;
@@ -325,7 +326,7 @@ export async function loadJoinRequestsAction() {
 }
 
 export async function refreshJoinRequestsAction() {
-	await loadJoinRequestsAction();
+	await fetchCoordinatorJoinRequests({ force: true });
 }
 
 /**

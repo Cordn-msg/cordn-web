@@ -26,6 +26,7 @@ const withCoordinatorClientMock = vi.fn(
 );
 
 vi.mock('$lib/services/chatRuntime', () => ({
+	assertCoordinatorOperationActive: vi.fn(),
 	getCoordinatorClient: getCoordinatorClientMock,
 	requireActiveAccount: requireActiveAccountMock,
 	withCoordinatorClient: withCoordinatorClientMock,
@@ -628,6 +629,7 @@ describe('snapshot persistence', () => {
 describe('loadGroups snapshot baseline', () => {
 	test('creates baseline healthy snapshot for legacy group with no snapshots', async () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
+			assertCoordinatorOperationActive: vi.fn(),
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
 			withCoordinatorClient: withCoordinatorClientMock,
@@ -681,6 +683,7 @@ describe('loadGroups snapshot baseline', () => {
 
 	test('skips baseline for poisoned group', async () => {
 		vi.doMock('$lib/services/chatRuntime', () => ({
+			assertCoordinatorOperationActive: vi.fn(),
 			getCoordinatorClient: getCoordinatorClientMock,
 			requireActiveAccount: requireActiveAccountMock,
 			withCoordinatorClient: withCoordinatorClientMock,

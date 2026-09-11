@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
+import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
-import { isCoordinatorClientRefreshInProgress } from '$lib/services/chatRuntime';
 import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
 import {
 	fetchWelcomeNotifications,
@@ -10,9 +10,12 @@ import {
 } from '$lib/services/chatWelcomeNotifications.svelte';
 import { normalizePubKey } from '$lib/utils';
 
-async function fetchSingleCoordinatorWelcomeNotifications(coordinatorKey: string) {
+async function fetchSingleCoordinatorWelcomeNotifications(
+	coordinatorKey: string,
+	options: { signal?: AbortSignal; force?: boolean } = {}
+) {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
-	await fetchWelcomeNotifications([normalizedCoordinatorKey]);
+	await fetchWelcomeNotifications([normalizedCoordinatorKey], options);
 	return listWelcomeNotificationsForCoordinator(normalizedCoordinatorKey);
 }
 
@@ -33,7 +36,11 @@ export async function fetchCoordinatorWelcomeNotifications(
 	if (coordinatorKey?.trim()) {
 		return queryClient.fetchQuery({
 			queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey),
-			queryFn: () => fetchSingleCoordinatorWelcomeNotifications(coordinatorKey),
+			queryFn: ({ signal }) =>
+				fetchSingleCoordinatorWelcomeNotifications(coordinatorKey, {
+					signal,
+					force: options?.force
+				}),
 			staleTime
 		});
 	}
@@ -43,7 +50,8 @@ export async function fetchCoordinatorWelcomeNotifications(
 		coordinatorKeys.map((key) =>
 			queryClient.fetchQuery({
 				queryKey: chatQueryKeys.welcomeNotifications(stablePubkey, key),
-				queryFn: () => fetchSingleCoordinatorWelcomeNotifications(key),
+				queryFn: ({ signal }) =>
+					fetchSingleCoordinatorWelcomeNotifications(key, { signal, force: options?.force }),
 				staleTime
 			})
 		)
@@ -62,8 +70,9 @@ export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinat
 		queryKey: hasStablePubkey
 			? chatQueryKeys.welcomeNotifications(stablePubkey, coordinatorKey)
 			: ([...chatQueryKeys.all, 'welcome-notifications', 'no-account', coordinatorKey] as const),
-		queryFn: () => fetchSingleCoordinatorWelcomeNotifications(coordinatorKey),
-		enabled: browser && hasStablePubkey && !isCoordinatorClientRefreshInProgress(coordinatorKey),
+		queryFn: ({ signal }: QueryFunctionContext) =>
+			fetchSingleCoordinatorWelcomeNotifications(coordinatorKey, { signal }),
+		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
 		refetchIntervalInBackground: false

@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -9,25 +10,21 @@ import {
 import { cordnClient } from '$lib/services/coordinatorClient';
 import { throwIfCoordinatorInReadBackoff } from '$lib/services/coordinatorHealth.svelte';
 import { defaultRelays } from '$lib/services/relay-pool';
-import {
-	isCoordinatorClientRefreshInProgress,
-	requireActiveAccount,
-	withCoordinatorClient
-} from '$lib/services/chatRuntime';
+import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { normalizePubKey } from '$lib/utils';
 
 async function fetchSingleCoordinatorAvailableKeyPackages(
-	coordinatorKey: string
+	coordinatorKey: string,
+	options: { signal?: AbortSignal; force?: boolean } = {}
 ): Promise<AvailableKeyPackage[]> {
 	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
-	// Read seam: fast-fail while the coordinator is in read backoff, and skip the
-	// transient-retry ladder — the poll is the retry (see withCoordinatorClient).
-	throwIfCoordinatorInReadBackoff(coordinatorKey);
+	// Passive polls respect outage backoff; an explicit refresh may probe now.
+	if (!options.force) throwIfCoordinatorInReadBackoff(coordinatorKey);
 	const result = await withCoordinatorClient(
 		account,
 		normalizePubKey(coordinatorKey),
 		(client) => client.ListAvailableKeyPackages({}),
-		{ transientRetries: false }
+		{ signal: options.signal }
 	);
 	return result.keyPackages.sort((a, b) => b.at - a.at);
 }
@@ -64,11 +61,11 @@ export type AvailableKeyPackageWithCoordinator = AvailableKeyPackage & { coordin
 
 export async function fetchCoordinatorAvailableKeyPackages(
 	coordinatorKey?: string,
-	options: { force?: boolean } = {}
+	options: { force?: boolean; signal?: AbortSignal } = {}
 ): Promise<AvailableKeyPackageWithCoordinator[]> {
 	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
 	if (coordinatorKey?.trim()) {
-		const entries = await fetchSingleCoordinatorAvailableKeyPackages(coordinatorKey);
+		const entries = await fetchSingleCoordinatorAvailableKeyPackages(coordinatorKey, options);
 		return entries.map((entry) => ({ ...entry, coordinatorKey }));
 	}
 
@@ -81,7 +78,8 @@ export async function fetchCoordinatorAvailableKeyPackages(
 			queryClient
 				.fetchQuery({
 					queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
-					queryFn: () => fetchSingleCoordinatorAvailableKeyPackages(key),
+					queryFn: ({ signal }) =>
+						fetchSingleCoordinatorAvailableKeyPackages(key, { signal, force: options.force }),
 					staleTime: options.force ? 0 : 30 * 1000
 				})
 				.then((entries) => entries.map((entry) => ({ ...entry, coordinatorKey: key })))
@@ -115,13 +113,9 @@ export function availableKeyPackagesQueryOptions(stablePubkey: string, coordinat
 					'no-account',
 					coordinatorKey ?? 'any'
 				] as const),
-		queryFn: () => fetchCoordinatorAvailableKeyPackages(coordinatorKey),
-		enabled:
-			browser &&
-			hasStablePubkey &&
-			!isCoordinatorClientRefreshInProgress(
-				coordinatorKey?.trim() ? normalizePubKey(coordinatorKey) : undefined
-			),
+		queryFn: ({ signal }: QueryFunctionContext) =>
+			fetchCoordinatorAvailableKeyPackages(coordinatorKey, { signal }),
+		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
 		refetchIntervalInBackground: false

@@ -14,6 +14,10 @@
 - Lint: `pnpm lint`
 - Auto-fix formatting/lint issues: `pnpm lint:fix`
 - Run unit tests: `pnpm test`
+- Open Android Studio project: `pnpm android`
+- Build debug APK: `pnpm android:apk`
+- Build release APK (keystore-signed): `pnpm android:release`
+- Always use the `android*` scripts for APKs, never raw `cap`/`gradlew` commands — the scripts run `pnpm build` and `cap sync` first so the bundled assets aren't stale. `android:apk` is debug-signed (local install only); `android:release` is the keystore-signed distributable.
 
 ## Development workflow
 

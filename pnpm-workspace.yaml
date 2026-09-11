@@ -1,17 +1,14 @@
 packages:
-  - 'packages/*'
-
+  - packages/*
+allowBuilds:
+  esbuild: false
+  sharp: true
 overrides:
   nostr-tools: ^2.23.9
   tar: ^7.5.16
   minimatch: ^3.1.4
   uuid: ^11.1.1
   ws: ^8.21.0
-
-allowBuilds:
-  esbuild: false
-  sharp: true
-
 patchedDependencies:
   nostr-signer-capacitor-plugin@0.0.5: patches/nostr-signer-capacitor-plugin@0.0.5.patch
   applesauce-accounts@6.0.0: patches/applesauce-accounts@6.0.0.patch

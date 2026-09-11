@@ -69,7 +69,10 @@ export function markCoordinatorDegraded(coordinatorKey: string, error: string) {
 	});
 }
 
-export function resetCoordinatorHealth(coordinatorKey: string) {
+export function resetCoordinatorHealth(
+	coordinatorKey: string,
+	options: { clearBackoff?: boolean } = {}
+) {
 	const normalized = normalizePubKey(coordinatorKey);
 	const previous = coordinatorHealthStore.byCoordinator.get(normalized);
 	if (!previous) return;
@@ -80,7 +83,7 @@ export function resetCoordinatorHealth(coordinatorKey: string) {
 	coordinatorHealthStore.byCoordinator.set(normalized, {
 		status: 'unknown',
 		lastError: undefined,
-		lastFailureAt: previous.lastFailureAt
+		lastFailureAt: options.clearBackoff ? undefined : previous.lastFailureAt
 	});
 }
 

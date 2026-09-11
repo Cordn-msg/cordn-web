@@ -73,6 +73,7 @@ import { removeSentJoinRequest } from '$lib/services/chatJoinRequests.svelte';
 import { errorMessage, normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
+	assertCoordinatorOperationActive,
 	getCoordinatorClient,
 	requireActiveAccount,
 	withCoordinatorClient,
@@ -1417,6 +1418,7 @@ async function applyIncomingChatGroupMessages(
 		localStablePubkey: normalizePubKey(account.pubkey),
 		mdActive
 	});
+	assertCoordinatorOperationActive(account);
 
 	const nextGroup = buildPersistedChatGroup({
 		group,
@@ -1503,7 +1505,9 @@ export async function ingestIncomingChatGroupMessages(
 		return { group, received: [], issues: [] };
 	}
 
+	const account = requireActiveAccount('You must be logged in to process group messages');
 	return runGroupOperation(groupId, async () => {
+		assertCoordinatorOperationActive(account);
 		const group = requireChatGroup(groupId);
 		return applyIncomingChatGroupMessages(group, messages);
 	});

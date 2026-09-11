@@ -3,6 +3,8 @@ import type { CallToolResult } from '@contextvm/mcp-sdk/types.js';
 import {
 	callToolStream,
 	NostrClientTransport,
+	OpenStreamRegistry,
+	type NostrSigner,
 	type NostrTransportOptions,
 	PrivateKeySigner,
 	type RelayHandler,
@@ -93,176 +95,8 @@ export type coordinatorClient = {
 	}>;
 };
 
-/**
- * Setup deadline for opening a subscription stream. `callToolStream` resolves
- * only once the subscribe request actually publishes, and a publish on a
- * wedged socket can retry forever. Bounding it here makes a stuck subscribe
- * fail fast as a transient error so the watch reconciler can rebuild.
- */
-const SUBSCRIBE_SETUP_TIMEOUT_MS = 20_000;
-/**
- * Deadline for the MCP initialize handshake (relay connect + round-trip).
- * Unbounded, it is capped only by the SDK's 60s request timeout — longer than
- * every deadline above it, which made tick deadlines detonate legitimately
- * slow cold starts. On timeout the client is disconnected; since SDK 0.13.11
- * that genuinely cancels the stuck initialize publish.
- */
-const CONNECT_TIMEOUT_MS = 20_000;
-
-async function callToolStreamWithSetupDeadline(params: Parameters<typeof callToolStream>) {
-	const streamCall = callToolStream<CallToolResult>(...params);
-	let setupTimer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		return await Promise.race([
-			streamCall,
-			new Promise<never>((_, reject) => {
-				setupTimer = setTimeout(
-					() =>
-						reject(new Error(`Subscribe setup timed out after ${SUBSCRIBE_SETUP_TIMEOUT_MS}ms`)),
-					SUBSCRIBE_SETUP_TIMEOUT_MS
-				);
-			})
-		]);
-	} catch (error) {
-		// The losing promise may still resolve later; abort its stream so it
-		// cannot leak as an orphaned subscription.
-		void streamCall.then((call) => call.abort('setup timeout')).catch(() => undefined);
-		throw error;
-	} finally {
-		if (setupTimer) clearTimeout(setupTimer);
-	}
-}
-
-/**
- * Bounded MCP initialize handshake. The raw promise keeps only a logging
- * catch (its rejection is also observed by the race); on timeout we reject
- * and hand back control via `onTimeout` (the caller disconnects — with the
- * lifecycle pool that genuinely cancels the stuck initialize publish instead
- * of abandoning it as a zombie). `isClosed` downgrades the log for
- * rejections that are deliberate-teardown collateral, not failures.
- */
-export async function withConnectDeadline(
-	raw: Promise<void>,
-	options: {
-		kind: 'ephemeral' | 'stable';
-		onTimeout: () => void;
-		isClosed?: () => boolean;
-	}
-): Promise<void> {
-	const { kind, onTimeout, isClosed } = options;
-	void raw.catch((error) => {
-		const log = isClosed?.() ? console.debug : console.error;
-		log(`Failed to connect ${kind} client to server: ${error}`);
-	});
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		await Promise.race([
-			raw,
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(() => {
-					reject(new Error(`${kind} connect timed out after ${CONNECT_TIMEOUT_MS}ms`));
-					onTimeout();
-				}, CONNECT_TIMEOUT_MS);
-			})
-		]);
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
-}
-
-/**
- * App-wide shared relay pools, keyed by sorted relay set (trailing slashes
- * normalized). Relay sockets are the expensive layer (WS connect + handshake
- * per relay); coordinator client identities are stateless and disposable, so
- * sharing one pool per relay set means foreground rebuilds / client swaps
- * reuse warm sockets instead of re-dialing every relay per client, and the
- * pool's own machinery (per-relay auto-reconnect, liveness-driven rebuild)
- * owns socket health for everyone. Coordinators with different relay sets
- * simply get different pools — sharing never crosses relay sets.
- *
- * Refcounted lifetime: a pool lives exactly while at least one client uses
- * it. The last release terminal-disconnects it and drops the cache entry, so
- * relay-set edits / coordinator removal / account switch-away don't strand
- * warm sockets and a ping monitor forever. Client swaps can never hit zero
- * mid-flight: `replaceCoordinatorClient` acquires the replacement's ref
- * before releasing the old client's (async, fire-and-forget) one.
- */
-const sharedRelayPools = new Map<string, { pool: ApplesauceRelayPool; refs: number }>();
-
-/**
- * Delegating wrapper around a shared pool. `disconnect()` is a RELEASE, not
- * a teardown: transport `close()` unconditionally calls
- * `relayHandler.disconnect()`, which on a raw pool is terminal and would kill
- * the sockets of every other client on the pool. Both transports of one
- * `cordnClient` share a single wrapper, so the release is guarded to fire
- * once per wrapper. `transport.close()` still releases its own subscriptions
- * and request state (`unsubscribeAll` is separate from relay disconnect by
- * SDK design), so nothing leaks per client.
- */
-class SharedRelayHandler implements RelayHandler {
-	private released = false;
-
-	constructor(
-		private readonly key: string,
-		private readonly entry: { pool: ApplesauceRelayPool; refs: number }
-	) {}
-
-	connect(): Promise<void> {
-		// Validation-only on the pool (relay group is built lazily); safe per call.
-		return this.entry.pool.connect();
-	}
-
-	disconnect(): Promise<void> {
-		if (this.released) return Promise.resolve();
-		this.released = true;
-		this.entry.refs -= 1;
-		if (this.entry.refs > 0) return Promise.resolve();
-		// Last user gone: terminal teardown in the background (bounded
-		// internally; a hung close must not block the transport's close path).
-		// The cache entry is dropped first — a disconnected pool is terminal,
-		// so the next user must build a fresh one.
-		sharedRelayPools.delete(this.key);
-		void this.entry.pool.disconnect().catch(() => undefined);
-		return Promise.resolve();
-	}
-
-	publish(...args: Parameters<ApplesauceRelayPool['publish']>): Promise<void> {
-		return this.entry.pool.publish(...args);
-	}
-
-	subscribe(...args: Parameters<ApplesauceRelayPool['subscribe']>): Promise<() => void> {
-		return this.entry.pool.subscribe(...args);
-	}
-
-	/** No-op: the SDK's client transports never call the global unsubscribe. */
-	unsubscribe(): void {}
-
-	getRelayUrls(): string[] {
-		return this.entry.pool.getRelayUrls();
-	}
-}
-
-/**
- * The shared relay handler for a relay set (creating the pool on first use).
- * Empty relay sets get a private pool instead: the SDK resolves those through
- * runtime discovery (which swaps the transport's handler) and a shared pool
- * would be silently stranded. No current call site passes empty — relay
- * resolution always falls back to `defaultRelays`.
- */
-function getSharedRelayHandler(relays: string[]): RelayHandler {
-	if (relays.length === 0) return new ApplesauceRelayPool(relays);
-	const key = [...relays]
-		.map((url) => url.replace(/\/+$/, ''))
-		.sort()
-		.join(',');
-	let entry = sharedRelayPools.get(key);
-	if (!entry) {
-		entry = { pool: new ApplesauceRelayPool(relays), refs: 0 };
-		sharedRelayPools.set(key, entry);
-	}
-	entry.refs += 1;
-	return new SharedRelayHandler(key, entry);
-}
+/** Includes local connect/signing and the response, not just MCP inactivity. */
+const REQUEST_TIMEOUT_MS = 20_000;
 
 export class cordnClient implements coordinatorClient {
 	private stableClient: Client | null = null;
@@ -276,13 +110,28 @@ export class cordnClient implements coordinatorClient {
 	/** Stored for lazy stable transport construction (see connectStable). */
 	private readonly stableSigner: NostrTransportOptions['signer'];
 	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
+	private readonly relayHandler: RelayHandler;
+	private readonly lifecycle = new AbortController();
+	readonly signal = this.lifecycle.signal;
+	readonly relays: string[];
+	private disconnectPromise: Promise<void> | undefined;
+	private signerOperations = 0;
+	private readonly streamStarts = new Map<string, () => void>();
+
+	get isClosed(): boolean {
+		return this.signal.aborted;
+	}
+
+	get isSigning(): boolean {
+		return !this.isClosed && this.signerOperations > 0;
+	}
 
 	constructor(
 		options: Partial<NostrTransportOptions> & {
 			privateKey?: string;
 			ephemeralPrivateKey?: string;
 			relays?: string[];
-			/** Shared relay pool wrapper (see getSharedRelayHandler); omit for a private pool. */
+			/** Injected handlers are owned by this client, never shared with another client. */
 			relayHandler?: RelayHandler;
 			onHealth?: (signal: CoordinatorHealthSignal) => void;
 			onServerInfo?: (info: CoordinatorServerInfo) => void;
@@ -303,12 +152,12 @@ export class cordnClient implements coordinatorClient {
 			);
 		}
 
-		const relays = options.relays || [];
-		// Shared pool by default so client swaps/rebuilds reuse warm relay
-		// sockets; a private per-client pool only when explicitly injected.
-		// Acquired only after all constructor throws are past: a throw after
-		// acquisition would leak the pool refcount forever.
-		const relayHandler = options.relayHandler ?? getSharedRelayHandler(relays);
+		const relays = options.relays?.length ? [...options.relays] : [...defaultRelays];
+		this.relays = relays;
+		// Client replacement must replace sockets AND cancel old publishers.
+		// Only this client's stable/ephemeral transports share the pool.
+		const relayHandler = options.relayHandler ?? new ApplesauceRelayPool(relays);
+		this.relayHandler = relayHandler;
 		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
 		this.onHealth = onHealth;
 		this.onServerInfo = onServerInfo;
@@ -324,7 +173,10 @@ export class cordnClient implements coordinatorClient {
 		// Shared transport config — stable and ephemeral differ only in signer.
 		// Stored for lazy stable construction so read/receive-only sessions never
 		// allocate the ~10 SDK helper objects the transport constructor creates.
-		this.stableSigner = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
+		const signer = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
+		this.stableSigner = this.trackSigner(
+			typeof signer === 'string' ? new PrivateKeySigner(signer) : signer
+		);
 		this.transportBase = {
 			serverPubkey,
 			relayHandler,
@@ -353,34 +205,102 @@ export class cordnClient implements coordinatorClient {
 			...this.transportBase,
 			signer: ephemeralSigner
 		});
-
-		this.ephemeralConnected = withConnectDeadline(
-			this.ephemeralClient.connect(this.ephemeralTransport),
-			{
-				kind: 'ephemeral',
-				onTimeout: () => void this.disconnect(),
-				isClosed: () => this.closed
+		// MCP's onprogress schema strips the CEP-41 `cvm` field. Observe the
+		// SDK's validated, server-authenticated notification before that projection.
+		this.ephemeralTransport.onmessageWithContext = (message) => {
+			if (
+				'method' in message &&
+				message.method === 'notifications/progress' &&
+				OpenStreamRegistry.isOpenStreamProgress(message.params) &&
+				message.params.cvm.frameType === 'start'
+			) {
+				this.streamStarts.get(String(message.params.progressToken))?.();
 			}
-		);
+		};
+
+		// Stateless initialize is local setup, not a coordinator health check.
+		this.ephemeralConnected = this.connect(this.ephemeralClient, this.ephemeralTransport);
+		void this.ephemeralConnected.catch(() => undefined);
 	}
 
-	/** Set by {@link disconnect}: distinguishes deliberate teardown rejections
-	 * (expected, debug) from genuine connect failures (error). */
-	private closed = false;
+	/** Track actual signer work so an Android approval round-trip isn't a network reset. */
+	private trackSigner(signer: NostrSigner): NostrSigner {
+		const track = async <T>(operation: () => Promise<T>): Promise<T> => {
+			this.signal.throwIfAborted();
+			this.signerOperations += 1;
+			try {
+				const result = await operation();
+				this.signal.throwIfAborted();
+				return result;
+			} finally {
+				this.signerOperations -= 1;
+			}
+		};
+		return {
+			getPublicKey: () => track(() => signer.getPublicKey()),
+			signEvent: (event) => track(() => signer.signEvent(event)),
+			nip44: signer.nip44
+				? {
+						encrypt: (pubkey, plaintext) => track(() => signer.nip44!.encrypt(pubkey, plaintext)),
+						decrypt: (pubkey, ciphertext) => track(() => signer.nip44!.decrypt(pubkey, ciphertext))
+					}
+				: undefined
+		};
+	}
 
-	async disconnect(): Promise<void> {
-		this.closed = true;
-		// Never await the connect promises: a hung initialize on a dead socket
-		// must not block teardown, and its eventual rejection is swallowed here.
-		void this.stableConnected?.catch(() => undefined);
-		void this.ephemeralConnected.catch(() => undefined);
-		await Promise.all([
-			this.stableTransport?.close().catch(() => undefined),
-			this.ephemeralTransport.close().catch(() => undefined)
-		]);
+	disconnect(): Promise<void> {
+		if (this.disconnectPromise) return this.disconnectPromise;
+		// Reject callers and cancel pool publishers BEFORE SDK close drains inbound tasks.
+		this.lifecycle.abort(new Error('Connection closed'));
+		this.streamStarts.clear();
+		this.disconnectPromise = Promise.allSettled([
+			this.relayHandler.disconnect(),
+			this.stableTransport?.close(),
+			this.ephemeralTransport.close()
+		]).then(() => undefined);
+		return this.disconnectPromise;
+	}
+
+	private async withDeadline<T>(
+		operation: () => Promise<T>,
+		timeout = REQUEST_TIMEOUT_MS
+	): Promise<T> {
+		this.signal.throwIfAborted();
+		let onAbort!: () => void;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const interrupted = new Promise<never>((_, reject) => {
+			onAbort = () => reject(this.signal.reason);
+			this.signal.addEventListener('abort', onAbort, { once: true });
+			timer = setTimeout(() => {
+				const error = new Error(`Coordinator request timed out after ${timeout}ms`);
+				this.onHealth?.({ status: 'degraded', error: error.message });
+				reject(error);
+				void this.disconnect();
+			}, timeout);
+		});
+		try {
+			const result = await Promise.race([operation(), interrupted]);
+			this.signal.throwIfAborted();
+			return result;
+		} finally {
+			clearTimeout(timer);
+			this.signal.removeEventListener('abort', onAbort);
+		}
+	}
+
+	private connect(client: Client, transport: NostrClientTransport): Promise<void> {
+		return this.withDeadline(async () => {
+			try {
+				await client.connect(transport);
+			} finally {
+				// SDK start is not abortable. A late start must not resurrect subscriptions.
+				if (this.isClosed) void transport.close().catch(() => undefined);
+			}
+		});
 	}
 
 	private connectStable(): Promise<void> {
+		this.signal.throwIfAborted();
 		if (!this.stableConnected) {
 			// Lazy-construct the stable transport + client on first stable call.
 			// Most sessions are receive-only (ephemeral) and never need this.
@@ -392,11 +312,8 @@ export class cordnClient implements coordinatorClient {
 				...this.transportBase,
 				signer: this.stableSigner
 			});
-			this.stableConnected = withConnectDeadline(this.stableClient.connect(this.stableTransport), {
-				kind: 'stable',
-				onTimeout: () => void this.disconnect(),
-				isClosed: () => this.closed
-			});
+			this.stableConnected = this.connect(this.stableClient, this.stableTransport);
+			void this.stableConnected.catch(() => undefined);
 		}
 
 		return this.stableConnected;
@@ -409,23 +326,19 @@ export class cordnClient implements coordinatorClient {
 		schema?: ZodType<T>,
 		options: { timeout?: number } = {}
 	): Promise<T> {
-		const connected = transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected;
-
 		try {
-			await connected;
-			const client = transportKind === 'stable' ? this.stableClient! : this.ephemeralClient;
-			const result = await client.callTool(
-				{
-					name,
-					arguments: { ...args }
-				},
-				undefined,
-				{
+			const result = await this.withDeadline(async () => {
+				await (transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected);
+				this.signal.throwIfAborted();
+				const client = transportKind === 'stable' ? this.stableClient! : this.ephemeralClient;
+				return client.callTool({ name, arguments: { ...args } }, undefined, {
+					// Progress tokens are also required for oversized transfers. Progress
+					// must not extend a finite operation's deadline, though.
 					onprogress: () => undefined,
-					resetTimeoutOnProgress: true,
-					...(options.timeout !== undefined ? { timeout: options.timeout } : {})
-				}
-			);
+					resetTimeoutOnProgress: false,
+					timeout: options.timeout ?? REQUEST_TIMEOUT_MS
+				});
+			}, options.timeout);
 
 			// Check if the server returned an error
 			if (result.isError) {
@@ -449,7 +362,7 @@ export class cordnClient implements coordinatorClient {
 			return parsed;
 		} catch (error) {
 			const detail = errorMessage(error);
-			this.onHealth?.({ status: 'degraded', error: detail });
+			if (!this.isClosed) this.onHealth?.({ status: 'degraded', error: detail });
 			throw error;
 		}
 	}
@@ -477,7 +390,7 @@ export class cordnClient implements coordinatorClient {
 	 * responded first populates the gaps. No extra round-trip — this is whatever
 	 * was already learned from routine coordinator calls.
 	 */
-	getServerInfo(): CoordinatorServerInfo {
+	private getServerInfo(): CoordinatorServerInfo {
 		return {
 			...this.readTransportServerInfo(this.stableTransport),
 			...this.readTransportServerInfo(this.ephemeralTransport)
@@ -608,12 +521,7 @@ export class cordnClient implements coordinatorClient {
 			COORDINATOR_METHODS.postGroupMessage,
 			input,
 			postGroupMessageOutputSchema,
-			// ponytail: explicit 8s beats the MCP 60s default. On mobile
-			// background-return a dead socket otherwise hangs the optimistic
-			// "Sending…" state for a full minute before the transient-retry +
-			// client-rebuild in withCoordinatorClient gets a chance to recover
-			// it. 8s is generous for a coordinator queue op (ms steady-state);
-			// only a stuck socket hits it, which is exactly when we bail+retry.
+			// Queue writes should fail promptly; an ambiguous timeout is NOT replayed.
 			{ timeout: 8_000 }
 		);
 	}
@@ -636,37 +544,52 @@ export class cordnClient implements coordinatorClient {
 		result: Promise<SubscribeManyGroupMessagesOutput>;
 		abort: (reason?: string) => Promise<void>;
 	}> {
-		await this.ephemeralConnected;
-
-		const call = await callToolStreamWithSetupDeadline([
-			{
+		return this.withDeadline(async () => {
+			await this.ephemeralConnected;
+			this.signal.throwIfAborted();
+			const call = await callToolStream<CallToolResult>({
 				client: this.ephemeralClient,
 				transport: this.ephemeralTransport,
 				name: COORDINATOR_METHODS.subscribeManyGroupMessages,
 				arguments: { ...input }
+			});
+			const started = new Promise<void>((resolve) => {
+				this.streamStarts.set(call.progressToken, resolve);
+			});
+			// The handle exists before publication. Readiness is the server's start
+			// frame; result is the final reply when the long-running stream ends.
+			const result = call.result.then((reply) =>
+				subscribeManyGroupMessagesOutputSchema.parse(reply.structuredContent)
+			);
+			void result.catch((error) => call.stream.fail(error)).catch(() => undefined);
+			try {
+				await Promise.race([
+					started,
+					call.stream.closed.then(() => {
+						throw new Error('Connection closed before stream started');
+					})
+				]);
+			} finally {
+				this.streamStarts.delete(call.progressToken);
 			}
-		]);
-		const stream: AsyncIterable<GroupMessage> = {
-			async *[Symbol.asyncIterator]() {
-				for await (const chunk of call.stream) {
-					yield groupMessageSchema.parse(JSON.parse(chunk.value));
+			this.signal.throwIfAborted();
+			this.onHealth?.({ status: 'healthy' });
+			const stream: AsyncIterable<GroupMessage> = {
+				async *[Symbol.asyncIterator]() {
+					for await (const chunk of call.stream) {
+						yield groupMessageSchema.parse(JSON.parse(chunk.value));
+					}
 				}
-			}
-		};
-
-		return {
-			stream,
-			result: call.result.then((result) =>
-				subscribeManyGroupMessagesOutputSchema.parse(result.structuredContent)
-			),
-			abort: async (reason?: string) => {
-				void call.stream.closed.catch(() => undefined);
-				try {
-					await call.abort(reason);
-				} catch {
-					return;
+			};
+			return {
+				stream,
+				result,
+				abort: async (reason?: string) => {
+					// SDK abort finalizes locally before publishing the best-effort hint.
+					// Never wait for that publish on a potentially dead socket.
+					void call.abort(reason).catch(() => undefined);
 				}
-			}
-		};
+			};
+		});
 	}
 }

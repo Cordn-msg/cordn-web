@@ -49,6 +49,7 @@
 		refreshCoordinatorWelcomeNotificationsAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { availableKeyPackagesQueryOptions } from '$lib/queries/chatKeyPackageQueries';
+	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import Boxes from '@lucide/svelte/icons/boxes';
@@ -70,8 +71,13 @@
 	);
 	const localKeyPackages = $derived.by(() => listChatKeyPackages());
 	const pendingWelcomes = $derived.by(() => listWelcomeNotificationsForCoordinator(coordinatorKey));
-	const loadingWelcomes = $derived.by(() => chatWelcomeNotificationsStore.loading);
-	const welcomeError = $derived.by(() => chatWelcomeNotificationsStore.error);
+	const welcomesQuery = createQuery(() =>
+		welcomeNotificationsQueryOptions($activeAccount?.pubkey ?? '', coordinatorKey)
+	);
+	const loadingWelcomes = $derived(welcomesQuery.isFetching);
+	const welcomeError = $derived(
+		chatWelcomeNotificationsStore.error || welcomesQuery.error?.message
+	);
 	const relatedPublishedKeyPackages = $derived.by(() =>
 		localKeyPackages.filter((entry) => entry.publishedCoordinatorKeys.includes(coordinatorKey))
 	);
