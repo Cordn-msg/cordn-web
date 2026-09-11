@@ -18,7 +18,6 @@ import {
 	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient
 } from '$lib/services/chatRuntime';
-import { shouldRebuildAfterBackground } from '$lib/services/appSuspension';
 import { focusManager } from '@tanstack/svelte-query';
 import { App } from '@capacitor/app';
 import type { IAccount } from 'applesauce-accounts';
@@ -156,6 +155,8 @@ const WATCH_SETUP_DEADLINE_MS = 45_000;
 const WATCH_BACKLOG_FETCH_TIMEOUT_MS = 20_000;
 /** Foreground heartbeat — the convergence backstop for keepalive-green zombies. */
 const HEARTBEAT_INTERVAL_MS = 60_000;
+/** A beat older than this means timers stopped while nothing else could tell — suspension. */
+const HEARTBEAT_MISSED_MS = HEARTBEAT_INTERVAL_MS + 30_000;
 /** Min spacing between catch-up sweeps (focus/visibility events can burst). */
 const CATCH_UP_MIN_INTERVAL_MS = 5_000;
 /** Hides the "Updating chats…" banner for ticks that finish quickly. */
@@ -278,13 +279,17 @@ function noteBackground(): void {
 }
 
 function resumeForeground(reason: string): void {
-	// A handled departure must not be detected again by an overdue heartbeat.
-	if (hiddenAt !== null || wasFrozen) lastHeartbeatAt = Date.now();
-	const rebuild =
-		wasFrozen ||
-		shouldRebuildAfterBackground(hiddenAt) ||
-		(isNativePlatform() && hiddenAt !== null);
+	// Suspension evidence, strongest first: an explicit freeze/bfcache event, or
+	// heartbeat silence past its tolerance — timers that stayed quiet while hidden
+	// mean the process was frozen or the OS slept, so every socket is suspect.
+	// Elapsed hidden time alone is NOT evidence: a hidden-but-alive desktop tab
+	// keeps firing the heartbeat and delivering on its sockets, and rebuilding on
+	// return was discarding exactly those healthy connections.
+	const heartbeatMissed = Date.now() - lastHeartbeatAt > HEARTBEAT_MISSED_MS;
+	const rebuild = wasFrozen || heartbeatMissed || (isNativePlatform() && hiddenAt !== null);
 	const returningFromSigner = signerRoundTrip;
+	// A handled departure must not be detected again by the next heartbeat.
+	lastHeartbeatAt = Date.now();
 	hiddenAt = null;
 	wasFrozen = false;
 	signerRoundTrip = false;
@@ -1132,7 +1137,7 @@ if (browser) {
 	// upgrade path if this backstop proves sufficient in practice.
 	setInterval(() => {
 		const now = Date.now();
-		const missedHeartbeat = now - lastHeartbeatAt > HEARTBEAT_INTERVAL_MS + 30_000;
+		const missedHeartbeat = now - lastHeartbeatAt > HEARTBEAT_MISSED_MS;
 		lastHeartbeatAt = now;
 		if (!warmed) return;
 		// OS sleep can leave a page visible throughout, with no visibility event.

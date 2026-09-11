@@ -177,10 +177,23 @@ describe('foreground recovery triggers', () => {
 		expect(rebuild).not.toHaveBeenCalled();
 	});
 
-	test('a long hide rebuilds once across a burst of foreground events', async () => {
+	test('a long hide with a live heartbeat preserves healthy clients', async () => {
 		await start();
 		visibility('hidden');
-		await vi.advanceTimersByTimeAsync(11_000);
+		// Timers keep firing while hidden (desktop tab, not frozen): two heartbeats
+		// pass, so the tab is provably alive and its sockets are not suspect.
+		await vi.advanceTimersByTimeAsync(130_000);
+		visibility('visible');
+		win.dispatchEvent(new Event('focus'));
+		win.dispatchEvent(new Event('pageshow'));
+		expect(rebuild).not.toHaveBeenCalled();
+	});
+
+	test('heartbeat silence while hidden rebuilds once on return', async () => {
+		await start();
+		visibility('hidden');
+		// Wall clock advanced but no timer ran: the process was suspended.
+		vi.setSystemTime(Date.now() + 120_000);
 		visibility('visible');
 		win.dispatchEvent(new Event('focus'));
 		win.dispatchEvent(new Event('pageshow'));
