@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.0 — 2026-09-11
+
+### Features
+
+- Signal-style message action bar with long-press sheet on touch
+- mobile thumb-zone navigation and calmer chat home
+- mark-all-read, consistent coordinator labels, coordinator-seeded group creation
+
+### Fixes
+
+- keep healthy coordinator sockets across unfocused desktop hides
+- bump @contextvm/sdk to 0.13.16 for the acknowledged-probe keepalive fix
+- crossfade chat avatars over fallback color to stop remount flash
+- make coordinator connections reliable across app suspension
+- converge last-resort key package across devices and coordinators
+- clear system bars for update banners and toasts
+- fold the new-conversation FAB into the tab bar as a center action
+- unified chat tab bar with notifications and hierarchical back
+- isolate coordinator failures and restore live-stream resilience
+- spread sidebar quick-action icons across the sidebar width
+- **build:** regenerate lockfile with pnpm 10 and pin packageManager
+- **build:** restore ts-mls patch dropped from workspace config
+- **android:** stop backup export crash when the save picker opens
+- reconnection handling
+
+### Performance
+
+- memoize message label formatting
+- cut redundant work from the send and ingest paths
+
+### Docs
+
+- add invite key sync bullet to today's news release
+- add status-bar bullet to today's news release
+- add label-smoothness bullet to today's news release
+- add news release for the performance pass
+
+### Chore
+
+- update toddstr nip-05
+- add toddstr nip-05
+
 ## 0.3.0 — 2026-08-18
 
 ### Features
