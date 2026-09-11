@@ -16,10 +16,29 @@
 	}: { pubkey: string; picture?: string; size?: string; alt?: string } = $props();
 
 	const showImage = $derived(getLoadAvatars());
+	// Fade the picture in over the always-painted fallback color: the avatar
+	// element remounts whenever the run's avatar hops to a newer message, and the
+	// fresh <img> can't paint pixels until its bitmap is fetched/decoded. The
+	// crossfade turns that into a smooth transition instead of a color flash.
+	let loaded = $state(false);
 </script>
 
 {#if picture && showImage}
-	<img src={picture} {alt} class={cn('rounded-full object-cover', size)} />
+	<div
+		class={cn('overflow-hidden rounded-full', size)}
+		style={`background-color: ${pubkeyToHexColor(pubkey)}`}
+	>
+		<img
+			src={picture}
+			{alt}
+			class={cn(
+				'h-full w-full object-cover transition-opacity duration-200',
+				loaded ? 'opacity-100' : 'opacity-0'
+			)}
+			decoding="sync"
+			onload={() => (loaded = true)}
+		/>
+	</div>
 {:else}
 	<div
 		class={cn('rounded-full', size)}
