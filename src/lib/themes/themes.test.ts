@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { contrastRatio, CONTRAST_PAIRS } from './contrast';
+import { randomTheme } from './random';
 import { BUILTIN_THEMES } from './builtin';
 import { themeCss, parseThemeJson } from './appearance.svelte';
 import { THEME_TOKEN_KEYS } from './types';
@@ -102,5 +103,38 @@ describe('themeCss', () => {
 		expect(css).toContain(':root:root{');
 		expect(css).toContain(':root:root.dark{');
 		for (const key of THEME_TOKEN_KEYS) expect(css).toContain(`--${key}:`);
+	});
+});
+
+describe('randomTheme', () => {
+	it('generated themes pass the same AA bar as built-ins (200 rolls)', () => {
+		for (let i = 0; i < 200; i++) {
+			const theme = randomTheme();
+			expect(theme.name).toMatch(/^\w+ \w+$/);
+			for (const variant of [theme.light, theme.dark]) {
+				for (const key of THEME_TOKEN_KEYS) {
+					const expected = key === 'radius' ? /^[\d.]+(rem|px|em)$/ : /^#[0-9a-f]{6}$/i;
+					expect(variant[key], `${theme.name} ${key}`).toMatch(expected);
+				}
+				for (const pair of CONTRAST_PAIRS) {
+					expect(
+						contrastRatio(variant[pair.fg], variant[pair.bg]),
+						`${theme.name} ${pair.fg}/${pair.bg}`
+					).toBeGreaterThanOrEqual(4.5);
+				}
+			}
+		}
+	});
+
+	it('rolls are varied (distinct names and backgrounds over 50 rolls)', () => {
+		const names = new Set<string>();
+		const bgs = new Set<string>();
+		for (let i = 0; i < 50; i++) {
+			const t = randomTheme();
+			names.add(t.name);
+			bgs.add(t.light.background + t.dark.background);
+		}
+		expect(names.size).toBeGreaterThan(10);
+		expect(bgs.size).toBe(50);
 	});
 });

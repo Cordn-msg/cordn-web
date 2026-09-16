@@ -17,6 +17,7 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Send from '@lucide/svelte/icons/send';
+	import Dices from '@lucide/svelte/icons/dices';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Lock from '@lucide/svelte/icons/lock';
@@ -24,6 +25,7 @@
 	import { Slider } from '$lib/components/ui/slider';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 	import { BUILTIN_THEMES } from '$lib/themes/builtin';
+	import { randomTheme } from '$lib/themes/random';
 	import { toast } from 'svelte-sonner';
 
 	const VARIANTS = ['light', 'dark'] as const;
@@ -126,6 +128,18 @@
 		toast.success('Theme JSON copied');
 	}
 
+	/** Replace the draft with a random AA-gated theme; keeps the draft id so
+	 * save semantics (fork vs in-place) are unchanged. */
+	function roll() {
+		const t = randomTheme();
+		draft.name = t.name;
+		draft.light = t.light;
+		draft.dark = t.dark;
+		jsonDirty = false;
+		syncJson();
+		previewTheme(draft);
+	}
+
 	function hexInputHandler(key: ThemeTokenKey) {
 		return (event: Event) => {
 			const input = event.currentTarget as HTMLInputElement;
@@ -202,19 +216,34 @@
 		</p>
 	</div>
 
-	<div class="inline-flex rounded-lg border border-border p-1" role="tablist" aria-label="Variant">
-		{#each VARIANTS as m (m)}
-			<button
-				type="button"
-				role="tab"
-				aria-selected={mode === m}
-				class="rounded-md px-3 py-1 text-sm font-medium transition-colors
+	<div class="flex items-center justify-between gap-2">
+		<div
+			class="inline-flex rounded-lg border border-border p-1"
+			role="tablist"
+			aria-label="Variant"
+		>
+			{#each VARIANTS as m (m)}
+				<button
+					type="button"
+					role="tab"
+					aria-selected={mode === m}
+					class="rounded-md px-3 py-1 text-sm font-medium transition-colors
 					{mode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => (mode = m)}
-			>
-				{m === 'light' ? 'Light' : 'Dark'} variant
-			</button>
-		{/each}
+					onclick={() => (mode = m)}
+				>
+					{m === 'light' ? 'Light' : 'Dark'} variant
+				</button>
+			{/each}
+		</div>
+		<Button
+			type="button"
+			variant="outline"
+			size="sm"
+			onclick={roll}
+			title="Generate a random color scheme"
+		>
+			<Dices class="size-4" /> Roll
+		</Button>
 	</div>
 
 	<div class="flex flex-wrap gap-2">
