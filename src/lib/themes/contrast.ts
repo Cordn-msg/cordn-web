@@ -50,6 +50,8 @@ export interface ContrastPair {
 export const CONTRAST_PAIRS: ContrastPair[] = [
 	{ label: 'Body text', fg: 'foreground', bg: 'background' },
 	{ label: 'Muted text', fg: 'muted-foreground', bg: 'background' },
+	{ label: 'On card', fg: 'card-foreground', bg: 'card' },
+	{ label: 'On popover', fg: 'popover-foreground', bg: 'popover' },
 	{ label: 'On primary', fg: 'primary-foreground', bg: 'primary' },
 	{ label: 'Destructive', fg: 'destructive', bg: 'background' }
 ];

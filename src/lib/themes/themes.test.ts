@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { contrastRatio } from './contrast';
+import { contrastRatio, CONTRAST_PAIRS } from './contrast';
 import { BUILTIN_THEMES } from './builtin';
 import { themeCss, parseThemeJson } from './appearance.svelte';
 import { THEME_TOKEN_KEYS } from './types';
@@ -45,17 +45,13 @@ describe('built-in themes', () => {
 		}
 	});
 
-	it('key pairs meet WCAG AA (>= 4.5:1)', () => {
+	it('every CONTRAST_PAIR meets WCAG AA (>= 4.5:1)', () => {
 		for (const theme of BUILTIN_THEMES) {
 			for (const variant of [theme.light, theme.dark]) {
-				for (const [fg, bg] of [
-					['foreground', 'background'],
-					['muted-foreground', 'background'],
-					['primary-foreground', 'primary']
-				] as const) {
+				for (const pair of CONTRAST_PAIRS) {
 					expect(
-						contrastRatio(variant[fg], variant[bg]),
-						`${theme.id} ${fg}/${bg}`
+						contrastRatio(variant[pair.fg], variant[pair.bg]),
+						`${theme.id} ${pair.fg}/${pair.bg}`
 					).toBeGreaterThanOrEqual(4.5);
 				}
 			}
