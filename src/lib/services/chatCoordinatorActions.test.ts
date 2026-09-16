@@ -60,6 +60,11 @@ function kp(ref: string, publishedCoordinatorKeys: string[]) {
 	return { keyPackageRef: ref, publishedCoordinatorKeys };
 }
 
+// Warm the heavy module graph at file scope: vi.mock is hoisted above this,
+// so mocks apply, and the first in-test `await import()` no longer pays the
+// transform+eval cost against its 5s timeout (the parallel-load flake).
+await import('./chatCoordinatorActions.svelte');
+
 describe('computeKeyPackageDeletion()', () => {
 	beforeEach(() => {
 		listChatGroupsMock.mockReset();

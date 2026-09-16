@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-16-appearance-themes',
+		createdAt: Date.UTC(2026, 8, 16),
+		version: 1,
+		title: 'Make Cordn yours: themes',
+		body: '- ✨ New Appearance page in Settings with eight built-in themes — Soft (the new default for new users), Classic, Matrix, Cypherpunk, Navy, Warm Paper, Catppuccin, and Dracula. Everyone who already used Cordn keeps their familiar look.\n- ✨ Customize any theme: fork it, tweak every color and the corner radius, and watch the whole app preview your changes live while you edit.\n- ✨ Not sure where to start? Hit "Roll" to generate a random theme — every roll is checked to stay readable (WCAG AA) automatically, so keep rolling until one feels right.\n- ✨ Themes can be edited as JSON too: copy the object, tweak it in your own editor or with the help of an AI agent, paste it back, and apply it live. Export and import round-trips the same file, so you can share themes between devices.\n- 🔄 The in-progress draft now survives navigating away and back — leave Settings mid-edit, look around, come back, and continue where you left off.\n- 🔄 Cordn now uses your device\'s system font, which makes it feel more native, load faster, and work offline.'
+	},
+	{
 		id: 'cordn-news-2026-09-11-foreground-reliability',
 		createdAt: Date.UTC(2026, 8, 11),
 		version: 1,

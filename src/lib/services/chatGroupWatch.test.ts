@@ -12,6 +12,11 @@ const { rebuild, signing, native, setFocused, appListener, groups, client, unwat
 		appListener: { current: undefined as ((state: { isActive: boolean }) => void) | undefined }
 	})
 );
+// Each test calls vi.resetModules() and re-imports this heavy module by design
+// (module-level state under test), so the import cost is legitimately per-test.
+// Raise the budget instead of warming the cache.
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('$app/environment', () => ({ browser: true }));
 vi.mock('@capacitor/app', () => ({
 	App: {

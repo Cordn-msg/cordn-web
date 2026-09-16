@@ -20,6 +20,20 @@
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<link rel="manifest" href="/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png" />
+		<script>
+			/* No-flash theme restore: re-apply the active theme's compiled CSS before
+			   first paint. Persisted as `cordn.themeCss` by the theming service
+			   (appearance.svelte.ts); layout.css only holds the default (Soft). */
+			try {
+				var css = localStorage.getItem('cordn.themeCss');
+				if (css) {
+					var s = document.createElement('style');
+					s.id = 'cordn-theme';
+					s.textContent = css;
+					document.head.appendChild(s);
+				}
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

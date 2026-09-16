@@ -12,6 +12,7 @@
 	import Images from '@lucide/svelte/icons/images';
 	import Smartphone from '@lucide/svelte/icons/smartphone';
 	import Bell from '@lucide/svelte/icons/bell';
+	import Palette from '@lucide/svelte/icons/palette';
 	import { isNativePlatform } from '$lib/services/nativeBridge';
 	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
@@ -217,6 +218,22 @@
 									<p class="font-medium">Media</p>
 									<p class="mt-1 text-sm text-muted-foreground">
 										Blossom server used for encrypted image and file uploads.
+									</p>
+								</div>
+							</a>
+
+							<a href={resolve('/chat/config/appearance')} class="block">
+								<div
+									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
+								>
+									<div
+										class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
+									>
+										<Palette class="size-4" />
+									</div>
+									<p class="font-medium">Appearance</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										Themes, color mode, and custom theme customization.
 									</p>
 								</div>
 							</a>
