@@ -22,7 +22,7 @@
 	import Lock from '@lucide/svelte/icons/lock';
 	import LockOpen from '@lucide/svelte/icons/lock-open';
 	import { Slider } from '$lib/components/ui/slider';
-	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { BUILTIN_THEMES } from '$lib/themes/builtin';
 	import { randomTheme } from '$lib/themes/random';
 	import { toast } from 'svelte-sonner';
