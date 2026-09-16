@@ -1,21 +1,20 @@
 <script lang="ts">
 	import ThemeEditor from '$lib/components/appearance/ThemeEditor.svelte';
-	import { activeTheme } from '$lib/themes/appearance.svelte';
-	import type { ThemeDefinition } from '$lib/themes/types';
+	import { activeTheme, appearance, closeThemeEditor, openThemeEditor } from './appearance.svelte';
+	import type { ThemeDefinition } from './types';
 
 	// Mirrors the appearance page's editor swap: same conditional render and
-	// same onsaved/ oncancel state clears.
-	let editing = $state<ThemeDefinition | null>(null);
-
+	// same onsaved/oncancel state clears, driven by the module-level editor
+	// state so drafts survive remounts (i.e. route navigation).
 	export function openEditor(source?: ThemeDefinition) {
-		editing = source ?? activeTheme();
+		openThemeEditor(source ?? activeTheme());
 	}
 </script>
 
-{#if editing}
+{#if appearance.themeEditor}
 	<ThemeEditor
-		source={editing}
-		oncancel={() => (editing = null)}
-		onsaved={() => (editing = null)}
+		editor={appearance.themeEditor}
+		oncancel={closeThemeEditor}
+		onsaved={closeThemeEditor}
 	/>
 {/if}

@@ -3,14 +3,16 @@
 	import * as Card from '$lib/components/ui/card';
 	import ThemeGallery from '$lib/components/appearance/ThemeGallery.svelte';
 	import ThemeEditor from '$lib/components/appearance/ThemeEditor.svelte';
-	import { activeTheme, forkTheme } from '$lib/themes/appearance.svelte';
-	import type { ThemeDefinition } from '$lib/themes/types';
+	import {
+		activeTheme,
+		appearance,
+		closeThemeEditor,
+		openThemeEditor
+	} from '$lib/themes/appearance.svelte';
 	import Palette from '@lucide/svelte/icons/palette';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { resetMode, setMode, userPrefersMode } from 'mode-watcher';
 	import { Button } from '$lib/components/ui/button';
-
-	let editing = $state<ThemeDefinition | null>(null);
 
 	function chooseMode(mode: 'light' | 'dark' | 'system') {
 		if (mode === 'system') resetMode();
@@ -19,7 +21,7 @@
 
 	function startNewTheme() {
 		// Start from the active theme's values - a fully blank set would be invalid hex.
-		editing = { ...forkTheme(activeTheme()), name: 'New theme' };
+		openThemeEditor({ ...activeTheme(), id: crypto.randomUUID(), name: 'New theme' });
 	}
 
 	const modes = [
@@ -92,16 +94,20 @@
 						</Card.Description>
 					</Card.Header>
 					<Card.Content>
-						{#if editing}
+						{#if appearance.themeEditor}
 							<ThemeEditor
-								source={editing}
-								oncancel={() => (editing = null)}
-								onsaved={() => (editing = null)}
+								editor={appearance.themeEditor}
+								oncancel={closeThemeEditor}
+								onsaved={closeThemeEditor}
 							/>
 						{:else}
-							<ThemeGallery onedit={(theme: ThemeDefinition) => (editing = theme)} />
+							<ThemeGallery onedit={openThemeEditor} />
 							<div class="mt-3 flex flex-wrap gap-2">
-								<Button type="button" variant="outline" onclick={() => (editing = activeTheme())}>
+								<Button
+									type="button"
+									variant="outline"
+									onclick={() => openThemeEditor(activeTheme())}
+								>
 									<Palette class="size-4" /> Customize current theme
 								</Button>
 								<Button type="button" variant="outline" onclick={startNewTheme}>

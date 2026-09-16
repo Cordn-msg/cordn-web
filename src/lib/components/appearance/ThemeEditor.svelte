@@ -2,7 +2,6 @@
 	import {
 		activeTheme,
 		appearance,
-		forkTheme,
 		isHexColor,
 		parseThemeJson,
 		previewTheme,
@@ -31,18 +30,13 @@
 	const VARIANTS = ['light', 'dark'] as const;
 	type Variant = (typeof VARIANTS)[number];
 
-	let { source, oncancel, onsaved = () => {} } = $props();
+	let { editor, oncancel, onsaved = () => {} } = $props();
 
-	// Fork semantics: only built-ins fork into a new custom theme; customs and
-	// brand-new unsaved drafts (from "New theme") edit in place.
-	// Deliberate snapshot of `source` — a draft must not react to later changes.
-	const isBuiltIn = BUILTIN_THEMES.some((t) => t.id === source.id);
+	// `editor` is module state (appearance.themeEditor), so the draft survives
+	// navigating away and back. It is a deliberate snapshot pair: `source` is
+	// the last-saved state the revert buttons restore to.
 	/* svelte-ignore state_referenced_locally */
-	const draft = $state(
-		isBuiltIn
-			? forkTheme(source)
-			: { ...source, light: { ...source.light }, dark: { ...source.dark } }
-	);
+	const { source, draft } = editor;
 
 	// Apply the draft once on open so the editor is self-contained regardless
 	// of which theme was active when it opened (setup-time call, not teardown).
@@ -57,6 +51,8 @@
 			['Advanced', false]
 		])
 	);
+
+	const isBuiltIn = BUILTIN_THEMES.some((t) => t.id === source.id);
 
 	// Live preview is applied explicitly in commit()/cancel()/save() instead of
 	// via $effect/onDestroy: Svelte teardown callbacks run with stale $state

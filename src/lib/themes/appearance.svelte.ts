@@ -23,9 +23,20 @@ const THEME_CSS_KEY = 'cordn.themeCss';
 const STYLE_ID = 'cordn-theme';
 const CHAT_DB_NAME = 'cordn-web';
 
+/**
+ * In-progress editor session. Hoisted to module state so navigating away and
+ * back keeps the draft (previews keep painting app-wide while editing).
+ * `source` is the last-saved snapshot the revert buttons restore to.
+ */
+export interface ThemeEditorState {
+	source: ThemeDefinition;
+	draft: ThemeDefinition;
+}
+
 export const appearance = $state({
 	activeThemeId: DEFAULT_THEME_ID,
-	customThemes: [] as ThemeDefinition[]
+	customThemes: [] as ThemeDefinition[],
+	themeEditor: null as ThemeEditorState | null
 });
 
 let initialized = false;
@@ -148,6 +159,19 @@ export function forkTheme(source: ThemeDefinition): ThemeDefinition {
 /** Live-preview a draft without persisting anything. */
 export function previewTheme(draft: ThemeDefinition) {
 	applyThemeStyle(draft, false);
+}
+
+/** Open (or re-open) the editor on a theme: built-ins fork, customs copy. */
+export function openThemeEditor(source: ThemeDefinition) {
+	const base = BUILTIN_THEMES.some((t) => t.id === source.id) ? forkTheme(source) : source;
+	appearance.themeEditor = {
+		source,
+		draft: { ...base, light: { ...base.light }, dark: { ...base.dark } }
+	};
+}
+
+export function closeThemeEditor() {
+	appearance.themeEditor = null;
 }
 
 export function saveCustomTheme(def: ThemeDefinition) {

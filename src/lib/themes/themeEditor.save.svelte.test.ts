@@ -74,6 +74,38 @@ describe('ThemeEditor save flow', () => {
 		target.remove();
 	});
 
+	it('an in-progress draft survives unmounting (route navigation)', async () => {
+		const target = document.createElement('div');
+		document.body.appendChild(target);
+		let host = mount(EditorHost, { target });
+		const api = host as unknown as { openEditor: () => void };
+		api.openEditor();
+		await new Promise((r) => setTimeout(r, 20));
+
+		const bgPicker = target.querySelector<HTMLInputElement>(
+			'input[type="color"][aria-label="Pick Background color"]'
+		);
+		bgPicker!.value = '#445566';
+		bgPicker!.dispatchEvent(new Event('input', { bubbles: true }));
+		expect(cssVar('--background')).toBe('#445566');
+
+		// Navigate away (unmount) and come back to the settings page (fresh mount).
+		unmount(host);
+		host = mount(EditorHost, { target });
+		await new Promise((r) => setTimeout(r, 20));
+
+		// The editor re-opened on its own with the draft intact, preview re-applied.
+		const reopened = target.querySelector<HTMLInputElement>(
+			'input[type="color"][aria-label="Pick Background color"]'
+		);
+		expect(reopened).toBeTruthy();
+		expect(reopened!.value.toLowerCase()).toBe('#445566');
+		expect(cssVar('--background')).toBe('#445566');
+
+		unmount(host);
+		target.remove();
+	});
+
 	it('pasting edited JSON applies it to the draft preview', async () => {
 		const target = document.createElement('div');
 		document.body.appendChild(target);
