@@ -97,6 +97,11 @@ vi.mock('$lib/services/chatMlsUtils', () => ({
 	}
 }));
 
+// Warm the heavy module graph at file scope: vi.mock is hoisted above this,
+// so mocks apply, and the first in-test `await import()` no longer pays the
+// transform+eval cost against its 5s timeout (the parallel-load flake).
+await import('./chatGroups.svelte');
+
 describe('isChatGroupPoisoned()', () => {
 	test('returns true when group status is poisoned', async () => {
 		const { isChatGroupPoisoned } = await import('./chatGroups.svelte');
