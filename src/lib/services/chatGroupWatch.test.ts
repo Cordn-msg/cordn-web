@@ -12,6 +12,11 @@ const { rebuild, signing, native, setFocused, appListener, groups, client, unwat
 		appListener: { current: undefined as ((state: { isActive: boolean }) => void) | undefined }
 	})
 );
+// Each test calls vi.resetModules() and re-imports this heavy module by design
+// (module-level state under test), so the import cost is legitimately per-test.
+// Raise the budget instead of warming the cache.
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('$app/environment', () => ({ browser: true }));
 vi.mock('@capacitor/app', () => ({
 	App: {
@@ -101,11 +106,6 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
-
-// Warm the heavy module graph at file scope: vi.mock is hoisted above this,
-// so mocks apply, and the first in-test `await import()` no longer pays the
-// transform+eval cost against its 5s timeout (the parallel-load flake).
-await import('./chatGroupWatch.svelte');
 
 describe('foreground recovery triggers', () => {
 	test('retired backlog setup is removed and replaced without waiting for the reaper', async () => {
