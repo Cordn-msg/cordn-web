@@ -19,6 +19,8 @@
 	import Send from '@lucide/svelte/icons/send';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import Copy from '@lucide/svelte/icons/copy';
+	import Lock from '@lucide/svelte/icons/lock';
+	import LockOpen from '@lucide/svelte/icons/lock-open';
 	import { Slider } from '$lib/components/ui/slider';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 	import { BUILTIN_THEMES } from '$lib/themes/builtin';
@@ -45,6 +47,8 @@
 	previewTheme(draft);
 
 	let mode = $state<Variant>('light');
+	// Radius is shared between variants unless the user explicitly unlinks it.
+	let radiusLocked = $state(true);
 	let openGroups = $state<Record<string, boolean>>(
 		Object.fromEntries([
 			...THEME_TOKEN_GROUPS.map((g, i) => [g.label, i === 0]),
@@ -59,6 +63,10 @@
 
 	function commit(key: ThemeTokenKey, value: string) {
 		draft[mode][key] = value;
+		if (key === 'radius' && radiusLocked) {
+			draft.light.radius = value;
+			draft.dark.radius = value;
+		}
 		previewTheme(draft);
 		syncJson();
 	}
@@ -285,6 +293,22 @@
 									<span class="w-14 shrink-0 text-right font-mono text-xs text-muted-foreground">
 										{radiusToRem(draft[mode][token.key]).toFixed(2)}rem
 									</span>
+									<button
+										type="button"
+										aria-pressed={radiusLocked}
+										title={radiusLocked
+											? 'Corner radius is shared between light and dark. Click to unlink.'
+											: 'Corner radius is separate per variant. Click to share one value.'}
+										class="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground
+											{radiusLocked ? 'text-foreground' : ''}"
+										onclick={() => (radiusLocked = !radiusLocked)}
+									>
+										{#if radiusLocked}
+											<Lock class="size-3.5" />
+										{:else}
+											<LockOpen class="size-3.5" />
+										{/if}
+									</button>
 									<Slider
 										type="single"
 										min={0}
