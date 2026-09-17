@@ -75,6 +75,15 @@ export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinat
 		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: false
+		refetchIntervalInBackground: false,
+		// Never (re)fetch because an observer resubscribed. svelte-query v6's
+		// subscribe-effect re-runs on query state changes, tearing down and
+		// resubscribing observers mid-flight; with one unreachable coordinator
+		// its errored queries (and aborted siblings) mount-refetch in a
+		// self-sustaining RPC storm. Warm data: no mount refetch. Errored: no
+		// mount refetch either — recovery is owned by refetchInterval,
+		// invalidations, and the manual force paths.
+		refetchOnMount: false,
+		retryOnMount: false
 	};
 }

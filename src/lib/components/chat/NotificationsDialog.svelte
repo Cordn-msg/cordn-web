@@ -34,7 +34,7 @@
 	} from '$lib/services/chatUiActions.svelte';
 	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
 	import { joinRequestsQueryOptions } from '$lib/queries/chatJoinRequestQueries';
-	import { createQueries } from '@tanstack/svelte-query';
+	import { queryClient } from '$lib/query-client';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { normalizePubKey } from '$lib/utils';
@@ -49,26 +49,62 @@
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const joinRequests = $derived.by(() => listJoinRequests());
 
-	// Per-coordinator observers (AGENTS.md): each coordinator polls and merges
-	// into the welcome store on its own schedule — a faulty coordinator can't
-	// stall the rest. The UI reads the store, not these query results.
+	// Per-coordinator polling (AGENTS.md): each coordinator resolves on its own
+	// schedule and merges into the welcome/join stores as it lands — a faulty
+	// coordinator can't stall the rest. The UI reads the stores, not query
+	// results.
+	//
+	// Polling is imperative (fetchQuery over the same per-coordinator query
+	// cache) instead of always-mounted createQueries observers: svelte-query
+	// v6.1.33's observer subscribe-effects re-run on query state changes, tearing
+	// down and resubscribing mid-flight; each resubscribe cancels the in-flight
+	// fetch (queries never land data) and mount-fetches again — with one
+	// unreachable coordinator keeping its query errored, that becomes a
+	// self-sustaining welcome_take RPC storm (~3.5 nos2x signs/sec).
 	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
-	const welcomeQueries = createQueries(() => ({
-		queries: coordinatorKeys.map((key) =>
-			welcomeNotificationsQueryOptions($activeAccount?.pubkey ?? '', key)
-		)
-	}));
-	// Observe the join-requests query so invalidation (e.g. after accepting a
-	// request) triggers a refetch and the `consumed` ack retires the accepted
-	// row on the coordinator promptly. Without a persistent observer the ack
-	// is deferred, the original row lingers, and a re-request from a user who
-	// left/re-deleted the group is silently deduped against it — so admins
-	// never see the re-request until the user sends twice. Mirrors welcomes.
-	const joinQueries = createQueries(() => ({
-		queries: coordinatorKeys.map((key) =>
-			joinRequestsQueryOptions($activeAccount?.pubkey ?? '', key)
-		)
-	}));
+
+	let isPollRefreshing = $state(false);
+	const pollFailures = $state.raw<string[]>([]);
+
+	async function pollNotifications() {
+		const account = $activeAccount;
+		if (!account) return;
+		isPollRefreshing = true;
+		try {
+			const results = await Promise.allSettled(
+				coordinatorKeys.map(async (key) => {
+					// Shared cache, staleTime dedupes; per-key failures surface below.
+					await Promise.all([
+						queryClient.fetchQuery(welcomeNotificationsQueryOptions(account.pubkey, key)),
+						queryClient.fetchQuery(joinRequestsQueryOptions(account.pubkey, key))
+					]);
+				})
+			);
+			pollFailures.splice(
+				0,
+				pollFailures.length,
+				...results
+					.map((result, index) =>
+						result.status === 'rejected'
+							? `${getCoordinatorLabel(coordinatorKeys[index])}: ${String(result.reason).replace(/^Error:\s*/, '')}`
+							: ''
+					)
+					.filter(Boolean)
+			);
+		} finally {
+			isPollRefreshing = false;
+		}
+	}
+
+	// Immediate poll on mount/account/coordinator-set change, then every 5 min
+	// (same cadence the query options' refetchInterval had).
+	$effect(() => {
+		const account = $activeAccount;
+		if (!account || coordinatorKeys.length === 0) return;
+		void pollNotifications();
+		const timer = setInterval(() => void pollNotifications(), 5 * 60 * 1000);
+		return () => clearInterval(timer);
+	});
 
 	const unifiedItems = $derived.by(() => {
 		const items: UnifiedItem[] = [
@@ -79,14 +115,10 @@
 	});
 
 	const useScrollableList = $derived(unifiedItems.length > 2);
-	const isLoading = $derived([...welcomeQueries, ...joinQueries].some((query) => query.isFetching));
+	const isLoading = $derived(isPollRefreshing);
 	const errorMessage = $derived.by(() => {
-		const failures = coordinatorKeys.flatMap((key, index) => {
-			const error = welcomeQueries[index]?.error ?? joinQueries[index]?.error;
-			return error ? [`${getCoordinatorLabel(key)}: ${error.message}`] : [];
-		});
 		return (
-			chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error || failures.join('; ')
+			chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error || pollFailures.join('; ')
 		);
 	});
 	const hasError = $derived(Boolean(errorMessage));
@@ -111,7 +143,12 @@
 
 	async function refreshAll() {
 		if (!$activeAccount) return;
-		await Promise.all([refreshWelcomeNotificationsAction(), refreshJoinRequestsAction()]);
+		isPollRefreshing = true;
+		try {
+			await Promise.all([refreshWelcomeNotificationsAction(), refreshJoinRequestsAction()]);
+		} finally {
+			isPollRefreshing = false;
+		}
 	}
 
 	function markAllRead() {

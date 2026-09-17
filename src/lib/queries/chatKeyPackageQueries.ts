@@ -118,6 +118,10 @@ export function availableKeyPackagesQueryOptions(stablePubkey: string, coordinat
 		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: false
+		refetchIntervalInBackground: false,
+		// See welcomeNotificationsQueryOptions: never fetch on observer
+		// resubscription; recovery owned by interval + invalidations.
+		refetchOnMount: false,
+		retryOnMount: false
 	};
 }

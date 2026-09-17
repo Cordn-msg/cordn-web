@@ -43,6 +43,11 @@ export function joinRequestsQueryOptions(
 		enabled: browser && hasStablePubkey,
 		staleTime: options.force ? 0 : 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: false
+		refetchIntervalInBackground: false,
+		// See welcomeNotificationsQueryOptions: observers resubscribe on query
+		// state changes; never refetch (or retry) on that path. Recovery is owned
+		// by refetchInterval, invalidations, and force paths.
+		refetchOnMount: false,
+		retryOnMount: false
 	};
 }
