@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { untrack } from 'svelte';
 import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -33,20 +34,24 @@ export function joinRequestsQueryOptions(
 		queryKey: hasStablePubkey
 			? chatQueryKeys.joinRequests(stablePubkey, normalizedCoordinatorKey)
 			: ([...chatQueryKeys.all, 'join-requests', 'no-account', normalizedCoordinatorKey] as const),
-		queryFn: async ({ signal }: QueryFunctionContext) => {
-			await fetchJoinRequestsForAdminGroups(normalizedCoordinatorKey, {
-				signal,
-				force: options.force
-			});
-			return listJoinRequestsForCoordinator(normalizedCoordinatorKey);
-		},
+		queryFn: async ({ signal }: QueryFunctionContext) =>
+			// untrack: see welcomeNotificationsQueryOptions — reactive reads before
+			// the first await must not become deps of the calling effect
+			// (TanStack/query#11541).
+			untrack(async () => {
+				await fetchJoinRequestsForAdminGroups(normalizedCoordinatorKey, {
+					signal,
+					force: options.force
+				});
+				return listJoinRequestsForCoordinator(normalizedCoordinatorKey);
+			}),
 		enabled: browser && hasStablePubkey,
 		staleTime: options.force ? 0 : 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
 		refetchIntervalInBackground: false,
-		// See welcomeNotificationsQueryOptions: observers resubscribe on query
-		// state changes; never refetch (or retry) on that path. Recovery is owned
-		// by refetchInterval, invalidations, and force paths.
+		// See welcomeNotificationsQueryOptions: belt against resubscription churn
+		// (TanStack/query#11541) — never refetch (or retry) on observer (re)mount.
+		// Recovery is owned by refetchInterval, invalidations, and force paths.
 		refetchOnMount: false,
 		retryOnMount: false
 	};

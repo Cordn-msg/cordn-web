@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { untrack } from 'svelte';
 import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
@@ -14,9 +15,17 @@ async function fetchSingleCoordinatorWelcomeNotifications(
 	coordinatorKey: string,
 	options: { signal?: AbortSignal; force?: boolean } = {}
 ) {
-	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
-	await fetchWelcomeNotifications([normalizedCoordinatorKey], options);
-	return listWelcomeNotificationsForCoordinator(normalizedCoordinatorKey);
+	// untrack: the fetch reads coordinator/health $state stores synchronously
+	// before its first await (backoff checks, coordinator lookups). queryFns run
+	// in-cycle inside svelte-query's subscribe-$effect and inside our polling
+	// $effect (via fetchQuery), so without this those reads become dependencies
+	// of the calling effect and every health write re-runs it.
+	// https://github.com/TanStack/query/issues/11541
+	return untrack(async () => {
+		const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
+		await fetchWelcomeNotifications([normalizedCoordinatorKey], options);
+		return listWelcomeNotificationsForCoordinator(normalizedCoordinatorKey);
+	});
 }
 
 /**
@@ -76,13 +85,11 @@ export function welcomeNotificationsQueryOptions(stablePubkey: string, coordinat
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
 		refetchIntervalInBackground: false,
-		// Never (re)fetch because an observer resubscribed. svelte-query v6's
-		// subscribe-effect re-runs on query state changes, tearing down and
-		// resubscribing observers mid-flight; with one unreachable coordinator
-		// its errored queries (and aborted siblings) mount-refetch in a
-		// self-sustaining RPC storm. Warm data: no mount refetch. Errored: no
-		// mount refetch either — recovery is owned by refetchInterval,
-		// invalidations, and the manual force paths.
+		// Belt (see untrack in the queryFn): never (re)fetch because an observer
+		// resubscribed. Reactive reads in a queryFn used to pollute svelte-query's
+		// subscribe-$effect deps (TanStack/query#11541) — resubscription churn
+		// mount-refetched dataless queries in a self-sustaining RPC storm.
+		// Recovery is owned by refetchInterval, invalidations, and force paths.
 		refetchOnMount: false,
 		retryOnMount: false
 	};

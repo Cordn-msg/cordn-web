@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import JoinRequestCard from '$lib/components/chat/JoinRequestCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -55,12 +56,15 @@
 	// results.
 	//
 	// Polling is imperative (fetchQuery over the same per-coordinator query
-	// cache) instead of always-mounted createQueries observers: svelte-query
-	// v6.1.33's observer subscribe-effects re-run on query state changes, tearing
-	// down and resubscribing mid-flight; each resubscribe cancels the in-flight
-	// fetch (queries never land data) and mount-fetches again — with one
-	// unreachable coordinator keeping its query errored, that becomes a
-	// self-sustaining welcome_take RPC storm (~3.5 nos2x signs/sec).
+	// cache) instead of always-mounted createQueries observers: queryFns read
+	// coordinator/health $state before their first await, which used to pollute
+	// svelte-query's subscribe-$effect deps (TanStack/query#11541) — health
+	// writes re-ran it, tearing down observers mid-flight (cancelling in-flight
+	// fetches so data never landed) and mount-fetching the still-dataless
+	// queries again: a self-sustaining welcome_take RPC storm (~3.2 nos2x
+	// signs/sec). The queryFns now untrack those reads; this poll call is
+	// untracked too so fetch reads never pollute the effect below, and polling
+	// keeps no observers mounted at all.
 	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
 
 	let isPollRefreshing = $state(false);
@@ -97,11 +101,14 @@
 	}
 
 	// Immediate poll on mount/account/coordinator-set change, then every 5 min
-	// (same cadence the query options' refetchInterval had).
+	// (same cadence the query options' refetchInterval had). untrack: the poll
+	// synchronously runs queryFn preludes (via fetchQuery); the account/keys
+	// reads above are this effect's only intended dependencies — fetch reads
+	// must not re-run/reset the interval.
 	$effect(() => {
 		const account = $activeAccount;
 		if (!account || coordinatorKeys.length === 0) return;
-		void pollNotifications();
+		void untrack(() => pollNotifications());
 		const timer = setInterval(() => void pollNotifications(), 5 * 60 * 1000);
 		return () => clearInterval(timer);
 	});
