@@ -1,4 +1,3 @@
-import { browser } from '$app/environment';
 import { untrack } from 'svelte';
 import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
@@ -45,14 +44,9 @@ export function joinRequestsQueryOptions(
 				});
 				return listJoinRequestsForCoordinator(normalizedCoordinatorKey);
 			}),
-		enabled: browser && hasStablePubkey,
-		staleTime: options.force ? 0 : 60 * 1000,
-		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: false,
-		// See welcomeNotificationsQueryOptions: belt against resubscription churn
-		// (TanStack/query#11541) — never refetch (or retry) on observer (re)mount.
-		// Recovery is owned by refetchInterval, invalidations, and force paths.
-		refetchOnMount: false,
-		retryOnMount: false
+		// No observer ever mounts these options (the dialog polls imperatively via
+		// fetchQuery and reads the stores), so observer-only config is inert here.
+		// staleTime is the one option fetchQuery honors: it dedups burst polls.
+		staleTime: options.force ? 0 : 60 * 1000
 	};
 }

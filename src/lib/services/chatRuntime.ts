@@ -22,13 +22,16 @@ type CoordinatorTarget = {
 	relays: string[];
 };
 
-function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordinator>): string[] {
-	// Explicit saved relays win; otherwise defaultRelays. Same rule as the
-	// guest path (resolveGuestCoordinatorRelays). Never fall back to the user's
-	// globally selected Nostr relays — those are a publish/subscribe concern,
-	// not a coordinator-connection concern, and in dev they default to the
-	// localhost test relay (ws://localhost:10547), which is not a usable
-	// coordinator endpoint for a freshly stored coordinator.
+/**
+ * Coordinator connection relays: explicit saved relays win; otherwise
+ * defaultRelays (same rule for account and guest clients). Never fall back to
+ * the user's globally selected Nostr relays — those are a publish/subscribe
+ * concern, not a coordinator-connection concern, and in dev they default to
+ * the localhost test relay (ws://localhost:10547), which is not a usable
+ * coordinator endpoint for a freshly stored coordinator.
+ */
+export function resolveCoordinatorRelays(coordinatorKey: string): string[] {
+	const coordinator = getChatCoordinator(normalizePubKey(coordinatorKey));
 	if (coordinator?.relays.length) {
 		return coordinator.relays;
 	}
@@ -37,10 +40,9 @@ function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordina
 
 function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
-	const coordinator = getChatCoordinator(normalizedCoordinatorKey);
 	return {
 		serverPubkey: normalizedCoordinatorKey,
-		relays: resolveCoordinatorRelays(coordinator)
+		relays: resolveCoordinatorRelays(normalizedCoordinatorKey)
 	};
 }
 
