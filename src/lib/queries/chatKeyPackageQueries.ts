@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { untrack } from 'svelte';
 import type { QueryFunctionContext } from '@tanstack/svelte-query';
 import { queryClient } from '$lib/query-client';
 import type { AvailableKeyPackage } from '$lib/contracts';
@@ -17,16 +18,21 @@ async function fetchSingleCoordinatorAvailableKeyPackages(
 	coordinatorKey: string,
 	options: { signal?: AbortSignal; force?: boolean } = {}
 ): Promise<AvailableKeyPackage[]> {
-	const account = requireActiveAccount('You must be logged in to list coordinator key packages');
-	// Passive polls respect outage backoff; an explicit refresh may probe now.
-	if (!options.force) throwIfCoordinatorInReadBackoff(coordinatorKey);
-	const result = await withCoordinatorClient(
-		account,
-		normalizePubKey(coordinatorKey),
-		(client) => client.ListAvailableKeyPackages({}),
-		{ signal: options.signal }
-	);
-	return result.keyPackages.sort((a, b) => b.at - a.at);
+	// untrack: see welcomeNotificationsQueryOptions — the account/backoff/
+	// coordinator reads before the first await must not become deps of the
+	// calling effect (TanStack/query#11541).
+	return untrack(async () => {
+		const account = requireActiveAccount('You must be logged in to list coordinator key packages');
+		// Passive polls respect outage backoff; an explicit refresh may probe now.
+		if (!options.force) throwIfCoordinatorInReadBackoff(coordinatorKey);
+		const result = await withCoordinatorClient(
+			account,
+			normalizePubKey(coordinatorKey),
+			(client) => client.ListAvailableKeyPackages({}),
+			{ signal: options.signal }
+		);
+		return result.keyPackages.sort((a, b) => b.at - a.at);
+	});
 }
 
 function resolveGuestCoordinatorRelays(coordinatorKey: string): string[] {
@@ -118,6 +124,11 @@ export function availableKeyPackagesQueryOptions(stablePubkey: string, coordinat
 		enabled: browser && hasStablePubkey,
 		staleTime: 60 * 1000,
 		refetchInterval: 5 * 60 * 1000,
-		refetchIntervalInBackground: false
+		refetchIntervalInBackground: false,
+		// See welcomeNotificationsQueryOptions: belt against resubscription churn
+		// (TanStack/query#11541) — never fetch on observer (re)mount; recovery
+		// owned by interval + invalidations.
+		refetchOnMount: false,
+		retryOnMount: false
 	};
 }

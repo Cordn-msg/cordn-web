@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-17-notifications-storm',
+		createdAt: Date.UTC(2026, 8, 17),
+		version: 1,
+		title: 'Calm, reliable notifications',
+		body: '- 🐛 Loading your invitations and join requests no longer gets stuck in a rapid retry loop — a rare timing bug made the app quietly fire several freshly-signed coordinator requests per second while the notifications list never finished loading. Beyond keeping your notifications from appearing, it drained battery and data until the app was restarted.\n- 🔄 Invitations and join requests now load on a steady five-minute schedule, and each coordinator is checked independently — one coordinator having trouble can no longer disturb the others, and any error names exactly which coordinator failed.\n- 🔄 Coordinator health changes no longer trigger redundant background refetches on coordinator pages and key-package lists, so those screens are steadier and quieter.'
+	},
+	{
 		id: 'cordn-news-2026-09-16-appearance-themes',
 		createdAt: Date.UTC(2026, 8, 16),
 		version: 1,
