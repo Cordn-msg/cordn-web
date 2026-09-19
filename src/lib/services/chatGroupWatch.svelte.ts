@@ -15,6 +15,7 @@ import {
 	isCurrentCoordinatorClient,
 	isCoordinatorSignerActive,
 	isTransientCoordinatorError,
+	probeCoordinatorClientPools,
 	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient
 } from '$lib/services/chatRuntime';
@@ -294,7 +295,14 @@ function resumeForeground(reason: string): void {
 	wasFrozen = false;
 	signerRoundTrip = false;
 	if (rebuild && !returningFromSigner) rebuildForeground(reason);
-	else void requestTick(reason, { catchUp: true });
+	else {
+		// No suspension evidence — but mobile radio death (and single zombie
+		// relays) leave sockets half-open with no lifecycle event, so prove each
+		// pool instead of trusting it. The full rebuild above covers the frozen
+		// case; this probe covers the false-negative and signer-detour cases.
+		probeCoordinatorClientPools(reason);
+		void requestTick(reason, { catchUp: true });
+	}
 }
 
 /**

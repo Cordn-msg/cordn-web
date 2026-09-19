@@ -221,6 +221,53 @@ export async function disconnectCoordinatorClient(
  * reconnects start immediately instead of waiting for in-flight calls to
  * fail. Preserves laziness — coordinators without a client keep having none.
  */
+/** Min spacing between pool probe sweeps — attention events can burst. */
+const POOL_PROBE_DEBOUNCE_MS = 15_000;
+let lastPoolProbeAt = 0;
+
+/**
+ * Probe every live coordinator client's relay pool at an attention event
+ * (visible / resume / focus — including signer round-trip returns) and let the
+ * pool rebuild itself if any connected relay fails the liveness ping. This
+ * closes the post-suspension blind window: sockets that died silently while
+ * the process kept running (mobile radio death, one zombie relay) report
+ * `connected: true`, so only an explicit probe can catch them — the first RPC
+ * through them would otherwise burn its full deadline ("send timed out after
+ * 8000ms, retry works"). Cheap, read-only (dummy filter, no signing), and safe
+ * alongside in-flight calls: a pool rebuild replays subscriptions and pending
+ * responses re-deliver.
+ *
+ * ponytail: calls the SDK pool's `checkLiveness` through a private-method cast
+ * — guarded so an SDK rename fails open (no probe, today's behavior). Replace
+ * with a public SDK probe API when one ships.
+ */
+export function probeCoordinatorClientPools(reason: string): void {
+	const account = manager.getActive();
+	if (!account) return;
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	if (!registry || registry.coordinatorKeys().length === 0) return;
+	const now = Date.now();
+	if (now - lastPoolProbeAt < POOL_PROBE_DEBOUNCE_MS) return;
+	lastPoolProbeAt = now;
+	for (const coordinatorKey of registry.coordinatorKeys()) {
+		const client = registry.peekClient(coordinatorKey);
+		const pool = client && !client.isClosed ? client.relayHandler : undefined;
+		// Call as a method (never detached): checkLiveness reads this.relays /
+		// this.subscriptions, so a detached reference would throw and be swallowed.
+		const prober = pool as { checkLiveness?: () => Promise<void> } | undefined;
+		if (!prober || typeof prober.checkLiveness !== 'function') continue;
+		try {
+			void prober.checkLiveness().catch(() => undefined);
+		} catch {
+			// Probe failures never block recovery; the next attention event retries.
+		}
+	}
+	console.debug('[coordinator] pool liveness probe', {
+		reason,
+		coordinators: registry.coordinatorKeys().length
+	});
+}
+
 export function rebuildAllCoordinatorClients(
 	account: IAccount | undefined = manager.getActive()
 ): void {
