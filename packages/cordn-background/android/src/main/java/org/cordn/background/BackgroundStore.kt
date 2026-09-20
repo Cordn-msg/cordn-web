@@ -108,6 +108,23 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
     fun getDeliveryIntervalMinutes(default: Long): Long =
         get(KV_DELIVERY_INTERVAL)?.toLongOrNull() ?: default
 
+    /**
+     * Track gids with a live message notification (any poster). The seeded-gid set alone can't
+     * cancel a notification whose group was unseeded after posting (removed, account switch) —
+     * that orphan lingered in the shade forever. Cleared by the plugin's clear call so the set
+     * stays bounded by the live notification count, not history.
+     */
+    fun addNotifiedGid(gid: String) {
+        val current = notifiedGids()
+        if (current.contains(gid)) return
+        put(KV_NOTIFIED_GIDS, (current + gid).joinToString(","))
+    }
+
+    fun notifiedGids(): List<String> =
+        get(KV_NOTIFIED_GIDS)?.split(',')?.filter { it.isNotEmpty() } ?: emptyList()
+
+    fun clearNotifiedGids() = put(KV_NOTIFIED_GIDS, "")
+
     private fun put(key: String, value: String) {
         val cv = ContentValues().apply { put("key", key); put("value", value) }
         writableDatabase.insertWithOnConflict(T_CONFIG, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
@@ -358,3 +375,4 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
 private const val KV_ACCOUNT = "account_pubkey"
 private const val KV_DELIVERY_MODE = "delivery_mode"
 private const val KV_DELIVERY_INTERVAL = "delivery_interval_minutes"
+private const val KV_NOTIFIED_GIDS = "notified_gids"

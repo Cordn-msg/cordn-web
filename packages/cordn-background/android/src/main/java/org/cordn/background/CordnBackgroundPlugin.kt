@@ -98,9 +98,12 @@ class CordnBackgroundPlugin : Plugin() {
 
     @PluginMethod
     fun clearMessageNotifications(call: PluginCall) {
-        // Cancel by seeded gid id — never cancelAll (would kill the ongoing sync-service notification).
-        val gids = BackgroundStore.get(getContext()).pollGroups().map { it.gid }
+        // Cancel by seeded ∪ notified gid — never cancelAll (would kill the ongoing sync-service
+        // notification), and the notified set covers groups unseeded since their last post.
+        val store = BackgroundStore.get(getContext())
+        val gids = (store.pollGroups().map { it.gid } + store.notifiedGids()).distinct()
         Notifications.clearMessageNotifications(getContext(), gids)
+        store.clearNotifiedGids()
         call.resolve()
     }
 
@@ -177,6 +180,20 @@ class CordnBackgroundPlugin : Plugin() {
         if (gid != null) pendingLaunchGid = gid
     }
 
+    // App-visibility signal for the background poller (MessageFetcher). The bridge fires these
+    // from the activity lifecycle; the flag lives on the companion so the worker/service reach
+    // it without a plugin instance. Default false — a WorkManager cold-start with no bridge is
+    // backgrounded and MUST notify.
+    override fun handleOnResume() {
+        super.handleOnResume()
+        appForegrounded = true
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        appForegrounded = false
+    }
+
     /**
      * Signal the foregrounded WebView that the background worker staged sidecar bytes, so the live
      * TS layer drains immediately — closes the foregrounded live-path gap (a stale/rebuilding client
@@ -206,6 +223,10 @@ class CordnBackgroundPlugin : Plugin() {
     companion object {
         const val EXTRA_GID = "cordn_gid"
         const val EVENT_SIDECAR_UPDATED = "sidecarUpdated"
+
+        /** True while the app UI is foregrounded; see [handleOnResume]. */
+        @Volatile
+        var appForegrounded = false
 
         @Volatile
         var instance: CordnBackgroundPlugin? = null
