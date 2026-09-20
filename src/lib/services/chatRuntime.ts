@@ -22,13 +22,16 @@ type CoordinatorTarget = {
 	relays: string[];
 };
 
-function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordinator>): string[] {
-	// Explicit saved relays win; otherwise defaultRelays. Same rule as the
-	// guest path (resolveGuestCoordinatorRelays). Never fall back to the user's
-	// globally selected Nostr relays — those are a publish/subscribe concern,
-	// not a coordinator-connection concern, and in dev they default to the
-	// localhost test relay (ws://localhost:10547), which is not a usable
-	// coordinator endpoint for a freshly stored coordinator.
+/**
+ * Coordinator connection relays: explicit saved relays win; otherwise
+ * defaultRelays (same rule for account and guest clients). Never fall back to
+ * the user's globally selected Nostr relays — those are a publish/subscribe
+ * concern, not a coordinator-connection concern, and in dev they default to
+ * the localhost test relay (ws://localhost:10547), which is not a usable
+ * coordinator endpoint for a freshly stored coordinator.
+ */
+export function resolveCoordinatorRelays(coordinatorKey: string): string[] {
+	const coordinator = getChatCoordinator(normalizePubKey(coordinatorKey));
 	if (coordinator?.relays.length) {
 		return coordinator.relays;
 	}
@@ -37,10 +40,9 @@ function resolveCoordinatorRelays(coordinator: ReturnType<typeof getChatCoordina
 
 function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {
 	const normalizedCoordinatorKey = normalizePubKey(coordinatorKey);
-	const coordinator = getChatCoordinator(normalizedCoordinatorKey);
 	return {
 		serverPubkey: normalizedCoordinatorKey,
-		relays: resolveCoordinatorRelays(coordinator)
+		relays: resolveCoordinatorRelays(normalizedCoordinatorKey)
 	};
 }
 
@@ -235,6 +237,47 @@ export function rebuildAllCoordinatorClients(
 		replaceCoordinatorClient(coordinatorKey, account);
 	}
 	void queryClient.invalidateQueries({ queryKey });
+}
+
+/** Min spacing between pool probe sweeps — attention events can burst. */
+const POOL_PROBE_DEBOUNCE_MS = 15_000;
+let lastPoolProbeAt = 0;
+
+/**
+ * Probe every live coordinator client's relay pool at an attention event
+ * (visible / resume / focus — including signer round-trip returns) and let the
+ * pool rebuild itself if any connected relay fails the liveness ping. This
+ * closes the post-suspension blind window: sockets that died silently while
+ * the process kept running (mobile radio death, one zombie relay) report
+ * `connected: true`, so only an explicit probe can catch them — the first RPC
+ * through them would otherwise burn its full deadline ("send timed out after
+ * 8000ms, retry works"). Cheap, read-only (dummy filter, no signing), and safe
+ * alongside in-flight calls: a pool rebuild replays subscriptions and pending
+ * responses re-deliver.
+ *
+ * Resolves only after any failing pool has finished rebuilding (SDK 0.14.0
+ * public `probe()`: heal-then-report), so a caller that awaits this and then
+ * ticks lands on fresh sockets instead of racing the rebuild.
+ */
+export async function probeCoordinatorClientPools(reason: string): Promise<void> {
+	const account = manager.getActive();
+	if (!account) return;
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	if (!registry || registry.coordinatorKeys().length === 0) return;
+	const now = Date.now();
+	if (now - lastPoolProbeAt < POOL_PROBE_DEBOUNCE_MS) return;
+	lastPoolProbeAt = now;
+	console.debug('[coordinator] pool liveness probe', {
+		reason,
+		coordinators: registry.coordinatorKeys().length
+	});
+	await Promise.allSettled(
+		registry.coordinatorKeys().map(async (coordinatorKey) => {
+			const client = registry.peekClient(coordinatorKey);
+			if (!client || client.isClosed || !client.pool) return;
+			await client.pool.probe();
+		})
+	);
 }
 
 export function isTransientCoordinatorError(error: unknown): boolean {

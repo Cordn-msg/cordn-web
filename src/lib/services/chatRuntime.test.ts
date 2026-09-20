@@ -33,6 +33,7 @@ vi.mock('$lib/services/coordinatorClient', () => {
 import {
 	disconnectCoordinatorClients,
 	getCoordinatorClient,
+	probeCoordinatorClientPools,
 	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient,
 	withCoordinatorClient,
@@ -174,5 +175,33 @@ describe('coordinator client ownership', () => {
 		);
 		expect(getCoordinatorClient(ACCOUNT, COORDINATOR)).not.toBe(old);
 		expect(old.isClosed).toBe(true);
+	});
+});
+
+describe('pool liveness probes', () => {
+	test('attention events probe every live pool once per debounce window', async () => {
+		const client = getCoordinatorClient(ACCOUNT, COORDINATOR);
+		let probed = 0;
+		const pool = {
+			probe: vi.fn(async () => {
+				probed += 1;
+				return true;
+			})
+		};
+		(client as unknown as { pool: unknown }).pool = pool;
+		// A coordinator without an SDK pool (custom relayHandler injected) is
+		// skipped without throwing.
+		const COORDINATOR2 = 'cc'.repeat(32);
+		const legacy = getCoordinatorClient(ACCOUNT, COORDINATOR2);
+		(legacy as unknown as { pool: unknown }).pool = undefined;
+
+		await probeCoordinatorClientPools('page visible');
+		expect(probed).toBe(1);
+		expect(pool.probe).toHaveBeenCalledTimes(1);
+
+		// Burst of attention events inside the debounce window: one probe total.
+		await probeCoordinatorClientPools('window focus');
+		await probeCoordinatorClientPools('page resumed');
+		expect(probed).toBe(1);
 	});
 });

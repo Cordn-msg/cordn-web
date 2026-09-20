@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { rebuild, signing, native, setFocused, appListener, groups, client, unwatched } = vi.hoisted(
-	() => ({
+const { rebuild, probe, signing, native, setFocused, appListener, groups, client, unwatched } =
+	vi.hoisted(() => ({
 		rebuild: vi.fn(),
+		probe: vi.fn(async () => {}),
 		signing: vi.fn(),
 		native: vi.fn(),
 		setFocused: vi.fn(),
@@ -10,8 +11,7 @@ const { rebuild, signing, native, setFocused, appListener, groups, client, unwat
 		client: { current: undefined as unknown },
 		unwatched: vi.fn(),
 		appListener: { current: undefined as ((state: { isActive: boolean }) => void) | undefined }
-	})
-);
+	}));
 // Each test calls vi.resetModules() and re-imports this heavy module by design
 // (module-level state under test), so the import cost is legitimately per-test.
 // Raise the budget instead of warming the cache.
@@ -41,6 +41,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 }));
 vi.mock('$lib/services/chatRuntime', () => ({
 	rebuildAllCoordinatorClients: rebuild,
+	probeCoordinatorClientPools: probe,
 	isCoordinatorSignerActive: signing,
 	getCoordinatorClient: () => client.current,
 	isCurrentCoordinatorClient: (_key: string, observed: unknown) => observed === client.current

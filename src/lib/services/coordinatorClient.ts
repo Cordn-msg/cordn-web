@@ -107,10 +107,17 @@ export class cordnClient implements coordinatorClient {
 	private readonly ephemeralConnected: Promise<void>;
 	private readonly onHealth?: (signal: CoordinatorHealthSignal) => void;
 	private readonly onServerInfo?: (info: CoordinatorServerInfo) => void;
+	/** The relay pool backing this client's transports (disconnected on close). */
+	private readonly relayHandler: RelayHandler;
+	/**
+	 * The concrete pool when one backs this client (default construction), typed
+	 * for the public `probe()` liveness API (SDK 0.14.0+). Undefined only when a
+	 * custom `relayHandler` was injected (tests).
+	 */
+	readonly pool?: ApplesauceRelayPool;
 	/** Stored for lazy stable transport construction (see connectStable). */
 	private readonly stableSigner: NostrTransportOptions['signer'];
 	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
-	private readonly relayHandler: RelayHandler;
 	private readonly lifecycle = new AbortController();
 	readonly signal = this.lifecycle.signal;
 	readonly relays: string[];
@@ -156,8 +163,18 @@ export class cordnClient implements coordinatorClient {
 		this.relays = relays;
 		// Client replacement must replace sockets AND cancel old publishers.
 		// Only this client's stable/ephemeral transports share the pool.
-		const relayHandler = options.relayHandler ?? new ApplesauceRelayPool(relays);
+		// Ping cadence 30s (default 120s) so an ambient zombie socket — half-dead
+		// after a network switch or NAT timeout, with no lifecycle event — is
+		// detected and rebuilt within ~32s instead of ~140s. Probe budget 2.5s
+		// (default 20s) keeps attention-triggered probes snappy.
+		const relayHandler =
+			options.relayHandler ??
+			new ApplesauceRelayPool(relays, {
+				pingFrequencyMs: 30_000,
+				pingTimeoutMs: 2_500
+			});
 		this.relayHandler = relayHandler;
+		this.pool = relayHandler instanceof ApplesauceRelayPool ? relayHandler : undefined;
 		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
 		this.onHealth = onHealth;
 		this.onServerInfo = onServerInfo;

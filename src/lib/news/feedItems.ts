@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-20-instant-sends',
+		createdAt: Date.UTC(2026, 8, 20),
+		version: 1,
+		title: 'Messages send instantly when you come back',
+		body: '- 🐛 Coming back to Cordn after your phone slept or the app sat in the background: messages now send right away. Connections that died silently while you were away are checked and repaired the moment you return, instead of failing with “timed out” until you tried again.\n- 🐛 Switching between Wi-Fi and mobile data mid-session no longer leaves sends stuck or failing: dead connections are detected and rebuilt on their own within about half a minute, and a send that hits a bad moment retries itself instead of failing until you sent it again.\n- 🔄 Messages are confirmed as soon as the first delivery server accepts them — no more waiting for the slowest one — so sends stay consistently fast even when one server is struggling.'
+	},
+	{
 		id: 'cordn-news-2026-09-17-notifications-storm',
 		createdAt: Date.UTC(2026, 8, 17),
 		version: 1,

@@ -72,8 +72,8 @@ importers:
         specifier: ^1.30
         version: 1.30.0(zod@4.6.2)
       '@contextvm/sdk':
-        specifier: ^0.13.17
-        version: 0.13.17(typescript@6.0.3)
+        specifier: ^0.14.0
+        version: 0.14.0(typescript@6.0.3)
       '@cordn/core':
         specifier: ^0.5.5
         version: 0.5.5
@@ -345,8 +345,8 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4.0
 
-  '@contextvm/sdk@0.13.17':
-    resolution: {integrity: sha512-SbEpKxT3e4ul3drJYH3ls96jEjRpi1x5d552wWkkF6SUbSqgZ6jKqVL/2/8dsplaetFzab/iFIRCZHPCcrnH5g==}
+  '@contextvm/sdk@0.14.0':
+    resolution: {integrity: sha512-UPrj3lqFPaBDugvFHCTNYNll8dhdeca2cunXPzhGc6WK4xoraBSc9HFW8dw+Ofb9jhgEg95KxK5iB//EoufaHw==}
     engines: {bun: '>=1.2.0'}
 
   '@cordn/core@0.5.5':
@@ -3654,7 +3654,7 @@ snapshots:
       zod: 4.6.2
       zod-to-json-schema: 3.25.2(zod@4.6.2)
 
-  '@contextvm/sdk@0.13.17(typescript@6.0.3)':
+  '@contextvm/sdk@0.14.0(typescript@6.0.3)':
     dependencies:
       '@contextvm/mcp-sdk': 1.30.0(zod@4.6.2)
       '@noble/hashes': 2.4.0
