@@ -884,7 +884,11 @@
 				}
 			}
 		>
-			<Sheet.Content side="right" showCloseButton={false} class="p-0 data-[side=right]:w-full">
+			<Sheet.Content
+				side="right"
+				showCloseButton={false}
+				class="bg-background data-[side=right]:w-full"
+			>
 				<ChatDetailSidebar
 					{groupId}
 					eventId={selectedDetailEventId}

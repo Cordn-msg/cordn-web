@@ -240,7 +240,9 @@
 			</div>
 		</header>
 
-		<ScrollArea.Root class="min-h-0 flex-1">
+		<!-- pb-inset: conversation routes hide the tab bar, so this page must own the nav-bar
+		     clearance itself (0px on web). -->
+		<ScrollArea.Root class="min-h-0 flex-1 pb-inset">
 			<div class="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
 				{#if isRemoved}
 					<div

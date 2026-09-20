@@ -45,7 +45,9 @@
 		<h1 class="truncate text-lg font-semibold tracking-tight">Message</h1>
 	</header>
 
-	<div class="min-h-0 flex-1 overflow-y-auto">
+	<!-- pb-inset: conversation routes hide the tab bar, so this page must own the nav-bar
+	     clearance itself (0px on web). -->
+	<div class="min-h-0 flex-1 overflow-y-auto pb-inset">
 		<div class="mx-auto w-full max-w-3xl">
 			<ChatRichBody {groupId} {eventId} onNavigate={navigateToEvent} />
 		</div>
