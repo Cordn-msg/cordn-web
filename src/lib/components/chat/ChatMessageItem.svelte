@@ -489,7 +489,7 @@
 	{#snippet systemName(name: string | undefined)}
 		{#if name}
 			<span
-				class="inline-block max-w-[28ch] truncate align-baseline font-medium text-foreground/90"
+				class="inline-block max-w-[28ch] truncate align-bottom font-medium text-foreground/90"
 				title={name}>{name}</span
 			>
 		{:else}
@@ -501,7 +501,7 @@
 		{@const IconComponent = systemMessageIcon}
 		<!-- Prose flow, not flex items: the sentence wraps between words and names
 		     truncate to one line (title shows the full name on hover). -->
-		<Marker.Root class="justify-center px-2 py-1 text-xs" data-message-id={message.id}>
+		<Marker.Root class="justify-center px-2 py-1 text-center text-xs" data-message-id={message.id}>
 			<Marker.Icon>
 				<IconComponent class="size-3.5 text-muted-foreground/60" />
 			</Marker.Icon>
