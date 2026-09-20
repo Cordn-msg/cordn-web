@@ -21,7 +21,10 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import Avatar from '$lib/components/Avatar.svelte';
 	import { useProfile } from '$lib/services/useProfile.svelte';
+	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
+	import * as Marker from '$lib/components/ui/marker/index.js';
 	import { nip19 } from 'nostr-tools';
+	import type { ProfileContent } from 'applesauce-core/helpers';
 	import Check from '@lucide/svelte/icons/check';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Download from '@lucide/svelte/icons/download';
@@ -145,6 +148,39 @@
 	);
 	const profileState = useProfile(() => message.author);
 	const profile = $derived(profileState.current);
+	// System-message name lookups (committer/target) — local truncating chips instead of
+	// ProfileCard's inline mode: the system sentence needs text-xs prose flow and one-line
+	// truncating names, while ProfileCard inline hardcodes text-sm and word-wrapping names
+	// (the "long names break the row" bug). Fetch pattern mirrors ProfileCard.
+	const systemCommitterProfile = useProfile(() => message.systemCommitter ?? '');
+	const systemTargetProfile = useProfile(() => message.systemTarget ?? '');
+
+	function systemProfileName(
+		pubkey: string | undefined,
+		profile: ProfileContent | undefined
+	): string | undefined {
+		if (!pubkey) return undefined;
+		return (
+			profile?.name ||
+			profile?.display_name ||
+			profile?.nip05 ||
+			`${nip19.npubEncode(pubkey).slice(0, 12)}…`
+		);
+	}
+
+	const systemCommitterName = $derived(
+		systemProfileName(message.systemCommitter, systemCommitterProfile.current)
+	);
+	const systemTargetName = $derived(
+		systemProfileName(message.systemTarget, systemTargetProfile.current)
+	);
+
+	$effect(() => {
+		if (message.systemCommitter && !systemCommitterProfile.current)
+			ensureProfileLoaded(message.systemCommitter);
+		if (message.systemTarget && !systemTargetProfile.current)
+			ensureProfileLoaded(message.systemTarget);
+	});
 	const authorNpub = $derived(nip19.npubEncode(message.author));
 	const authorHref = $derived(resolve('/p/[identifier]', { identifier: authorNpub }));
 	const displayName = $derived.by(
@@ -445,78 +481,50 @@
 		</div>
 	{/snippet}
 	{#if showDayLabel}
-		<p class="px-2 text-center text-[11px] font-medium text-muted-foreground">{message.dayLabel}</p>
+		<Marker.Root variant="separator" class="px-2 py-1 text-[11px] font-medium">
+			<Marker.Content>{message.dayLabel}</Marker.Content>
+		</Marker.Root>
 	{/if}
 
+	{#snippet systemName(name: string | undefined)}
+		{#if name}
+			<span
+				class="inline-block max-w-[28ch] truncate align-baseline font-medium text-foreground/90"
+				title={name}>{name}</span
+			>
+		{:else}
+			<span>Someone</span>
+		{/if}
+	{/snippet}
+
 	{#if isSystemMessage}
-		<div
-			class="flex items-center justify-center gap-2 px-2 py-1 text-xs text-muted-foreground"
-			data-message-id={message.id}
-		>
-			{#snippet icon()}
-				{@const IconComponent = systemMessageIcon}
-				<IconComponent class="size-3.5 shrink-0 text-muted-foreground/60" />
-			{/snippet}
-			{@render icon()}
-			<span class="inline-flex items-center gap-1">
+		{@const IconComponent = systemMessageIcon}
+		<!-- Prose flow, not flex items: the sentence wraps between words and names
+		     truncate to one line (title shows the full name on hover). -->
+		<Marker.Root class="justify-center px-2 py-1 text-xs" data-message-id={message.id}>
+			<Marker.Icon>
+				<IconComponent class="size-3.5 text-muted-foreground/60" />
+			</Marker.Icon>
+			<Marker.Content class="leading-5">
 				{#if message.systemKind === 'member-added'}
-					{#if message.systemCommitter}
-						<ProfileCard
-							pubkey={message.systemCommitter}
-							mode="inline"
-							showInlineAvatar={false}
-							profileLink={false}
-						/>
-					{:else}
-						<span>Someone</span>
-					{/if}
+					{@render systemName(systemCommitterName)}
 					added
-					{#if message.systemTarget}
-						<ProfileCard
-							pubkey={message.systemTarget}
-							mode="inline"
-							showInlineAvatar={false}
-							profileLink={false}
-						/>
-					{/if}
+					{@render systemName(systemTargetName)}
 					to the group
 				{:else if message.systemKind === 'member-removed'}
-					{#if message.systemCommitter}
-						<ProfileCard
-							pubkey={message.systemCommitter}
-							mode="inline"
-							showInlineAvatar={false}
-							profileLink={false}
-						/>
-					{:else}
-						<span>Someone</span>
-					{/if}
+					{@render systemName(systemCommitterName)}
 					removed
-					{#if message.systemTarget}
-						<ProfileCard
-							pubkey={message.systemTarget}
-							mode="inline"
-							showInlineAvatar={false}
-							profileLink={false}
-						/>
-					{/if}
+					{@render systemName(systemTargetName)}
 					from the group
 				{:else if message.systemKind === 'metadata-changed'}
-					{#if message.systemCommitter}
-						<ProfileCard
-							pubkey={message.systemCommitter}
-							mode="inline"
-							showInlineAvatar={false}
-							profileLink={false}
-						/>
-					{:else}
-						<span>Someone</span>
-					{/if}
+					{@render systemName(systemCommitterName)}
 					changed {message.systemDetail ?? 'group settings'}
 				{/if}
-			</span>
-			<span class="text-[10px] text-muted-foreground/50">{message.timeLabel}</span>
-		</div>
+				<span class="ml-1 align-baseline text-[10px] whitespace-nowrap text-muted-foreground/50">
+					{message.timeLabel}
+				</span>
+			</Marker.Content>
+		</Marker.Root>
 	{:else}
 		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
 			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
