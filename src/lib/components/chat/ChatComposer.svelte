@@ -162,7 +162,15 @@
 		// Defensive: never stack a pending arm timer on a leaked one (re-entrant
 		// pointerdown without a prior pointerup, seen on some touch panels).
 		if (armTimer) clearTimeout(armTimer);
-		armTimer = setTimeout(() => void recorder.start(), HOLD_ARM_MS);
+		armTimer = setTimeout(() => {
+			// Null the id as it fires so the pre-arm abort guard in onGestureMove
+			// only covers the pre-arm window — a stale truthy id kept it armed for
+			// the whole gesture, and natural finger drift (>10px horizontal) then
+			// tore down the listeners mid-hold: release stopped working and the
+			// recording ran hands-free ("locked" without swiping up).
+			armTimer = undefined;
+			void recorder.start();
+		}, HOLD_ARM_MS);
 	}
 
 	function onGestureMove(event: PointerEvent) {
