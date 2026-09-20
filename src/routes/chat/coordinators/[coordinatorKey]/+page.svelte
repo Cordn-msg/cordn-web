@@ -52,6 +52,11 @@
 	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 	import { normalizePubKey } from '$lib/utils';
+	import { decodeCoordinatorQueryParam } from '$lib/utils/groupShareLink';
+	import { buildCoordinatorShareUrl } from '$lib/utils/coordinatorShare';
+	import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
+	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Inbox from '@lucide/svelte/icons/inbox';
@@ -62,7 +67,10 @@
 
 	let { params } = $props();
 
-	const coordinatorKey = $derived.by(() => normalizePubKey(params.coordinatorKey));
+	// Route param accepts nprofile (with relay hints), npub, and legacy hex links.
+	const coordinatorKey = $derived.by(
+		() => decodeCoordinatorQueryParam(params.coordinatorKey)?.coordinatorKey ?? ''
+	);
 	const coordinator = $derived.by(() => getChatCoordinator(coordinatorKey));
 	const serverInfo = $derived.by(() => getCoordinatorServerInfo(coordinatorKey));
 	const coordinatorDisplayLabel = $derived.by(() => getCoordinatorLabel(coordinatorKey));
@@ -101,6 +109,7 @@
 	);
 	let removingKeyPackageRef = $state('');
 	let showPurgeDialog = $state(false);
+	let showShareDialog = $state(false);
 	let removeError = $state('');
 	const welcomeProfileHints = useProfileHints(
 		() => [
@@ -281,6 +290,10 @@
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-48">
+						<DropdownMenu.Item onclick={() => (showShareDialog = true)} class="gap-2">
+							<Share2 class="size-4" />
+							<span>Share coordinator</span>
+						</DropdownMenu.Item>
 						<DropdownMenu.Item
 							onclick={() => (showPurgeDialog = true)}
 							class="gap-2 text-destructive data-highlighted:text-destructive"
@@ -337,9 +350,14 @@
 								</div>
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Relays</p>
-									<p class="mt-1 text-sm text-muted-foreground">
-										{coordinator?.relays?.join(' · ') || 'Use client defaults'}
+									<p class="mt-1 text-sm break-all text-muted-foreground">
+										{resolveCoordinatorRelays(coordinatorKey).join(' · ')}
 									</p>
+									{#if !coordinator?.relays?.length}
+										<p class="mt-0.5 text-xs text-muted-foreground/70">
+											Client defaults — edit to pin specific relays
+										</p>
+									{/if}
 								</div>
 								{#if serverInfo.name || serverInfo.about || serverInfo.website || serverInfo.picture}
 									<div>
@@ -569,6 +587,12 @@
 			pubkey={coordinatorKey}
 			label={coordinatorDisplayLabel}
 			onpurged={handleCoordinatorPurged}
+		/>
+		<QrShareDialog
+			bind:open={showShareDialog}
+			title="Share coordinator"
+			description="Scan or copy the link to add {coordinatorDisplayLabel} on another device."
+			data={buildCoordinatorShareUrl(coordinatorKey)}
 		/>
 	</div>
 </div>

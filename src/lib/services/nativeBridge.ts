@@ -567,8 +567,11 @@ export async function drainBackgroundSidecar(): Promise<void> {
 					opaqueMessageBase64: m.msg64
 				}))
 			);
-		} catch {
-			// a single group failing to ingest must not block the rest
+		} catch (error) {
+			// A single group failing to ingest must not block the rest — but never
+			// silently: drained rows are already consumed on the native side, so a
+			// failure here means recovery only via the coordinator backlog fetch.
+			console.warn('[native] sidecar ingest failed', { gid, error });
 		}
 	}
 }

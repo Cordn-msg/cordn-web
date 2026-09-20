@@ -1,4 +1,5 @@
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
+import { mayContainMarkdown, parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
 
 const MAX_CACHED_PARSED_MESSAGES = 1000;
 
@@ -22,6 +23,38 @@ export function getCachedChatMessageParts(messageId: string, text: string): Pars
 	}
 
 	return parsed;
+}
+
+type MarkdownCacheEntry = {
+	text: string;
+	blocks: MarkdownBlock[];
+};
+
+const markdownCache = new Map<string, MarkdownCacheEntry>();
+
+/**
+ * Markdown block VM for a message, or null when the text has no markdown
+ * triggers — the null path is the plain-text fast lane (mention/link
+ * pipeline only, exactly today's cost). Same cache discipline as the
+ * mention cache: id+text keyed, bounded, FIFO-evicted.
+ */
+export function getCachedChatMarkdownBlocks(
+	messageId: string,
+	text: string
+): MarkdownBlock[] | null {
+	if (!mayContainMarkdown(text)) return null;
+
+	const cached = markdownCache.get(messageId);
+	if (cached?.text === text) return cached.blocks;
+
+	const blocks = parseMarkdown(text);
+	markdownCache.set(messageId, { text, blocks });
+	if (markdownCache.size > MAX_CACHED_PARSED_MESSAGES) {
+		const oldestKey = markdownCache.keys().next().value;
+		if (oldestKey) markdownCache.delete(oldestKey);
+	}
+
+	return blocks;
 }
 
 export function loadCustomChatReactions(): string[] {

@@ -103,6 +103,9 @@ internal object Notifications {
     ) {
         ensureChannels(ctx)
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        // Record for orphan-free clears: clearMessageNotifications cancels seeded ∪ recorded
+        // gids, so a notification whose group was unseeded after posting still gets canceled.
+        BackgroundStore.get(ctx).addNotifiedGid(gid)
         val builder = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_cordn)
             .setContentTitle(title)

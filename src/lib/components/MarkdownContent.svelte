@@ -1,15 +1,7 @@
-<script lang="ts" module>
-	import { parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
-
-	function blockKey(block: MarkdownBlock): string {
-		if (block.type === 'heading') return `heading:${block.level}:${block.text}`;
-		if (block.type === 'paragraph') return `paragraph:${block.text}`;
-		return `list:${block.items.join('|')}`;
-	}
-</script>
-
 <script lang="ts">
+	import { parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
 	import { cn } from '$lib/utils';
+	import MarkdownInline from './MarkdownInline.svelte';
 
 	let {
 		source = '',
@@ -25,30 +17,36 @@
 </script>
 
 {#if blocks.length}
-	<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 	<article class={cn('prose max-w-none prose-neutral dark:prose-invert', className)}>
-		{#each blocks as block (blockKey(block))}
+		{#each blocks as block, index (index)}
 			{#if block.type === 'heading'}
 				{#if block.level === 1}
-					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-					<h1>{@html block.text}</h1>
+					<h1><MarkdownInline nodes={block.inline} /></h1>
 				{:else if block.level === 2}
-					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-					<h2>{@html block.text}</h2>
+					<h2><MarkdownInline nodes={block.inline} /></h2>
 				{:else}
-					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-					<h3>{@html block.text}</h3>
+					<h3><MarkdownInline nodes={block.inline} /></h3>
 				{/if}
 			{:else if block.type === 'paragraph'}
-				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-				<p>{@html block.text}</p>
+				<p><MarkdownInline nodes={block.inline} /></p>
+			{:else if block.type === 'list'}
+				{#if block.ordered}
+					<ol>
+						{#each block.items as item, itemIndex (itemIndex)}
+							<li><MarkdownInline nodes={item} /></li>
+						{/each}
+					</ol>
+				{:else}
+					<ul>
+						{#each block.items as item, itemIndex (itemIndex)}
+							<li><MarkdownInline nodes={item} /></li>
+						{/each}
+					</ul>
+				{/if}
+			{:else if block.type === 'code'}
+				<pre><code>{block.text}</code></pre>
 			{:else}
-				<ul>
-					{#each block.items as item (item)}
-						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-						<li>{@html item}</li>
-					{/each}
-				</ul>
+				<blockquote><MarkdownInline nodes={block.inline} /></blockquote>
 			{/if}
 		{/each}
 	</article>

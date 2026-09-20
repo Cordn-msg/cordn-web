@@ -1500,6 +1500,12 @@ export async function ingestIncomingChatGroupMessages(
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
 }> {
+	// The background-sidecar drain (cold start from a notification tap) can reach
+	// here before the groups store has hydrated from storage — requireChatGroup
+	// would throw and the drained rows are already consumed natively (silent
+	// loss, recovered only via a coordinator backlog fetch). Every other entry
+	// gates on this idempotent load; awaiting it is free once hydrated.
+	await ensureGroupsLoaded();
 	if (messages.length === 0) {
 		const group = requireChatGroup(groupId);
 		return { group, received: [], issues: [] };

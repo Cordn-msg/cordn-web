@@ -1,9 +1,14 @@
 import { browser } from '$app/environment';
-import { SvelteSet } from 'svelte/reactivity';
+import { untrack } from 'svelte';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { ProfileModel } from 'applesauce-core/models';
 import { manager } from '$lib/services/accountManager.svelte';
+import { eventStore } from '$lib/services/eventStore';
+import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 import { listChatGroups } from '$lib/services/chatGroups.svelte';
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 import { getCoordinatorServerName } from '$lib/services/coordinatorServerInfo.svelte';
+import { profileDisplayName } from '$lib/utils/profileName';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 
@@ -162,20 +167,86 @@ function defaultCoordinatorLabel(pubkey: string): string {
 /**
  * Resolve a display label for a coordinator. Precedence:
  *   1. User-defined stored label (anything other than the auto default)
- *   2. Server-announced name learned from coordinator responses
- *   3. Auto-derived `Coordinator <short-pubkey>` fallback
+ *   2. Kind-0 profile name (Nostr identity, fetched via the shared
+ *      profile-card query)
+ *   3. Server-announced name learned from coordinator responses
+ *   4. Auto-derived `Coordinator <short-pubkey>` fallback
  */
 export function getCoordinatorLabel(pubkey: string): string {
 	const stored = getChatCoordinator(pubkey);
 	if (stored && stored.label !== defaultCoordinatorLabel(pubkey)) {
 		return stored.label;
 	}
-	return getCoordinatorServerName(pubkey) ?? stored?.label ?? defaultCoordinatorLabel(pubkey);
+	return (
+		getCoordinatorProfileName(pubkey) ??
+		getCoordinatorServerName(pubkey) ??
+		stored?.label ??
+		defaultCoordinatorLabel(pubkey)
+	);
 }
 
 export function getChatCoordinator(pubkey: string): StoredCoordinator | undefined {
 	const normalized = normalizePubKey(pubkey);
 	return chatCoordinatorsStore.coordinators.find((entry) => entry.pubkey === normalized);
+}
+
+/**
+ * Kind-0 display names for known coordinators, mirrored from eventStore into a
+ * rune map so `getCoordinatorLabel` — a plain function called from
+ * non-component code — can read them synchronously like the server-info store.
+ * Populated by the browser-only watcher below; account-agnostic (a
+ * coordinator's kind-0 profile does not depend on the active account), so no
+ * reset on account change. Ephemeral by design, mirroring server info: names
+ * are re-fetched each session through the Svelte-Query-deduped profile query.
+ */
+const coordinatorProfileNames = new SvelteMap<string, string>();
+
+export function getCoordinatorProfileName(coordinatorKey: string): string | undefined {
+	return coordinatorProfileNames.get(normalizePubKey(coordinatorKey));
+}
+
+const coordinatorProfileSubs = new Map<string, { unsubscribe: () => void }>();
+
+/**
+ * Keep profile subscriptions + fetches in sync with the known-coordinator set.
+ * Fetch hints prefer the coordinator's own saved relays (they host its kind 0);
+ * unsaved coordinators fall back to the default metadata relays inside
+ * `ensureProfileLoaded`.
+ */
+function syncCoordinatorProfileWatches(keys: string[]): void {
+	const next = new Set(keys.map(normalizePubKey));
+	for (const key of next) {
+		if (coordinatorProfileSubs.has(key)) continue;
+		coordinatorProfileSubs.set(
+			key,
+			eventStore.model(ProfileModel, key).subscribe((profile) => {
+				const name = profileDisplayName(profile, key);
+				if (name) coordinatorProfileNames.set(key, name);
+			})
+		);
+		ensureProfileLoaded(key, getChatCoordinator(key)?.relays ?? []);
+	}
+	for (const [key, sub] of coordinatorProfileSubs) {
+		if (!next.has(key)) {
+			sub.unsubscribe();
+			coordinatorProfileSubs.delete(key);
+			coordinatorProfileNames.delete(key);
+		}
+	}
+}
+
+// Browser-only watcher: reactively tracks the known-coordinator set (saved
+// entries, group records, key-package publish targets — the self-healing
+// union) and keeps kind-0 subscriptions in sync. Runs detached in an effect
+// root at module load; store hydration and later coordinator discovery
+// re-trigger it through the reactive reads inside `listKnownCoordinatorKeys`.
+if (browser) {
+	$effect.root(() => {
+		$effect(() => {
+			const keys = listKnownCoordinatorKeys();
+			untrack(() => syncCoordinatorProfileWatches(keys));
+		});
+	});
 }
 
 export function getDefaultChatCoordinator(): StoredCoordinator | undefined {

@@ -85,6 +85,11 @@
 	let editPreview = $state('');
 	let optimisticEdits = $state<Record<string, string>>({});
 	let optimisticDeletes = $state<Record<string, boolean>>({});
+	// Pending reactions, keyed by target eventId → emojis (optimistic overlay, like
+	// optimisticEdits/Deletes: cleared on failure, superseded by the stored
+	// kind-Reaction message on success — the fold's author-set union makes the
+	// overlap window a no-op). Not a row, so the outbox is the wrong home.
+	let optimisticReactions = $state<Record<string, string[]>>({});
 	let selectedMentions = $state<ChatMentionReference[]>([]);
 	let composerFocusKey = $state(0);
 	let handledMessageTarget = $state('');
@@ -227,6 +232,7 @@
 		selectedMentions = [];
 		optimisticEdits = {};
 		optimisticDeletes = {};
+		optimisticReactions = {};
 	});
 
 	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
@@ -278,6 +284,37 @@
 				const pinEntry = !deleted ? pinSet.get(message.id) : undefined;
 				const pinned = Boolean(pinEntry && pinEntry.op === 'add');
 
+				// Optimistic reaction overlay: union pending emojis with the stored
+				// author-sets — the chip appears/highlights instantly, and the landing
+				// confirmed reaction (or a concurrent peer one) can't double-count
+				// (authors dedup by pubkey). Deleted targets show no chips (old ternary's
+				// `!deleted && reactions : []` semantics preserved).
+				const reactionEntries = (deleted ? [] : [...(reactions ?? []).values()]).map((entry) => ({
+					emoji: entry.emoji,
+					count: entry.authors.size,
+					reactedByMe: entry.authors.has(activePubkey),
+					reactors: Array.from(entry.authors)
+				}));
+				if (!deleted) {
+					for (const emoji of optimisticReactions[message.id] ?? []) {
+						const existing = reactionEntries.find((entry) => entry.emoji === emoji);
+						if (existing) {
+							existing.reactedByMe = true;
+							if (!existing.reactors.includes(activePubkey)) {
+								existing.reactors.push(activePubkey);
+								existing.count += 1;
+							}
+						} else {
+							reactionEntries.push({
+								emoji,
+								count: 1,
+								reactedByMe: true,
+								reactors: [activePubkey]
+							});
+						}
+					}
+				}
+
 				return {
 					...toChatMessage(message),
 					text: deleted ? '' : (optimisticEdit ?? edit?.content ?? message.content),
@@ -285,15 +322,7 @@
 					pinned,
 					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
 					edited: !deleted && Boolean(optimisticEdit || edit),
-					reactions:
-						!deleted && reactions
-							? Array.from(reactions.values()).map((entry) => ({
-									emoji: entry.emoji,
-									count: entry.authors.size,
-									reactedByMe: entry.authors.has(activePubkey),
-									reactors: Array.from(entry.authors)
-								}))
-							: [],
+					reactions: reactionEntries,
 					replyTo: replySource
 						? {
 								id: `${replySource.id}:${replySource.cursor}`,
@@ -675,8 +704,26 @@
 			kind: storedMessage.kind
 		};
 
-		await sendGroupMessageAction(groupId, reaction, undefined, reactionTarget);
+		// Optimistic: show the chip immediately. On success the stored kind-Reaction
+		// message takes over (author-set union — no flicker, no double count); on
+		// failure the overlay entry is dropped so the chip reverts, with the composer
+		// error surfacing why (same UX as optimistic deletes). Double-taps are
+		// harmless: the annotation fold dedups by author pubkey.
+		const currentTarget = storedMessage.id;
+		optimisticReactions = {
+			...optimisticReactions,
+			[currentTarget]: [...(optimisticReactions[currentTarget] ?? []), reaction]
+		};
+
+		const sent = await sendGroupMessageAction(groupId, reaction, undefined, reactionTarget);
 		sendError = chatComposerActionsStore.error;
+		if (!sent) {
+			const next = { ...optimisticReactions };
+			const emojis = (next[currentTarget] ?? []).filter((emoji) => emoji !== reaction);
+			if (emojis.length === 0) delete next[currentTarget];
+			else next[currentTarget] = emojis;
+			optimisticReactions = next;
+		}
 	}
 
 	function handleEdit(message: ChatMessage) {

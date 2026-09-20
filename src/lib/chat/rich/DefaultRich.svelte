@@ -11,6 +11,8 @@
 	import { peekMessageMedia } from '$lib/services/chatMediaStorage.svelte';
 	import { buildAnnotationIndex, getMessageThreadReference } from '$lib/chat/references';
 	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
+	import ChatMarkdown from '$lib/chat/markdown/ChatMarkdown.svelte';
+	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 	import type { RichBodyProps } from '$lib/chat/registry';
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
@@ -238,9 +240,16 @@
 					</div>
 				{/if}
 				{#if displayContent}
-					<p class="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-						<MessageParts messageId={subject.id} text={displayContent} {isOwn} />
-					</p>
+					{@const markdownBlocks = getCachedChatMarkdownBlocks(subject.id, displayContent)}
+					{#if markdownBlocks}
+						<div class="mt-2">
+							<ChatMarkdown blocks={markdownBlocks} messageId={subject.id} {isOwn} />
+						</div>
+					{:else}
+						<p class="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+							<MessageParts messageId={subject.id} text={displayContent} {isOwn} />
+						</p>
+					{/if}
 				{/if}
 			</div>
 		{:else if isDeleted}

@@ -169,6 +169,16 @@ internal object MessageFetcher {
         title: String?,
         iconBytes: String?
     ) {
+        // Foreground suppression — the missing half of the design's attention split: a
+        // foregrounded app surfaces new messages in-app (unread dots, sidecar drain), so a
+        // shade notification here is noise, and every nativeCursor-sync race would otherwise
+        // become a visible notification for messages the user is already reading. The JS live
+        // path gates the same way on its own appActive flag; this is the worker door's gate.
+        // Staging + cursor advance + emitSidecarUpdated still run — only the notify is skipped.
+        if (CordnBackgroundPlugin.appForegrounded) {
+            android.util.Log.i("CordnBg", "notify suppressed (app foregrounded) gid=$gid count=$count")
+            return
+        }
         val name = title?.takeIf { it.isNotBlank() } ?: "Cordn"
         val body = if (count == 1) "New message" else "$count new messages"
         // Shared renderer — identical icon/channel/format to the live foreground path.

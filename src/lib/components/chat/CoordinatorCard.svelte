@@ -7,11 +7,15 @@
 		setDefaultChatCoordinator,
 		getCoordinatorLabel
 	} from '$lib/services/chatCoordinators.svelte';
+	import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import CoordinatorPurgeDialog from './CoordinatorPurgeDialog.svelte';
+	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
+	import { buildCoordinatorShareUrl, coordinatorRouteParam } from '$lib/utils/coordinatorShare';
 	import Check from '@lucide/svelte/icons/check';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	export interface CoordinatorCardEntry {
@@ -25,6 +29,7 @@
 	let { coordinator }: { coordinator: CoordinatorCardEntry } = $props();
 
 	let showPurgeDialog = $state(false);
+	let showShareDialog = $state(false);
 
 	// Single display-name seam: user label → server-announced name → auto
 	// default. No raw stored labels in render, matching every other surface.
@@ -61,8 +66,14 @@
 				<p class="font-mono text-xs break-all text-muted-foreground">
 					{coordinator.pubkey}
 				</p>
-				<p class="text-xs text-muted-foreground">
-					{coordinator.relays.length > 0 ? coordinator.relays.join(' · ') : 'No saved relays'}
+				<p class="text-xs break-all text-muted-foreground">
+					{resolveCoordinatorRelays(coordinator.pubkey).join(' · ')}
+					{#if coordinator.relays.length === 0}
+						<span
+							class="ml-1 rounded-full bg-muted px-1.5 py-0.5 align-middle text-[10px] font-medium"
+							>defaults</span
+						>
+					{/if}
 				</p>
 			</div>
 			<div class="shrink-0">
@@ -83,6 +94,10 @@
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-52">
+						<DropdownMenu.Item onclick={() => (showShareDialog = true)} class="gap-2">
+							<Share2 class="size-4" />
+							<span>Share</span>
+						</DropdownMenu.Item>
 						{#if !coordinator.isDefault}
 							<DropdownMenu.Item
 								onclick={() => setDefaultChatCoordinator(coordinator.pubkey)}
@@ -124,7 +139,7 @@
 		<div class="mt-4 flex flex-wrap gap-2">
 			<Button
 				href={resolve('/chat/coordinators/[coordinatorKey]', {
-					coordinatorKey: coordinator.pubkey
+					coordinatorKey: coordinatorRouteParam(coordinator.pubkey)
 				})}>Open detail</Button
 			>
 			<Button href={`${resolve('/chat/coordinators')}?c=${coordinator.pubkey}`} variant="outline"
@@ -145,4 +160,11 @@
 	bind:open={showPurgeDialog}
 	pubkey={coordinator.pubkey}
 	label={displayLabel}
+/>
+
+<QrShareDialog
+	bind:open={showShareDialog}
+	title="Share coordinator"
+	description="Scan or copy the link to add {displayLabel} on another device."
+	data={buildCoordinatorShareUrl(coordinator.pubkey)}
 />

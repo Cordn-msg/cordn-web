@@ -14,6 +14,7 @@
 	} from '$lib/services/chatCoordinators.svelte';
 	import { decodeCoordinatorQueryParam } from '$lib/utils/groupShareLink';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { defaultRelays } from '$lib/services/relay-pool';
 
 	// ponytail: seed from URL once at mount (c/r/label/color/default). The `c`
 	// convention matches group-share links; reactively seeding a textarea would
@@ -184,6 +185,9 @@
 									<InputGroup.Text>Relays</InputGroup.Text>
 								</InputGroup.Addon>
 							</InputGroup.Root>
+							<p class="text-xs text-muted-foreground">
+								Leave empty to use the client defaults ({defaultRelays.join(', ')}).
+							</p>
 
 							<InputGroup.Root>
 								<InputGroup.Input

@@ -115,6 +115,16 @@
 	// stay sane; revisit if a specific device feels off.
 	const LOCK_PX = Math.min(120, Math.max(56, Math.round(window.innerHeight * 0.1)));
 	const CANCEL_PX = Math.min(140, Math.max(48, Math.round(window.innerWidth * 0.3)));
+	// Hold-to-arm delay: the mic button sits in Android's right back-gesture zone,
+	// and pointerdown fires BEFORE the system steals the touch for an edge swipe —
+	// so an instant start() grabs the mic (music ducks) on every back gesture, only
+	// for the clip to be discarded as too short. The mic only arms once the finger
+	// has been held AND essentially still horizontally for this long: system steals
+	// (pointercancel) and early horizontal travel (abort in onGestureMove) both land
+	// before getUserMedia ever runs. Real holds don't notice 150ms.
+	const HOLD_ARM_MS = 150;
+	const ARM_ABORT_MOVE_PX = 10;
+	let armTimer: ReturnType<typeof setTimeout> | undefined;
 	const lockProgress = $derived(Math.min(1, dragUpPx / LOCK_PX));
 	const cancelProgress = $derived(Math.min(1, dragLeftPx / CANCEL_PX));
 
@@ -149,11 +159,29 @@
 		// starts hands-free (locked) instead, where send/trash buttons are
 		// reachable — the system dialog would otherwise orphan the pointer gesture.
 		beginGesture(event);
-		void recorder.start();
+		// Defensive: never stack a pending arm timer on a leaked one (re-entrant
+		// pointerdown without a prior pointerup, seen on some touch panels).
+		if (armTimer) clearTimeout(armTimer);
+		armTimer = setTimeout(() => {
+			// Null the id as it fires so the pre-arm abort guard in onGestureMove
+			// only covers the pre-arm window — a stale truthy id kept it armed for
+			// the whole gesture, and natural finger drift (>10px horizontal) then
+			// tore down the listeners mid-hold: release stopped working and the
+			// recording ran hands-free ("locked" without swiping up).
+			armTimer = undefined;
+			void recorder.start();
+		}, HOLD_ARM_MS);
 	}
 
 	function onGestureMove(event: PointerEvent) {
 		if (event.pointerId !== activePointerId) return;
+		// Pre-arm: horizontal travel means a swipe (back gesture), not a hold —
+		// abort before the mic ever activates. Vertical travel is allowed through:
+		// drag-up is the lock gesture and only matters once recording starts.
+		if (armTimer && Math.abs(event.clientX - gestureStartX) > ARM_ABORT_MOVE_PX) {
+			endGesture();
+			return;
+		}
 		if (recorder.state !== 'recording') return;
 		dragUpPx = Math.max(0, gestureStartY - event.clientY);
 		dragLeftPx = Math.max(0, gestureStartX - event.clientX);
@@ -180,6 +208,10 @@
 	}
 
 	function endGesture() {
+		if (armTimer) {
+			clearTimeout(armTimer);
+			armTimer = undefined;
+		}
 		if (activePointerId !== null) {
 			try {
 				document.body.releasePointerCapture(activePointerId);
