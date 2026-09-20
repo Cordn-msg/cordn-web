@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 const { rebuild, probe, signing, native, setFocused, appListener, groups, client, unwatched } =
 	vi.hoisted(() => ({
 		rebuild: vi.fn(),
-		probe: vi.fn(),
+		probe: vi.fn(async () => {}),
 		signing: vi.fn(),
 		native: vi.fn(),
 		setFocused: vi.fn(),

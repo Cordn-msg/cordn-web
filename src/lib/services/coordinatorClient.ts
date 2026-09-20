@@ -107,8 +107,14 @@ export class cordnClient implements coordinatorClient {
 	private readonly ephemeralConnected: Promise<void>;
 	private readonly onHealth?: (signal: CoordinatorHealthSignal) => void;
 	private readonly onServerInfo?: (info: CoordinatorServerInfo) => void;
-	/** The relay pool backing this client's transports. Exposed for pool-level liveness probes. */
-	readonly relayHandler: RelayHandler;
+	/** The relay pool backing this client's transports (disconnected on close). */
+	private readonly relayHandler: RelayHandler;
+	/**
+	 * The concrete pool when one backs this client (default construction), typed
+	 * for the public `probe()` liveness API (SDK 0.14.0+). Undefined only when a
+	 * custom `relayHandler` was injected (tests).
+	 */
+	readonly pool?: ApplesauceRelayPool;
 	/** Stored for lazy stable transport construction (see connectStable). */
 	private readonly stableSigner: NostrTransportOptions['signer'];
 	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
@@ -168,6 +174,7 @@ export class cordnClient implements coordinatorClient {
 				pingTimeoutMs: 2_500
 			});
 		this.relayHandler = relayHandler;
+		this.pool = relayHandler instanceof ApplesauceRelayPool ? relayHandler : undefined;
 		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
 		this.onHealth = onHealth;
 		this.onServerInfo = onServerInfo;

@@ -279,7 +279,7 @@ function noteBackground(): void {
 	signerRoundTrip ||= isNativePlatform() && isCoordinatorSignerActive();
 }
 
-function resumeForeground(reason: string): void {
+async function resumeForeground(reason: string): Promise<void> {
 	// Suspension evidence, strongest first: an explicit freeze/bfcache event, or
 	// heartbeat silence past its tolerance — timers that stayed quiet while hidden
 	// mean the process was frozen or the OS slept, so every socket is suspect.
@@ -300,7 +300,9 @@ function resumeForeground(reason: string): void {
 		// relays) leave sockets half-open with no lifecycle event, so prove each
 		// pool instead of trusting it. The full rebuild above covers the frozen
 		// case; this probe covers the false-negative and signer-detour cases.
-		probeCoordinatorClientPools(reason);
+		// Await: probe() finishes any rebuild it triggers, so the tick lands on
+		// fresh sockets instead of racing them.
+		await probeCoordinatorClientPools(reason);
 		void requestTick(reason, { catchUp: true });
 	}
 }

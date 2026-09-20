@@ -179,31 +179,29 @@ describe('coordinator client ownership', () => {
 });
 
 describe('pool liveness probes', () => {
-	test('attention events probe every live pool once per debounce window', () => {
+	test('attention events probe every live pool once per debounce window', async () => {
 		const client = getCoordinatorClient(ACCOUNT, COORDINATOR);
-		// checkLiveness must be invoked as a method: the SDK implementation reads
-		// this.relays / this.subscriptions, so a detached call throws and the
-		// probe would silently no-op. probeCount only advances on a bound call.
+		let probed = 0;
 		const pool = {
-			probeCount: 0,
-			checkLiveness: vi.fn(async function (this: { probeCount: number }) {
-				this.probeCount += 1;
+			probe: vi.fn(async () => {
+				probed += 1;
+				return true;
 			})
 		};
-		(client as unknown as { relayHandler: unknown }).relayHandler = pool;
-		// A second coordinator whose pool predates the probe API must be skipped
-		// without throwing (fail open on SDK changes).
+		(client as unknown as { pool: unknown }).pool = pool;
+		// A coordinator without an SDK pool (custom relayHandler injected) is
+		// skipped without throwing.
 		const COORDINATOR2 = 'cc'.repeat(32);
 		const legacy = getCoordinatorClient(ACCOUNT, COORDINATOR2);
-		(legacy as unknown as { relayHandler: unknown }).relayHandler = {};
+		(legacy as unknown as { pool: unknown }).pool = undefined;
 
-		probeCoordinatorClientPools('page visible');
-		expect(pool.probeCount).toBe(1);
-		expect(pool.checkLiveness).toHaveBeenCalledTimes(1);
+		await probeCoordinatorClientPools('page visible');
+		expect(probed).toBe(1);
+		expect(pool.probe).toHaveBeenCalledTimes(1);
 
 		// Burst of attention events inside the debounce window: one probe total.
-		probeCoordinatorClientPools('window focus');
-		probeCoordinatorClientPools('page resumed');
-		expect(pool.probeCount).toBe(1);
+		await probeCoordinatorClientPools('window focus');
+		await probeCoordinatorClientPools('page resumed');
+		expect(probed).toBe(1);
 	});
 });

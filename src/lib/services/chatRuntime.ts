@@ -223,6 +223,22 @@ export async function disconnectCoordinatorClient(
  * reconnects start immediately instead of waiting for in-flight calls to
  * fail. Preserves laziness — coordinators without a client keep having none.
  */
+export function rebuildAllCoordinatorClients(
+	account: IAccount | undefined = manager.getActive()
+): void {
+	if (!account) return;
+	const queryKey = chatQueryKeys.coordinators(account.pubkey);
+	// Cancellation keeps cached data but prevents refresh from joining retired work.
+	// Actual network cancellation is owned by client.disconnect(), not Query.
+	void queryClient.cancelQueries({ queryKey });
+	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
+	for (const coordinatorKey of registry?.coordinatorKeys() ?? []) {
+		resetCoordinatorHealth(coordinatorKey, { clearBackoff: true });
+		replaceCoordinatorClient(coordinatorKey, account);
+	}
+	void queryClient.invalidateQueries({ queryKey });
+}
+
 /** Min spacing between pool probe sweeps — attention events can burst. */
 const POOL_PROBE_DEBOUNCE_MS = 15_000;
 let lastPoolProbeAt = 0;
@@ -239,11 +255,11 @@ let lastPoolProbeAt = 0;
  * alongside in-flight calls: a pool rebuild replays subscriptions and pending
  * responses re-deliver.
  *
- * ponytail: calls the SDK pool's `checkLiveness` through a private-method cast
- * — guarded so an SDK rename fails open (no probe, today's behavior). Replace
- * with a public SDK probe API when one ships.
+ * Resolves only after any failing pool has finished rebuilding (SDK 0.14.0
+ * public `probe()`: heal-then-report), so a caller that awaits this and then
+ * ticks lands on fresh sockets instead of racing the rebuild.
  */
-export function probeCoordinatorClientPools(reason: string): void {
+export async function probeCoordinatorClientPools(reason: string): Promise<void> {
 	const account = manager.getActive();
 	if (!account) return;
 	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
@@ -251,39 +267,17 @@ export function probeCoordinatorClientPools(reason: string): void {
 	const now = Date.now();
 	if (now - lastPoolProbeAt < POOL_PROBE_DEBOUNCE_MS) return;
 	lastPoolProbeAt = now;
-	for (const coordinatorKey of registry.coordinatorKeys()) {
-		const client = registry.peekClient(coordinatorKey);
-		const pool = client && !client.isClosed ? client.relayHandler : undefined;
-		// Call as a method (never detached): checkLiveness reads this.relays /
-		// this.subscriptions, so a detached reference would throw and be swallowed.
-		const prober = pool as { checkLiveness?: () => Promise<void> } | undefined;
-		if (!prober || typeof prober.checkLiveness !== 'function') continue;
-		try {
-			void prober.checkLiveness().catch(() => undefined);
-		} catch {
-			// Probe failures never block recovery; the next attention event retries.
-		}
-	}
 	console.debug('[coordinator] pool liveness probe', {
 		reason,
 		coordinators: registry.coordinatorKeys().length
 	});
-}
-
-export function rebuildAllCoordinatorClients(
-	account: IAccount | undefined = manager.getActive()
-): void {
-	if (!account) return;
-	const queryKey = chatQueryKeys.coordinators(account.pubkey);
-	// Cancellation keeps cached data but prevents refresh from joining retired work.
-	// Actual network cancellation is owned by client.disconnect(), not Query.
-	void queryClient.cancelQueries({ queryKey });
-	const registry = accountClientRegistries.get(getAccountRegistryKey(account));
-	for (const coordinatorKey of registry?.coordinatorKeys() ?? []) {
-		resetCoordinatorHealth(coordinatorKey, { clearBackoff: true });
-		replaceCoordinatorClient(coordinatorKey, account);
-	}
-	void queryClient.invalidateQueries({ queryKey });
+	await Promise.allSettled(
+		registry.coordinatorKeys().map(async (coordinatorKey) => {
+			const client = registry.peekClient(coordinatorKey);
+			if (!client || client.isClosed || !client.pool) return;
+			await client.pool.probe();
+		})
+	);
 }
 
 export function isTransientCoordinatorError(error: unknown): boolean {
