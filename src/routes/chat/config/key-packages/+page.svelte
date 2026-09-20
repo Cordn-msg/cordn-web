@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { coordinatorRouteParam } from '$lib/utils/coordinatorShare';
 	import * as Card from '$lib/components/ui/card';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -473,7 +474,9 @@
 										<div class="space-y-2 pt-1">
 											{#each publishedCoordinatorKeys as coordinatorKey (coordinatorKey)}
 												<a
-													href={resolve('/chat/coordinators/[coordinatorKey]', { coordinatorKey })}
+													href={resolve('/chat/coordinators/[coordinatorKey]', {
+														coordinatorKey: coordinatorRouteParam(coordinatorKey)
+													})}
 													class="block rounded-lg border border-border/60 px-3 py-2 transition-colors hover:bg-background"
 												>
 													<div class="flex items-center justify-between gap-3">
@@ -633,7 +636,7 @@
 												</div>
 												<Button
 													href={resolve('/chat/coordinators/[coordinatorKey]', {
-														coordinatorKey: group.coordinatorKey
+														coordinatorKey: coordinatorRouteParam(group.coordinatorKey)
 													})}
 													variant="outline"
 													size="sm"

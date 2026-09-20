@@ -4,11 +4,8 @@ import { nip19 } from 'nostr-tools';
 import { normalizePubKey } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import { publicWebOrigin } from '$lib/utils/appOrigin';
-import {
-	getChatCoordinator,
-	getCoordinatorColor,
-	getCoordinatorLabel
-} from '$lib/services/chatCoordinators.svelte';
+import { getCoordinatorColor, getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
+import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
 import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 
 /**
@@ -63,7 +60,7 @@ export function listProfileShareOptions(ownerPubkey: string | undefined): Profil
 		label: getCoordinatorLabel(coordinatorKey),
 		color: getCoordinatorColor({ pubkey: coordinatorKey, color: undefined }),
 		value: toAbsoluteProfileUrl(
-			buildProfileSharePath(owner, coordinatorKey, getChatCoordinator(coordinatorKey)?.relays ?? [])
+			buildProfileSharePath(owner, coordinatorKey, resolveCoordinatorRelays(coordinatorKey))
 		)
 	}));
 }
