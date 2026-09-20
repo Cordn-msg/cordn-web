@@ -136,6 +136,8 @@
  * env() as the fallback and 0px last, so these are inert on desktop / no-notch (web unchanged).
  * pt-safe/pb-safe use max(base, inset): clears tall system bars (status, 3-button nav, home
  * indicator) without over-padding on devices with a small/no inset.
+ * Family rule: *-safe = involves a design base (max() or calc(base+inset), via *-safe-N suffix);
+ * *-inset = exactly the inset (0px on web — for overlay interiors and edge bleed).
  */
 @utility pt-safe {
 	padding-top: max(0.75rem, var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
@@ -143,10 +145,10 @@
 @utility pb-safe {
 	padding-bottom: max(0.75rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
 }
-@utility pl-safe {
+@utility pl-inset {
 	padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
 }
-@utility pr-safe {
+@utility pr-inset {
 	padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
 /* Floating controls (e.g. lightbox close) that want a gap BELOW the status bar, not flush to it. */
@@ -159,6 +161,22 @@
    of the base (2 = 0.5rem), mirroring pt-2. */
 @utility pt-safe-2 {
 	padding-top: calc(0.5rem + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+}
+/* Breathing-room variant for interactive bottom controls (composer, tab bar): design gap PLUS
+   inset — web renders exactly the base; native keeps a gap above the nav bar. max() would sit
+   the control FLUSH on top of an opaque 3-button bar (the reported "too close" bug). Suffix =
+   Tailwind spacing scale of the base (3 = 0.75rem), mirroring pb-3. */
+@utility pb-safe-3 {
+	padding-bottom: calc(0.75rem + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+/* Full-height overlay interiors (side sheets): EXACTLY the inset, 0px on web — the overlay's own
+   background paints the strip behind the bar while its content clears it. Unlike pt-safe/pb-safe
+   there is no base minimum, so the web rendering is byte-for-byte unchanged. */
+@utility pt-inset {
+	padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+}
+@utility pb-inset {
+	padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 @layer base {

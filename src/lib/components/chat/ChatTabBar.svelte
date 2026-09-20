@@ -55,7 +55,7 @@
 </script>
 
 {#if !isConversationRoute}
-	<nav aria-label="Primary" class="z-40 shrink-0 border-t border-border bg-background pb-safe">
+	<nav aria-label="Primary" class="z-40 shrink-0 border-t border-border bg-background pb-safe-3">
 		<div class="mx-auto grid max-w-md grid-cols-5">
 			<a
 				href={chatsHref}

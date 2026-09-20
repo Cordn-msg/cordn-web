@@ -143,7 +143,7 @@
 	});
 </script>
 
-<div class="flex h-dvh min-h-dvh bg-background pr-safe pl-safe text-foreground">
+<div class="flex h-dvh min-h-dvh bg-background pr-inset pl-inset text-foreground">
 	<ChatSidebar mobileSidebarOpen={chatLayout.mobileSidebarOpen} />
 
 	<!-- pt-safe here is the single status-bar clearance for EVERY /chat/* page (chat header,

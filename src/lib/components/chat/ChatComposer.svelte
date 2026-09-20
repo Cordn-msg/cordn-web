@@ -507,7 +507,7 @@
 </script>
 
 <div class="border-t border-border bg-background">
-	<form class="mx-auto max-w-5xl px-3 pt-3 pb-safe sm:px-4 md:px-6" onsubmit={handleSubmit}>
+	<form class="mx-auto max-w-5xl px-3 pt-3 pb-safe-3 sm:px-4 md:px-6" onsubmit={handleSubmit}>
 		{#if editTo}
 			<div
 				class="mb-3 flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2"
