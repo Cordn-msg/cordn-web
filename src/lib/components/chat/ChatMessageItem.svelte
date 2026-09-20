@@ -23,8 +23,8 @@
 	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import * as Marker from '$lib/components/ui/marker/index.js';
+	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
-	import type { ProfileContent } from 'applesauce-core/helpers';
 	import Check from '@lucide/svelte/icons/check';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Download from '@lucide/svelte/icons/download';
@@ -155,24 +155,11 @@
 	const systemCommitterProfile = useProfile(() => message.systemCommitter ?? '');
 	const systemTargetProfile = useProfile(() => message.systemTarget ?? '');
 
-	function systemProfileName(
-		pubkey: string | undefined,
-		profile: ProfileContent | undefined
-	): string | undefined {
-		if (!pubkey) return undefined;
-		return (
-			profile?.name ||
-			profile?.display_name ||
-			profile?.nip05 ||
-			`${nip19.npubEncode(pubkey).slice(0, 12)}…`
-		);
-	}
-
 	const systemCommitterName = $derived(
-		systemProfileName(message.systemCommitter, systemCommitterProfile.current)
+		profileDisplayName(systemCommitterProfile.current, message.systemCommitter)
 	);
 	const systemTargetName = $derived(
-		systemProfileName(message.systemTarget, systemTargetProfile.current)
+		profileDisplayName(systemTargetProfile.current, message.systemTarget)
 	);
 
 	$effect(() => {

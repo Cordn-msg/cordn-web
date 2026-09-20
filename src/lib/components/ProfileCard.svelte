@@ -8,6 +8,7 @@
 	import { cleanupActiveAccountChatData } from '$lib/services/chatSession.svelte';
 	import { nip19 } from 'nostr-tools';
 	import { copyToClipboard } from '$lib/utils';
+	import { profileDisplayName } from '$lib/utils/profileName';
 	import { resolve } from '$app/paths';
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
 	import Avatar from './Avatar.svelte';
@@ -40,9 +41,7 @@
 	const profileState = useProfile(() => pubkey);
 	const profile = $derived(profileState.current);
 	const npub = $derived(nip19.npubEncode(pubkey));
-	const displayName = $derived(
-		profile?.name || profile?.display_name || profile?.nip05 || `${npub.slice(0, 12)}…`
-	);
+	const displayName = $derived(profileDisplayName(profile, pubkey) ?? pubkey);
 	const showImages = $derived(getLoadAvatars());
 
 	async function copyPubkey() {
