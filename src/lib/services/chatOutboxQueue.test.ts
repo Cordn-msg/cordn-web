@@ -135,6 +135,9 @@ describe('offline outbox queue', () => {
 		expect(entries).toHaveLength(1);
 		expect(entries[0].state).toBe('ambiguous');
 		expect(entries[0].attemptedEventId).toBe('evt-timeout');
+		// The bubble carries the attempted event id so the UI can hide it the
+		// moment its confirmed copy lands (no both-visible flash).
+		expect(projection.getPendingMessages('g1')[0]?.eventId).toBe('evt-timeout');
 		expect(projection.getPendingMessages('g1')[0]?.deliveryState).toBe('queued');
 
 		// The attempt actually landed: the backlog catch-up sees its event id.

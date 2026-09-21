@@ -337,7 +337,15 @@
 				};
 			});
 
-		return [...confirmedMessages, ...getPendingMessages(groupId)].sort(compareChatMessages);
+		// Never render a pending bubble whose confirmed copy is already
+		// ingested (the live subscription echoes our own send back, and backlog
+		// confirms land while the entry is still queued): the pending→confirmed
+		// swap happens in a single render instead of a both-visible flash.
+		// Unsealed bubbles carry `outbox:` event ids, which never match.
+		const pending = getPendingMessages(groupId).filter(
+			(message) => !byEventId.has(message.eventId)
+		);
+		return [...confirmedMessages, ...pending].sort(compareChatMessages);
 	});
 
 	// Ordered pin list for the top ribbon. Newest-pinned-first; resolves the

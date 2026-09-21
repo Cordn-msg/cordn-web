@@ -76,7 +76,10 @@ function bubbleId(entry: Pick<StoredChatOutboxRecord, 'seq'>): string {
 function outboxEntryToChatMessage(entry: StoredChatOutboxRecord): UiChatMessage {
 	return {
 		id: bubbleId(entry),
-		eventId: bubbleId(entry),
+		// Once an attempt is sealed, point eventId at the real event id so the
+		// UI can hide the bubble the instant its confirmed copy is ingested
+		// (live-subscription echo / backlog) — never render both at once.
+		eventId: entry.attemptedEventId ?? bubbleId(entry),
 		author: entry.ownerPubkey,
 		text: entry.content,
 		kind: ChatKinds.Text,
@@ -132,9 +135,12 @@ function isAmbiguousTimeout(error: unknown): boolean {
 
 async function dropEntry(entry: StoredChatOutboxRecord): Promise<void> {
 	entriesBySeq.delete(entry.seq);
+	// UI removal BEFORE the awaited storage delete: the confirmed copy is
+	// already reactive in the message store at this point, and any await in
+	// between renders both rows (visible jump) before the bubble disappears.
+	removePendingMessage(entry.groupId, bubbleId(entry));
 	const storage = await getChatStorage();
 	await storage.deleteOutboxEntry(entry.seq);
-	removePendingMessage(entry.groupId, bubbleId(entry));
 }
 
 async function persistEntry(entry: StoredChatOutboxRecord): Promise<void> {
@@ -205,6 +211,11 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 				entry.attemptedEventId = eventId;
 				entry.state = 'ambiguous';
 				await persistEntry(entry);
+				updatePendingMessage(entry.groupId, bubbleId(entry), (message) => ({
+					...message,
+					eventId,
+					deliveryState: 'sending'
+				}));
 			}
 		});
 		return 'sent';
