@@ -5,6 +5,7 @@ import type {
 	StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
 import type { PendingEpochOperation } from '$lib/services/chatGroupProtocol';
+import type { ChatMessageReplyTarget } from '$lib/chat/references';
 
 export type ChatStorageBackend = 'indexeddb' | 'memory';
 
@@ -78,6 +79,35 @@ export interface StoredChatKeyPackageRecord {
 	publishedCoordinatorKeys: string[];
 }
 
+/** Delivery lifecycle of a queued send intent. `ambiguous` = a coordinator post
+ *  was in flight (or timed out) and may have landed — it must be confirmed
+ *  against the backlog (by `attemptedEventId`) before any retry, because
+ *  msg_post has no server-side dedup. */
+export type StoredChatOutboxState = 'queued' | 'ambiguous' | 'failed';
+
+/** A persisted send INTENT (plaintext payload, not ciphertext): drained by
+ *  re-encrypting against the group's CURRENT MLS state at attempt time. This
+ *  survives reloads/app close and makes epoch changes while offline a no-op. */
+export interface StoredChatOutboxRecord {
+	/** Client-generated monotonic key; also the order within a group (FIFO). */
+	seq: number;
+	groupId: string;
+	/** Account that queued the send — drains only under its owner. */
+	ownerPubkey: string;
+	content: string;
+	tags: string[][];
+	replyTo?: ChatMessageReplyTarget;
+	/** Display label for the optimistic reply preview (profile name at queue time). */
+	replyToAuthorLabel?: string;
+	createdAt: number;
+	state: StoredChatOutboxState;
+	/** Event id of the most recent MLS sealing of this intent (set before post). */
+	attemptedEventId?: string;
+	/** Transient-failure count; drives retry backoff only (no auto-fail). */
+	attempts: number;
+	lastAttemptAt?: number;
+}
+
 export interface ChatStorageCapabilities {
 	backend: ChatStorageBackend;
 	persistent: boolean;
@@ -93,6 +123,9 @@ export interface ChatStorage {
 	putGroup(group: StoredChatGroupData): Promise<void>;
 	deleteGroup(groupId: string): Promise<void>;
 	deleteGroupsByOwner(ownerPubkey: string): Promise<void>;
+	listOutboxEntries(ownerPubkey?: string): Promise<StoredChatOutboxRecord[]>;
+	putOutboxEntry(entry: StoredChatOutboxRecord): Promise<void>;
+	deleteOutboxEntry(seq: number): Promise<void>;
 	listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]>;
 	getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined>;
 	putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void>;
@@ -102,13 +135,14 @@ export interface ChatStorage {
 }
 
 const DATABASE_NAME = 'cordn-web';
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const GROUP_STORE = 'groups';
 const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
 const SYNC_ISSUE_STORE = 'syncIssues';
 const KEY_PACKAGE_STORE = 'keyPackages';
 const SNAPSHOT_STORE = 'snapshots';
+const OUTBOX_STORE = 'outbox';
 
 function cloneBytes(bytes: Uint8Array): Uint8Array {
 	return new Uint8Array(bytes);
@@ -174,6 +208,18 @@ function cloneGroupRecord(group: StoredChatGroupData): StoredChatGroupRecord {
 	return { ...record };
 }
 
+function cloneOutboxEntry(entry: StoredChatOutboxRecord): StoredChatOutboxRecord {
+	return {
+		...entry,
+		tags: entry.tags.map((tag) => [...tag]),
+		replyTo: entry.replyTo && { ...entry.replyTo, tags: entry.replyTo.tags.map((tag) => [...tag]) }
+	};
+}
+
+function compareOutboxEntries(a: StoredChatOutboxRecord, b: StoredChatOutboxRecord) {
+	return a.seq - b.seq;
+}
+
 function compareGroups(a: StoredChatGroupRecord, b: StoredChatGroupRecord) {
 	return a.createdAt - b.createdAt;
 }
@@ -216,6 +262,7 @@ class MemoryChatStorage implements ChatStorage {
 
 	protected groups = new Map<string, StoredChatGroupData>();
 	protected keyPackages = new Map<string, StoredChatKeyPackageRecord>();
+	protected outboxEntries: StoredChatOutboxRecord[] = [];
 
 	constructor(capabilities: ChatStorageCapabilities) {
 		this.capabilities = capabilities;
@@ -255,6 +302,24 @@ class MemoryChatStorage implements ChatStorage {
 				await this.deleteGroup(group.id);
 			}
 		}
+	}
+
+	async listOutboxEntries(ownerPubkey?: string): Promise<StoredChatOutboxRecord[]> {
+		return this.outboxEntries
+			.filter((entry) => (ownerPubkey ? entry.ownerPubkey === ownerPubkey : true))
+			.map(cloneOutboxEntry)
+			.sort(compareOutboxEntries);
+	}
+
+	async putOutboxEntry(entry: StoredChatOutboxRecord): Promise<void> {
+		const stored = cloneOutboxEntry(entry);
+		const existing = this.outboxEntries.findIndex((candidate) => candidate.seq === entry.seq);
+		if (existing >= 0) this.outboxEntries[existing] = stored;
+		else this.outboxEntries.push(stored);
+	}
+
+	async deleteOutboxEntry(seq: number): Promise<void> {
+		this.outboxEntries = this.outboxEntries.filter((entry) => entry.seq !== seq);
 	}
 
 	async listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]> {
@@ -336,6 +401,11 @@ class IndexedDbChatStorage implements ChatStorage {
 				}
 				if (!db.objectStoreNames.contains(SNAPSHOT_STORE)) {
 					db.createObjectStore(SNAPSHOT_STORE, { keyPath: 'groupId' });
+				}
+				if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+					const store = db.createObjectStore(OUTBOX_STORE, { keyPath: 'seq' });
+					store.createIndex('groupId', 'groupId', { unique: false });
+					store.createIndex('ownerPubkey', 'ownerPubkey', { unique: false });
 				}
 			};
 			request.onsuccess = () => resolve(request.result);
@@ -516,7 +586,14 @@ class IndexedDbChatStorage implements ChatStorage {
 		const db = this.requireDatabase();
 		await new Promise<void>((resolve, reject) => {
 			const transaction = db.transaction(
-				[GROUP_STORE, GROUP_STATE_STORE, MESSAGE_STORE, SYNC_ISSUE_STORE, SNAPSHOT_STORE],
+				[
+					GROUP_STORE,
+					GROUP_STATE_STORE,
+					MESSAGE_STORE,
+					SYNC_ISSUE_STORE,
+					SNAPSHOT_STORE,
+					OUTBOX_STORE
+				],
 				'readwrite'
 			);
 			const groupStore = transaction.objectStore(GROUP_STORE);
@@ -526,6 +603,8 @@ class IndexedDbChatStorage implements ChatStorage {
 			const syncIssueStore = transaction.objectStore(SYNC_ISSUE_STORE);
 			const syncIssueIndex = syncIssueStore.index('groupId');
 			const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
+			const outboxStore = transaction.objectStore(OUTBOX_STORE);
+			const outboxIndex = outboxStore.index('groupId');
 			transaction.onerror = () =>
 				reject(transaction.error ?? new Error('IndexedDB transaction failed'));
 			transaction.oncomplete = () => resolve();
@@ -544,6 +623,14 @@ class IndexedDbChatStorage implements ChatStorage {
 				const cursor = deleteIssues.result;
 				if (!cursor) return;
 				syncIssueStore.delete(cursor.primaryKey);
+				cursor.continue();
+			};
+			// Queued send intents die with their group — there is no one left to deliver to.
+			const deleteOutbox = outboxIndex.openKeyCursor(IDBKeyRange.only(groupId));
+			deleteOutbox.onsuccess = () => {
+				const cursor = deleteOutbox.result;
+				if (!cursor) return;
+				outboxStore.delete(cursor.primaryKey);
 				cursor.continue();
 			};
 		});
@@ -619,6 +706,40 @@ class IndexedDbChatStorage implements ChatStorage {
 		for (const record of records) {
 			await this.deleteKeyPackage(record.keyPackageRef);
 		}
+	}
+
+	async listOutboxEntries(ownerPubkey?: string): Promise<StoredChatOutboxRecord[]> {
+		const entries = await this.runTransaction<StoredChatOutboxRecord[]>(
+			OUTBOX_STORE,
+			'readonly',
+			(store) =>
+				(ownerPubkey
+					? store.index('ownerPubkey').getAll(ownerPubkey)
+					: store.getAll()) as IDBRequest<StoredChatOutboxRecord[]>
+		);
+		return (entries ?? []).map(cloneOutboxEntry).sort(compareOutboxEntries);
+	}
+
+	async putOutboxEntry(entry: StoredChatOutboxRecord): Promise<void> {
+		await this.runTransaction<void>(
+			OUTBOX_STORE,
+			'readwrite',
+			(store) => {
+				store.put(cloneOutboxEntry(entry));
+			},
+			() => undefined
+		);
+	}
+
+	async deleteOutboxEntry(seq: number): Promise<void> {
+		await this.runTransaction<void>(
+			OUTBOX_STORE,
+			'readwrite',
+			(store) => {
+				store.delete(seq);
+			},
+			() => undefined
+		);
 	}
 }
 

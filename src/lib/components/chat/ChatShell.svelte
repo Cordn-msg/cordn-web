@@ -56,6 +56,7 @@
 		removePendingMessage,
 		updatePendingMessage
 	} from '$lib/services/chatOutbox.svelte';
+	import { enqueueTextMessage, retryOutboxEntry } from '$lib/services/chatOutboxQueue';
 
 	let {
 		groupId = 'general',
@@ -396,33 +397,19 @@
 		}
 
 		const serialized = serializeChatProfileMentions(draft.trim(), selectedMentions);
-		const messageText = serialized.content;
 		const currentReplyTarget = replyTarget;
 		const currentReplyTargetAuthor = replyTargetAuthor;
-		const optimisticCreatedAt = Date.now();
-		const optimisticId = `optimistic:${crypto.randomUUID()}`;
-		const optimisticReplyTarget = currentReplyTarget
-			? {
-					id: currentReplyTarget.id,
-					author: currentReplyTarget.pubkey,
-					authorLabel: currentReplyTargetAuthor || currentReplyTarget.pubkey,
-					text: currentReplyTarget.content
-				}
-			: undefined;
 
-		appendOptimisticMessage({
-			id: optimisticId,
-			eventId: optimisticId,
-			author: activePubkey,
-			text: messageText,
-			kind: ChatKinds.Text,
-			createdAt: optimisticCreatedAt,
-			timeLabel: formatUnixTimestamp(optimisticCreatedAt, true, false),
-			dayLabel: formatUnixTimestamp(optimisticCreatedAt, false, true),
-			isOwn: true,
-			deliveryState: 'sending',
-			reactions: [],
-			replyTo: optimisticReplyTarget
+		// Text sends go through the durable outbox: the intent is persisted before
+		// any network attempt, so it survives reload/close/offline and drains
+		// (FIFO per group) once a connection is available. The optimistic bubble is
+		// added synchronously inside enqueueTextMessage.
+		enqueueTextMessage({
+			groupId,
+			content: serialized.content,
+			tags: serialized.tags,
+			replyTo: currentReplyTarget ?? undefined,
+			replyToAuthorLabel: currentReplyTargetAuthor || undefined
 		});
 
 		await messageListRef?.scrollToBottom();
@@ -435,22 +422,6 @@
 		// focusKey here re-focuses it before the network send resolves, minimizing flicker (also
 		// keeps the cursor in the composer on desktop).
 		composerFocusKey += 1;
-
-		const sent = await sendGroupMessageAction(
-			groupId,
-			messageText,
-			currentReplyTarget ?? undefined,
-			undefined,
-			serialized.tags
-		);
-		sendError = chatComposerActionsStore.error;
-
-		if (sent) {
-			removeOptimisticMessage(optimisticId);
-			return;
-		}
-
-		updateOptimisticMessage(optimisticId, (message) => ({ ...message, deliveryState: 'error' }));
 	}
 
 	function handleSendMedia(files: File[], caption: string) {
@@ -626,7 +597,7 @@
 	}
 
 	async function handleRetrySend(message: ChatMessage) {
-		if (!message.id.startsWith('optimistic:') || !group) return;
+		if (!group) return;
 
 		// Media sends can't be retried from the bubble: the original File isn't
 		// retained (only a preview URL), so a text-path retry would fire an empty
@@ -638,31 +609,9 @@
 			return;
 		}
 
-		// Rebuild the full reply target from the stored replied-to message: the
-		// optimistic preview only carries {id,author,text}, but the send path
-		// needs {id,pubkey,kind,content,tags}. If the original was deleted in
-		// the meantime, drop the reply and resend as plain text.
-		let replyTarget: ChatMessageReplyTarget | undefined;
-		if (message.replyTo) {
-			const stored = messageMaps.byEventId.get(message.replyTo.id);
-			if (stored) {
-				replyTarget = {
-					id: stored.id,
-					pubkey: stored.sender,
-					kind: stored.kind,
-					content: stored.content,
-					tags: stored.tags
-				};
-			}
-		}
-		updateOptimisticMessage(message.id, (entry) => ({ ...entry, deliveryState: 'sending' }));
-		const sent = await sendGroupMessageAction(groupId, message.text, replyTarget, undefined, []);
-		sendError = chatComposerActionsStore.error;
-		if (sent) {
-			removeOptimisticMessage(message.id);
-		} else {
-			updateOptimisticMessage(message.id, (entry) => ({ ...entry, deliveryState: 'error' }));
-		}
+		// Queued text messages retry through the outbox (resets backoff, kicks
+		// the drain). The reply target is already persisted on the entry.
+		retryOutboxEntry(message.id);
 	}
 
 	function handleReply(message: ChatMessage) {

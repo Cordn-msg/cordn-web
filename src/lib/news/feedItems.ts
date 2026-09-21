@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-21-offline-outbox',
+		createdAt: Date.UTC(2026, 8, 21),
+		version: 1,
+		title: 'Write now, send later — messages survive being offline',
+		body: "- ✨ Text messages you send while offline no longer fail: they wait in the chat with a small clock icon and send on their own as soon as the connection returns — even if you closed the app or reloaded the page in between.\n- 🐛 A send interrupted by a dropped connection or a closed app can no longer be lost or delivered twice: Cordn remembers exactly what was on its way and finishes the job once when you're back.\n- 🔄 Slow or flaky networks now get patient automatic retries instead of instant errors; if a message truly can't be delivered (for example the group is gone), it's marked failed and one tap retries it. Photos and voice notes still ask for a connection to upload."
+	},
+	{
 		id: 'cordn-news-2026-09-21-heic-metadata',
 		createdAt: Date.UTC(2026, 8, 21),
 		version: 1,

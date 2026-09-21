@@ -26,6 +26,7 @@
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
+	import Clock from '@lucide/svelte/icons/clock';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Download from '@lucide/svelte/icons/download';
 	import CornerUpLeft from '@lucide/svelte/icons/corner-up-left';
@@ -131,6 +132,7 @@
 		}
 	});
 	function getDeliveryStateLabel() {
+		if (message.deliveryState === 'queued') return 'Queued — will send when back online';
 		if (message.deliveryState === 'sending') return 'Sending';
 		if (message.deliveryState === 'sent') return 'Sent';
 		if (message.deliveryState === 'error') return 'Failed';
@@ -946,6 +948,14 @@
 						>
 							<X class="size-3" />
 						</button>
+					{:else if message.isOwn && message.deliveryState === 'queued'}
+						<span
+							class="inline-flex items-center"
+							aria-label={getDeliveryStateLabel()}
+							title={getDeliveryStateLabel()}
+						>
+							<Clock class="size-3" />
+						</span>
 					{:else if message.isOwn && message.deliveryState === 'sending'}
 						<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
 					{/if}
