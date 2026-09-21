@@ -28,6 +28,7 @@
 	import { nip19 } from 'nostr-tools';
 	import ProfileCard from '../ProfileCard.svelte';
 	import type { ChatMentionCandidate, ChatMentionReference } from './chat.types';
+	import { enterKeySends } from '$lib/services/chatComposerSettings.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	const COMPOSER_PREVIEW_WRAP_CLASS =
@@ -321,6 +322,13 @@
 		return candidate.nip05 || profile?.nip05 || nip19.npubEncode(candidate.pubkey);
 	}
 
+	const enterSends = $derived(enterKeySends());
+	const enterHint = $derived(
+		enterSends
+			? 'Press Enter to send. Shift+Enter inserts a new line.'
+			: 'Enter inserts a new line. Send with the send button, or Ctrl or Command plus Enter.'
+	);
+
 	function handleSubmit(event: Event) {
 		event.preventDefault();
 		if (disabled) return;
@@ -366,9 +374,17 @@
 				return;
 			}
 		}
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			dispatchSubmit();
+		// Enter-key behavior resolves per keypress from the user preference +
+		// pointer type ('auto' sends on keyboard devices, inserts a newline on
+		// touch — WhatsApp/iMessage convention). `isComposing` guards IME (CJK)
+		// input: that Enter confirms the composition, it must not send. When
+		// Enter doesn't send, the event falls through so the textarea inserts a
+		// newline; Ctrl/⌘+Enter still submits in newline mode.
+		if (event.key === 'Enter' && !event.isComposing) {
+			if (enterKeySends() ? !event.shiftKey : event.metaKey || event.ctrlKey) {
+				event.preventDefault();
+				dispatchSubmit();
+			}
 		}
 	}
 
@@ -807,12 +823,15 @@
 							<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
 						</Button>
 					</div>
+					<p id="composer-enter-hint" class="sr-only">{enterHint}</p>
 					<Textarea
 						bind:ref={textareaRef}
 						bind:value
 						placeholder="Type a message…"
 						rows={expanded ? 6 : 1}
 						wrap="soft"
+						enterkeyhint={enterSends ? 'send' : 'enter'}
+						aria-describedby="composer-enter-hint"
 						{disabled}
 						onkeydown={handleKeyDown}
 						oninput={handleInput}
