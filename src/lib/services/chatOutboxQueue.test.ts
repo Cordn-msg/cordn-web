@@ -87,8 +87,17 @@ async function listEntries(storage: typeof import('$lib/storage/chatStorage')) {
 }
 
 beforeEach(() => {
-	vi.useRealTimers();
+	// Frozen clock (auto-advancing for the setTimeout(0) in settleDrain): the
+	// backoff window can never be "elapsed" by a machine stall under parallel
+	// suite load — an immediate re-drain is deterministically blocked, exactly
+	// as in real usage within 15s of a failure.
+	vi.useFakeTimers({ shouldAdvanceTime: true });
 });
+
+// Warm the (mocked) module graph at file scope so the per-test resetModules +
+// re-import in freshModules pays only eval, not transform — same parallel-load
+// flake fix as chatGroups.test.ts.
+await import('./chatOutboxQueue');
 
 describe('offline outbox queue', () => {
 	test('online send: entry persisted before the post, dropped after success', async () => {
@@ -152,7 +161,6 @@ describe('offline outbox queue', () => {
 
 	test('ambiguous-but-absent retries only after the backoff window', async () => {
 		const { queue, storage } = await freshModules();
-		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mocks.sendMock.mockImplementation(
 			async (input: { onSealed?: (id: string) => Promise<void> }) => {
 				if (input.onSealed) await input.onSealed('evt-mia');
