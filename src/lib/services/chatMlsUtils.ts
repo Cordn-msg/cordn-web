@@ -22,6 +22,7 @@ import {
 	wireformats,
 	isDefaultCredential,
 	type ClientState,
+	type Signature,
 	type CustomExtension,
 	type GroupContextExtension,
 	type KeyPackage,
@@ -31,6 +32,7 @@ import {
 	type CredentialBasic
 } from 'ts-mls';
 import { verifyEvent, type NostrEvent } from 'nostr-tools';
+import { ed25519 } from '@noble/curves/ed25519.js';
 
 const CORDN_GROUP_METADATA_EXTENSION_TYPE = 0xc04d;
 const APP_DATA_DICTIONARY_EXTENSION_TYPE = 0x0006;
@@ -330,16 +332,56 @@ export function getCordnGroupMetadataExtension(state: ClientState): CordnGroupMe
 
 let cordnCipherSuitePromise: Promise<Awaited<ReturnType<typeof getCiphersuiteImpl>>> | undefined;
 
+// ponytail: ts-mls's Ed25519 impl uses crypto.subtle whenever it exists, even on engines whose
+// subtle lacks Ed25519 (WebCrypto Ed25519 shipped in Chrome/WebView 137; emulator images freeze at
+// 133 → "Algorithm: Unrecognized name"). Detect once and swap in @noble/curves. Drop when ts-mls
+// feature-detects itself.
+async function subtleEd25519Available(): Promise<boolean> {
+	try {
+		await crypto.subtle.importKey(
+			'raw',
+			crypto.getRandomValues(new Uint8Array(32)),
+			{ name: 'Ed25519' },
+			true,
+			['verify']
+		);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export function makeNobleEd25519Signature(): Signature {
+	// SubtleCrypto-generated sign keys are PKCS8 (48B); the seed is the trailing 32 bytes.
+	const toSeed = (signKey: Uint8Array): Uint8Array =>
+		signKey.length === 48 ? signKey.slice(-32) : signKey;
+	return {
+		async sign(signKey, message) {
+			return ed25519.sign(message, toSeed(signKey));
+		},
+		async verify(publicKey, message, signature) {
+			return ed25519.verify(signature, message, publicKey);
+		},
+		async keygen() {
+			const signKey = ed25519.utils.randomSecretKey();
+			return { signKey, publicKey: ed25519.getPublicKey(signKey) };
+		}
+	};
+}
+
 export function getCordnCipherSuite() {
 	// Memoized: a pure function of constants, but called per MLS op — twice per
 	// message in the ingest loop — so rebuilds are pure waste (~0.02ms each).
 	// A rejected build (never expected for fixed constants) un-caches to retry.
-	cordnCipherSuitePromise ??= getCiphersuiteImpl(CLI_CIPHERSUITE, nobleCryptoProvider).catch(
-		(error) => {
-			cordnCipherSuitePromise = undefined;
-			throw error;
-		}
-	);
+	cordnCipherSuitePromise ??= (async () => {
+		const impl = await getCiphersuiteImpl(CLI_CIPHERSUITE, nobleCryptoProvider);
+		return (await subtleEd25519Available())
+			? impl
+			: { ...impl, signature: makeNobleEd25519Signature() };
+	})().catch((error) => {
+		cordnCipherSuitePromise = undefined;
+		throw error;
+	});
 	return cordnCipherSuitePromise;
 }
 

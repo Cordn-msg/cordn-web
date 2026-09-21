@@ -76,11 +76,14 @@ importers:
         version: 0.14.0(typescript@6.0.3)
       '@cordn/core':
         specifier: ^0.5.5
-        version: 0.5.5
+        version: 0.5.5(@noble/curves@2.2.0)
       '@ionic/pwa-elements':
         specifier: ^3.4.0
         version: 3.4.0
       '@noble/ciphers':
+        specifier: 2.2.0
+        version: 2.2.0
+      '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
       '@noble/hashes':
@@ -133,7 +136,7 @@ importers:
         version: 1.1.1(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       ts-mls:
         specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)
+        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
       zod:
         specifier: ^4.6.2
         version: 4.6.2
@@ -710,6 +713,10 @@ packages:
 
   '@noble/curves@2.0.1':
     resolution: {integrity: sha512-vs1Az2OOTBiP4q0pwjW5aF0xp9n4MxVrmkFBxc6EKZc6ddYx5gaZiAsZoq0uRRXWbi3AT/sBqn05eRPtn1JCPw==}
+    engines: {node: '>= 20.19.0'}
+
+  '@noble/curves@2.2.0':
+    resolution: {integrity: sha512-T/BoHgFXirb0ENSPBquzX0rcjXeM6Lo892a2jlYJkqk83LqZx0l1Of7DzlKJ6jkpvMrkHSnAcgb5JegL8SeIkQ==}
     engines: {node: '>= 20.19.0'}
 
   '@noble/hashes@2.0.1':
@@ -3673,12 +3680,12 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@cordn/core@0.5.5':
+  '@cordn/core@0.5.5(@noble/curves@2.2.0)':
     dependencies:
       '@noble/ciphers': 2.2.0
       '@noble/hashes': 2.2.0
       '@scure/base': 2.2.0
-      ts-mls: 2.0.0-rc.12(@noble/ciphers@2.2.0)
+      ts-mls: 2.0.0-rc.12(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
       zod: 4.6.2
     transitivePeerDependencies:
       - '@hpke/chacha20poly1305'
@@ -4034,6 +4041,10 @@ snapshots:
   '@noble/curves@2.0.1':
     dependencies:
       '@noble/hashes': 2.0.1
+
+  '@noble/curves@2.2.0':
+    dependencies:
+      '@noble/hashes': 2.2.0
 
   '@noble/hashes@2.0.1': {}
 
@@ -6467,15 +6478,19 @@ snapshots:
     dependencies:
       typescript: 6.0.3
 
-  ts-mls@2.0.0-rc.12(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.12(@noble/ciphers@2.2.0)(@noble/curves@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
+    optionalDependencies:
+      '@noble/curves': 2.2.0
 
-  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0):
+  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
+    optionalDependencies:
+      '@noble/curves': 2.2.0
 
   ts-node@10.9.2(@types/node@22.19.19)(typescript@6.0.3):
     dependencies:

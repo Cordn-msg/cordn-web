@@ -24,7 +24,7 @@
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run",
 		"version": "node scripts/changelog.mjs",
-		"android": "pnpm build && npx cap sync android && npx cap open android",
+		"android": "pnpm android:apk && ./scripts/android-launch.sh",
 		"android:apk": "pnpm build && npx cap sync android && cd android && ./gradlew assembleDebug && echo 'APK dir: android/app/build/outputs/apk/debug/'",
 		"android:release": "pnpm build && npx cap sync android && cd android && ./gradlew assembleRelease && echo 'APK dir: android/app/build/outputs/apk/release/'"
 	},
@@ -83,6 +83,7 @@
 		"@cordn/core": "^0.5.5",
 		"@ionic/pwa-elements": "^3.4.0",
 		"@noble/ciphers": "2.2.0",
+		"@noble/curves": "2.2.0",
 		"@noble/hashes": "2.0.1",
 		"@tanstack/svelte-query": "^6.1.33",
 		"@tanstack/svelte-virtual": "^3.13.25",
