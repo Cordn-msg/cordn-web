@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-21-heic-metadata',
+		createdAt: Date.UTC(2026, 8, 21),
+		version: 1,
+		title: 'HEIC photos send properly — and photos leave their metadata behind',
+		body: "- 🐛 Photos taken on phones set to save HEIC (for example Samsung's “extended color” mode) no longer arrive as empty images: they are converted to a widely viewable JPEG before being sent, so everyone in the chat sees them.\n- ✨ Photos no longer carry their metadata out of your phone: capture location, device model, and timestamps are stripped before sending on every device — the picture is just pixels. What you see in the composer preview is exactly what gets sent.\n- 🔄 A photo that arrived before this fix and can't be displayed now appears as a downloadable file instead of a silent blank, so it can still be saved and opened."
+	},
+	{
 		id: 'cordn-news-2026-09-21-enter-key',
 		createdAt: Date.UTC(2026, 8, 21),
 		version: 1,
