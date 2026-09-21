@@ -29,6 +29,7 @@
 	import ProfileCard from '../ProfileCard.svelte';
 	import type { ChatMentionCandidate, ChatMentionReference } from './chat.types';
 	import { enterKeySends } from '$lib/services/chatComposerSettings.svelte';
+	import { sanitizeImageFile } from '$lib/services/imageSanitize';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	const COMPOSER_PREVIEW_WRAP_CLASS =
@@ -434,8 +435,12 @@
 		});
 	}
 
-	function stageFiles(files: File[]) {
-		for (const file of files) {
+	// Sanitize images before staging (metadata strip / HEIC transcode), so the
+	// preview shows the exact bytes that will be encrypted + uploaded. Sequential
+	// on purpose: each file's preview appears as soon as it's ready.
+	async function stageFiles(files: File[]) {
+		for (const original of files) {
+			const file = await sanitizeImageFile(original);
 			pendingAttachments = [
 				...pendingAttachments,
 				{
@@ -452,7 +457,7 @@
 	async function captureAndStage(capture: () => Promise<File | null>) {
 		try {
 			const file = await capture();
-			if (file) stageFiles([file]);
+			if (file) await stageFiles([file]);
 		} catch (err) {
 			toast.error('Could not open camera', {
 				description: errorMessage(err)
@@ -471,7 +476,7 @@
 	async function pickImage() {
 		try {
 			const files = await pickImagesFromGallery();
-			if (files.length > 0) stageFiles(files);
+			if (files.length > 0) await stageFiles(files);
 		} catch (err) {
 			toast.error('Could not open gallery', {
 				description: errorMessage(err)
@@ -492,7 +497,7 @@
 		const files = input.files ? Array.from(input.files) : [];
 		input.value = '';
 		if (files.length === 0) return;
-		stageFiles(files);
+		void stageFiles(files);
 	}
 
 	function removeAttachment(id: string) {

@@ -15,6 +15,8 @@ public class MainActivity extends BridgeActivity {
         // Register the local SAF "Save as" plugin. It lives in this app module (not from npm), so
         // `cap sync` can't discover it the way it auto-registers cordn-background / nostr-signer.
         registerPlugin(SaveAsPlugin.class);
+        // Same deal: local HEIC/metadata-strip image re-encoder (see SanitizeImagePlugin).
+        registerPlugin(SanitizeImagePlugin.class);
         super.onCreate(savedInstanceState);
         // Capacitor's default onRenderProcessGone returns false, which makes the whole app exit
         // when the WebView renderer is killed — typically an OOM (large backup export, long chat

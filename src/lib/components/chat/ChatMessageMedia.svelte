@@ -56,6 +56,10 @@
 	let resolved = $state<ResolvedMedia | null>(null);
 	let loading = $state(false);
 	let failed = $state(false);
+	// The `<img>` failed to decode the bytes (e.g. a HEIC from old sends that
+	// predate truthful labeling): fall back to the generic file card instead of
+	// a silent blank — the blob still downloads and opens in a native viewer.
+	let imageDecodeFailed = $state(false);
 
 	// Resolve only confirmed media (optimistic items show the local preview).
 	$effect(() => {
@@ -133,7 +137,7 @@
 							id={messageId}
 						/>
 					</div>
-				{:else if optimistic.previewUrl && showingImage}
+				{:else if optimistic.previewUrl && showingImage && !imageDecodeFailed}
 					<button
 						type="button"
 						class="block max-h-64 w-full overflow-hidden rounded-2xl"
@@ -150,6 +154,7 @@
 							src={optimistic.previewUrl}
 							alt={optimistic.filename}
 							class="max-h-64 w-full cursor-zoom-in object-cover"
+							onerror={() => (imageDecodeFailed = true)}
 						/>
 					</button>
 				{:else}
@@ -175,7 +180,7 @@
 			>
 				<Spinner class="size-5 text-muted-foreground" />
 			</div>
-		{:else if resolved && resolved.mime.startsWith('image/')}
+		{:else if resolved && resolved.mime.startsWith('image/') && !imageDecodeFailed}
 			<button
 				type="button"
 				class="block max-h-64 w-full overflow-hidden rounded-2xl"
@@ -192,6 +197,7 @@
 					src={resolved.url}
 					alt={ref?.alt ?? ref?.filename}
 					class="max-h-64 w-full cursor-zoom-in object-cover transition-transform hover:scale-[1.02]"
+					onerror={() => (imageDecodeFailed = true)}
 				/>
 			</button>
 		{:else if resolved && resolved.mime.startsWith('video/')}

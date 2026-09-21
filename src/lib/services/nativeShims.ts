@@ -11,6 +11,7 @@
 import { browser } from '$app/environment';
 import { errorMessage } from '$lib/utils';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { mediaExtFromMime, replaceFileExt, sniffMediaMime } from './mediaSniff';
 import { Browser } from '@capacitor/browser';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -42,9 +43,59 @@ interface SaveAsPlugin {
 }
 const SaveAs = registerPlugin<SaveAsPlugin>('SaveAs');
 
+/**
+ * Local Capacitor plugin (SanitizeImagePlugin, in the Android app module) that re-encodes an image
+ * to a metadata-free baseline JPEG with the platform decoder (API 28+). Used for HEIC/HEIF
+ * captures, which the WebView cannot decode at all — Chromium has no HEVC image support.
+ */
+interface SanitizeImagePlugin {
+	toJpeg(options: { base64: string }): Promise<{ base64: string }>;
+}
+const SanitizeImage = registerPlugin<SanitizeImagePlugin>('SanitizeImage');
+
+/**
+ * Chunked base64 helpers, local on purpose: this module is a leaf (utils.ts imports it), so
+ * reusing ts-mls's codec here would drag the MLS stack into every consumer — and break tests
+ * that mock ts-mls with hoisted factories. Chunking avoids a stack overflow on multi-MB photos.
+ */
+function bytesToBase64Local(bytes: Uint8Array): string {
+	let binary = '';
+	const CHUNK = 0x8000;
+	for (let i = 0; i < bytes.length; i += CHUNK) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+	}
+	return btoa(binary);
+}
+
+function base64ToBytesLocal(base64: string): Uint8Array {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
 /** True only inside the Capacitor native shell (Android). Web/PWA → false. */
 export function isNativePlatform(): boolean {
 	return browser && Capacitor.isNativePlatform();
+}
+
+/**
+ * Re-encode an image file to a clean baseline JPEG via the native platform decoder (API 28+;
+ * ImageDecoder applies EXIF orientation, so pixels stay upright with all metadata stripped).
+ * Returns null when unavailable (web, old Android, decode failure) so callers fall back to the
+ * original file with its truthful label.
+ */
+export async function nativeImageToJpeg(file: File): Promise<File | null> {
+	if (!isNativePlatform()) return null;
+	try {
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		const { base64 } = await SanitizeImage.toJpeg({ base64: bytesToBase64Local(bytes) });
+		return new File([base64ToBytesLocal(base64) as BlobPart], replaceFileExt(file.name, 'jpg'), {
+			type: 'image/jpeg'
+		});
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -227,18 +278,21 @@ function friendlyMediaError(err: unknown): Error {
 async function mediaResultToFile(result: MediaResult): Promise<File> {
 	if (!result.webPath) throw new Error('Camera returned no media');
 	const blob = await fetch(result.webPath).then((response) => response.blob());
-	// `result.type` (Photo|Video) is always present and is the reliable signal — `blob.type` from a
-	// fetched Capacitor file URL is often empty on native, and `metadata.format` needs includeMetadata.
-	// Default per media type; honor metadata.format when present (e.g. png). This is what stops a
-	// recorded video from being mislabeled image/jpeg and sent as a broken .jpg.
+	// Truthful labels only. `blob.type` from a fetched Capacitor file URL is often empty on native,
+	// and the old per-type guess (`image/jpeg` for any photo) mislabeled HEIC captures as JPEG —
+	// which encrypted-and-sent as silent blanks, forever: the AEAD AAD binds the declared mime to
+	// the exact bytes (spec/applications/encrypted-media.md §3.2), so a wrong label is unfixable
+	// after send. Magic bytes are definitive, and the fetch already paid for them. `result.type`
+	// (Photo|Video) is always present and disambiguates unnamed ISOBMFF brands.
 	const isVideo = result.type === MediaType.Video;
-	const format = result.metadata?.format;
-	const ext = format ? (format === 'jpeg' ? 'jpg' : format) : isVideo ? 'mp4' : 'jpg';
-	const mime = blob.type || (isVideo ? 'video/mp4' : ext === 'png' ? 'image/png' : 'image/jpeg');
-	const prefix = isVideo ? 'video' : ext === 'png' ? 'image' : 'photo';
-	return new File([blob], `${prefix}-${Date.now()}.${ext}`, {
-		type: mime
-	});
+	const bytes = new Uint8Array(await blob.arrayBuffer());
+	const mime =
+		blob.type ||
+		sniffMediaMime(bytes, isVideo) ||
+		(isVideo ? 'video/mp4' : 'application/octet-stream');
+	const ext = mediaExtFromMime(mime);
+	const prefix = isVideo ? 'video' : mime.startsWith('image/') ? 'photo' : 'file';
+	return new File([blob], `${prefix}-${Date.now()}.${ext}`, { type: mime });
 }
 
 /**
