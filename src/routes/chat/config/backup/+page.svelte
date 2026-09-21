@@ -63,6 +63,7 @@
 	let enabling = $state(false);
 	let restoringDevice = $state(false);
 	let deviceRecoveryKey = $state('');
+	let devicePassphrase = $state('');
 
 	const groupCount = $derived(listChatGroups().length);
 
@@ -187,9 +188,10 @@
 		restoringDevice = true;
 		await new Promise((resolve) => setTimeout(resolve)); // paint the spinner first
 		try {
-			importResult = await restoreLatestDeviceBackup(
-				deviceRecoveryKey.trim() ? { backupKeyHex: deviceRecoveryKey } : undefined
-			);
+			importResult = await restoreLatestDeviceBackup({
+				backupKeyHex: deviceRecoveryKey.trim() || undefined,
+				passphrase: devicePassphrase || undefined
+			});
 			await ensureGroupsLoaded();
 			toast.success(
 				`Restored ${importResult.groups} group${importResult.groups === 1 ? '' : 's'}, ${importResult.accounts} account(s)`
@@ -479,6 +481,16 @@
 										id="device-recovery-key"
 										bind:value={deviceRecoveryKey}
 										placeholder="64-character key — optional on this device"
+										autocomplete="off"
+									/>
+								</div>
+								<div class="space-y-2">
+									<Label for="device-passphrase">Passphrase</Label>
+									<Input
+										id="device-passphrase"
+										type="password"
+										bind:value={devicePassphrase}
+										placeholder="Only if you set one when enabling backups"
 										autocomplete="off"
 									/>
 								</div>

@@ -287,6 +287,9 @@ export async function restoreLatestDeviceBackup(credentials?: {
 	// Typed recovery key wins (also validates it), else the Keystore device key; the passphrase
 	// rides along either way for envelopes that only carry a passphrase wrapper.
 	const typed = credentials?.backupKeyHex?.trim().toLowerCase();
+	if (typed && !/^[0-9a-f]{64}$/.test(typed)) {
+		throw new Error('Recovery key must be 64 hex characters');
+	}
 	const backupKey = typed ? bytesToBase64(hexToBytes(typed)) : await getDeviceBackupKey();
 	return importClientData(latest.text, {
 		backupKey,
