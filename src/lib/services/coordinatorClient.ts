@@ -344,6 +344,17 @@ export class cordnClient implements coordinatorClient {
 		options: { timeout?: number } = {}
 	): Promise<T> {
 		try {
+			// Fail fast: a signer without NIP-44 v2 cannot decrypt the coordinator's
+			// gift-wrapped responses on the stable lane (key packages, join requests,
+			// welcomes). Without this guard every such call hangs to the 20s timeout
+			// with a message that blames the network.
+			if (
+				transportKind === 'stable' &&
+				typeof this.stableSigner === 'object' &&
+				!this.stableSigner.nip44
+			) {
+				throw new Error('Your signer does not support NIP-44 v2, which this action requires');
+			}
 			const result = await this.withDeadline(async () => {
 				await (transportKind === 'stable' ? this.connectStable() : this.ephemeralConnected);
 				this.signal.throwIfAborted();

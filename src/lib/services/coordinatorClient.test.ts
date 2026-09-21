@@ -97,6 +97,24 @@ afterEach(async () => {
 });
 
 describe('coordinator client lifetime', () => {
+	test('stable-lane calls fail fast when the signer lacks NIP-44 v2', async () => {
+		// A real signer with nip44 stripped — the extension-without-nip44 case.
+		// Without the guard, every gift-wrapped response is undecryptable and each
+		// stable call hangs to the 20s timeout blaming the network.
+		const signer = new PrivateKeySigner('02'.repeat(32));
+		(signer as { nip44?: unknown }).nip44 = undefined;
+		const { instance, relay } = client(new OfflineRelay(), signer);
+
+		await expect(instance.FetchPendingWelcomes({})).rejects.toThrow(/NIP-44 v2/);
+		expect(relay.requests).toHaveLength(0); // no I/O, no 20s hang
+
+		// The guard must not over-block: the ephemeral lane signs with its own
+		// local key, so it still reaches the relay without the user signer's nip44.
+		const subscription = instance.SubscribeManyGroupMessages({ groups: [{ gid: 'g' }] });
+		void subscription.catch(() => undefined);
+		await requestAt(relay);
+	});
+
 	test('default clients own different pools even for the same relay set', async () => {
 		// Relay objects are lazy; suppress subscription/publication so no websocket is opened.
 		vi.spyOn(ApplesauceRelayPool.prototype, 'subscribe').mockResolvedValue(() => {});

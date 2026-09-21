@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-21-signer-capability',
+		createdAt: Date.UTC(2026, 8, 21),
+		version: 1,
+		title: "When your signer can't do something, Cordn now says so",
+		body: "- 🐛 Linking a device while signed in with a signer that doesn't support NIP-44 v2 (some browser-extension signers) no longer pretends to succeed: it used to finish with “0 groups seeded”, a healthy-looking sync, and no error anywhere — now it's refused up front with a message naming the signer.\n- 🐛 Joining a group and handling invitations no longer hang for twenty seconds and then blame the network when the signer is the actual limit: actions your signer can't support fail immediately and say why, instead of a fake timeout.\n- ✨ A small banner now appears when the active signer lacks NIP-44 v2, explaining that messaging keeps working while joining groups, invitations, and device sync need a signer that supports it.\n- 🔄 The multi-device page reports its true state: “Sync active” only shows once a sync has actually happened, a linked device that hasn't synced yet says so, and a manual re-sync explains exactly what went wrong — the signer, the relays, or an unreadable tip — instead of one generic message."
+	},
+	{
 		id: 'cordn-news-2026-09-21-offline-outbox',
 		createdAt: Date.UTC(2026, 8, 21),
 		version: 1,

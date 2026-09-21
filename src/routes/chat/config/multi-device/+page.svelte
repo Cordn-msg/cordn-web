@@ -84,8 +84,13 @@
 	const hasLocalGroups = $derived(listChatGroups().length > 0);
 
 	// Every linked device both reads and writes (mesh of equal peers, spec §11),
-	// so the only honest status distinction is active / not-set-up.
-	const statusLabel = $derived(!hasConfig ? 'Not set up yet' : 'Sync active');
+	// so there is no enabled/disabled distinction — but "Sync active" is only
+	// honest once a tip has actually been read or published (`lastSeenTip`). A
+	// config that has never seen a tip is linked-but-not-converged (slow relays,
+	// or a signer that cannot decrypt the tip at all).
+	const statusLabel = $derived(
+		!hasConfig ? 'Not set up yet' : config?.lastSeenTip ? 'Sync active' : 'Linked — not synced yet'
+	);
 
 	function toggleBlossom(server: string, checked: boolean) {
 		if (checked) {
@@ -157,13 +162,23 @@
 	async function handleResync() {
 		resyncing = true;
 		try {
-			const counts = await reconcileMultiDeviceNow();
-			if (!counts) {
-				toast.error('Sync is off, or no group document was found');
-			} else {
+			const result = await reconcileMultiDeviceNow();
+			if (result.status === 'ok') {
+				const { counts } = result;
 				toast.success(
 					`Re-synced — ${counts.fastForwarded} caught up, ${counts.seeded} new, ${counts.skipped} already current`
 				);
+				// The service saved a fresh lastSeenTip — re-read so the status card
+				// flips from "not synced yet" to green without a page reload.
+				config = getMultiDeviceConfig();
+			} else if (result.status === 'signer-no-nip44') {
+				toast.error('This signer does not support NIP-44 v2 — multi-device sync needs it');
+			} else if (result.status === 'no-tip') {
+				toast.error('No tip found on the configured relays — check them or link again');
+			} else if (result.status === 'unreadable-tip') {
+				toast.error('Found a tip but could not decrypt or verify it');
+			} else {
+				toast.error('Multi-device sync is off on this device');
 			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Could not re-sync');
@@ -207,9 +222,16 @@
 			// without a page reload (the $effect only re-runs on account change).
 			config = getMultiDeviceConfig();
 			connectionString = config ? buildConnectionString(config) : '';
-			toast.success(
-				`Linked — ${linkResult.seeded} group${linkResult.seeded === 1 ? '' : 's'} seeded`
-			);
+			if (linkResult.seeded === 0 && linkResult.fastForwarded === 0 && linkResult.skipped === 0) {
+				// Nothing came through — relays may be slow, but this is NOT the
+				// "0 groups seeded" success it used to report. The live subscription
+				// keeps converging in the background.
+				toast.warning('Linked, but no groups arrived yet — sync continues in the background');
+			} else {
+				toast.success(
+					`Linked — ${linkResult.seeded} group${linkResult.seeded === 1 ? '' : 's'} seeded`
+				);
+			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Could not link this device');
 		} finally {
@@ -267,9 +289,11 @@
 							<div class="min-w-0">
 								<p class="flex items-center gap-2 text-sm font-medium">
 									<span
-										class="size-2 shrink-0 rounded-full {hasConfig
-											? 'bg-emerald-500'
-											: 'bg-muted-foreground'}"
+										class="size-2 shrink-0 rounded-full {!hasConfig
+											? 'bg-muted-foreground'
+											: config?.lastSeenTip
+												? 'bg-emerald-500'
+												: 'bg-amber-500'}"
 									></span>
 									{statusLabel}
 								</p>

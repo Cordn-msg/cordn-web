@@ -353,6 +353,12 @@ export function enableMultiDevice(
 	if (!browser) throw new Error('Multi-device can only run in the browser');
 	const account = manager.getActive();
 	if (!account) throw new Error('Log in to enable multi-device sync');
+	// The tip seal routes through the active signer in BOTH directions (§6), so a
+	// signer without NIP-44 v2 can neither read nor publish the tip. Fail at the
+	// entry point instead of degrading to a silent zero-group state.
+	if (!account.nip44) {
+		throw new Error('This signer does not support NIP-44 v2 — multi-device sync needs it');
+	}
 	dbg('enableMultiDevice enter', { hadAccount: !!account, relayCount: relays?.length ?? 0 });
 	const existing = getMultiDeviceConfig(account.pubkey);
 	const config = existing ?? createFreshConfig(account.pubkey, relays, blossomServers);
@@ -1514,22 +1520,33 @@ export function resetMultiDeviceSession(): void {
 	stopTipSubscription();
 }
 
+/** Outcome of a manual `reconcileMultiDeviceNow()`. The non-ok statuses keep
+ * "no groups because sync is off" distinct from "no groups because the tip is
+ * unreachable or undecryptable" — previously all collapsed into `null` and the
+ * UI rendered the same message for every cause. */
+export type MultiDeviceReconcileResult =
+	| { status: 'ok'; counts: ReconcileCounts }
+	| { status: 'off' | 'no-account' | 'signer-no-nip44' | 'no-tip' | 'unreadable-tip' };
+
 /** Manual one-shot reconcile (diagnostic / recovery). Fetches the tip +
  * reconciles (§8), bypassing the in-session dedup so a repeat click always
  * re-applies. Used by the config-page "Re-sync now" action. No-op when sync is
  * off / no account; does not start the live subscription. */
-export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null> {
-	if (!browser) return null;
+export async function reconcileMultiDeviceNow(): Promise<MultiDeviceReconcileResult> {
+	if (!browser) return { status: 'off' };
 	const config = getMultiDeviceConfig();
-	if (!config) return null;
+	if (!config) return { status: 'off' };
 	const account = manager.getActive();
-	if (!account) return null;
+	if (!account) return { status: 'no-account' };
+	// Same capability gate as link/enable: without nip44 the tip seal cannot be
+	// decrypted at all, which is a signer problem, not a relay one.
+	if (!account.nip44) return { status: 'signer-no-nip44' };
 	const ownerPubkey = normalizePubKey(account.pubkey);
 	dbg('reconcileMultiDeviceNow enter', { dTag: config.dTag.slice(0, 8) });
 	const tipEvent = await fetchLatestTipEvent(config);
 	if (!tipEvent) {
 		dbg('reconcileMultiDeviceNow no tip found');
-		return null;
+		return { status: 'no-tip' };
 	}
 	// Bypass the per-doc + per-event dedup: a manual trigger should always
 	// re-apply, even if the tip address/event id matches the last auto-reconcile.
@@ -1537,8 +1554,9 @@ export async function reconcileMultiDeviceNow(): Promise<ReconcileCounts | null>
 	config.lastSeenTipEventId = undefined;
 	saveConfig(config);
 	const counts = await handleTipEvent(tipEvent, ownerPubkey);
+	if (!counts) return { status: 'unreadable-tip' };
 	dbg('reconcileMultiDeviceNow done', { counts });
-	return counts;
+	return { status: 'ok', counts };
 }
 
 /** §10 mitigation #1: reconcile the tip before staging an epoch-advancing Commit
@@ -2264,6 +2282,12 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	if (!browser) throw new Error('Multi-device can only run in the browser');
 	const account = manager.getActive();
 	if (!account) throw new Error('Log in to link a device');
+	// Probe before importing anything: the tip is NIP-44-sealed to the owner
+	// (§6), so a signer without nip44 would decrypt nothing and surface the
+	// failure as "0 groups seeded" with no error anywhere.
+	if (!account.nip44) {
+		throw new Error('This signer does not support NIP-44 v2 — multi-device sync needs it');
+	}
 	const payload = parseConnectionString(connection);
 	const decoded = nip19.decode(payload.naddr);
 	if (decoded.type !== 'naddr') throw new Error('Invalid connection string');
