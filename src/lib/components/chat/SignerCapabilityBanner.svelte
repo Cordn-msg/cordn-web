@@ -1,13 +1,22 @@
 <script lang="ts">
 	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
-	import { activeAccount } from '$lib/services/accountManager.svelte';
+	import { onMount } from 'svelte';
+	import { manager } from '$lib/services/accountManager.svelte';
 
-	// NIP-44 v2 is load-bearing beyond multi-device: the coordinator's stable
-	// lane (key packages, join requests, welcomes) and the multi-device tip seal
-	// all decrypt through the active signer. Some NIP-07 extensions and bunkers
-	// don't expose it — messaging still works there, so without this banner the
-	// failure is invisible until each affected flow times out.
-	const missing = $derived(!!$activeAccount && !$activeAccount.nip44);
+	// `account.nip44` is a plain getter over the extension's `window.nostr`
+	// object, not a reactive signal — extensions inject asynchronously, so a
+	// single read at mount can false-positive. Poll instead: the banner only
+	// appears once absence is actually observed, and a late injection clears it
+	// on the next tick. A 1s getter read is effectively free.
+	let missing = $state(false);
+
+	onMount(() => {
+		const id = setInterval(() => {
+			const account = manager.getActive();
+			missing = !!account && !account.nip44;
+		}, 1000);
+		return () => clearInterval(id);
+	});
 </script>
 
 {#if missing}
