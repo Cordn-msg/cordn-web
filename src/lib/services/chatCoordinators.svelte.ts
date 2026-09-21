@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { untrack } from 'svelte';
+import { markBackupDirty } from '$lib/services/chatBackupDirty';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { ProfileModel } from 'applesauce-core/models';
 import { manager } from '$lib/services/accountManager.svelte';
@@ -100,6 +101,7 @@ function migrateCoordinator(entry: StoredCoordinator): StoredCoordinator {
 
 function saveCoordinators() {
 	if (!browser) return;
+	markBackupDirty();
 	const payload: PersistedCoordinators = { coordinators: chatCoordinatorsStore.coordinators };
 	localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 	// Re-seed the native background poll set so worker routing tracks relay changes. Dynamic

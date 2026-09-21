@@ -9,6 +9,7 @@ import {
 	type KeyPackage
 } from 'ts-mls';
 import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import { markBackupDirty } from '$lib/services/chatBackupDirty';
 import {
 	onGroupStateAdvance,
 	isMultiDeviceActive,
@@ -311,6 +312,7 @@ export async function ensureGroupsLoaded() {
 }
 
 function persistGroups(groups: StoredChatGroup[]) {
+	markBackupDirty();
 	persistGroupsPromise = persistGroupsPromise
 		.then(async () => {
 			const storage = await getChatStorage();
@@ -331,6 +333,7 @@ function persistGroups(groups: StoredChatGroup[]) {
  * chain is kept so bulk loads and single-group writes still order safely.
  */
 function persistSingleGroup(group: StoredChatGroup) {
+	markBackupDirty();
 	persistGroupsPromise = persistGroupsPromise
 		.then(async () => {
 			const storage = await getChatStorage();

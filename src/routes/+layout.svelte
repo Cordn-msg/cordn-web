@@ -9,6 +9,7 @@
 	import NativeAppUpdateBanner from '$lib/components/NativeAppUpdateBanner.svelte';
 	import { onMount } from 'svelte';
 	import { initNativeShell } from '$lib/services/nativeBridge';
+	import { initAutoBackup } from '$lib/services/backupAutomation.svelte';
 	import { initAppearance } from '$lib/themes/appearance.svelte';
 	import { defineCustomElements } from '@ionic/pwa-elements/loader';
 
@@ -35,6 +36,8 @@
 		// web). Harmless no-op on native, where takePhoto uses the real camera intent.
 		defineCustomElements(window);
 		void initNativeShell();
+		// Automated backups: no-op on web and when not opted in (guards inside).
+		initAutoBackup();
 		// Re-apply the stored theme post-hydration (the app.html inline script has
 		// already painted it) and run the one-time default migration.
 		void initAppearance();
