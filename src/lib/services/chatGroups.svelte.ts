@@ -383,6 +383,7 @@ class RemovedFromGroupError extends Error {
 		this.name = 'RemovedFromGroupError';
 	}
 }
+export { RemovedFromGroupError };
 
 export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean {
 	if (!group) return false;
@@ -1534,6 +1535,11 @@ export async function sendChatGroupMessage(input: {
 	 *  through so the stashed key matches the ciphertext even if the group state
 	 *  moved on. Other callers omit it and the key is derived here as before. */
 	mediaKeyBase64?: string;
+	/** Awaited after the intent is MLS-sealed (event id known) and BEFORE the
+	 *  coordinator post. The offline outbox persists the event id here so an
+	 *  ambiguous outcome (timeout / app closed mid-post) can be resolved by
+	 *  checking the backlog before any retry — msg_post has no server dedup. */
+	onSealed?: (eventId: string) => Promise<void>;
 }): Promise<StoredChatMessage> {
 	return runGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to send a message');
@@ -1564,6 +1570,12 @@ export async function sendChatGroupMessage(input: {
 			state,
 			opaqueMessageBase64: outbound.opaqueMessageBase64
 		});
+
+		// Attempt marker: durable record of "this event id is (about to be) posted"
+		// before the RPC leaves. See the offline outbox (chatOutboxQueue.ts).
+		if (input.onSealed) {
+			await input.onSealed(outbound.event.id);
+		}
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedOutbound)

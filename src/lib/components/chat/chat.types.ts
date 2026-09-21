@@ -9,7 +9,7 @@ export interface ChatMessage {
 	timeLabel: string;
 	dayLabel: string;
 	isOwn?: boolean;
-	deliveryState?: 'sending' | 'sent' | 'error';
+	deliveryState?: 'sending' | 'sent' | 'error' | 'queued';
 	edited?: boolean;
 	deleted?: boolean;
 	reactions?: Array<{
