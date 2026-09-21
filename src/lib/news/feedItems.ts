@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-21-enter-key',
+		createdAt: Date.UTC(2026, 8, 21),
+		version: 1,
+		title: 'An Enter key that fits your device',
+		body: "- ✨ On phones, the return key now starts a new line instead of sending — writing a message with several lines no longer sends it halfway through. On devices with a keyboard, Enter keeps sending and Shift+Enter starts a new line, exactly as before.\n- ✨ Prefer it the other way around? The new Settings → Chat behavior page lets you choose: keep the automatic behavior, make Enter always send, or make Enter always start a new line (then send with Ctrl+Enter — ⌘ on Mac — or the send button).\n- 🐛 Typing in Japanese, Chinese, or Korean no longer risks sending your message early: pressing Enter to confirm a conversion in your keyboard's IME is no longer treated as send."
+	},
+	{
 		id: 'cordn-news-2026-09-20-instant-sends',
 		createdAt: Date.UTC(2026, 8, 20),
 		version: 9,
