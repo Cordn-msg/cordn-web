@@ -3,6 +3,7 @@ import { registerAndroidAccounts } from 'applesauce-accounts/accounts/android-na
 import { NostrConnectSigner } from 'applesauce-signers/signers';
 import { browser } from '$app/environment';
 import { relayPool } from './relay-pool';
+import { markBackupDirty } from './chatBackupDirty';
 
 // create an account manager instance
 export const manager = new AccountManager();
@@ -40,6 +41,7 @@ if (browser) {
 	// next, subscribe to any accounts added or removed
 	manager.accounts$.subscribe(() => {
 		// save all the accounts into the "accounts" field
+		markBackupDirty();
 		localStorage.setItem('accounts', JSON.stringify(manager.toJSON()));
 	});
 }

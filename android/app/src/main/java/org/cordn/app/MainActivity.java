@@ -3,6 +3,7 @@ package org.cordn.app;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.WindowManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 
@@ -17,7 +18,14 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SaveAsPlugin.class);
         // Same deal: local HEIC/metadata-strip image re-encoder (see SanitizeImagePlugin).
         registerPlugin(SanitizeImagePlugin.class);
+        // Same deal: Keystore-backed value store for the automated-backup key (see
+        // SecureStorePlugin) — must register before super.onCreate like the others.
+        registerPlugin(SecureStorePlugin.class);
         super.onCreate(savedInstanceState);
+        // FLAG_SECURE: keep chat contents out of screenshots and the recents thumbnail —
+        // standard messenger behavior (Signal/WhatsApp do the same). Trade-off: users can't
+        // screenshot their own conversations either; that is the point.
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         // Capacitor's default onRenderProcessGone returns false, which makes the whole app exit
         // when the WebView renderer is killed — typically an OOM (large backup export, long chat
         // history) or a system memory reclaim while backgrounded. Users see a "crash" with no

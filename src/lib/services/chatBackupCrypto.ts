@@ -33,7 +33,47 @@ export interface DecryptRequest {
 	ciphertext: string;
 }
 
-export type BackupWorkerRequest = EncryptRequest | DecryptRequest;
+/** v2 envelope: encrypt the document with a raw 32-byte backup key (base64). No KDF — this is
+ * the automated-backup hot path, so it must be instant even on a phone. */
+export interface EncryptWithKeyRequest {
+	op: 'encryptWithKey';
+	/** Raw backup key, base64. */
+	key: string;
+	plaintext: string;
+}
+
+export interface DecryptWithKeyRequest {
+	op: 'decryptWithKey';
+	key: string;
+	iv: string;
+	ciphertext: string;
+}
+
+/** Wrap the raw backup key with a passphrase-derived key (PBKDF2 + AES-GCM on 32 bytes).
+ * Runs once at enable/passphrase-change, never per backup — the KDF cost stays off the hot path. */
+export interface WrapKeyRequest {
+	op: 'wrapKey';
+	passphrase: string;
+	/** Raw backup key, base64. */
+	key: string;
+}
+
+export interface UnwrapKeyRequest {
+	op: 'unwrapKey';
+	passphrase: string;
+	salt: string;
+	iv: string;
+	/** Wrapped backup key, base64. */
+	wrapped: string;
+}
+
+export type BackupWorkerRequest =
+	| EncryptRequest
+	| DecryptRequest
+	| EncryptWithKeyRequest
+	| DecryptWithKeyRequest
+	| WrapKeyRequest
+	| UnwrapKeyRequest;
 
 export interface EncryptResponse {
 	ok: true;
@@ -47,9 +87,40 @@ export interface DecryptResponse {
 	plaintext: string;
 }
 
+export interface EncryptWithKeyResponse {
+	ok: true;
+	iv: string;
+	ciphertext: string;
+}
+
+export interface DecryptWithKeyResponse {
+	ok: true;
+	plaintext: string;
+}
+
+export interface WrapKeyResponse {
+	ok: true;
+	salt: string;
+	iv: string;
+	wrapped: string;
+}
+
+export interface UnwrapKeyResponse {
+	ok: true;
+	/** Raw backup key, base64. */
+	key: string;
+}
+
 export interface ErrorResponse {
 	ok: false;
 	message: string;
 }
 
-export type BackupWorkerResponse = EncryptResponse | DecryptResponse | ErrorResponse;
+export type BackupWorkerResponse =
+	| EncryptResponse
+	| DecryptResponse
+	| EncryptWithKeyResponse
+	| DecryptWithKeyResponse
+	| WrapKeyResponse
+	| UnwrapKeyResponse
+	| ErrorResponse;

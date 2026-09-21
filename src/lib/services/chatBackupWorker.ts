@@ -135,7 +135,7 @@ scope.onmessage = async (event: MessageEvent<BackupWorkerRequest>) => {
 				iv: bytesToBase64(iv),
 				ciphertext: bytesToBase64(ciphertext)
 			};
-		} else {
+		} else if (req.op === 'decrypt') {
 			const key = await deriveKey(req.passphrase, base64ToBytes(req.salt));
 			// Both crypto.subtle.decrypt and @noble gcm.decrypt throw on GCM tag
 			// mismatch (wrong passphrase / corruption); the catch below surfaces
@@ -143,6 +143,37 @@ scope.onmessage = async (event: MessageEvent<BackupWorkerRequest>) => {
 			// passphrase" message.
 			const plaintext = await aesDecrypt(key, base64ToBytes(req.iv), base64ToBytes(req.ciphertext));
 			res = { ok: true, plaintext: new TextDecoder().decode(plaintext) };
+		} else if (req.op === 'encryptWithKey') {
+			const iv = randomBytes(IV_BYTES);
+			const ciphertext = await aesEncrypt(
+				base64ToBytes(req.key),
+				iv,
+				new TextEncoder().encode(req.plaintext)
+			);
+			res = { ok: true, iv: bytesToBase64(iv), ciphertext: bytesToBase64(ciphertext) };
+		} else if (req.op === 'decryptWithKey') {
+			const plaintext = await aesDecrypt(
+				base64ToBytes(req.key),
+				base64ToBytes(req.iv),
+				base64ToBytes(req.ciphertext)
+			);
+			res = { ok: true, plaintext: new TextDecoder().decode(plaintext) };
+		} else if (req.op === 'wrapKey') {
+			const salt = randomBytes(SALT_BYTES);
+			const iv = randomBytes(IV_BYTES);
+			const kek = await deriveKey(req.passphrase, salt);
+			const wrapped = await aesEncrypt(kek, iv, base64ToBytes(req.key));
+			res = {
+				ok: true,
+				salt: bytesToBase64(salt),
+				iv: bytesToBase64(iv),
+				wrapped: bytesToBase64(wrapped)
+			};
+		} else {
+			const kek = await deriveKey(req.passphrase, base64ToBytes(req.salt));
+			// Tag mismatch on wrong passphrase throws; catch below returns the error variant.
+			const key = await aesDecrypt(kek, base64ToBytes(req.iv), base64ToBytes(req.wrapped));
+			res = { ok: true, key: bytesToBase64(key) };
 		}
 		scope.postMessage(res);
 	} catch (error) {

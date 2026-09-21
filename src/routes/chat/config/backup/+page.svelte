@@ -17,10 +17,17 @@
 		CrossAccountRestoreError,
 		type ImportResult
 	} from '$lib/services/chatBackup.svelte';
+	import {
+		autoBackupStore,
+		enableAutoBackup,
+		disableAutoBackup,
+		runAutoBackup,
+		restoreLatestDeviceBackup
+	} from '$lib/services/backupAutomation.svelte';
 	import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { toast } from 'svelte-sonner';
 	import { nip19 } from 'nostr-tools';
-	import { isNativePlatform, saveBlob } from '$lib/services/nativeShims';
+	import { isNativePlatform, saveBlob, copyText } from '$lib/services/nativeShims';
 	import Download from '@lucide/svelte/icons/download';
 	import Upload from '@lucide/svelte/icons/upload';
 	import DatabaseBackup from '@lucide/svelte/icons/database-backup';
@@ -47,6 +54,15 @@
 	// Set when import was blocked because the active pubkey isn't in the backup;
 	// drives the cross-account warning variant of the confirm dialog.
 	let crossAccount = $state<CrossAccountRestoreError | null>(null);
+
+	// Automatic-backup controls (native only)
+	let autoSetupOpen = $state(false);
+	let autoSetupPhase = $state<'setup' | 'key'>('setup');
+	let autoPassphrase = $state('');
+	let recoveryKey = $state('');
+	let enabling = $state(false);
+	let restoringDevice = $state(false);
+	let deviceRecoveryKey = $state('');
 
 	const groupCount = $derived(listChatGroups().length);
 
@@ -140,6 +156,50 @@
 			? nip19.npubEncode(crossAccount.backupPubkeys[0]).slice(0, 16)
 			: ''
 	);
+
+	function startAutoSetup() {
+		autoPassphrase = '';
+		recoveryKey = '';
+		autoSetupPhase = 'setup';
+		autoSetupOpen = true;
+	}
+
+	async function confirmAutoSetup() {
+		enabling = true;
+		await new Promise((resolve) => setTimeout(resolve)); // paint the spinner first
+		try {
+			recoveryKey = await enableAutoBackup(autoPassphrase || undefined);
+			autoSetupPhase = 'key';
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Could not enable automatic backups');
+		} finally {
+			enabling = false;
+		}
+	}
+
+	async function finishAutoSetup() {
+		autoSetupOpen = false;
+		const ok = await runAutoBackup();
+		toast.success(ok ? 'First automatic backup created' : 'Automatic backups enabled');
+	}
+
+	async function handleRestoreDevice() {
+		restoringDevice = true;
+		await new Promise((resolve) => setTimeout(resolve)); // paint the spinner first
+		try {
+			importResult = await restoreLatestDeviceBackup(
+				deviceRecoveryKey.trim() ? { backupKeyHex: deviceRecoveryKey } : undefined
+			);
+			await ensureGroupsLoaded();
+			toast.success(
+				`Restored ${importResult.groups} group${importResult.groups === 1 ? '' : 's'}, ${importResult.accounts} account(s)`
+			);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Restore failed');
+		} finally {
+			restoringDevice = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -269,6 +329,68 @@
 							</Button>
 						</Card.Content>
 					</Card.Root>
+
+					{#if isNativePlatform()}
+						<Card.Root>
+							<Card.Header>
+								<Card.Title>Automatic backups</Card.Title>
+								<Card.Description>
+									Opt-in. Snapshots are encrypted with a backup key held in Android secure hardware
+									and stored in app-private storage. Covers all accounts on this device.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="space-y-4">
+								{#if autoBackupStore.settings.enabled}
+									<div class="space-y-1 rounded-lg border border-border p-3 text-sm">
+										<p class="font-medium">
+											On — last backup
+											{autoBackupStore.settings.lastRunAt
+												? new Date(autoBackupStore.settings.lastRunAt).toLocaleString()
+												: 'pending'}
+										</p>
+										{#if autoBackupStore.lastError}
+											<p class="text-destructive">{autoBackupStore.lastError}</p>
+										{/if}
+										<p class="text-xs text-muted-foreground">
+											Runs when you open or return to the app. Device backups survive app data
+											issues but not uninstall — for a new device, use your recovery key or a manual
+											export.
+										</p>
+									</div>
+									<div class="flex gap-2">
+										<Button
+											onclick={() => void runAutoBackup()}
+											disabled={autoBackupStore.running}
+											class="flex-1"
+										>
+											{#if autoBackupStore.running}
+												<Spinner class="mr-2 size-4" />
+												Backing up…
+											{:else}Back up now{/if}
+										</Button>
+										<Button
+											variant="outline"
+											onclick={() => {
+												disableAutoBackup();
+												toast.success('Automatic backups turned off');
+											}}
+										>
+											Turn off
+										</Button>
+									</div>
+								{:else}
+									<p class="text-sm text-muted-foreground">
+										You'll get a one-time recovery key — without it (or a passphrase), backups can't
+										be read on another device.
+									</p>
+									<Button onclick={startAutoSetup} class="w-full">
+										<DatabaseBackup class="mr-2 size-4" />
+										Enable automatic backups
+									</Button>
+								{/if}
+							</Card.Content>
+						</Card.Root>
+					{/if}
 				{:else}
 					<Card.Root>
 						<Card.Header>
@@ -340,6 +462,40 @@
 							{/if}
 						</Card.Content>
 					</Card.Root>
+
+					{#if isNativePlatform()}
+						<Card.Root>
+							<Card.Header>
+								<Card.Title>Restore device backup</Card.Title>
+								<Card.Description>
+									The latest automatic backup from this device's app storage — no file picker
+									needed.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="space-y-3">
+								<div class="space-y-2">
+									<Label for="device-recovery-key">Recovery key (after reinstall)</Label>
+									<Input
+										id="device-recovery-key"
+										bind:value={deviceRecoveryKey}
+										placeholder="64-character key — optional on this device"
+										autocomplete="off"
+									/>
+								</div>
+								<Button
+									onclick={handleRestoreDevice}
+									disabled={restoringDevice}
+									variant="secondary"
+									class="w-full"
+								>
+									{#if restoringDevice}
+										<Spinner class="mr-2 size-4" />
+										Restoring…
+									{:else}<Upload class="mr-2 size-4" />Restore latest{/if}
+								</Button>
+							</Card.Content>
+						</Card.Root>
+					{/if}
 				{/if}
 
 				<div
@@ -394,6 +550,58 @@
 			<div class="flex justify-end gap-2 pt-4">
 				<Button variant="outline" onclick={() => (confirmOpen = false)}>Cancel</Button>
 				<Button disabled={importing} onclick={() => runImport(false)}>Restore</Button>
+			</div>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={autoSetupOpen}>
+	<Dialog.Content class="sm:max-w-[425px]">
+		{#if autoSetupPhase === 'setup'}
+			<Dialog.Header>
+				<Dialog.Title>Enable automatic backups</Dialog.Title>
+				<Dialog.Description>
+					A random backup key stored in Android secure hardware encrypts each snapshot. Optionally
+					add a passphrase so the key can also be recovered with it on another device.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="space-y-2 pt-2">
+				<Label for="auto-passphrase">Passphrase (optional)</Label>
+				<Input
+					id="auto-passphrase"
+					type="password"
+					bind:value={autoPassphrase}
+					placeholder="For recovery on another device"
+					autocomplete="new-password"
+				/>
+			</div>
+			<div class="flex justify-end gap-2 pt-4">
+				<Button variant="outline" onclick={() => (autoSetupOpen = false)}>Cancel</Button>
+				<Button onclick={confirmAutoSetup} disabled={enabling}>
+					{#if enabling}<Spinner class="mr-2 size-4" />{/if}
+					Continue
+				</Button>
+			</div>
+		{:else}
+			<Dialog.Header>
+				<Dialog.Title>Save your recovery key</Dialog.Title>
+				<Dialog.Description>
+					Shown once. With it (or your passphrase) you can restore backups on any device; without
+					it, backups only restore on this device.
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="space-y-2 pt-2">
+				<code class="block rounded-md bg-muted p-3 font-mono text-xs break-all">{recoveryKey}</code>
+				<Button
+					variant="outline"
+					class="w-full"
+					onclick={() => void copyText(recoveryKey).then(() => toast.success('Copied'))}
+				>
+					Copy key
+				</Button>
+			</div>
+			<div class="flex justify-end gap-2 pt-4">
+				<Button onclick={finishAutoSetup}>I've saved it</Button>
 			</div>
 		{/if}
 	</Dialog.Content>

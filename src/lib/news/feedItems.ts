@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-22-automatic-backups',
+		createdAt: Date.UTC(2026, 8, 22),
+		version: 1,
+		title: 'Automatic backups — opt in, encrypted on your device',
+		body: "- ✨ Opt-in automatic backups (Android): enable them once in Settings → Backup & recovery and Cordn keeps an encrypted snapshot of your accounts, group secrets, and message history in the app's private storage — refreshed whenever you open or return to the app. No passphrase to remember for day-to-day use: each snapshot is encrypted with a backup key held in Android's secure hardware, and restoring on the same device is one tap, no typing.\n- ✨ Setting it up shows a one-time recovery key (and optionally lets you add a passphrase) so a backup can also be restored on a new device — write the key down somewhere safe; without it or the passphrase, backups only open on the device that made them.\n- 🔄 Screenshots and the app switcher preview no longer show your chats: the screen is blanked outside the app, the same privacy behavior other messengers use."
+	},
+	{
 		id: 'cordn-news-2026-09-21-signer-capability',
 		createdAt: Date.UTC(2026, 8, 21),
 		version: 1,
