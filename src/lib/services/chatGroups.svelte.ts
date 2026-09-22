@@ -1375,8 +1375,11 @@ export async function updateChatGroupMetadata(input: {
 }
 
 export function listChatGroupMessages(groupId: string): StoredChatMessage[] {
-	const group = getChatGroup(groupId);
-	return group ? [...group.messages].sort((a, b) => a.cursor - b.cursor) : [];
+	// Stable, unsorted view of the store array (ingest pushes in cursor order).
+	// No per-call copy+sort: this sits in hot deriveds and is called per outbox
+	// entry per drain, and every consumer is order-independent (display re-sorts
+	// by createdAt+id, scans are folds/maxes).
+	return getChatGroup(groupId)?.messages ?? [];
 }
 
 export function listChatGroupSyncIssues(groupId: string): StoredChatSyncIssue[] {

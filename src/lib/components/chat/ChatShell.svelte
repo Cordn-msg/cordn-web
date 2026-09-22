@@ -172,7 +172,9 @@
 			return createdAtDiff;
 		}
 
-		return a.id.localeCompare(b.id);
+		// Codepoint compare, not localeCompare: collation varies by user locale
+		// and identical input must sort identically on every device.
+		return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	}
 
 	function appendOptimisticMessage(message: ChatMessage) {
@@ -353,6 +355,8 @@
 	// edit-resolved text. O(messages) once per message change, O(pins) to resolve.
 	const pinnedMessages = $derived.by<ChatMessage[]>(() => {
 		const { pinSet } = messageMaps;
+		// Common case: no pins — skip the O(messages) view-model map entirely.
+		if (pinSet.size === 0) return [];
 		const byEventId = new SvelteMap<string, ChatMessage>();
 		for (const message of messages) byEventId.set(message.eventId, message);
 

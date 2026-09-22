@@ -40,29 +40,6 @@
 	const ESTIMATED_MESSAGE_HEIGHT = 128;
 	const VIRTUAL_OVERSCAN = 8;
 
-	const groupedMessages = $derived.by(() =>
-		messages.map((message, index) => {
-			const previousMessage = index > 0 ? messages[index - 1] : null;
-			const nextMessage = index < messages.length - 1 ? messages[index + 1] : null;
-
-			if (message.systemKind) {
-				return {
-					message,
-					showAuthor: false,
-					showAvatar: false,
-					showDayLabel: previousMessage?.dayLabel !== message.dayLabel
-				};
-			}
-
-			return {
-				message,
-				showAuthor: previousMessage?.author !== message.author,
-				showAvatar: nextMessage?.author !== message.author,
-				showDayLabel: previousMessage?.dayLabel !== message.dayLabel
-			};
-		})
-	);
-
 	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
 		count: 0,
 		getScrollElement: () => container,
@@ -306,21 +283,24 @@
 		<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
 			<div class="relative w-full" style={`height: ${totalSize}px;`}>
 				{#each virtualItems as virtualItem (virtualItem.key)}
-					{@const entry = groupedMessages[virtualItem.index]}
-					{#if entry}
+					{@const message = messages[virtualItem.index]}
+					{#if message}
+						{@const previousMessage = messages[virtualItem.index - 1]}
+						{@const nextMessage = messages[virtualItem.index + 1]}
+						{@const systemRow = Boolean(message.systemKind)}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
-							data-message-id={entry.message.id}
+							data-message-id={message.id}
 							class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
 							style={`transform: translateY(${virtualItem.start}px);`}
 							use:measureItem
 						>
 							<ChatMessageItem
-								message={entry.message}
-								showAuthor={entry.showAuthor}
-								showAvatar={entry.showAvatar}
-								showDayLabel={entry.showDayLabel}
+								{message}
+								showAuthor={!systemRow && previousMessage?.author !== message.author}
+								showAvatar={!systemRow && nextMessage?.author !== message.author}
+								showDayLabel={previousMessage?.dayLabel !== message.dayLabel}
 								{onReply}
 								{onReact}
 								{onEdit}
@@ -329,7 +309,7 @@
 								onNavigateToMessage={navigateToMessage}
 								{onOpenRich}
 								{onPin}
-								highlighted={highlightedMessageId === entry.message.id}
+								highlighted={highlightedMessageId === message.id}
 							/>
 						</div>
 					{/if}

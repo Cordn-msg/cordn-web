@@ -771,3 +771,47 @@ describe('pruneConsumedKeyPackagesForActiveGroups()', () => {
 		expect(arg).not.toContain(undefined);
 	});
 });
+
+describe('listChatGroupMessages()', () => {
+	test('is a stable, unsorted view of the stored messages', async () => {
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+		const ownerPubkey = 'dd'.repeat(32);
+		const groupId = 'list-view';
+
+		const message = (id: string, cursor: number) => ({
+			id,
+			cursor,
+			createdAt: 100 + cursor,
+			direction: 'inbound' as const,
+			sender: 'ee'.repeat(32),
+			kind: 9,
+			tags: [],
+			content: id
+		});
+
+		await storage.putGroup({
+			id: groupId,
+			ownerPubkey,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 3,
+			fetchCursor: 3,
+			status: 'active',
+			stateBytes: new Uint8Array([1]),
+			// Deliberately not cursor order: the view must not re-sort per call.
+			messages: [message('m3', 3), message('m1', 1), message('m2', 2)],
+			syncIssues: []
+		});
+
+		const { reloadChatGroupsForOwner, listChatGroupMessages } = await import('./chatGroups.svelte');
+		await reloadChatGroupsForOwner(ownerPubkey);
+
+		const listed = listChatGroupMessages(groupId);
+		expect(listed.map((m) => m.id)).toEqual(['m3', 'm1', 'm2']);
+		// Same reference every call — no copy+sort in the hot read path.
+		expect(listed).toBe(listChatGroupMessages(groupId));
+
+		await storage.deleteGroup(groupId);
+	});
+});
