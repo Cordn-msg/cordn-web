@@ -68,7 +68,9 @@
 	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
 
 	let isPollRefreshing = $state(false);
-	const pollFailures = $state.raw<string[]>([]);
+	// $state (not .raw): pollFailures is mutated via splice below and the error
+	// banner derives from it — raw state mutations never notify.
+	const pollFailures = $state<string[]>([]);
 
 	async function pollNotifications() {
 		const account = $activeAccount;
