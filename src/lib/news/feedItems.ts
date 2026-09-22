@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-22-sturdier-sends',
+		createdAt: Date.UTC(2026, 8, 22),
+		version: 1,
+		title: 'Sturdier offline sends, smoother long chats',
+		body: "- 🐛 A queued message that can't be delivered at all (for example after you are removed from the group) no longer keeps trying in the background forever: it is marked failed and waits for you, and one tap retries it.\n- 🐛 A message whose send was cut off mid-way is now re-sent only after the app has confirmed it never arrived — a flaky connection can no longer deliver the same message twice.\n- 🐛 The notifications dialog now always names the right coordinator when one fails a check: the error details used to stay stale after a retry.\n- 🔄 Importing a theme with an invalid color value is now caught right away, instead of the color being quietly dropped and falling back to a default.\n- 🔄 Long chats do less work with every update: sending, reacting, and scrolling stay smooth even in conversations with thousands of messages, and other groups syncing in the background no longer slow down the chat you are looking at."
+	},
+	{
 		id: 'cordn-news-2026-09-21-signer-capability',
 		createdAt: Date.UTC(2026, 8, 21),
 		version: 1,
