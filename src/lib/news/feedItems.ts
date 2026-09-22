@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-22-ostrich-theme',
+		createdAt: Date.UTC(2026, 8, 22),
+		version: 1,
+		title: 'Ostrich: a purple theme with a bitcoin heart',
+		body: "- ✨ New Ostrich theme in Settings → Appearance: deep nostr-purple surfaces, a vivid violet accent, and a bitcoin-orange focus ring for that ⚡ touch. Every color combination is checked to stay comfortably readable (WCAG AA) in both light and dark mode.\n- 🔄 Ostrich takes Dracula's seat in the lineup. If Dracula was your active theme you land on Classic — and if purple is your thing, Ostrich is one tap away. Any look you lost can be rebuilt in the theme editor: fork, tweak, export."
+	},
+	{
 		id: 'cordn-news-2026-09-22-sturdier-sends',
 		createdAt: Date.UTC(2026, 8, 22),
 		version: 1,

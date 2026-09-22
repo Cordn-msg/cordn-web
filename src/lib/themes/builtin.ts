@@ -7,8 +7,7 @@ import type { ThemeDefinition } from './types';
  * `soft` is the lower-contrast default (body text ~9.4:1 light / ~8.2:1 dark,
  * all muted/status pairs ≥ 4.5:1 WCAG AA). The rest of the lineup keeps the
  * same AA bar — the invariants test enforces it for every built-in pair.
- * Catppuccin ports the official Latte/Mocha palette (MIT); Dracula's light
- * variant is our own "Dracula Daylight" (no official light palette exists).
+ * Catppuccin ports the official Latte/Mocha palette (MIT).
  *
  * layout.css `:root`/`.dark` mirror `soft` so the pre-JS paint matches the
  * default; any other active theme is injected at runtime with higher
@@ -339,50 +338,58 @@ export const CATPPUCCIN_THEME: ThemeDefinition = {
 		radius: '0.625rem'
 	}
 };
-export const DRACULA_THEME: ThemeDefinition = {
-	id: 'dracula',
-	name: 'Dracula',
+
+/**
+ * Ostrich — full nostr immersion: genuinely purple #221938 dark surfaces,
+ * vivid #c084fc primary with plum text on it, lavender-cream light. The
+ * bitcoin-orange focus ring (and the one-step-warm border/input hue) is the
+ * ⚡ detail — ring/input/border are outside every CONTRAST_PAIR, so the orange
+ * can't move AA. All pairs verified ≥4.5:1 in both variants.
+ */
+export const OSTRICH_THEME: ThemeDefinition = {
+	id: 'ostrich',
+	name: 'Ostrich',
 	light: {
-		background: '#f5f2fa',
-		foreground: '#33323f',
-		card: '#fbf9fd',
-		'card-foreground': '#33323f',
-		popover: '#fdfcff',
-		'popover-foreground': '#33323f',
-		primary: '#7c3aed',
-		'primary-foreground': '#f7f4fd',
-		secondary: '#ebe5f5',
-		'secondary-foreground': '#3f3a52',
-		muted: '#eeeaf6',
-		'muted-foreground': '#6d6785',
-		accent: '#e4dcf2',
-		'accent-foreground': '#3f3a52',
-		destructive: '#bd2845',
-		border: '#ded6ec',
-		input: '#d2c8e6',
-		ring: '#9a6cf0',
-		radius: '0.625rem'
+		background: '#f3eefb',
+		foreground: '#322a4a',
+		card: '#faf7ff',
+		'card-foreground': '#322a4a',
+		popover: '#fdfbff',
+		'popover-foreground': '#322a4a',
+		primary: '#7d3af0',
+		'primary-foreground': '#f9f6ff',
+		secondary: '#e9e1f7',
+		'secondary-foreground': '#3a3157',
+		muted: '#ece6f6',
+		'muted-foreground': '#645a8a',
+		accent: '#e2d5f8',
+		'accent-foreground': '#3a3157',
+		destructive: '#ab2d6b',
+		border: '#d9c8e8',
+		input: '#d2b6ea',
+		ring: '#c96a00',
+		radius: '0.75rem'
 	},
 	dark: {
-		background: '#282a36',
-		foreground: '#f8f8f2',
-		card: '#2b2d3a',
-		'card-foreground': '#f8f8f2',
-		popover: '#21222d',
-		'popover-foreground': '#f8f8f2',
-		primary: '#bd93f9',
-		'primary-foreground': '#1f1f2a',
-		secondary: '#3a3d4d',
-		'secondary-foreground': '#f8f8f2',
-		muted: '#343946',
-		'muted-foreground': '#98a1c9',
-		accent: '#44475a',
-		'accent-foreground': '#f8f8f2',
-		destructive: '#ff6e6e',
-		border: '#44475a',
-		input: '#4c4f63',
-		ring: '#bd93f9',
-		radius: '0.625rem'
+		background: '#221938',
+		foreground: '#eae2f6',
+		card: '#292044',
+		'card-foreground': '#eae2f6',
+		popover: '#1c1531',
+		'popover-foreground': '#efe8f9',
+		primary: '#c084fc',
+		'primary-foreground': '#201038',
+		secondary: '#342a55',
+		'secondary-foreground': '#ded3f0',
+		muted: '#332952',
+		'muted-foreground': '#aca0d0',
+		accent: '#3d2f66',
+		'accent-foreground': '#e5dcf4',
+		destructive: '#e56ba1',
+		border: '#473462',
+		input: '#543b73',
+		ring: '#f7931a',
+		radius: '0.75rem'
 	}
 };
 
@@ -394,7 +401,7 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
 	NAVY_THEME,
 	WARM_PAPER_THEME,
 	CATPPUCCIN_THEME,
-	DRACULA_THEME
+	OSTRICH_THEME
 ];
 
 export const DEFAULT_THEME_ID = SOFT_THEME.id;
