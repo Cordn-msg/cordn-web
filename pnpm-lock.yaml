@@ -10,6 +10,9 @@ overrides:
   minimatch: ^3.1.4
   uuid: ^11.1.1
   ws: ^8.21.0
+  fast-uri@>=3.0.0 <3.1.6: '>=3.1.6'
+  nanoid@>=4.0.0 <5.1.16: '>=5.1.16'
+  devalue@<5.9.1: '>=5.9.2'
 
 patchedDependencies:
   applesauce-accounts@6.0.0:
@@ -1621,8 +1624,9 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  devalue@5.8.2:
-    resolution: {integrity: sha512-DObPPAfdtFbXjxLqK8s2Xk9ZuWz5+ZoFEhC7J76es4GU/rEiXwHTmbImoCdyoCOcBH1UF3+Cz6Z2sYD4hyl5TA==}
+  devalue@6.0.2:
+    resolution: {integrity: sha512-6V1HzU4to74skg//ScZR2mp9bdz+rESC9jQzVIIG/ha0HYgymHcXIQQCjH0+ivRaSuY82fa9fZ7Ro6QZT4s4uw==}
+    engines: {node: '>=22.17'}
 
   diff@4.0.4:
     resolution: {integrity: sha512-X07nttJQkwkfKfvTPG/KSnE2OMdcUCao6+eXF3wmnIQRn2aPAHH3VxDbDOdegkd6JbPsXqShpvEOHfAT+nCNwQ==}
@@ -1808,8 +1812,8 @@ packages:
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
 
-  fast-uri@3.1.2:
-    resolution: {integrity: sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==}
+  fast-uri@4.2.1:
+    resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
 
   fd-slicer@1.1.0:
     resolution: {integrity: sha512-cE1qsB/VwyQozZ+q1dGxR8LBYNZeofhEdUNGSMbQD3Gw2lAzX9Zb3uIU6Ebc/Fmyjo9AWWfnn0AUCHqtevs/8g==}
@@ -2327,9 +2331,9 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nanoid@5.1.11:
-    resolution: {integrity: sha512-v+KEsUv2ps74PaSKv0gHTxTCgMXOIfBEbaqa6w6ISIGC7ZsvHN4N9oJ8d4cmf0n5oTzQz2SLmThbQWhjd/8eKg==}
-    engines: {node: ^18 || >=20}
+  nanoid@6.0.1:
+    resolution: {integrity: sha512-3wVS3i51pE2pi1k5FFL/95BGfVS0kSsvDVuGXHOtxox/TywUmtgq+3qiTOTbs9J7KfHaXPiN171k/A6dBnaXFw==}
+    engines: {node: ^22 || ^24 || >=26}
     hasBin: true
 
   napi-build-utils@2.0.0:
@@ -4157,7 +4161,7 @@ snapshots:
       '@types/cookie': 0.6.0
       acorn: 8.16.0
       cookie: 0.6.0
-      devalue: 5.8.2
+      devalue: 6.0.2
       esm-env: 1.2.2
       kleur: 4.1.5
       magic-string: 0.30.21
@@ -4549,7 +4553,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.1.2
+      fast-uri: 4.2.1
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -4567,7 +4571,7 @@ snapshots:
     dependencies:
       applesauce-core: 6.2.0(typescript@6.0.3)
       applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       rxjs: 7.8.2
     optionalDependencies:
       nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
@@ -4582,7 +4586,7 @@ snapshots:
       applesauce-core: 6.2.0(typescript@6.0.3)
       hash-sum: 2.0.0
       light-bolt11-decoder: 3.2.0
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color
@@ -4593,7 +4597,7 @@ snapshots:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
       hash-sum: 2.0.0
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       nostr-tools: 2.23.9(typescript@6.0.3)
       rxjs: 7.8.2
     transitivePeerDependencies:
@@ -4603,7 +4607,7 @@ snapshots:
   applesauce-loaders@6.0.0(typescript@6.0.3):
     dependencies:
       applesauce-core: 6.2.0(typescript@6.0.3)
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       rxjs: 7.8.2
     transitivePeerDependencies:
       - supports-color
@@ -4613,7 +4617,7 @@ snapshots:
     dependencies:
       '@noble/hashes': 2.2.0
       applesauce-core: 6.2.0(typescript@6.0.3)
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       nostr-tools: 2.23.9(typescript@6.0.3)
       rxjs: 7.8.2
     transitivePeerDependencies:
@@ -4624,7 +4628,7 @@ snapshots:
     dependencies:
       '@noble/hashes': 2.4.0
       applesauce-core: 6.2.0(typescript@6.0.3)
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       nostr-tools: 2.23.9(typescript@6.0.3)
       rxjs: 7.8.2
     transitivePeerDependencies:
@@ -4636,7 +4640,7 @@ snapshots:
       '@noble/secp256k1': 1.7.2
       applesauce-core: 6.2.0(typescript@6.0.3)
       debug: 4.4.3
-      nanoid: 5.1.11
+      nanoid: 6.0.1
       rxjs: 7.8.2
     optionalDependencies:
       nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
@@ -4996,7 +5000,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  devalue@5.8.2: {}
+  devalue@6.0.2: {}
 
   diff@4.0.4: {}
 
@@ -5220,7 +5224,7 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
-  fast-uri@3.1.2: {}
+  fast-uri@4.2.1: {}
 
   fd-slicer@1.1.0:
     dependencies:
@@ -5647,7 +5651,7 @@ snapshots:
 
   nanoid@3.3.16: {}
 
-  nanoid@5.1.11: {}
+  nanoid@6.0.1: {}
 
   napi-build-utils@2.0.0: {}
 
@@ -6340,7 +6344,7 @@ snapshots:
       aria-query: 5.3.1
       axobject-query: 4.1.0
       clsx: 2.1.1
-      devalue: 5.8.2
+      devalue: 6.0.2
       esm-env: 1.2.2
       esrap: 2.3.0(@typescript-eslint/types@8.59.3)
       is-reference: 3.0.3
