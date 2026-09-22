@@ -229,6 +229,54 @@ describe('offline outbox queue', () => {
 		expect(await listEntries(storage)).toHaveLength(0);
 	});
 
+	test('failed entries are terminal until the user retries', async () => {
+		const { queue, storage } = await freshModules();
+		mocks.sendMock.mockRejectedValue(new Error('coordinator is unhealthy and is read-only'));
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'undeliverable' });
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
+		expect((await listEntries(storage))[0].state).toBe('failed');
+
+		// Later drains never auto-retry a definitive failure (even past backoff).
+		vi.setSystemTime(Date.now() + 60_000);
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
+
+		// One tap retries it.
+		const [entry] = await listEntries(storage);
+		queue.retryOutboxEntry(`outbox:${entry.seq}`);
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+		expect((await listEntries(storage))[0].state).toBe('failed');
+	});
+
+	test('ambiguous entry is not retried while the confirm sweep fails', async () => {
+		const { queue, storage } = await freshModules();
+		mocks.sendMock.mockImplementation(
+			async (input: { onSealed?: (id: string) => Promise<void> }) => {
+				if (input.onSealed) await input.onSealed('evt-risk');
+				throw new Error('Coordinator request timed out after 8000ms');
+			}
+		);
+		mocks.refreshMock.mockRejectedValue(new Error('still offline'));
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'maybe-landed' });
+		await settleDrain(queue);
+		expect((await listEntries(storage))[0].state).toBe('ambiguous');
+
+		// Past backoff, but a FAILED sweep proves nothing — no re-post (that path
+		// ships a duplicate when the original actually landed).
+		vi.setSystemTime(Date.now() + 60_000);
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
+
+		// Sweep recovers → absence proven → retried.
+		mocks.refreshMock.mockResolvedValue(undefined);
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
 	test('hydrateOutbox rebuilds the projection from durable storage', async () => {
 		const { queue, projection } = await freshModules();
 		mocks.sendMock.mockRejectedValue(new TypeError('fetch failed'));

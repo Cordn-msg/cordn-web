@@ -267,9 +267,15 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 			? await (async () => {
 					if (!entries.some((entry) => entry.state === 'ambiguous')) return true;
 					const watch = await import('./chatGroupWatch.svelte');
-					await watch.refreshWatchedGroups().catch(() => undefined);
+					// Only a SUCCEEDED sweep proves the attempted id absent. A failed
+					// sweep leaves the outcome unknown and must not authorize a re-post
+					// (msg_post has no dedup — that path ships duplicates).
+					const swept = await watch.refreshWatchedGroups().then(
+						() => true,
+						() => false
+					);
 					entries = await storage.listOutboxEntries(ownerPubkey);
-					return true;
+					return swept;
 				})()
 			: false;
 
@@ -303,6 +309,10 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 				await dropEntry(entry);
 				continue;
 			}
+			// 'failed' is terminal until the user taps retry (retryOutboxEntry
+			// resets it) — auto-retrying a definitive failure would re-post an
+			// undeliverable intent on every drain.
+			if (entry.state === 'failed') continue;
 			// An ambiguous head is only retried after a successful confirm sweep
 			// proved its event id absent; otherwise it blocks its group (FIFO).
 			if (entry.state === 'ambiguous' && !sweepDone) break;
@@ -317,7 +327,10 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 		}
 	}
 
-	return (await storage.listOutboxEntries(ownerPubkey)).length;
+	// Failed entries hold no remaining work (user-driven retry only) — counting
+	// them would keep the 30s retry timer alive forever.
+	return (await storage.listOutboxEntries(ownerPubkey)).filter((entry) => entry.state !== 'failed')
+		.length;
 }
 
 async function runDrain(): Promise<void> {
