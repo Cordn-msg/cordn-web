@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.5.0 — 2026-09-22
+
+### Features
+
+- **themes:** replace Dracula with the Ostrich nostr theme
+- queue text sends in a durable offline outbox
+- **chat:** device-aware Enter key behavior with chat-behavior setting
+- **chat:** render markdown in messages
+- **chat:** optimistic reaction sends
+- **coordinators:** share action, nprofile URLs, truthful relay display
+- **coordinators:** resolve coordinator names from kind-0 profiles
+- **chat:** adopt SDK 0.14.0 public probe() and ordered resume recovery
+- keep the in-progress theme draft across navigation
+- random theme generator with Roll button in the editor
+- switch to the system font stack, drop bundled Inter
+- lock corner radius between light and dark variants
+- add six built-in themes (Matrix, Cypherpunk, Navy, Warm Paper, Catppuccin, Dracula)
+- appearance settings with themes
+
+### Fixes
+
+- **deps:** keep devalue override on the patched 5.x line
+- **deps:** floor prod-shipped transitives for known vulnerabilities
+- **notifications:** make per-coordinator poll failures reactive
+- **outbox:** make failed entries terminal and require a successful confirm sweep
+- poll signer NIP-44 capability before showing the banner
+- surface missing NIP-44 v2 signer capability instead of silent failures
+- **chat:** fall back to noble Ed25519 on WebViews without WebCrypto Ed25519
+- eliminate pending/confirmed double-render jump on message confirm
+- **media:** truthful mime labels, HEIC transcode, and EXIF strip for photos
+- **native:** suppress worker notifications while the app is foregrounded
+- **native:** drain sidecar only after groups hydrate
+- **chat:** align system-message name chips and center wrapped lines
+- **chat:** rebuild system messages on Marker with truncating name chips
+- **chat:** clear the voice arm timer when it fires
+- **chat:** hold-to-arm voice note so back swipes don't grab the mic
+- **chat:** clear Android system bars on overlays and bottom controls
+- **chat:** probe coordinator relay pools at attention events
+- **chat:** untrack reactive queryFn reads to stop effect dep pollution
+- **chat:** stop welcome_take RPC storm from observer resubscription churn
+- chatGroupWatch suite crash from file-scope warm import
+- CI redness — playwright browser install + flaky heavy-import test timeouts
+- unreadable card/popover text in dark variants of new themes
+
+### Performance
+
+- cut per-change message view work and isolate cross-group rebuilds
+
+### Docs
+
+- **news:** publish sturdier-sends release card
+- **news:** publish signer-capability release card
+- **news:** publish HEIC photo fix and metadata-strip release card
+- **news:** coordinator names, sharing, and truthful relay display
+- **news:** add voice-note gesture fix to the Sep 20 release notes
+- **news:** add Android layout fixes to the Sep 20 release notes
+- **news:** publish Sep 20 release notes for the pool liveness fix
+- **news:** publish Sep 17 release notes for the notifications fix
+- news release for the appearance themes update
+
+### Refactor
+
+- **chat:** drop inert observer config and dedupe relay resolution
+
+### Chore
+
+- tighten theme import validation and drop dead classes
+- **android:** pnpm android boots the emulator, installs and launches
+- bump @contextvm/sdk to 0.13.17 (CEP-22 probe no longer signs throwaway events)
+- align Textarea import with the repo's ui component convention
+
+### Other
+
+- deflake outbox queue tests under parallel suite load
+- add ngmi name
+
 ## 0.4.0 — 2026-09-11
 
 ### Features
