@@ -50,11 +50,14 @@ export function activeTheme(): ThemeDefinition {
 }
 
 export function isHexColor(value: string): boolean {
-	return /^#[0-9a-f]{3,8}$/i.test(value.trim());
+	// CSS-valid forms only: #rgb, #rgba, #rrggbb, #rrggbbaa (5/7-digit hex is
+	// accepted by the old {3,8} shape but is invalid CSS and silently drops the
+	// whole token — imported themes must not carry it).
+	return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim());
 }
 
 function isCssLength(value: string): boolean {
-	return /^[\d.]+(rem|px|em)$/.test(value.trim());
+	return /^\d+(\.\d+)?(rem|px|em)$/.test(value.trim());
 }
 
 /** Keep only known tokens with well-formed values (missing keys absent). */

@@ -22,8 +22,9 @@
 	{:else if node.type === 'del'}
 		<del><Self nodes={node.children} /></del>
 	{:else if node.type === 'link'}
-		<!-- Hrefs are parser-validated to absolute http(s)/mailto, so router-relative
-			 navigation (the rule's concern) cannot occur here. -->
+		<!-- Hrefs are parser-validated (http(s), app-relative, or #fragment — never
+		     javascript:/data:), so this is a plain user-clicked anchor, not
+		     dynamic router navigation (the rule's concern). -->
 		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 		<a href={node.href}>{node.text}</a>
 	{:else if node.type === 'softbreak'}
