@@ -116,12 +116,11 @@
 		// Anchor to the ROW (not the bubble) so the unread marker renders inside
 		// the viewport top; double pass because late measurements keep settling.
 		const row = container.querySelector<HTMLElement>(`[data-index="${index}"]`);
-		if (row) {
-			positionMessage(row, 'top');
-			await tick();
-			if (run !== scrollRun) return true;
-			positionMessage(row, 'top');
-		}
+		if (!row) return false; // target vanished mid-flight — fall back to bottom-pin
+		positionMessage(row, 'top');
+		await tick();
+		if (run !== scrollRun) return true;
+		positionMessage(row, 'top');
 		updateBottomState();
 		markVisibleUnreadReferences();
 		return true;
@@ -256,7 +255,8 @@
 			} else {
 				// Land on the first unread message when the chat opens with one;
 				// otherwise keep the classic bottom-pin for new arrivals.
-				const focused = focusId !== consumedFocusId && (await scrollToFocusMessage(focusId));
+				const focused =
+					Boolean(focusId) && focusId !== consumedFocusId && (await scrollToFocusMessage(focusId));
 				if (!focused && shouldScroll) void scrollToLatestMessage();
 			}
 			updateBottomState();
@@ -286,10 +286,13 @@
 		if (messageIndex === -1) return;
 
 		suppressNextAutoScroll = true;
+		const run = ++scrollRun;
 		$virtualizer.scrollToIndex(messageIndex, { align: 'center' });
 		await tick();
+		if (run !== scrollRun) return;
 		measureVisibleItems();
 		await tick();
+		if (run !== scrollRun) return;
 
 		const element = container.querySelector<HTMLElement>(
 			`[data-index="${messageIndex}"] [data-message-id]`
@@ -306,6 +309,7 @@
 
 		positionMessage(element, 'center');
 		await tick();
+		if (run !== scrollRun) return;
 		positionMessage(element, 'center');
 		updateBottomState();
 		markVisibleUnreadReferences();

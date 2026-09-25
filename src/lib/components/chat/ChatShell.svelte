@@ -805,17 +805,16 @@
 			if (focusSnapshotGroupId !== groupId) {
 				focusSnapshotGroupId = groupId;
 				const lastReadCursor = getChatGroupLastReadCursor(groupId);
-				const firstUnread = storedMessages.find(
-					(message) =>
-						message.cursor > lastReadCursor &&
-						message.kind !== SYSTEM_MESSAGE_KIND &&
-						!isAnnotationKind(message.kind)
-				);
-				initialFocusMessageId = page.url.searchParams.get('message')
-					? ''
-					: firstUnread
-						? `${firstUnread.id}:${firstUnread.cursor}`
-						: '';
+				// A ?message= deep link owns the initial scroll instead.
+				const firstUnread = page.url.searchParams.get('message')
+					? undefined
+					: storedMessages.find(
+							(message) =>
+								message.cursor > lastReadCursor &&
+								message.kind !== SYSTEM_MESSAGE_KIND &&
+								!isAnnotationKind(message.kind)
+						);
+				initialFocusMessageId = firstUnread ? `${firstUnread.id}:${firstUnread.cursor}` : '';
 			}
 		});
 		markChatGroupRead(groupId, group.lastCursor);

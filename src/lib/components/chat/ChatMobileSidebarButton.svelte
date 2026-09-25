@@ -48,6 +48,13 @@
 	const openGroupId = $derived(activeGroupId(page.url.pathname));
 </script>
 
+{#snippet attentionDot()}
+	<span
+		class="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background"
+		aria-hidden="true"
+	></span>
+{/snippet}
+
 {#if isHome}
 	<Button
 		type="button"
@@ -60,10 +67,7 @@
 	>
 		<PanelLeft class="size-4" />
 		{#if hasUnreadChatAttention()}
-			<span
-				class="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background"
-				aria-hidden="true"
-			></span>
+			{@render attentionDot()}
 		{/if}
 	</Button>
 {:else}
@@ -77,10 +81,7 @@
 	>
 		<ChevronLeft class="size-5" />
 		{#if hasUnreadChatAttention(openGroupId)}
-			<span
-				class="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background"
-				aria-hidden="true"
-			></span>
+			{@render attentionDot()}
 		{/if}
 	</Button>
 {/if}
