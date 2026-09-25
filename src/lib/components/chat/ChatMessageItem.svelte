@@ -63,6 +63,7 @@
 		showAuthor = true,
 		showAvatar = true,
 		showDayLabel = false,
+		showUnreadMarker = false,
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
 		onEdit = () => {},
@@ -77,6 +78,10 @@
 		showAuthor?: boolean;
 		showAvatar?: boolean;
 		showDayLabel?: boolean;
+		/** Render the "New messages" divider above this row — set on the message
+		 *  the chat was opened at (first unread), anchored to the open session like
+		 *  Telegram/WhatsApp: it disappears on the next open once read to the end. */
+		showUnreadMarker?: boolean;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
@@ -471,6 +476,15 @@
 	{#if showDayLabel}
 		<Marker.Root variant="separator" class="px-2 py-1 text-[11px] font-medium">
 			<Marker.Content>{message.dayLabel}</Marker.Content>
+		</Marker.Root>
+	{/if}
+
+	{#if showUnreadMarker}
+		<Marker.Root
+			variant="separator"
+			class="px-2 py-1 text-[11px] font-medium text-primary before:bg-primary/40 after:bg-primary/40"
+		>
+			<Marker.Content>New messages</Marker.Content>
 		</Marker.Root>
 	{/if}
 

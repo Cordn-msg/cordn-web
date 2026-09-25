@@ -86,11 +86,18 @@
 		await navigateToMessage(messageId);
 	}
 
-	// Open-at-first-unread: land with the first unread message at the TOP of the
-	// viewport (WhatsApp-style). Same measure-twice dance as navigateToMessage —
-	// estimated row heights shift the anchor — but aligned to 'start' and without
-	// the highlight. Returns false when the target isn't in the list (consumer
-	// falls back to the bottom-pin).
+	// Open-at-first-unread: land with the first unread message (and its "New
+	// messages" marker) at the TOP of the viewport, WhatsApp-style.
+	//
+	// Virtualizer gotcha this dances around: scrollToIndex reads
+	// measurementsCache — measured rows plus a 128px estimate for every row
+	// that never rendered. The cache is *self-consistent* (row translateY and
+	// the spacer height come from the same numbers), so pass 1 always mounts the
+	// target row even when its cached offset is wrong in absolute terms. But
+	// once pass 1's rows get measured the cache shifts, so the final position
+	// must come from DOM geometry (navigateToMessage's trick), not from a
+	// second scrollToIndex. Returns false when the target isn't in the list
+	// (consumer falls back to the bottom-pin).
 	async function scrollToFocusMessage(messageId: string): Promise<boolean> {
 		if (!browser || !container) return false;
 		const index = messages.findIndex((message) => message.id === messageId);
@@ -98,17 +105,23 @@
 
 		consumedFocusId = messageId;
 		const run = ++scrollRun;
-		// Suppress the totalSize re-pin: measurement lands while the scroll event
-		// hasn't updated wasAtBottom yet (same guard navigateToMessage uses).
+		// Suppress the totalSize re-pin while measurements settle (same guard
+		// navigateToMessage uses).
 		suppressNextAutoScroll = true;
 		$virtualizer.scrollToIndex(index, { align: 'start' });
 		await tick();
 		if (run !== scrollRun) return true;
 		measureVisibleItems();
 		await tick();
-		if (run !== scrollRun) return true;
-		$virtualizer.scrollToIndex(index, { align: 'start' });
-		await tick();
+		// Anchor to the ROW (not the bubble) so the unread marker renders inside
+		// the viewport top; double pass because late measurements keep settling.
+		const row = container.querySelector<HTMLElement>(`[data-index="${index}"]`);
+		if (row) {
+			positionMessage(row, 'top');
+			await tick();
+			if (run !== scrollRun) return true;
+			positionMessage(row, 'top');
+		}
 		updateBottomState();
 		markVisibleUnreadReferences();
 		return true;
@@ -161,13 +174,18 @@
 		scheduleVisibleUnreadReferenceCheck();
 	}
 
-	function centerMessage(element: HTMLElement) {
+	// DOM-anchored positioning (immune to virtualizer estimate error above the
+	// target): rects are truth, cache-derived translateY offsets are not — see
+	// scrollToFocusMessage.
+	function positionMessage(element: HTMLElement, align: 'top' | 'center') {
 		if (!container) return;
 		const containerRect = container.getBoundingClientRect();
 		const elementRect = element.getBoundingClientRect();
 		const currentTop = container.scrollTop;
 		const delta =
-			elementRect.top - containerRect.top - container.clientHeight / 2 + elementRect.height / 2;
+			align === 'top'
+				? elementRect.top - containerRect.top
+				: elementRect.top - containerRect.top - container.clientHeight / 2 + elementRect.height / 2;
 		container.scrollTo({ top: Math.max(0, currentTop + delta), behavior: 'instant' });
 	}
 
@@ -286,9 +304,9 @@
 			highlightedMessageId = '';
 		}, 2400);
 
-		centerMessage(element);
+		positionMessage(element, 'center');
 		await tick();
-		centerMessage(element);
+		positionMessage(element, 'center');
 		updateBottomState();
 		markVisibleUnreadReferences();
 	}
@@ -337,6 +355,7 @@
 								showAuthor={!systemRow && previousMessage?.author !== message.author}
 								showAvatar={!systemRow && nextMessage?.author !== message.author}
 								showDayLabel={previousMessage?.dayLabel !== message.dayLabel}
+								showUnreadMarker={message.id === initialFocusMessageId}
 								{onReply}
 								{onReact}
 								{onEdit}
