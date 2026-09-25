@@ -2,7 +2,11 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { listChatGroupMembers, type StoredChatGroup } from '$lib/services/chatGroups.svelte';
-	import { getChatGroupDisplayTitle, type ChatGroupProfileHints } from './chatGroupDisplay';
+	import {
+		formatChatMessagePreviewText,
+		getChatGroupDisplayTitle,
+		type ChatGroupProfileHints
+	} from './chatGroupDisplay';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import ChatGroupUnreadChips from './ChatGroupUnreadChips.svelte';
 	import ChatGroupActions from './ChatGroupActions.svelte';
@@ -127,7 +131,7 @@
 						? 'truncate text-xs leading-5 text-muted-foreground'
 						: 'truncate text-sm text-muted-foreground'}
 				>
-					{preview}
+					{formatChatMessagePreviewText(preview, hints)}
 				</p>
 			</div>
 		{/if}

@@ -9,6 +9,8 @@ import {
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
+	formatChatMessagePreviewText,
+	getProfileDisplayName,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -122,10 +124,11 @@ export function syncChatAttention() {
 	ensureFaviconLink().href = DEFAULT_FAVICON;
 }
 
-function getNotificationBody(sender: string, content: string) {
-	const trimmed = content.trim();
+function getNotificationBody(sender: string, content: string, profileHints: ChatGroupProfileHints) {
+	// Same mention-token rendering as the group-card previews.
+	const trimmed = formatChatMessagePreviewText(content, profileHints).trim();
 	if (trimmed) return trimmed;
-	return `New message from ${sender.slice(0, 12)}…`;
+	return `New message from ${getProfileDisplayName(sender, profileHints)}`;
 }
 
 const NOTIFICATION_PROFILE_TIMEOUT_MS = 1500;
@@ -207,7 +210,7 @@ export async function notifyForUnreadChatMessages() {
 			rememberNotifiedMessage(message.id);
 			await showLocalNotification({
 				title: title || 'Cordn',
-				body: getNotificationBody(message.sender, message.content),
+				body: getNotificationBody(message.sender, message.content, profileHints),
 				icon,
 				groupId: group.id
 			});

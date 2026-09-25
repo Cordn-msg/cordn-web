@@ -11,7 +11,6 @@ import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
-const MAX_PREVIEW_LENGTH = 80;
 
 type GroupPresenceRecord = {
 	lastReadCursor: number;
@@ -199,11 +198,10 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 		}
 	}
 	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();
-	if (preview) {
-		return preview.length > MAX_PREVIEW_LENGTH
-			? `${preview.slice(0, MAX_PREVIEW_LENGTH - 1).trimEnd()}…`
-			: preview;
-	}
+	// No length cap: cards clip with CSS, and cutting here would slice `nostr:`
+	// mention tokens before names replace them — an 80-char cap ate the entire
+	// text of any mention-first message.
+	if (preview) return preview;
 
 	return group?.metadata?.description || 'Group chat';
 }

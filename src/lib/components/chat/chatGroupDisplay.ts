@@ -1,5 +1,6 @@
 import { nip19 } from 'nostr-tools';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
+import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { normalizePubKey } from '$lib/utils';
 import type { ProfileContent } from 'applesauce-core/helpers';
 
@@ -14,6 +15,23 @@ export function getProfileDisplayName(
 	const profile = profileHints?.[pubkey];
 	const npub = nip19.npubEncode(pubkey);
 	return profile?.name || profile?.displayName || profile?.nip05 || `${npub.slice(0, 12)}…`;
+}
+
+/**
+ * Plain-text rendering of a message body for previews and notification
+ * bodies: `nostr:` mention tokens become `@Name`, mirroring how bubbles render
+ * them, with `getProfileDisplayName`'s short-npub fallback for profiles the
+ * hints don't cover.
+ */
+export function formatChatMessagePreviewText(
+	content: string,
+	profileHints?: ChatGroupProfileHints
+): string {
+	return parseChatProfileMentions(content)
+		.map((part) =>
+			part.type === 'profile' ? `@${getProfileDisplayName(part.pubkey, profileHints)}` : part.text
+		)
+		.join('');
 }
 
 export function getGroupActivityAt(group: StoredChatGroup): number {
