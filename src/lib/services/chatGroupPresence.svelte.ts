@@ -3,7 +3,8 @@ import {
 	areChatGroupsLoaded,
 	getChatGroup,
 	listChatGroupMessages,
-	listChatGroups
+	listChatGroups,
+	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
 import { SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
@@ -75,9 +76,22 @@ export function getChatGroupLastReadCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0;
 }
 
+/** High-water of what the chat actually stores. Ingest pushes in cursor order,
+ *  so the tail is the max — maxed with the ingest counter because legacy or
+ *  never-refetched records can carry stored messages above `lastCursor`, and
+ *  read-marking only the counter leaves the open-at-first-unread scan
+ *  re-finding the same "unread" on every open while the badge fast-path
+ *  (group.lastCursor <= lastReadCursor) reports zero. */
+function getChatGroupStoredHighWater(group: StoredChatGroup | undefined): number {
+	return Math.max(group?.lastCursor ?? 0, group?.messages.at(-1)?.cursor ?? 0);
+}
+
 export function markChatGroupRead(groupId: string, cursor?: number) {
 	const group = getChatGroup(groupId);
-	const nextCursor = cursor ?? group?.lastCursor ?? 0;
+	// Every caller means "mark everything currently visible" (partial marks
+	// live in markChatGroupMentionsRead), so an explicit cursor is corrected
+	// upward against what is stored instead of trusted blindly.
+	const nextCursor = Math.max(cursor ?? 0, getChatGroupStoredHighWater(group));
 	const previous = getChatGroupLastReadCursor(groupId);
 	if (nextCursor <= previous) return;
 
@@ -95,16 +109,19 @@ function getChatGroupLastReadMentionCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadMentionCursor ?? 0;
 }
 
-export function markChatGroupMentionsRead(groupId: string, cursor: number) {
+export function markChatGroupMentionsRead(groupId: string, cursor?: number) {
+	// Explicit cursor = exact partial mark (one viewed mention); omitted = mark
+	// every stored mention (the "mark all read" actions).
+	const nextCursor = cursor ?? getChatGroupStoredHighWater(getChatGroup(groupId));
 	const previous = getChatGroupLastReadMentionCursor(groupId);
-	if (cursor <= previous) return;
+	if (nextCursor <= previous) return;
 
 	chatGroupPresenceStore.groups = {
 		...chatGroupPresenceStore.groups,
 		[groupId]: {
 			...chatGroupPresenceStore.groups[groupId],
 			lastReadCursor: chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0,
-			lastReadMentionCursor: cursor
+			lastReadMentionCursor: nextCursor
 		}
 	};
 	savePresence();
@@ -115,8 +132,8 @@ export function markChatGroupMentionsRead(groupId: string, cursor: number) {
  *  are already current. News and invitation badges keep their own read state. */
 export function markAllChatGroupsRead() {
 	for (const group of listChatGroups()) {
-		markChatGroupRead(group.id, group.lastCursor);
-		markChatGroupMentionsRead(group.id, group.lastCursor);
+		markChatGroupRead(group.id);
+		markChatGroupMentionsRead(group.id);
 	}
 }
 

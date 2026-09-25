@@ -85,8 +85,8 @@
 		<DropdownMenu.Content align="end" class="w-48">
 			<DropdownMenu.Item
 				onclick={() => {
-					markChatGroupRead(group.id, group.lastCursor);
-					markChatGroupMentionsRead(group.id, group.lastCursor);
+					markChatGroupRead(group.id);
+					markChatGroupMentionsRead(group.id);
 				}}
 				class="gap-2"
 			>

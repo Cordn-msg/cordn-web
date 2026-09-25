@@ -16,6 +16,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 }));
 
 import {
+	getChatGroupLastReadCursor,
 	getUnreadChatGroupMessageCount,
 	listUnreadChatGroupReferenceTargets,
 	markAllChatGroupsRead,
@@ -82,11 +83,27 @@ describe('chat group presence unread scans', () => {
 		seedGroup('presence-all-1', [10]);
 		seedGroup('presence-all-2', [5, 15]);
 		// One group already partially read — must still end fully read.
-		markChatGroupRead('presence-all-1', 5);
+		markChatGroupMentionsRead('presence-all-1', 5);
 		markAllChatGroupsRead();
 		expect(getUnreadChatGroupMessageCount('presence-all-1')).toBe(0);
 		expect(getUnreadChatGroupMessageCount('presence-all-2')).toBe(0);
 		expect(listUnreadChatGroupReferenceTargets('presence-all-1', MENTIONED)).toEqual([]);
 		expect(listUnreadChatGroupReferenceTargets('presence-all-2', MENTIONED)).toEqual([]);
+	});
+
+	test('read marks cover stored messages above the ingest counter', () => {
+		// Records can carry stored messages whose cursors exceed group.lastCursor
+		// (legacy/never-refetched history). Marking only the counter used to leave
+		// the open-at-first-unread scan re-finding the same "unread" on every open
+		// while the badge fast-path (group.lastCursor <= lastReadCursor) said zero.
+		const id = 'presence-stale-counter';
+		seedGroup(id, [1, 2, 3]);
+		const group = groups.get(id)!;
+		group.lastCursor = 2;
+		markChatGroupRead(id, group.lastCursor);
+		expect(getUnreadChatGroupMessageCount(id)).toBe(0);
+		expect(
+			group.messages.find((message) => message.cursor > getChatGroupLastReadCursor(id))
+		).toBeUndefined();
 	});
 });
