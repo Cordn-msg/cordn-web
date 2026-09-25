@@ -1,5 +1,6 @@
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { mayContainMarkdown, parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
+import type { ChatMessage } from './chat.types';
 
 const MAX_CACHED_PARSED_MESSAGES = 1000;
 
@@ -74,4 +75,14 @@ export function loadCustomChatReactions(): string[] {
 export function saveCustomChatReactions(reactions: string[]): void {
 	if (typeof localStorage === 'undefined') return;
 	localStorage.setItem('chat-custom-reactions', JSON.stringify(reactions));
+}
+
+// ponytail: coarse size buckets for the virtualizer's unmeasured rows (measured
+// rows use their real heights) — refine toward per-part math only if first-pass
+// scrolls still visibly correct.
+export function estimateChatMessageHeight(message: ChatMessage): number {
+	if (message.systemKind) return 48;
+	if (message.media || message.tags?.some((tag) => tag[0] === 'imeta')) return 264;
+	const lines = Math.min(5, Math.max(1, Math.ceil(message.text.length / 80)));
+	return 84 + (lines - 1) * 20;
 }

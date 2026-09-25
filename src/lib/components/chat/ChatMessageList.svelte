@@ -6,6 +6,7 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import { Button } from '$lib/components/ui/button';
 	import ChatMessageItem from './ChatMessageItem.svelte';
+	import { estimateChatMessageHeight } from './chatMessageRenderCache';
 	import type { ChatMessage } from './chat.types';
 
 	let {
@@ -52,10 +53,22 @@
 	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
 		count: 0,
 		getScrollElement: () => container,
-		estimateSize: () => ESTIMATED_MESSAGE_HEIGHT,
+		// Shape-aware estimates shrink the estimate→measure deltas that make
+		// first-pass scrolls jump; measured rows keep their real heights.
+		estimateSize: (index) =>
+			messages[index] ? estimateChatMessageHeight(messages[index]) : ESTIMATED_MESSAGE_HEIGHT,
 		overscan: VIRTUAL_OVERSCAN,
 		getItemKey: (index) => messages[index]?.id ?? index
 	});
+	// Class field, not an option (setOptions never touches it), assigned once.
+	// Tanstack's default only absorbs above-viewport resizes while scrolling
+	// forward — during backward scroll the corrections land as visible jumps.
+	// Anchor in both directions; with shape-aware estimates the deltas are small,
+	// so anchoring holds the reading position without fighting scroll input.
+	// ponytail: mirrors the default minus the direction clause and the private
+	// scrollAdjustments term — live scrollTop is close enough.
+	$virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
+		item.start < (container?.scrollTop ?? 0);
 
 	const virtualItems = $derived($virtualizer.getVirtualItems());
 	const totalSize = $derived($virtualizer.getTotalSize());
