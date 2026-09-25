@@ -61,13 +61,16 @@
 		getItemKey: (index) => messages[index]?.id ?? index
 	});
 	// Class field, not an option (setOptions never touches it), assigned once.
+	// ($store reads are safe, but `$store.prop = …` compiles to store.set() and
+	// this store is derived/read-only — so assign through a plain local.)
 	// Tanstack's default only absorbs above-viewport resizes while scrolling
 	// forward — during backward scroll the corrections land as visible jumps.
 	// Anchor in both directions; with shape-aware estimates the deltas are small,
 	// so anchoring holds the reading position without fighting scroll input.
 	// ponytail: mirrors the default minus the direction clause and the private
 	// scrollAdjustments term — live scrollTop is close enough.
-	$virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
+	const virtualizerInstance = $virtualizer;
+	virtualizerInstance.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
 		item.start < (container?.scrollTop ?? 0);
 
 	const virtualItems = $derived($virtualizer.getVirtualItems());
