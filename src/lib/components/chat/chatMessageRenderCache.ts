@@ -77,13 +77,13 @@ export function saveCustomChatReactions(reactions: string[]): void {
 	localStorage.setItem('chat-custom-reactions', JSON.stringify(reactions));
 }
 
-// ponytail: coarse size buckets for the virtualizer's unmeasured rows (measured
-// rows use their real heights) — refine toward per-part math only if first-pass
-// scrolls still visibly correct.
 // Calibrated against measured rows: a one-line text message renders at 62px
 // (bubble + timestamp row) and each wrapped line adds ~20px. Estimates feed
 // scrollToIndex — overshoot clamps a deep focus scroll to the bottom, which is
 // exactly how open-at-first-unread used to silently fail.
+// ponytail: still coarse buckets (measured rows use their real heights) —
+// refine toward per-part math (reply chips, mentions) only if first-pass jumps
+// still visibly miss.
 export function estimateChatMessageHeight(message: ChatMessage): number {
 	if (message.systemKind) return 48;
 	if (message.media || message.tags?.some((tag) => tag[0] === 'imeta')) return 264;
