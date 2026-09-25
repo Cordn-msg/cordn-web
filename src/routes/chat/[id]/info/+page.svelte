@@ -34,6 +34,7 @@
 		updateGroupMetadataAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
+	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -345,7 +346,10 @@
 							</div>
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Coordinator</p>
-								<p class="mt-2 font-mono text-xs break-all">{group.coordinatorKey}</p>
+								<p class="mt-2 text-sm">{getCoordinatorLabel(group.coordinatorKey)}</p>
+								<p class="mt-1 font-mono text-xs break-all text-muted-foreground">
+									{group.coordinatorKey}
+								</p>
 							</div>
 							<div class="rounded-2xl border border-border p-4">
 								<p class="text-xs tracking-wide text-muted-foreground uppercase">Created</p>
