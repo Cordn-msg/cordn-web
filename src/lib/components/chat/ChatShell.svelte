@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
@@ -13,7 +14,8 @@
 	import {
 		listUnreadChatGroupReferenceTargets,
 		markChatGroupMentionsRead,
-		markChatGroupRead
+		markChatGroupRead,
+		getChatGroupLastReadCursor
 	} from '$lib/services/chatGroupPresence.svelte';
 	import {
 		chatComposerActionsStore,
@@ -789,8 +791,33 @@
 		selectedDetailEventId = null;
 	}
 
+	// Open-at-first-unread: which rendered message the list should land on when
+	// the chat opens. Snapshotted once per group BEFORE markChatGroupRead clears
+	// the unread gap; the route component persists across group navigation (no
+	// {#key}), so the id guard means live arrivals while the chat is open never
+	// re-focus. A ?message= deep link wins (its own effect scrolls to the target).
+	let initialFocusMessageId = $state('');
+	let focusSnapshotGroupId = '';
+
 	$effect(() => {
 		if (!groupId || !group) return;
+		untrack(() => {
+			if (focusSnapshotGroupId !== groupId) {
+				focusSnapshotGroupId = groupId;
+				const lastReadCursor = getChatGroupLastReadCursor(groupId);
+				const firstUnread = storedMessages.find(
+					(message) =>
+						message.cursor > lastReadCursor &&
+						message.kind !== SYSTEM_MESSAGE_KIND &&
+						!isAnnotationKind(message.kind)
+				);
+				initialFocusMessageId = page.url.searchParams.get('message')
+					? ''
+					: firstUnread
+						? `${firstUnread.id}:${firstUnread.cursor}`
+						: '';
+			}
+		});
 		markChatGroupRead(groupId, group.lastCursor);
 	});
 
@@ -827,6 +854,7 @@
 				<ChatMessageList
 					bind:this={messageListRef}
 					{messages}
+					{initialFocusMessageId}
 					onReply={handleReply}
 					onReact={handleReact}
 					onEdit={handleEdit}

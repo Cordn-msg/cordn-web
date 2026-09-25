@@ -77,14 +77,15 @@ function getUnreadMessageCount() {
 	);
 }
 
-function getUnreadAttentionCount() {
+function getUnreadAttentionCount(excludeGroupId?: string) {
 	const pubkey = manager.active?.pubkey;
-	const unreadMessages = getUnreadMessageCount();
+	const groups = listChatGroups().filter((group) => group.id !== excludeGroupId);
+	const unreadMessages = groups.reduce(
+		(total, group) => total + getUnreadChatGroupMessageCount(group.id),
+		0
+	);
 	const unreadMentions = pubkey
-		? listChatGroups().reduce(
-				(total, group) => total + getUnreadChatGroupReferenceCount(group.id, pubkey),
-				0
-			)
+		? groups.reduce((total, group) => total + getUnreadChatGroupReferenceCount(group.id, pubkey), 0)
 		: 0;
 	const unreadWelcomes = getUnreadWelcomeNotificationCount();
 	const unreadJoinRequests = getUnreadJoinRequestCount();
@@ -92,8 +93,11 @@ function getUnreadAttentionCount() {
 	return unreadMessages + unreadMentions + unreadWelcomes + unreadJoinRequests + unreadNews;
 }
 
-export function hasUnreadChatAttention() {
-	return getUnreadAttentionCount() > 0;
+/** Any unread attention anywhere. Pass the open group's id (chat routes) to
+ *  signal "something new elsewhere" — the open group is being read, so its
+ *  unread (e.g. not-yet-viewed mentions) must not pin the dot forever. */
+export function hasUnreadChatAttention(excludeGroupId?: string) {
+	return getUnreadAttentionCount(excludeGroupId) > 0;
 }
 
 function buildBadgedTitle(pathname: string) {

@@ -70,7 +70,9 @@ export function deleteChatGroupPresenceForOwner(ownerPubkey: string) {
 	chatGroupPresenceStore.groups = {};
 }
 
-function getChatGroupLastReadCursor(groupId: string): number {
+/** Read cursor snapshot — exported for open-at-first-unread positioning,
+ *  which must capture it before `markChatGroupRead` clears the gap. */
+export function getChatGroupLastReadCursor(groupId: string): number {
 	return chatGroupPresenceStore.groups[groupId]?.lastReadCursor ?? 0;
 }
 

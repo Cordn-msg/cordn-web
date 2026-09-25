@@ -10,6 +10,7 @@
 
 	let {
 		messages,
+		initialFocusMessageId = '',
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
 		onEdit = () => {},
@@ -20,6 +21,9 @@
 		onPin = () => {}
 	}: {
 		messages: ChatMessage[];
+		/** Open-at-first-unread target ("<eventId>:<cursor>"), set once per group by
+		 *  ChatShell before the group is marked read. Empty → open at the bottom. */
+		initialFocusMessageId?: string;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
@@ -36,6 +40,11 @@
 	let wasAtBottom = true;
 	let showScrollToBottom = $state(false);
 	let suppressNextAutoScroll = false;
+	// Open-at-first-unread bookkeeping: the focus id already consumed, and a
+	// monotonic token so a newer programmatic scroll invalidates older in-flight
+	// ones (mount → focus and group-switch → focus can overlap mid-await).
+	let consumedFocusId = '';
+	let scrollRun = 0;
 
 	const ESTIMATED_MESSAGE_HEIGHT = 128;
 	const VIRTUAL_OVERSCAN = 8;
@@ -52,13 +61,16 @@
 	const totalSize = $derived($virtualizer.getTotalSize());
 
 	async function scrollToLatestMessage() {
+		const run = ++scrollRun;
 		await tick();
-		if (!browser || !container || messages.length === 0) return;
+		if (!browser || !container || messages.length === 0 || run !== scrollRun) return;
 
 		$virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
 		await tick();
+		if (run !== scrollRun) return;
 		measureVisibleItems();
 		await tick();
+		if (run !== scrollRun || !container) return;
 		container.scrollTo({
 			top: container.scrollHeight,
 			behavior: 'instant'
@@ -72,6 +84,34 @@
 	export async function scrollToMessage(messageId: string) {
 		await tick();
 		await navigateToMessage(messageId);
+	}
+
+	// Open-at-first-unread: land with the first unread message at the TOP of the
+	// viewport (WhatsApp-style). Same measure-twice dance as navigateToMessage —
+	// estimated row heights shift the anchor — but aligned to 'start' and without
+	// the highlight. Returns false when the target isn't in the list (consumer
+	// falls back to the bottom-pin).
+	async function scrollToFocusMessage(messageId: string): Promise<boolean> {
+		if (!browser || !container) return false;
+		const index = messages.findIndex((message) => message.id === messageId);
+		if (index === -1) return false;
+
+		consumedFocusId = messageId;
+		const run = ++scrollRun;
+		// Suppress the totalSize re-pin: measurement lands while the scroll event
+		// hasn't updated wasAtBottom yet (same guard navigateToMessage uses).
+		suppressNextAutoScroll = true;
+		$virtualizer.scrollToIndex(index, { align: 'start' });
+		await tick();
+		if (run !== scrollRun) return true;
+		measureVisibleItems();
+		await tick();
+		if (run !== scrollRun) return true;
+		$virtualizer.scrollToIndex(index, { align: 'start' });
+		await tick();
+		updateBottomState();
+		markVisibleUnreadReferences();
+		return true;
 	}
 
 	function isAtBottom() {
@@ -149,17 +189,9 @@
 	}
 
 	onMount(() => {
-		void tick().then(() => {
-			untrack(() => {
-				$virtualizer.setOptions({
-					count: messages.length,
-					getScrollElement: () => container,
-					getItemKey: (index) => messages[index]?.id ?? index
-				});
-				$virtualizer.measure();
-			});
-			void scrollToLatestMessage();
-		});
+		// Initial positioning (bottom-pin or first-unread focus) is owned by the
+		// messages $effect below — it runs on mount too. Here: keep the container
+		// shrink observer (soft keyboard) only.
 
 		// Re-pin to the bottom when the scroll container itself shrinks — most importantly the soft
 		// keyboard opening on mobile — so the latest messages stay visible instead of being clipped
@@ -186,6 +218,7 @@
 	$effect(() => {
 		const messageCount = messages.length;
 		const lastMessageId = messages.at(-1)?.id;
+		const focusId = initialFocusMessageId;
 		if (!browser || !container) return;
 		untrack(() => {
 			$virtualizer.setOptions({
@@ -196,14 +229,17 @@
 		});
 
 		const shouldScroll = wasAtBottom;
-		void tick().then(() => {
+		void tick().then(async () => {
 			void messageCount;
 			void lastMessageId;
 			measureVisibleItems();
 			if (suppressNextAutoScroll) {
 				suppressNextAutoScroll = false;
-			} else if (shouldScroll) {
-				void scrollToLatestMessage();
+			} else {
+				// Land on the first unread message when the chat opens with one;
+				// otherwise keep the classic bottom-pin for new arrivals.
+				const focused = focusId !== consumedFocusId && (await scrollToFocusMessage(focusId));
+				if (!focused && shouldScroll) void scrollToLatestMessage();
 			}
 			updateBottomState();
 			markVisibleUnreadReferences();

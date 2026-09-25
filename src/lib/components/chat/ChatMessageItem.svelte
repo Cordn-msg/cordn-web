@@ -405,12 +405,15 @@
 
 <div class="flex flex-col gap-2">
 	{#snippet reactionChoices(touch = false)}
-		<!-- One strip, two renderings: DropdownMenuItems inside menus, larger plain
-	     buttons (44px touch targets) in the mobile sheet. -->
+		<!-- One picker, two renderings: a wrapped emoji grid (never horizontal
+	     overflow) with the custom-emoji form below it, outside the scrollable
+	     grid — always reachable. Desktop caps the grid at ~3 visible rows and
+	     scrolls vertically; the mobile sheet wraps and scrolls as a whole
+	     (nested scroll containers are thumb-hostile). -->
 		<div
 			class={touch
-				? 'flex items-center gap-1 overflow-x-auto'
-				: 'flex max-w-[15rem] items-start gap-1 overflow-x-auto p-0.5'}
+				? 'flex flex-wrap gap-1'
+				: 'flex max-h-[8.5rem] max-w-[15rem] flex-wrap gap-1 overflow-y-auto p-0.5'}
 			role="group"
 			aria-label="Quick reactions"
 		>
@@ -433,40 +436,36 @@
 					</DropdownMenuItem>
 				{/if}
 			{/each}
-			<div
-				class={touch
-					? 'ml-1 flex shrink-0 items-center gap-1 border-l border-border/70 pl-3'
-					: 'flex shrink-0 items-center gap-1 border-l border-border/70 pl-2'}
+		</div>
+		<div class="flex shrink-0 items-center gap-1 border-t border-border/70 pt-1.5">
+			<form
+				class="flex items-center gap-1"
+				onsubmit={async (event) => {
+					event.preventDefault();
+					await handleCustomReaction();
+				}}
 			>
-				<form
-					class="flex items-center gap-1"
-					onsubmit={async (event) => {
-						event.preventDefault();
-						await handleCustomReaction();
+				<Input
+					bind:ref={customReactionInput}
+					bind:value={customReaction}
+					class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
+					placeholder="🙂"
+					maxlength={8}
+					aria-label="Custom reaction"
+					oninput={() => {
+						customReaction = normalizeCustomReaction(customReaction);
 					}}
+				/>
+				<Button
+					type="submit"
+					variant="ghost"
+					size="icon-sm"
+					class="rounded-xl bg-background"
+					aria-label="Confirm custom reaction"
 				>
-					<Input
-						bind:ref={customReactionInput}
-						bind:value={customReaction}
-						class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-						placeholder="🙂"
-						maxlength={8}
-						aria-label="Custom reaction"
-						oninput={() => {
-							customReaction = normalizeCustomReaction(customReaction);
-						}}
-					/>
-					<Button
-						type="submit"
-						variant="ghost"
-						size="icon-sm"
-						class="rounded-xl bg-background"
-						aria-label="Confirm custom reaction"
-					>
-						<Plus class="size-4" />
-					</Button>
-				</form>
-			</div>
+					<Plus class="size-4" />
+				</Button>
+			</form>
 		</div>
 	{/snippet}
 	{#if showDayLabel}
@@ -617,7 +616,7 @@
 											side="bottom"
 											align={isOwn ? 'start' : 'end'}
 											sideOffset={8}
-											class="flex min-w-0 flex-row items-start gap-1 rounded-2xl p-1"
+											class="flex min-w-0 flex-col gap-1 rounded-2xl p-1"
 										>
 											{@render reactionChoices()}
 										</DropdownMenuContent>
