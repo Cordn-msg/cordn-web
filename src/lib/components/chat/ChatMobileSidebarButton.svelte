@@ -5,7 +5,7 @@
 	import { hasUnreadChatAttention } from '$lib/services/chatAttention.svelte';
 	import { getChatLayoutContext } from '$lib/components/chat/chatLayoutContext';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
-	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
+	import { activeGroupId, resolveGroupLocator } from '$lib/utils/groupShareLink';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import PanelLeft from '@lucide/svelte/icons/panel-left';
 
@@ -41,7 +41,19 @@
 		}
 		return resolve('/chat');
 	});
+
+	// Inside a chat, the back dot signals unread attention in OTHER groups (and
+	// welcomes/news): the open group is auto-marked read, so counting it would
+	// leave a dot pinned on not-yet-viewed mentions forever.
+	const openGroupId = $derived(activeGroupId(page.url.pathname));
 </script>
+
+{#snippet attentionDot()}
+	<span
+		class="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background"
+		aria-hidden="true"
+	></span>
+{/snippet}
 
 {#if isHome}
 	<Button
@@ -55,10 +67,7 @@
 	>
 		<PanelLeft class="size-4" />
 		{#if hasUnreadChatAttention()}
-			<span
-				class="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-background"
-				aria-hidden="true"
-			></span>
+			{@render attentionDot()}
 		{/if}
 	</Button>
 {:else}
@@ -66,10 +75,13 @@
 		href={backHref}
 		variant="outline"
 		size="icon"
-		class="h-10 w-10 shrink-0 rounded-xl"
+		class="relative h-10 w-10 shrink-0 rounded-xl"
 		aria-label="Back"
 		title="Back"
 	>
 		<ChevronLeft class="size-5" />
+		{#if hasUnreadChatAttention(openGroupId)}
+			{@render attentionDot()}
+		{/if}
 	</Button>
 {/if}

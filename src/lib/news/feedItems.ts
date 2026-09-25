@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-25-open-at-unread',
+		createdAt: Date.UTC(2026, 8, 25),
+		version: 1,
+		title: 'Chats open where the new messages are',
+		body: "- ✨ Chats open at the first unread message with a “New messages” marker above it, so you pick up exactly where you left off — and the back button carries a small dot while something new is waiting in another chat.\n- 🐛 A chat can no longer get stuck opening at an old unread spot after you have read it: what the unread badge shows and where a chat opens now always agree.\n- 🐛 Tapping a reply now scrolls to the original message instead of leaving you near the bottom of the chat.\n- 🔄 Long chats scroll steadily: the view no longer jumps around while messages settle on screen.\n- 🔄 Group cards and notifications show names instead of nostr codes, and a group's info page names its coordinator instead of showing a raw key.\n- 🔄 The reaction emoji picker wraps into a neat grid that scrolls vertically, with the custom-emoji option always visible at the bottom instead of hiding behind a sideways scroll.\n- 🔄 Pinch zoom is off in the web app (matching the native app) so it stops getting in the way of chat gestures."
+	},
+	{
 		id: 'cordn-news-2026-09-22-ostrich-theme',
 		createdAt: Date.UTC(2026, 8, 22),
 		version: 1,

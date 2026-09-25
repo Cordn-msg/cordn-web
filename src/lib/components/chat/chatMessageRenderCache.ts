@@ -1,5 +1,6 @@
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { mayContainMarkdown, parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
+import type { ChatMessage } from './chat.types';
 
 const MAX_CACHED_PARSED_MESSAGES = 1000;
 
@@ -74,4 +75,18 @@ export function loadCustomChatReactions(): string[] {
 export function saveCustomChatReactions(reactions: string[]): void {
 	if (typeof localStorage === 'undefined') return;
 	localStorage.setItem('chat-custom-reactions', JSON.stringify(reactions));
+}
+
+// Calibrated against measured rows: a one-line text message renders at 62px
+// (bubble + timestamp row) and each wrapped line adds ~20px. Estimates feed
+// scrollToIndex — overshoot clamps a deep focus scroll to the bottom, which is
+// exactly how open-at-first-unread used to silently fail.
+// ponytail: still coarse buckets (measured rows use their real heights) —
+// refine toward per-part math (reply chips, mentions) only if first-pass jumps
+// still visibly miss.
+export function estimateChatMessageHeight(message: ChatMessage): number {
+	if (message.systemKind) return 48;
+	if (message.media || message.tags?.some((tag) => tag[0] === 'imeta')) return 264;
+	const lines = Math.min(30, Math.max(1, Math.ceil(message.text.length / 32)));
+	return 62 + (lines - 1) * 20;
 }

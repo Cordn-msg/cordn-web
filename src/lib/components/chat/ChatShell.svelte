@@ -13,7 +13,8 @@
 	import {
 		listUnreadChatGroupReferenceTargets,
 		markChatGroupMentionsRead,
-		markChatGroupRead
+		markChatGroupRead,
+		getChatGroupLastReadCursor
 	} from '$lib/services/chatGroupPresence.svelte';
 	import {
 		chatComposerActionsStore,
@@ -789,6 +790,32 @@
 		selectedDetailEventId = null;
 	}
 
+	// Open-at-first-unread: which rendered message the list should land on when
+	// the chat opens. Computed during render (not in an effect) so the message
+	// list mounts with the focus id already in hand — an effect-set prop arrives
+	// one flush late, the list bottom-pins first, and that in-flight pin keeps
+	// the virtual window at the tail so the focus row never renders. Snapshotted
+	// once per group before markChatGroupRead clears the unread gap; live
+	// arrivals while the chat is open never re-focus. A ?message= deep link wins
+	// (its own effect scrolls to the target).
+	let snapshotGroupId = '';
+	let snapshotFocusId = '';
+	const initialFocusMessageId = $derived.by(() => {
+		if (snapshotGroupId !== groupId) {
+			snapshotGroupId = groupId;
+			const firstUnread = page.url.searchParams.get('message')
+				? undefined
+				: storedMessages.find(
+						(message) =>
+							message.cursor > getChatGroupLastReadCursor(groupId) &&
+							message.kind !== SYSTEM_MESSAGE_KIND &&
+							!isAnnotationKind(message.kind)
+					);
+			snapshotFocusId = firstUnread ? `${firstUnread.id}:${firstUnread.cursor}` : '';
+		}
+		return snapshotFocusId;
+	});
+
 	$effect(() => {
 		if (!groupId || !group) return;
 		markChatGroupRead(groupId, group.lastCursor);
@@ -827,6 +854,7 @@
 				<ChatMessageList
 					bind:this={messageListRef}
 					{messages}
+					{initialFocusMessageId}
 					onReply={handleReply}
 					onReact={handleReact}
 					onEdit={handleEdit}

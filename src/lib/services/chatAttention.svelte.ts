@@ -9,6 +9,8 @@ import {
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
+	formatChatMessagePreviewText,
+	getProfileDisplayName,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -77,14 +79,15 @@ function getUnreadMessageCount() {
 	);
 }
 
-function getUnreadAttentionCount() {
+function getUnreadAttentionCount(excludeGroupId?: string) {
 	const pubkey = manager.active?.pubkey;
-	const unreadMessages = getUnreadMessageCount();
+	const groups = listChatGroups().filter((group) => group.id !== excludeGroupId);
+	const unreadMessages = groups.reduce(
+		(total, group) => total + getUnreadChatGroupMessageCount(group.id),
+		0
+	);
 	const unreadMentions = pubkey
-		? listChatGroups().reduce(
-				(total, group) => total + getUnreadChatGroupReferenceCount(group.id, pubkey),
-				0
-			)
+		? groups.reduce((total, group) => total + getUnreadChatGroupReferenceCount(group.id, pubkey), 0)
 		: 0;
 	const unreadWelcomes = getUnreadWelcomeNotificationCount();
 	const unreadJoinRequests = getUnreadJoinRequestCount();
@@ -92,8 +95,11 @@ function getUnreadAttentionCount() {
 	return unreadMessages + unreadMentions + unreadWelcomes + unreadJoinRequests + unreadNews;
 }
 
-export function hasUnreadChatAttention() {
-	return getUnreadAttentionCount() > 0;
+/** Any unread attention anywhere. Pass the open group's id (chat routes) to
+ *  signal "something new elsewhere" — the open group is being read, so its
+ *  unread (e.g. not-yet-viewed mentions) must not pin the dot forever. */
+export function hasUnreadChatAttention(excludeGroupId?: string) {
+	return getUnreadAttentionCount(excludeGroupId) > 0;
 }
 
 function buildBadgedTitle(pathname: string) {
@@ -118,10 +124,11 @@ export function syncChatAttention() {
 	ensureFaviconLink().href = DEFAULT_FAVICON;
 }
 
-function getNotificationBody(sender: string, content: string) {
-	const trimmed = content.trim();
+function getNotificationBody(sender: string, content: string, profileHints: ChatGroupProfileHints) {
+	// Same mention-token rendering as the group-card previews.
+	const trimmed = formatChatMessagePreviewText(content, profileHints).trim();
 	if (trimmed) return trimmed;
-	return `New message from ${sender.slice(0, 12)}…`;
+	return `New message from ${getProfileDisplayName(sender, profileHints)}`;
 }
 
 const NOTIFICATION_PROFILE_TIMEOUT_MS = 1500;
@@ -203,7 +210,7 @@ export async function notifyForUnreadChatMessages() {
 			rememberNotifiedMessage(message.id);
 			await showLocalNotification({
 				title: title || 'Cordn',
-				body: getNotificationBody(message.sender, message.content),
+				body: getNotificationBody(message.sender, message.content, profileHints),
 				icon,
 				groupId: group.id
 			});
