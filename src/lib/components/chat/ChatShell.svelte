@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import ChatComposer from './ChatComposer.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import ChatMessageList from './ChatMessageList.svelte';
@@ -792,31 +791,33 @@
 	}
 
 	// Open-at-first-unread: which rendered message the list should land on when
-	// the chat opens. Snapshotted once per group BEFORE markChatGroupRead clears
-	// the unread gap; the route component persists across group navigation (no
-	// {#key}), so the id guard means live arrivals while the chat is open never
-	// re-focus. A ?message= deep link wins (its own effect scrolls to the target).
-	let initialFocusMessageId = $state('');
-	let focusSnapshotGroupId = '';
+	// the chat opens. Computed during render (not in an effect) so the message
+	// list mounts with the focus id already in hand — an effect-set prop arrives
+	// one flush late, the list bottom-pins first, and that in-flight pin keeps
+	// the virtual window at the tail so the focus row never renders. Snapshotted
+	// once per group before markChatGroupRead clears the unread gap; live
+	// arrivals while the chat is open never re-focus. A ?message= deep link wins
+	// (its own effect scrolls to the target).
+	let snapshotGroupId = '';
+	let snapshotFocusId = '';
+	const initialFocusMessageId = $derived.by(() => {
+		if (snapshotGroupId !== groupId) {
+			snapshotGroupId = groupId;
+			const firstUnread = page.url.searchParams.get('message')
+				? undefined
+				: storedMessages.find(
+						(message) =>
+							message.cursor > getChatGroupLastReadCursor(groupId) &&
+							message.kind !== SYSTEM_MESSAGE_KIND &&
+							!isAnnotationKind(message.kind)
+					);
+			snapshotFocusId = firstUnread ? `${firstUnread.id}:${firstUnread.cursor}` : '';
+		}
+		return snapshotFocusId;
+	});
 
 	$effect(() => {
 		if (!groupId || !group) return;
-		untrack(() => {
-			if (focusSnapshotGroupId !== groupId) {
-				focusSnapshotGroupId = groupId;
-				const lastReadCursor = getChatGroupLastReadCursor(groupId);
-				// A ?message= deep link owns the initial scroll instead.
-				const firstUnread = page.url.searchParams.get('message')
-					? undefined
-					: storedMessages.find(
-							(message) =>
-								message.cursor > lastReadCursor &&
-								message.kind !== SYSTEM_MESSAGE_KIND &&
-								!isAnnotationKind(message.kind)
-						);
-				initialFocusMessageId = firstUnread ? `${firstUnread.id}:${firstUnread.cursor}` : '';
-			}
-		});
 		markChatGroupRead(groupId, group.lastCursor);
 	});
 

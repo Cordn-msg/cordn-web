@@ -110,36 +110,56 @@
 		await navigateToMessage(messageId);
 	}
 
+	// scrollToIndex reads measurementsCache — measured rows plus estimates for
+	// rows that never rendered. A deep target's estimated offset can overshoot
+	// the real content entirely (the jump clamps at the end and the row never
+	// mounts), so converge: jump, measure what rendered, jump again with the
+	// corrected offsets. Returns the target row or null when it never rendered.
+	async function jumpToRow(
+		index: number,
+		align: 'start' | 'center',
+		run: number
+	): Promise<HTMLElement | null> {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			$virtualizer.scrollToIndex(index, { align });
+			// The virtual window recomputes on the element's scroll event, which
+			// lands after every microtask — wait for the next frame or the row
+			// lookup races the render and misses a row that is in fact mounted.
+			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+			await tick();
+			if (run !== scrollRun || !container) return null;
+			measureVisibleItems();
+			await tick();
+			if (run !== scrollRun || !container) return null;
+			const row = container.querySelector<HTMLElement>(`[data-index="${index}"]`);
+			if (row) return row;
+		}
+		return null;
+	}
+
 	// Open-at-first-unread: land with the first unread message (and its "New
-	// messages" marker) at the TOP of the viewport, WhatsApp-style.
-	//
-	// Virtualizer gotcha this dances around: scrollToIndex reads
-	// measurementsCache — measured rows plus a 128px estimate for every row
-	// that never rendered. The cache is *self-consistent* (row translateY and
-	// the spacer height come from the same numbers), so pass 1 always mounts the
-	// target row even when its cached offset is wrong in absolute terms. But
-	// once pass 1's rows get measured the cache shifts, so the final position
-	// must come from DOM geometry (navigateToMessage's trick), not from a
-	// second scrollToIndex. Returns false when the target isn't in the list
-	// (consumer falls back to the bottom-pin).
+	// messages" marker) at the TOP of the viewport, WhatsApp-style. The final
+	// position comes from DOM geometry (not another scrollToIndex) so late
+	// measurements can't drift it. Returns false when the target isn't in the
+	// list (consumer falls back to the bottom-pin).
 	async function scrollToFocusMessage(messageId: string): Promise<boolean> {
 		if (!browser || !container) return false;
 		const index = messages.findIndex((message) => message.id === messageId);
 		if (index === -1) return false;
 
 		consumedFocusId = messageId;
+		// The focus flight owns the scroll: mark "not at bottom" so no auto-scroll
+		// actor (message-arrival effect re-runs, the container RO, the totalSize
+		// re-pin) can race it back to the latest message mid-flight.
+		wasAtBottom = false;
 		const run = ++scrollRun;
 		// Suppress the totalSize re-pin while measurements settle (same guard
 		// navigateToMessage uses).
 		suppressNextAutoScroll = true;
-		$virtualizer.scrollToIndex(index, { align: 'start' });
-		await tick();
-		if (run !== scrollRun) return true;
-		measureVisibleItems();
-		await tick();
 		// Anchor to the ROW (not the bubble) so the unread marker renders inside
 		// the viewport top; double pass because late measurements keep settling.
-		const row = container.querySelector<HTMLElement>(`[data-index="${index}"]`);
+		const row = await jumpToRow(index, 'start', run);
+		if (run !== scrollRun) return true;
 		if (!row) return false; // target vanished mid-flight — fall back to bottom-pin
 		positionMessage(row, 'top');
 		await tick();
@@ -164,9 +184,7 @@
 			if (!message) continue;
 			if (message.systemKind) continue;
 			if (!message.unreadReference) continue;
-			const element = container.querySelector<HTMLElement>(
-				`[data-index="${virtualItem.index}"] [data-message-id]`
-			);
+			const element = container.querySelector<HTMLElement>(`[data-index="${virtualItem.index}"]`);
 			if (!element) continue;
 
 			const elementRect = element.getBoundingClientRect();
@@ -240,11 +258,11 @@
 		// rAF-batched so the multi-frame keyboard animation collapses to one cheap scrollTo.
 		let resizeFrame: number | null = null;
 		const ro = new ResizeObserver(() => {
-			if (!container || !wasAtBottom) return;
+			if (!container || !wasAtBottom || suppressNextAutoScroll) return;
 			if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
 			resizeFrame = requestAnimationFrame(() => {
 				resizeFrame = null;
-				if (container && wasAtBottom) {
+				if (container && wasAtBottom && !suppressNextAutoScroll) {
 					container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
 				}
 			});
@@ -311,16 +329,8 @@
 
 		suppressNextAutoScroll = true;
 		const run = ++scrollRun;
-		$virtualizer.scrollToIndex(messageIndex, { align: 'center' });
-		await tick();
+		const element = await jumpToRow(messageIndex, 'center', run);
 		if (run !== scrollRun) return;
-		measureVisibleItems();
-		await tick();
-		if (run !== scrollRun) return;
-
-		const element = container.querySelector<HTMLElement>(
-			`[data-index="${messageIndex}"] [data-message-id]`
-		);
 		if (!element) return;
 
 		highlightedMessageId = messageId;

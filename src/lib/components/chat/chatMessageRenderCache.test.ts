@@ -23,11 +23,11 @@ describe('estimateChatMessageHeight', () => {
 			estimateChatMessageHeight(msg({ media: { mime: 'image/png', filename: 'a.png' } }))
 		).toBe(264);
 		expect(estimateChatMessageHeight(msg({ tags: [['imeta', 'url x']] }))).toBe(264);
-		expect(estimateChatMessageHeight(msg({ text: 'hi' }))).toBe(84);
+		expect(estimateChatMessageHeight(msg({ text: 'hi' }))).toBe(62);
 	});
 
-	it('grows text estimates with length and caps at five lines', () => {
-		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(240) }))).toBe(124);
-		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(2000) }))).toBe(164);
+	it('grows text estimates with length and caps at thirty lines', () => {
+		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(240) }))).toBe(202);
+		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(2000) }))).toBe(642);
 	});
 });
