@@ -70,8 +70,16 @@
 	// ponytail: mirrors the default minus the direction clause and the private
 	// scrollAdjustments term — live scrollTop is close enough.
 	const virtualizerInstance = $virtualizer;
-	virtualizerInstance.shouldAdjustScrollPositionOnItemSizeChange = (item) =>
-		item.start < (container?.scrollTop ?? 0);
+	virtualizerInstance.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
+		// Never drag a viewport pinned at the bottom: rows settling from estimate to
+		// measured height (short text especially) would otherwise pull the freshly
+		// opened chat up to a deterministic mid-history spot. At the bottom the
+		// browser clamps scrollTop to the shrunken content and the totalSize effect
+		// re-pins, so the view stays glued to the latest message.
+		const el = container;
+		if (el && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) return false;
+		return item.start < (el?.scrollTop ?? 0);
+	};
 
 	const virtualItems = $derived($virtualizer.getVirtualItems());
 	const totalSize = $derived($virtualizer.getTotalSize());
@@ -351,7 +359,7 @@
 <div class="relative h-full">
 	<div
 		bind:this={container}
-		class="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
+		class="h-full overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]"
 		onscroll={handleScroll}
 	>
 		<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
