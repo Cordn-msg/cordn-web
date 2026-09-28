@@ -7,6 +7,7 @@ import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKey
 import { throwIfCoordinatorInReadBackoff } from '$lib/services/coordinatorHealth.svelte';
 import type { CordnGroupMetadataPreview } from '$lib/services/chatMlsUtils';
 import { previewGroupMetadataFromWelcome } from '$lib/services/chatMlsUtils';
+import { ensureSignerReady } from '$lib/services/signerReadiness.svelte';
 import {
 	assertCoordinatorOperationActive,
 	requireActiveAccount,
@@ -204,6 +205,11 @@ export async function fetchWelcomeNotifications(
 ) {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
 	const assertActive = () => assertCoordinatorOperationActive(account, options.signal);
+	// Await-then-check: extension signers inject window.nostr asynchronously, so
+	// the stable lane waits for the signer to be active before judging its
+	// NIP-44 capability (bounded 8s, session-cached — see signerReadiness).
+	await ensureSignerReady(account);
+	assertActive();
 	if (!coordinatorKeys) await ensureGroupsLoaded();
 	assertActive();
 	const keys = (coordinatorKeys ?? listKnownCoordinatorKeys()).map(normalizePubKey);

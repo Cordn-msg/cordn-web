@@ -6,8 +6,10 @@ import {
 	CTXVM_MESSAGES_KIND,
 	decryptMessage,
 	PrivateKeySigner,
+	type NostrSigner,
 	type RelayHandler
 } from '@contextvm/sdk';
+import { ExtensionSigner } from 'applesauce-signers/signers';
 import type { NostrEvent } from 'nostr-tools';
 import { cordnClient } from './coordinatorClient';
 
@@ -79,7 +81,7 @@ class OfflineRelay implements RelayHandler {
 }
 
 const clients: cordnClient[] = [];
-function client(relay = new OfflineRelay(), signer?: PrivateKeySigner) {
+function client(relay = new OfflineRelay(), signer?: NostrSigner) {
 	const instance = new cordnClient({ serverPubkey, relayHandler: relay, signer });
 	clients.push(instance);
 	return { instance, relay };
@@ -93,6 +95,7 @@ async function requestAt(relay: OfflineRelay, index = 0): Promise<Request> {
 afterEach(async () => {
 	await Promise.all(clients.splice(0).map((instance) => instance.disconnect()));
 	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
 
@@ -113,6 +116,35 @@ describe('coordinator client lifetime', () => {
 		const subscription = instance.SubscribeManyGroupMessages({ groups: [{ gid: 'g' }] });
 		void subscription.catch(() => undefined);
 		await requestAt(relay);
+	});
+
+	test('stable calls pick up NIP-44 support the signer reports late', async () => {
+		// Extensions inject window.nostr asynchronously: capability observed at
+		// client construction must not be frozen for the client's whole lifetime.
+		const signer = new PrivateKeySigner('02'.repeat(32));
+		const nip44 = signer.nip44;
+		(signer as { nip44?: unknown }).nip44 = undefined;
+		const { instance, relay } = client(new OfflineRelay(), signer);
+		(signer as { nip44?: unknown }).nip44 = nip44;
+
+		const pending = expect(instance.FetchPendingWelcomes({})).resolves.toEqual({ welcomes: [] });
+		await relay.result(await requestAt(relay), { welcomes: [] });
+		await pending;
+	});
+
+	test('an un-injected extension fails as signer-missing, not NIP-44', async () => {
+		// Not ready ≠ incapable: the message must route into the signer-ready
+		// retry ladder instead of claiming the signer lacks NIP-44 v2.
+		vi.stubGlobal('window', {}); // window.nostr not injected yet
+		const { instance, relay } = client(new OfflineRelay(), new ExtensionSigner());
+		await expect(instance.FetchPendingWelcomes({})).rejects.toThrow(/signer extension missing/i);
+		expect(relay.requests).toHaveLength(0); // still fails fast, no I/O
+	});
+
+	test('an injected extension without nip44 gets the capability message', async () => {
+		vi.stubGlobal('window', { nostr: {} });
+		const { instance } = client(new OfflineRelay(), new ExtensionSigner());
+		await expect(instance.FetchPendingWelcomes({})).rejects.toThrow(/NIP-44 v2/);
 	});
 
 	test('default clients own different pools even for the same relay set', async () => {
