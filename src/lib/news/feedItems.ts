@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-28-stranded-publish-heal',
+		createdAt: Date.UTC(2026, 8, 28),
+		version: 1,
+		title: 'Linked devices keep up after a bad connection',
+		body: '- 🐛 A change made right as the connection dropped — a rename, an invite — could silently never reach your other devices until you touched that group again. Cordn now remembers what it still owes the fleet and pushes it on the next app open, so linked devices keep up on their own.'
+	},
+	{
 		id: 'cordn-news-2026-09-28-coordinator-relays',
 		createdAt: Date.UTC(2026, 8, 28),
 		version: 1,
