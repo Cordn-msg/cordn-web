@@ -145,6 +145,10 @@ export class cordnClient implements coordinatorClient {
 			relayHandler?: RelayHandler;
 			onHealth?: (signal: CoordinatorHealthSignal) => void;
 			onServerInfo?: (info: CoordinatorServerInfo) => void;
+			/** Fired once after the transport starts, with the final operational
+			 * relay set (configured, or resolved via hints/discovery/fallback for a
+			 * relay-less client — SDK 0.14.3 `getOperationalRelayUrls()`). */
+			onRelaysResolved?: (relayUrls: string[]) => void;
 		} = {}
 	) {
 		this.ephemeralClient = new Client({
@@ -165,11 +169,11 @@ export class cordnClient implements coordinatorClient {
 		// Empty means "unspecified": the transport's own resolution chain takes
 		// over (server-identity hints → kind-10002 discovery → fallback probe) at
 		// start(), swapping in a resolved pool. defaultRelays survives only as
-		// fallbackOperationalRelayUrls below. ponytail: the swap leaves this.pool
-		// pointing at the original (empty) pool — probe() on a relay-less client is
-		// a vacuous pass and the resolved pool runs SDK-default keepalive, not the
-		// 30s zombie tuning; fix by exposing the resolved relay set from the SDK
-		// and persisting it into the coordinator store.
+		// fallbackOperationalRelayUrls below. The swap leaves this.pool on the
+		// original (empty) pool, so probe() is a vacuous pass for this one client
+		// and the resolved pool keeps SDK-default keepalive — but onRelaysResolved
+		// lets callers persist the resolved set, so every later client for that
+		// coordinator is a configured one with the tuned pool.
 		const relays = options.relays ? [...options.relays] : [];
 		this.relays = relays;
 		// Client replacement must replace sockets AND cancel old publishers.
@@ -186,7 +190,7 @@ export class cordnClient implements coordinatorClient {
 			});
 		this.relayHandler = relayHandler;
 		this.pool = relayHandler instanceof ApplesauceRelayPool ? relayHandler : undefined;
-		const { signer: providedSigner, onHealth, onServerInfo, ...rest } = options;
+		const { signer: providedSigner, onHealth, onServerInfo, onRelaysResolved, ...rest } = options;
 		this.onHealth = onHealth;
 		this.onServerInfo = onServerInfo;
 		delete (rest as Partial<typeof options>).privateKey;
@@ -249,6 +253,24 @@ export class cordnClient implements coordinatorClient {
 		// Stateless initialize is local setup, not a coordinator health check.
 		this.ephemeralConnected = this.connect(this.ephemeralClient, this.ephemeralTransport);
 		void this.ephemeralConnected.catch(() => undefined);
+		// Report the resolved operational relay set once (SDK 0.14.3). For
+		// "unspecified" clients this is the discovery/fallback answer; configured
+		// clients just get their own set back. Fire-and-forget: callers persist it
+		// (e.g. into the coordinator store), never block on it.
+		void this.ephemeralConnected.then(
+			() => {
+				const urls = this.ephemeralTransport.getOperationalRelayUrls();
+				if (urls.length) onRelaysResolved?.(urls);
+			},
+			() => undefined
+		);
+	}
+
+	/** The final operational relay set; awaits transport start (and relay
+	 *  resolution for relay-less clients). Rejects if the client never started. */
+	async operationalRelayUrls(): Promise<string[]> {
+		await this.ephemeralConnected;
+		return this.ephemeralTransport.getOperationalRelayUrls();
 	}
 
 	/** Track actual signer work so an Android approval round-trip isn't a network reset. */

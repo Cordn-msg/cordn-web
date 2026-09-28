@@ -1,5 +1,9 @@
 import { manager } from '$lib/services/accountManager.svelte';
-import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+import {
+	getChatCoordinator,
+	markCoordinatorRelaysResolved,
+	upsertChatCoordinator
+} from '$lib/services/chatCoordinators.svelte';
 import {
 	markCoordinatorDegraded,
 	markCoordinatorHealthy,
@@ -64,6 +68,10 @@ class AccountCoordinatorClientRegistry {
 			signer: this.signer,
 			serverPubkey,
 			relays: target.relays,
+			// Persist the SDK-resolved relay set for relay-less coordinators
+			// (fill-if-empty) so every later client — this session included — takes
+			// the configured path instead of re-paying discovery.
+			onRelaysResolved: (relayUrls) => markCoordinatorRelaysResolved(serverPubkey, relayUrls),
 			onHealth: (signal) => {
 				if (client && this.peekClient(serverPubkey) !== client) return;
 				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
@@ -203,6 +211,26 @@ export async function disconnectCoordinatorClients(account?: IAccount): Promise<
 	// A rapid switch back must not reuse a registry whose teardown is still running.
 	accountClientRegistries.delete(registryKey);
 	await registry.disconnect();
+}
+
+/**
+ * Re-resolve a coordinator's relays from the network (explicit user action):
+ * a throwaway relay-less client runs the transport's full resolution chain
+ * (hints → kind-10002 discovery → fallback probe) and the result OVERWRITES the
+ * stored set — unlike automatic persistence (fill-if-empty), explicit intent
+ * replaces, so a coordinator that moved relays gets fixed here. The next
+ * getClient swaps in a fresh configured client automatically (relays mismatch).
+ */
+export async function refetchCoordinatorRelays(coordinatorKey: string): Promise<string[]> {
+	const normalized = normalizePubKey(coordinatorKey);
+	const client = new cordnClient({ serverPubkey: normalized, relays: [] });
+	try {
+		const urls = await client.operationalRelayUrls();
+		if (urls.length) upsertChatCoordinator({ pubkey: normalized, relays: urls });
+		return urls;
+	} finally {
+		await client.disconnect().catch(() => undefined);
+	}
 }
 
 export async function disconnectCoordinatorClient(

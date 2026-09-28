@@ -437,9 +437,9 @@ function gatherPollGroups(): PollGroup[] {
 		const coordinator = getChatCoordinator(group.coordinatorKey);
 		// ponytail: this seam is synchronous and feeds the native sidecar, which
 		// can't run the SDK's async relay-resolution chain — keep the
-		// default-relay fallback here. Ceiling: relay-less non-default coordinators
-		// get no background notifications until they have saved relays; upgrade by
-		// persisting SDK-resolved relays back into the coordinator store.
+		// default-relay fallback here. Relay-less coordinators get their resolved
+		// relays persisted on first in-app contact (markCoordinatorRelaysResolved),
+		// so this fallback only ever covers the window before that first contact.
 		const relayUrls = coordinator?.relays?.length ? coordinator.relays : defaultRelays;
 		const memberPubkeys = listChatGroupMembers(group.id)
 			.map((m) => normalizePubKey(m.stablePubkey))

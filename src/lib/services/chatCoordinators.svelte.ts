@@ -362,6 +362,24 @@ export function ensureDefaultCoordinatorRelays(): void {
 }
 
 /**
+ * Persist SDK-resolved operational relays (SDK 0.14.3 `getOperationalRelayUrls`)
+ * for a coordinator the store already knows, fill-if-empty — same §9 adoption
+ * semantics as document hints: never overwrites user-set or hint-adopted
+ * relays, never creates an entry (a removed coordinator is not resurrected).
+ * Persisting means every later client takes the configured path: no repeated
+ * discovery, our tuned pool/keepalive, and the native background poll works.
+ */
+export function markCoordinatorRelaysResolved(pubkey: string, relays: string[]): void {
+	const normalized = normalizePubKey(pubkey);
+	const resolved = normalizeRelays(relays);
+	if (!resolved.length) return;
+	const existing = getChatCoordinator(normalized);
+	if (existing && !existing.relays.length) {
+		upsertChatCoordinator({ pubkey: normalized, relays: resolved });
+	}
+}
+
+/**
  * Mark a coordinator as recently used, ensuring it is stored first. This is
  * the single relationship-establishment seam: called from group create/join,
  * key-package publish, and multi-device seed/fast-forward, so any coordinator

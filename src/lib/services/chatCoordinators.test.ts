@@ -16,6 +16,7 @@ import { defaultRelays } from '$lib/services/relay-pool';
 import {
 	ensureDefaultCoordinatorRelays,
 	getChatCoordinator,
+	markCoordinatorRelaysResolved,
 	markCoordinatorUsed,
 	upsertChatCoordinator
 } from './chatCoordinators.svelte';
@@ -35,6 +36,40 @@ describe('ensureDefaultCoordinatorRelays', () => {
 		upsertChatCoordinator({ pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY, relays: pinned });
 		ensureDefaultCoordinatorRelays();
 		expect(getChatCoordinator(DEFAULT_CHAT_COORDINATOR_PUBKEY)?.relays).toEqual(pinned);
+	});
+});
+
+describe('markCoordinatorRelaysResolved (SDK-resolved persistence, fill-if-empty)', () => {
+	const resolved = ['wss://discovered.example.com', 'wss://discovered2.example.com'];
+
+	test('fills a known relay-less coordinator; never creates an unknown one', () => {
+		const known = 'ee'.repeat(32);
+		markCoordinatorUsed(known); // stored without relays
+		markCoordinatorRelaysResolved(known, resolved);
+		expect(getChatCoordinator(known)?.relays).toEqual(resolved);
+
+		// Unknown coordinator (e.g. removed while its client was resolving): no entry.
+		const unknown = 'ff'.repeat(32);
+		markCoordinatorRelaysResolved(unknown, resolved);
+		expect(getChatCoordinator(unknown)).toBeUndefined();
+	});
+
+	test('never overwrites user-set or hint-adopted relays; ignores empty results', () => {
+		const key = 'ab'.repeat(32);
+		const pinned = ['wss://pinned.example.com'];
+		upsertChatCoordinator({ pubkey: key, relays: pinned });
+		markCoordinatorRelaysResolved(key, resolved);
+		expect(getChatCoordinator(key)?.relays).toEqual(pinned);
+
+		const hintAdopted = 'cd'.repeat(32);
+		markCoordinatorUsed(hintAdopted, resolved); // document hints adopted
+		markCoordinatorRelaysResolved(hintAdopted, ['wss://other.example.com']);
+		expect(getChatCoordinator(hintAdopted)?.relays).toEqual(resolved);
+
+		const bare = 'ef'.repeat(32);
+		markCoordinatorUsed(bare);
+		markCoordinatorRelaysResolved(bare, []);
+		expect(getChatCoordinator(bare)?.relays).toEqual([]);
 	});
 });
 
