@@ -1612,14 +1612,19 @@ async function startMultiDevice(): Promise<void> {
 	// process-killed publish, which the tip-event path can never see (the tip
 	// never moved). A racing mid-flight reconcile is benign: runSerialized
 	// orders the publishes and the sweep converges on its own reconcile.
-	scheduleOwedPublish(config);
+	scheduleOwedPublish();
 }
 
 /** Pure-local owed-publish check (§10.5): schedules a republish when any live
  *  group's local epoch is strictly ahead of the owed-push record, or the meta
  *  view hash no longer matches the last published one. Shared shape with
- *  handleTipEvent's divergence diff minus its fetch-gated signals. */
-function scheduleOwedPublish(config: MultiDeviceOwnerConfig): void {
+ *  handleTipEvent's divergence diff minus its fetch-gated signals. Fetches its
+ *  OWN config — `getMultiDeviceConfig()` returns a fresh JSON.parse per call,
+ *  so a config captured before the startup reconcile would miss the records
+ *  that reconcile just wrote and schedule a spurious publish. */
+function scheduleOwedPublish(): void {
+	const config = getMultiDeviceConfig();
+	if (!config) return;
 	const liveGroups = collectActiveGroups();
 	const staleGids = diffStaleGroupEpochs({
 		localEpochs: collectLocalGroupEpochs(liveGroups),
@@ -1971,14 +1976,15 @@ async function handleTipEvent(
 		// no divergence and this is a no-op. Gated to the READ path only — the
 		// write path (`publish`) drives its own re-seal plan and must not queue a
 		// redundant second publish here.
-		const liveGids = collectActiveGroups().map((g) => g.id);
+		const liveGroupsForDiff = collectActiveGroups();
+		const liveGids = liveGroupsForDiff.map((g) => g.id);
 		const localAhead = diffLocalAhead({
 			localGids: liveGids,
 			tipGids: pointer.groups.map((g) => g.gid),
 			epochsAheadGids: localAheadGids
 		});
 		const staleGids = diffStaleGroupEpochs({
-			localEpochs: collectLocalGroupEpochs(collectActiveGroups()),
+			localEpochs: collectLocalGroupEpochs(liveGroupsForDiff),
 			publishedEpochs: config.publishedGroupEpochs
 		});
 		const localAheadUnion = [...new Set([...localAhead, ...staleGids])];
