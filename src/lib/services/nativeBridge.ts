@@ -435,6 +435,11 @@ function gatherPollGroups(): PollGroup[] {
 	const activePubkey = manager.active?.pubkey;
 	return listChatGroups().map((group) => {
 		const coordinator = getChatCoordinator(group.coordinatorKey);
+		// ponytail: this seam is synchronous and feeds the native sidecar, which
+		// can't run the SDK's async relay-resolution chain — keep the
+		// default-relay fallback here. Ceiling: relay-less non-default coordinators
+		// get no background notifications until they have saved relays; upgrade by
+		// persisting SDK-resolved relays back into the coordinator store.
 		const relayUrls = coordinator?.relays?.length ? coordinator.relays : defaultRelays;
 		const memberPubkeys = listChatGroupMembers(group.id)
 			.map((m) => normalizePubKey(m.stablePubkey))

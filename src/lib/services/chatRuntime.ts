@@ -10,7 +10,6 @@ import {
 	setCoordinatorServerInfo
 } from '$lib/services/coordinatorServerInfo.svelte';
 import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorClient';
-import { defaultRelays } from '$lib/services/relay-pool';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { errorMessage, normalizePubKey } from '$lib/utils';
@@ -23,19 +22,19 @@ type CoordinatorTarget = {
 };
 
 /**
- * Coordinator connection relays: explicit saved relays win; otherwise
- * defaultRelays (same rule for account and guest clients). Never fall back to
- * the user's globally selected Nostr relays — those are a publish/subscribe
- * concern, not a coordinator-connection concern, and in dev they default to
- * the localhost test relay (ws://localhost:10547), which is not a usable
- * coordinator endpoint for a freshly stored coordinator.
+ * Coordinator connection relays: the coordinator's saved relay configuration,
+ * or empty for "unspecified" — the SDK transport then resolves through its own
+ * chain (server-identity hints → kind-10002 discovery on its bootstrap relays
+ * → fallbackOperationalRelayUrls probe). The blanket client-default fallback
+ * this used to apply starved that chain: every relay-less coordinator was
+ * hardwired to the contextvm public relays, unreachable for self-hosted
+ * servers. Never fall back to the user's globally selected Nostr relays —
+ * those are a publish/subscribe concern, not a coordinator-connection
+ * concern, and in dev they default to the localhost test relay
+ * (ws://localhost:10547), which is not a usable coordinator endpoint.
  */
 export function resolveCoordinatorRelays(coordinatorKey: string): string[] {
-	const coordinator = getChatCoordinator(normalizePubKey(coordinatorKey));
-	if (coordinator?.relays.length) {
-		return coordinator.relays;
-	}
-	return defaultRelays;
+	return getChatCoordinator(normalizePubKey(coordinatorKey))?.relays ?? [];
 }
 
 function resolveCoordinatorTarget(coordinatorKey: string): CoordinatorTarget {

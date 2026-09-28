@@ -162,7 +162,15 @@ export class cordnClient implements coordinatorClient {
 			);
 		}
 
-		const relays = options.relays?.length ? [...options.relays] : [...defaultRelays];
+		// Empty means "unspecified": the transport's own resolution chain takes
+		// over (server-identity hints → kind-10002 discovery → fallback probe) at
+		// start(), swapping in a resolved pool. defaultRelays survives only as
+		// fallbackOperationalRelayUrls below. ponytail: the swap leaves this.pool
+		// pointing at the original (empty) pool — probe() on a relay-less client is
+		// a vacuous pass and the resolved pool runs SDK-default keepalive, not the
+		// 30s zombie tuning; fix by exposing the resolved relay set from the SDK
+		// and persisting it into the coordinator store.
+		const relays = options.relays ? [...options.relays] : [];
 		this.relays = relays;
 		// Client replacement must replace sockets AND cancel old publishers.
 		// Only this client's stable/ephemeral transports share the pool.

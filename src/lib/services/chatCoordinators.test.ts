@@ -11,7 +11,32 @@ vi.mock('$lib/services/chatKeyPackages.svelte', () => ({
 	listChatKeyPackages: () => []
 }));
 
-import { getChatCoordinator, markCoordinatorUsed, upsertChatCoordinator } from './chatCoordinators.svelte';
+import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+import { defaultRelays } from '$lib/services/relay-pool';
+import {
+	ensureDefaultCoordinatorRelays,
+	getChatCoordinator,
+	markCoordinatorUsed,
+	upsertChatCoordinator
+} from './chatCoordinators.svelte';
+
+describe('ensureDefaultCoordinatorRelays', () => {
+	test('fills a relay-less default entry; leaves existing relays alone', () => {
+		// Relay-less default entry (install seeded before relays): filled.
+		upsertChatCoordinator({
+			pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
+			label: 'Default coordinator'
+		});
+		ensureDefaultCoordinatorRelays();
+		expect(getChatCoordinator(DEFAULT_CHAT_COORDINATOR_PUBKEY)?.relays).toEqual(defaultRelays);
+
+		// User-set relays always win — never overwritten.
+		const pinned = ['wss://pinned.example.com'];
+		upsertChatCoordinator({ pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY, relays: pinned });
+		ensureDefaultCoordinatorRelays();
+		expect(getChatCoordinator(DEFAULT_CHAT_COORDINATOR_PUBKEY)?.relays).toEqual(pinned);
+	});
+});
 
 describe('markCoordinatorUsed relay-hint adoption (spec §4.1/§9)', () => {
 	const hints = ['wss://relay.example.com', 'wss://backup.example.com'];

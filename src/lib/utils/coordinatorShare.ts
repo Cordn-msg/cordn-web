@@ -14,16 +14,18 @@ import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
 
 /**
  * Route param for a coordinator page: always an nprofile carrying the
- * *effective* relays — saved relays when present, else the client defaults
- * `resolveCoordinatorRelays` falls back to — so links describe what the app
- * actually connects through. `decodeCoordinatorQueryParam` on the route side
- * accepts nprofile, npub, and legacy hex, so old links keep working.
+ * coordinator's *saved* relays when present — a relay-less coordinator
+ * encodes no relay TLV, so the receiving client discovers through its own
+ * resolution chain instead of being pinned to relays it may not use.
+ * `decodeCoordinatorQueryParam` on the route side accepts nprofile, npub,
+ * and legacy hex, so old links keep working.
  */
 export function coordinatorRouteParam(pubkey: string): string {
 	const normalized = normalizePubKey(pubkey);
+	const relays = resolveCoordinatorRelays(normalized);
 	return nip19.nprofileEncode({
 		pubkey: normalized,
-		relays: resolveCoordinatorRelays(normalized)
+		...(relays.length ? { relays } : {})
 	});
 }
 
