@@ -12,6 +12,8 @@ import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import {
+	areChatGroupsLoaded,
+	ensureGroupsLoaded,
 	ingestIncomingChatGroupMessages,
 	listChatGroups,
 	listChatGroupMembers
@@ -535,6 +537,14 @@ export async function seedBackground(): Promise<void> {
 	const accountPubkey = manager.active?.pubkey;
 	if (!accountPubkey) return;
 	try {
+		// Never seed from an unhydrated group store: an empty gather would WIPE
+		// the native poll set (seedGroups drops rows not in the list) and
+		// background notifications silently die until the next transition.
+		await ensureGroupsLoaded();
+		if (!areChatGroupsLoaded()) return;
+		// The await above opened an account-switch window: never seed the NEW
+		// account's groups under the OLD pubkey — the next transition re-seeds.
+		if (manager.active?.pubkey !== accountPubkey) return;
 		await CordnBackground.seed({ accountPubkey, groups: gatherPollGroups() });
 	} catch {
 		// best-effort — a missed seed self-corrects on the next transition

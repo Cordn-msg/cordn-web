@@ -93,15 +93,19 @@ describe('coordinator client ownership', () => {
 	test('retired operations cannot block or replace the fresh client', async () => {
 		const pending = deferred<string>();
 		const first = withCoordinatorClient(ACCOUNT, COORDINATOR, () => pending.promise);
-		const failed = expect(first).rejects.toThrow('Connection closed');
 		const old = getCoordinatorClient(ACCOUNT, COORDINATOR);
 		replaceCoordinatorClient(COORDINATOR, ACCOUNT, old);
 		const fresh = getCoordinatorClient(ACCOUNT, COORDINATOR);
 		await expect(withCoordinatorClient(ACCOUNT, COORDINATOR, async () => 'fresh')).resolves.toBe(
 			'fresh'
 		);
+		// A COMPLETED call on a retired client resolves with its result instead
+		// of being discarded as 'Connection closed': a finished msg_post has
+		// landed — reporting success as failure breeds duplicate re-posts and
+		// stuck queued bubbles. (A call still in flight when the client dies
+		// still rejects via withDeadline's abort race.)
 		pending.resolve('stale');
-		await failed;
+		await expect(first).resolves.toBe('stale');
 		expect(getCoordinatorClient(ACCOUNT, COORDINATOR)).toBe(fresh);
 		expect(fresh).not.toBe(old);
 	});

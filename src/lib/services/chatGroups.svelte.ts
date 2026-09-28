@@ -467,6 +467,52 @@ async function catchUpGroupBeforeOutboundOperation(
 }
 
 /**
+ * Fetch this group's messages from ITS coordinator and ingest them — the
+ * outbox's per-group "confirm-before-retry" primitive. Returns true only
+ * when the fetch succeeded: that is what makes "the attempted event id is
+ * absent" provable (a failed fetch proves nothing, and msg_post has no
+ * server-side dedup, so re-posting on an unproven absence ships duplicates).
+ *
+ * Runs OUTSIDE the per-group operation lock — ingestion takes it internally
+ * via ingestIncomingChatGroupMessages (same deadlock rule as the resume
+ * gate). Per-group by design: a dead coordinator's failed confirm blocks
+ * only its own group's queue, never the other groups' drains.
+ */
+export async function confirmChatGroupDelivery(groupId: string): Promise<boolean> {
+	try {
+		const account = requireActiveAccount('You must be logged in to confirm message delivery');
+		const group = requireChatGroup(groupId);
+		assertChatGroupIsActive(group);
+		const gid = groupIdDecoder.decode(decodeStoredGroupState(group).groupContext.groupId);
+		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchManyGroupMessages(
+				{
+					groups: [{ gid, after: group.fetchCursor > 0 ? group.fetchCursor : undefined }]
+				},
+				// Fail closed and FAST (same 8s as PostGroupMessage): an answer slower
+				// than this just fails the confirm and the head retries next pass —
+				// never an unauthorized re-post. The 20s default would hang the
+				// outbox lane for the full timeout on every dead-coordinator tick.
+				{ timeout: 8_000 }
+			)
+		);
+		if (result.messages.length > 0) {
+			await ingestIncomingChatGroupMessages(
+				groupId,
+				result.messages.map((message) => ({
+					cursor: message.cursor,
+					createdAt: message.at,
+					opaqueMessageBase64: message.msg_64
+				}))
+			);
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Assert that a group can perform outbound operations.
  * Performs catch-up with the coordinator and validates the group is healthy.
  * Must be called from within a runGroupOperation context.
@@ -1538,6 +1584,14 @@ export async function sendChatGroupMessage(input: {
 	 *  through so the stashed key matches the ciphertext even if the group state
 	 *  moved on. Other callers omit it and the key is derived here as before. */
 	mediaKeyBase64?: string;
+	/** Frozen event timestamp (unix seconds) so retries of the same intent
+	 *  derive the SAME event id: each attempt still seals against the group's
+	 *  current MLS state (epoch changes stay a no-op), but the id no longer
+	 *  rotates per attempt — whichever attempt lands is confirmed by id
+	 *  everywhere (ingestion's seenMessageIds, the outbox's confirmation, the
+	 *  optimistic-bubble hide). Omitted by direct callers → minted at send
+	 *  time, exactly as before. */
+	eventCreatedAt?: number;
 	/** Awaited after the intent is MLS-sealed (event id known) and BEFORE the
 	 *  coordinator post. The offline outbox persists the event id here so an
 	 *  ambiguous outcome (timeout / app closed mid-post) can be resolved by
@@ -1564,7 +1618,8 @@ export async function sendChatGroupMessage(input: {
 				pubkey: normalizePubKey(account.pubkey),
 				content: outboundShape.content,
 				kind: outboundShape.kind,
-				tags: outboundShape.tags
+				tags: outboundShape.tags,
+				createdAt: input.eventCreatedAt
 			}),
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
 		});

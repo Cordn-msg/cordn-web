@@ -198,8 +198,10 @@ let tickPromise: Promise<void> | null = null;
 let tickDirty = false;
 let dirtyCatchUp = false;
 let lastCatchUpAt = 0;
-/** True while a detached catch-up sweep is running (see tickBody). */
-let catchUpInFlight = false;
+/** Coordinators with a detached catch-up fetch still in flight. Per
+ *  coordinator, NOT global: a dead coordinator's 20s fetch must not cause
+ *  healthy coordinators' catch-ups to be skipped while it runs. */
+const catchUpInFlightCoordinators = new Set<string>();
 let lastActiveAccountId = '';
 /** Armed once the first tick settled, so fresh opens start silently. */
 let warmed = false;
@@ -879,40 +881,49 @@ async function catchUpWatchedCoordinators(account: IAccount, watchedBefore: stri
 
 	await Promise.all(
 		[...groupsByCoordinator.entries()].map(async ([coordinatorKey, groups]) => {
-			const client = getCoordinatorClient(account, coordinatorKey);
-			const { failedGroupIds, ingestedCount } = await fetchCoordinatorGroupBacklog({
-				account,
-				client,
-				groups
-			}).catch((error) => {
-				console.warn('[watch] catch-up fetch failed', {
-					coordinatorKey,
-					detail: errorMessage(error)
+			// One fetch per coordinator at a time (idempotent by cursor anyway);
+			// skipping is scoped to THIS coordinator so a slow or dead one never
+			// withholds catch-ups from the healthy ones.
+			if (catchUpInFlightCoordinators.has(coordinatorKey)) return;
+			catchUpInFlightCoordinators.add(coordinatorKey);
+			try {
+				const client = getCoordinatorClient(account, coordinatorKey);
+				const { failedGroupIds, ingestedCount } = await fetchCoordinatorGroupBacklog({
+					account,
+					client,
+					groups
+				}).catch((error) => {
+					console.warn('[watch] catch-up fetch failed', {
+						coordinatorKey,
+						detail: errorMessage(error)
+					});
+					// Whole-fetch failure: the backlog is entirely unknown for these
+					// groups — conservatively mark them incomplete (never vouch for them
+					// on the MD send path) until a fetch succeeds.
+					return {
+						failedGroupIds: new Set<string>(groups.map((group) => group.id)),
+						ingestedCount: 0
+					};
 				});
-				// Whole-fetch failure: the backlog is entirely unknown for these
-				// groups — conservatively mark them incomplete (never vouch for them
-				// on the MD send path) until a fetch succeeds.
-				return {
-					failedGroupIds: new Set<string>(groups.map((group) => group.id)),
-					ingestedCount: 0
-				};
-			});
-			if (
-				manager.getActive()?.id !== account.id ||
-				!isCurrentCoordinatorClient(coordinatorKey, client, account)
-			)
-				return;
-			markGroupsBacklogComplete(
-				groups.filter((group) => !failedGroupIds.has(group.id)).map((group) => group.id)
-			);
-			markGroupsBacklogIncomplete([...failedGroupIds]);
-			if (ingestedCount === 0) return;
-			const handle = findWatchHandleByCoordinator(coordinatorKey);
-			if (handle && !isDeliveryStale(handle)) return;
+				if (
+					manager.getActive()?.id !== account.id ||
+					!isCurrentCoordinatorClient(coordinatorKey, client, account)
+				)
+					return;
+				markGroupsBacklogComplete(
+					groups.filter((group) => !failedGroupIds.has(group.id)).map((group) => group.id)
+				);
+				markGroupsBacklogIncomplete([...failedGroupIds]);
+				if (ingestedCount === 0) return;
+				const handle = findWatchHandleByCoordinator(coordinatorKey);
+				if (handle && !isDeliveryStale(handle)) return;
 
-			stopCoordinatorWatches(coordinatorKey, 'delivery gap detected');
-			replaceCoordinatorClient(coordinatorKey, account, client);
-			requestTick('zombie coordinator detected');
+				stopCoordinatorWatches(coordinatorKey, 'delivery gap detected');
+				replaceCoordinatorClient(coordinatorKey, account, client);
+				requestTick('zombie coordinator detected');
+			} finally {
+				catchUpInFlightCoordinators.delete(coordinatorKey);
+			}
 		})
 	);
 }
@@ -941,17 +952,13 @@ async function tickBody(account: IAccount, options: TickOptions): Promise<void> 
 	// next trigger re-ensures. (A global tick deadline + hard-reset hammer was
 	// removed: with all real work detached it measured nothing real, yet its
 	// teardown destroyed healthy in-flight connections and bred the very
-	// retry storm it blamed.) A catch-up request while a sweep is still
-	// running is skipped: live subscriptions cover the interim, and the next
-	// trigger re-runs it.
+	// retry storm it blamed.) A catch-up request for a coordinator whose fetch
+	// is still running is skipped per coordinator: live subscriptions cover
+	// the interim, the next trigger re-runs it, and other coordinators never
+	// wait on a slow one.
 	await startMissingWatches(account);
-	if (options.catchUp && !catchUpInFlight) {
-		catchUpInFlight = true;
-		void catchUpWatchedCoordinators(account, watchedBefore)
-			.catch(() => undefined)
-			.finally(() => {
-				catchUpInFlight = false;
-			});
+	if (options.catchUp) {
+		void catchUpWatchedCoordinators(account, watchedBefore).catch(() => undefined);
 	}
 }
 
