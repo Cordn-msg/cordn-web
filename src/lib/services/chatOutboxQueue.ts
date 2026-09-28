@@ -374,20 +374,13 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 	const storage = await getChatStorage();
 	const entries = await storage.listOutboxEntries(ownerPubkey);
 
-	const byGroup = new Map<string, StoredChatOutboxRecord[]>();
-	for (const entry of entries) {
-		const list = byGroup.get(entry.groupId);
-		if (list) list.push(entry);
-		else byGroup.set(entry.groupId, [entry]);
-	}
-
 	// Lanes are dispatched DETACHED — this pass must not wait on any lane.
 	// That was the last scheduling coupling: a dead coordinator's 20s
 	// confirm-fail/attempt hang used to hold the whole drain chain, so sends to
 	// healthy groups sat 'queued' behind it. A finished lane re-arms the drain
 	// to pick up entries that arrived while it ran (FIFO preserved: one lane
-	// per group, ever).
-	for (const [groupId] of byGroup) {
+	// per group, ever). Lanes re-list their own entries under their lock.
+	for (const groupId of new Set(entries.map((entry) => entry.groupId))) {
 		if (laneInFlight.has(groupId)) {
 			laneDeferred.add(groupId);
 			continue;

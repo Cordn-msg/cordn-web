@@ -537,6 +537,9 @@ export async function seedBackground(): Promise<void> {
 		// background notifications silently die until the next transition.
 		await ensureGroupsLoaded();
 		if (!areChatGroupsLoaded()) return;
+		// The await above opened an account-switch window: never seed the NEW
+		// account's groups under the OLD pubkey — the next transition re-seeds.
+		if (manager.active?.pubkey !== accountPubkey) return;
 		await CordnBackground.seed({ accountPubkey, groups: gatherPollGroups() });
 	} catch {
 		// best-effort — a missed seed self-corrects on the next transition

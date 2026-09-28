@@ -186,7 +186,7 @@ describe('offline outbox queue', () => {
 		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
 		expect((await listEntries(storage))[0].state).toBe('ambiguous');
 
-		// Past the window: confirm sweep proves absence, then retries.
+		// Past the window: the confirm fetch proves absence, then retries.
 		vi.setSystemTime(Date.now() + 60_000);
 		await settleDrain(queue);
 		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
