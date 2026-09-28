@@ -38,6 +38,7 @@
 	import { queryClient } from '$lib/query-client';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { isSignerUnavailableError } from '$lib/services/chatRuntime';
 	import { normalizePubKey } from '$lib/utils';
 	import { metadataRelays } from '$lib/services/relay-pool';
 
@@ -91,7 +92,10 @@
 				pollFailures.length,
 				...results
 					.map((result, index) =>
-						result.status === 'rejected'
+						// A not-yet-injected signer is transient and self-healing (the chat
+						// layout already shows its waiting hint; the next poll recovers) —
+						// it is not coordinator noise.
+						result.status === 'rejected' && !isSignerUnavailableError(result.reason)
 							? `${getCoordinatorLabel(coordinatorKeys[index])}: ${String(result.reason).replace(/^Error:\s*/, '')}`
 							: ''
 					)

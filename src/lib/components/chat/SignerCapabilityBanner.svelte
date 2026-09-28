@@ -1,19 +1,25 @@
 <script lang="ts">
 	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 	import { onMount } from 'svelte';
+	import { ExtensionSigner } from 'applesauce-signers/signers';
 	import { manager } from '$lib/services/accountManager.svelte';
 
 	// `account.nip44` is a plain getter over the extension's `window.nostr`
 	// object, not a reactive signal — extensions inject asynchronously, so a
-	// single read at mount can false-positive. Poll instead: the banner only
-	// appears once absence is actually observed, and a late injection clears it
-	// on the next tick. A 1s getter read is effectively free.
+	// single read can false-positive. Poll every second, and never judge while
+	// an extension signer is still uninjected: before `window.nostr` appears
+	// the signer is *waiting*, not incapable — the chat layout's waiting hint
+	// owns that window. The banner only appears for a signer that is present
+	// and genuinely lacks NIP-44 v2.
 	let missing = $state(false);
 
 	onMount(() => {
 		const id = setInterval(() => {
 			const account = manager.getActive();
-			missing = !!account && !account.nip44;
+			missing =
+				!!account &&
+				!account.nip44 &&
+				!(account.signer instanceof ExtensionSigner && !('nostr' in window));
 		}, 1000);
 		return () => clearInterval(id);
 	});
