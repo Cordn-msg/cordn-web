@@ -335,16 +335,24 @@ export function setDefaultChatCoordinator(pubkey: string) {
 
 /**
  * Mark a coordinator as recently used, ensuring it is stored first. This is
- * the single relationship-establishment seam: called from group create/join
- * and key-package publish, so any coordinator the user actually interacts with
- * is auto-curated — no manual "save" step. No relay info is available here, so
- * stored relays stay empty and resolveCoordinatorRelays falls back to client
- * defaults (behavior-preserving vs. unsaved). Never grabs the default flag.
+ * the single relationship-establishment seam: called from group create/join,
+ * key-package publish, and multi-device seed/fast-forward, so any coordinator
+ * the user actually interacts with is auto-curated — no manual "save" step.
+ * Relay hints from a multi-device group document (spec §4.1 `coordinatorRelays`)
+ * adopt fill-if-empty: they become this device's connection relays only when no
+ * relay configuration exists locally — local configuration always wins, so a
+ * manual correction is never clobbered by a stale hint republished by another
+ * device (spec §9). Never grabs the default flag.
  */
-export function markCoordinatorUsed(pubkey: string) {
+export function markCoordinatorUsed(pubkey: string, relayHints?: string[]) {
 	const normalized = normalizePubKey(pubkey);
-	if (!getChatCoordinator(normalized)) {
-		upsertChatCoordinator({ pubkey: normalized });
+	const existing = getChatCoordinator(normalized);
+	const hints = normalizeRelays(relayHints);
+	if (!existing || (!existing.relays.length && hints.length)) {
+		// relays: hints is fill-only by the guard: omitted/empty hints on a new
+		// entry normalize to [] (same as before), and an entry with relays never
+		// reaches this upsert.
+		upsertChatCoordinator({ pubkey: normalized, relays: hints });
 	}
 	chatCoordinatorsStore.coordinators = chatCoordinatorsStore.coordinators.map((entry) =>
 		entry.pubkey === normalized ? { ...entry, lastUsedAt: Date.now() } : entry
