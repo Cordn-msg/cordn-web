@@ -357,10 +357,13 @@ export async function withCoordinatorClient<T>(
 	const client = getCoordinatorClient(account, coordinatorKey);
 	try {
 		const result = await operation(client);
-		// Query unmounts discard read results, but must not close concurrent writes
-		// or streams. The RPC remains bounded; lifecycle resets disconnect its owner.
+		// Keep the account guard (never hand a switched account another account's
+		// result), but do NOT discard a COMPLETED call's result because its client
+		// was since swapped/disconnected: a finished msg_post has landed, and
+		// reporting it as a failure breeds duplicate re-posts and stuck "queued"
+		// bubbles on every foreground client rebuild. Read consumers that care
+		// about staleness already gate on isCurrentCoordinatorClient after fetch.
 		assertCoordinatorOperationActive(account, options.signal);
-		client.signal.throwIfAborted();
 		return result;
 	} catch (error) {
 		assertCoordinatorOperationActive(account, options.signal);

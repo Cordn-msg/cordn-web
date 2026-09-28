@@ -3,6 +3,7 @@ import { browser } from '$app/environment';
 import { manager } from './accountManager.svelte';
 import {
 	RemovedFromGroupError,
+	confirmChatGroupDelivery,
 	ensureGroupsLoaded,
 	getChatGroup,
 	isChatGroupPoisoned,
@@ -35,7 +36,11 @@ import { errorMessage, formatUnixTimestamp, normalizePubKey } from '$lib/utils';
  * Duplicate safety: msg_post has no server-side dedup, so every attempt
  * persists its event id (via sendChatGroupMessage's onSealed hook) BEFORE the
  * post. An ambiguous outcome (timeout / app closed mid-post) is resolved by a
- * backlog catch-up + event-id check before any retry — confirm-before-retry.
+ * per-group backlog fetch + event-id check before any retry — confirm-before-
+ * retry through the entry's OWN coordinator, so a dead coordinator blocks only
+ * its group's lane. Retries also derive the SAME event id (frozen created_at
+ * at enqueue), so even a duplicate that slips through collapses everywhere via
+ * ingestion's event-id dedupe.
  *
  * Scope: text/reply/mention sends only. Media (upload-first), reactions,
  * edits, deletes, and pins keep their direct fail-fast paths.
@@ -205,6 +210,14 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 			content: entry.content,
 			tags: entry.tags,
 			replyTo: entry.replyTo,
+			// Frozen at enqueue: every retry re-seals against the group's CURRENT
+			// MLS state (epoch changes stay a no-op) but derives the SAME event id,
+			// so whichever attempt lands is confirmed by id everywhere — no more
+			// permanently-stuck clocks when an earlier attempt's copy delivered.
+			// ponytail: second-resolution created_at means two identical intents
+			// enqueued within one second collide (pre-existing for direct sends too);
+			// a nonce tag fixes it if it ever bites.
+			eventCreatedAt: Math.floor(entry.createdAt / 1000),
 			// Persist the attempt marker (event id + ambiguous) BEFORE the post
 			// leaves, so any ambiguous outcome can be resolved by backlog check.
 			onSealed: async (eventId) => {
@@ -230,10 +243,10 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 			}));
 			return 'definitive';
 		}
-		// ponytail: a transient failure where the sweep below could not run
-		// (offline) still falls through to one harmless re-attempt per drain;
+		// ponytail: a transient failure where the per-group confirm could not
+		// run (offline) still falls through to one harmless re-attempt per drain;
 		// the request never reaches the coordinator while truly offline. A
-		// flapping connection inside the sweep window is the residual risk —
+		// flapping connection inside the confirm window is the residual risk —
 		// server-side msg_post dedup by event id closes it for good.
 		entry.attempts += 1;
 		entry.lastAttemptAt = Date.now();
@@ -247,6 +260,74 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 	}
 }
 
+/** Drain one group's FIFO lane. Strictly ordered within the group (MLS
+ *  generations must stay contiguous per sender), fully independent of every
+ *  other group's lane — a slow or dead coordinator stalls only its own group. */
+async function drainGroupLane(
+	groupId: string,
+	groupEntries: StoredChatOutboxRecord[]
+): Promise<void> {
+	const group = getChatGroup(groupId);
+	if (!group) {
+		// Group deleted while queued — the intents die with it.
+		for (const entry of groupEntries) await dropEntry(entry);
+		return;
+	}
+	if (isChatGroupRemoved(group) || isChatGroupPoisoned(group)) {
+		for (const entry of groupEntries) {
+			entry.state = 'failed';
+			await persistEntry(entry);
+			updatePendingMessage(groupId, bubbleId(entry), (message) => ({
+				...message,
+				deliveryState: 'error'
+			}));
+		}
+		return;
+	}
+	// Confirm-before-retry, per group: one fetch per lane per pass, through
+	// THIS group's coordinator. A failed fetch (dead coordinator, offline)
+	// blocks only this lane's ambiguous head — never another group's drain.
+	let confirmed = false;
+	let confirmSucceeded = false;
+	for (const entry of groupEntries) {
+		if (isConfirmedDelivered(entry)) {
+			await dropEntry(entry);
+			continue;
+		}
+		// 'failed' is terminal until the user taps retry (retryOutboxEntry
+		// resets it) — auto-retrying a definitive failure would re-post an
+		// undeliverable intent on every drain.
+		if (entry.state === 'failed') continue;
+		// An ambiguous head is only retried after a successful per-group fetch
+		// proved its event id absent. The fetch may have just ingested the
+		// landed copy — re-check before re-posting; otherwise it blocks (FIFO).
+		if (entry.state === 'ambiguous') {
+			if (!confirmed) {
+				confirmed = true;
+				// Offline the fetch cannot leave the machine — same unproven
+				// semantics as a dead coordinator; wait for an online drain trigger.
+				confirmSucceeded =
+					browser && !navigator.onLine ? false : await confirmChatGroupDelivery(groupId);
+			}
+			if (!confirmSucceeded) break;
+			if (isConfirmedDelivered(entry)) {
+				await dropEntry(entry);
+				continue;
+			}
+		}
+		if (withinBackoff(entry)) break;
+		const outcome = await attemptEntry(entry);
+		if (outcome === 'sent') {
+			await dropEntry(entry);
+			continue;
+		}
+		// Account switched — this lane stops; the other lanes abort at their
+		// next attempt too (assertCoordinatorOperationActive).
+		if (outcome === 'abort') return;
+		break; // transient/definitive — head blocked, rest waits (MLS order)
+	}
+}
+
 async function drainPass(ownerPubkey: string): Promise<number> {
 	// The resume gate must be awaited OUTSIDE the per-group operation lock
 	// (sendChatGroupMessage takes it) — same deadlock rule as the UI action.
@@ -254,30 +335,7 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 	if (resume) await resume.catch(() => undefined);
 
 	const storage = await getChatStorage();
-	let entries = await storage.listOutboxEntries(ownerPubkey);
-
-	// One catch-up sweep resolves all ambiguous entries: after it, any landed
-	// attempt is visible in the (reactive) message store. Reuses the single
-	// watch machinery — no parallel fetch path. Dynamic import: the watch
-	// module pulls the browser/Capacitor graph, which must stay out of tests.
-	// ponytail: skipped while navigator.onLine is false (the sweep can't fetch);
-	// ambiguous heads then simply wait for the next online drain trigger.
-	const sweepDone =
-		!browser || navigator.onLine
-			? await (async () => {
-					if (!entries.some((entry) => entry.state === 'ambiguous')) return true;
-					const watch = await import('./chatGroupWatch.svelte');
-					// Only a SUCCEEDED sweep proves the attempted id absent. A failed
-					// sweep leaves the outcome unknown and must not authorize a re-post
-					// (msg_post has no dedup — that path ships duplicates).
-					const swept = await watch.refreshWatchedGroups().then(
-						() => true,
-						() => false
-					);
-					entries = await storage.listOutboxEntries(ownerPubkey);
-					return swept;
-				})()
-			: false;
+	const entries = await storage.listOutboxEntries(ownerPubkey);
 
 	const byGroup = new Map<string, StoredChatOutboxRecord[]>();
 	for (const entry of entries) {
@@ -286,46 +344,12 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 		else byGroup.set(entry.groupId, [entry]);
 	}
 
-	for (const [groupId, groupEntries] of byGroup) {
-		const group = getChatGroup(groupId);
-		if (!group) {
-			// Group deleted while queued — the intents die with it.
-			for (const entry of groupEntries) await dropEntry(entry);
-			continue;
-		}
-		if (isChatGroupRemoved(group) || isChatGroupPoisoned(group)) {
-			for (const entry of groupEntries) {
-				entry.state = 'failed';
-				await persistEntry(entry);
-				updatePendingMessage(groupId, bubbleId(entry), (message) => ({
-					...message,
-					deliveryState: 'error'
-				}));
-			}
-			continue;
-		}
-		for (const entry of groupEntries) {
-			if (isConfirmedDelivered(entry)) {
-				await dropEntry(entry);
-				continue;
-			}
-			// 'failed' is terminal until the user taps retry (retryOutboxEntry
-			// resets it) — auto-retrying a definitive failure would re-post an
-			// undeliverable intent on every drain.
-			if (entry.state === 'failed') continue;
-			// An ambiguous head is only retried after a successful confirm sweep
-			// proved its event id absent; otherwise it blocks its group (FIFO).
-			if (entry.state === 'ambiguous' && !sweepDone) break;
-			if (withinBackoff(entry)) break;
-			const outcome = await attemptEntry(entry);
-			if (outcome === 'sent') {
-				await dropEntry(entry);
-				continue;
-			}
-			if (outcome === 'abort') return entries.length;
-			break; // transient/definitive — head blocked, rest waits (MLS order)
-		}
-	}
+	// Independent lanes: cross-group ordering was never required (each group
+	// is its own MLS tree with its own operation lock), so one coordinator's
+	// 8-20s attempt/confirm time costs only its own group, never the others'.
+	await Promise.allSettled(
+		[...byGroup].map(([groupId, groupEntries]) => drainGroupLane(groupId, groupEntries))
+	);
 
 	// Failed entries hold no remaining work (user-driven retry only) — counting
 	// them would keep the 30s retry timer alive forever.
