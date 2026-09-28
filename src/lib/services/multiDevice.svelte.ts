@@ -65,6 +65,7 @@ import {
 	partitionGapByEpoch,
 	planCarryForward,
 	diffLocalAhead,
+	diffStaleGroupEpochs,
 	metaViewHash,
 	type Nip44Seal,
 	type BlobStore,
@@ -201,6 +202,17 @@ export interface MultiDeviceOwnerConfig {
 	 * Persisted BEFORE the relay publish so loopback short-circuits.
 	 */
 	lastSeenTipEventId?: string;
+	/**
+	 * Per-gid epoch of group state known reflected by the tip (§10.5 owed-push
+	 * record): written when we seal a document — only after the tip rewrite
+	 * lands on relays — or adopt a peer document. A §8 'skipped' outcome is
+	 * deliberately NOT written — a skip is local ahead of the tip, i.e. an owed
+	 * push. The strictly-ahead diff vs this record (`diffStaleGroupEpochs`)
+	 * heals changes stranded by a deferred / failed / process-killed publish;
+	 * absent entry = unknown = quiet (no migration: a pre-existing strand stays
+	 * as stranded as today until the next op in that group, no worse).
+	 */
+	publishedGroupEpochs?: Record<string, string>;
 	/**
 	 * Dev-mode tip transition log (newest first, capped at 20). One entry per
 	 * tip move that actually changed ≥1 address — recorded in `setLastSeenTip`,
@@ -989,6 +1001,33 @@ function emptyTipPointer(config: MultiDeviceOwnerConfig): TipPointer {
 	return { groups: [], servers: config.blossomServers };
 }
 
+/** Live groups' local epochs, decoded once per collection — the input side of
+ *  the stale-epoch diff. Same decode cost class as
+ *  `makeReconcileTarget.localEpoch`, which already runs per changed gid. */
+function collectLocalGroupEpochs(
+	groups: ReturnType<typeof collectActiveGroups>
+): { gid: string; epoch: string }[] {
+	return groups.map((group) => ({
+		gid: group.id,
+		epoch: decodeStoredGroupState(group).groupContext.epoch.toString()
+	}));
+}
+
+/** Merge epochs known reflected by the tip (sealed or adopted) into the
+ *  owed-push record, pruning gids no longer live. Caller persists: the read
+ *  path's following `setLastSeenTip` saves; the write path saves after the
+ *  tip rewrite lands. */
+function mergePublishedGroupEpochs(
+	config: MultiDeviceOwnerConfig,
+	updates: Record<string, string>
+): void {
+	const next: Record<string, string> = { ...(config.publishedGroupEpochs ?? {}) };
+	for (const [gid, epoch] of Object.entries(updates)) next[gid] = epoch;
+	const live = new Set(collectActiveGroups().map((g) => g.id));
+	for (const gid of Object.keys(next)) if (!live.has(gid)) delete next[gid];
+	config.publishedGroupEpochs = next;
+}
+
 /** Ephemeral Blossom signer used by all republish paths. */
 function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
 	return {
@@ -1098,10 +1137,15 @@ type PublishPlan = {
  */
 // Max groups reconciled in parallel during a tip apply. Each group's
 // `pullAndReconcileGroup` races M Blossom servers via `makeReadStore`, so this
-// bounds the concurrent fetch burst (groups × servers) on a cold link — a
-// 13-group seed at 3 servers is 39 fetches unbounded; 5×3 = 15 is plenty fast
-// without saturating the browser's connection pool behind one slow host.
-const MD_GROUP_RECONCILE_CONCURRENCY = 5;
+// bounds the concurrent fetch burst (groups × servers) on a cold link and the
+// peak memory (each slot holds decrypted per-epoch states + the fetched gap
+// during replay). 8 covers a typical fleet ENTIRELY — with the old 5, a slow
+// coordinator's groups could occupy every slot and head-of-line block the
+// fast ones (in tip order); 8 makes "one slow coordinator" cost only its own
+// groups. It stops short of unbounded: extra concurrency doesn't reduce total
+// bytes on a saturated (slow-internet) link, it inflates per-item latency and
+// starves the small coordinator RTTs behind blob transfers.
+const MD_GROUP_RECONCILE_CONCURRENCY = 8;
 
 /** Minimal order-preserving concurrency-limited map. No dependency for a pool
  * this small. */
@@ -1140,6 +1184,12 @@ async function applyTip(
 	// outcome). Collected for the read-path divergence diff (§8/§10.5 "local
 	// ahead of tip") — the write path (publish's reconcile-before-push) ignores it.
 	const localAheadGids: string[] = [];
+	// Epochs adopted from the tip this pass (seed / fast-forward): recording them
+	// marks local state as reflected-by-the-tip WITHOUT a push, keeping the
+	// stale-epoch diff quiet for adopted (converged) groups. Skips are
+	// deliberately absent — a skip is the owed-push signal itself. Caller's
+	// setLastSeenTip persists this alongside the new tip addresses.
+	const adoptionEpochs: Record<string, string> = {};
 
 	// Reconcile changed groups in parallel — each gid writes its own storage key +
 	// MLS state, and fastForwardGroup runs under a per-group lock
@@ -1152,7 +1202,13 @@ async function applyTip(
 			if (lastSeenGroup?.address === group.address) return;
 			dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
 			try {
-				const { outcome } = await pullAndReconcileGroup(group, pointer, dekSeal, dekPubkey, config);
+				const { doc, outcome } = await pullAndReconcileGroup(
+					group,
+					pointer,
+					dekSeal,
+					dekPubkey,
+					config
+				);
 				if (outcome === 'seeded') counts.seeded++;
 				else if (outcome === 'fast-forwarded') counts.fastForwarded++;
 				else {
@@ -1160,6 +1216,10 @@ async function applyTip(
 					// §8 skip ⟺ local epoch ≥ document epoch ⟺ local is ahead of the tip
 					// for this gid. Record for the read-path divergence diff.
 					localAheadGids.push(group.gid);
+				}
+				if (outcome === 'seeded' || outcome === 'fast-forwarded') {
+					const epoch = groupEpoch(doc);
+					if (epoch !== undefined) adoptionEpochs[group.gid] = epoch.toString();
 				}
 			} catch (error) {
 				dbg('applyTip group reconcile failed', { gid: group.gid, error });
@@ -1171,6 +1231,13 @@ async function applyTip(
 			bumpMdProgress(++reconciled);
 		}
 	});
+
+	if (Object.keys(adoptionEpochs).length) {
+		// Persisted by the caller's setLastSeenTip (both callers run it after
+		// applyTip). Marks adopted state as tip-reflected so the stale-epoch diff
+		// stays quiet for converged groups (no echo republish of peer content).
+		mergePublishedGroupEpochs(config, adoptionEpochs);
+	}
 
 	if (pointer.metaAddress && pointer.metaAddress !== lastSeen?.metaAddress) {
 		dbg('applyTip meta changed', { address: pointer.metaAddress.slice(0, 12) });
@@ -1271,9 +1338,20 @@ async function publish(plan: PublishPlan): Promise<void> {
 	// The groups are independent — each reads its `prev` from the immutable
 	// fetched tip, not from a sibling's result — so only the tip (published below)
 	// needs every address. Promise.all preserves input order, so the tip's
-	// `groups` array order is unchanged.
+	// `groups` array order is unchanged. The plan is UNIONED with the stale-epoch
+	// gids (§10.5 owed-push record): any successful publish sweeps changes
+	// stranded by an earlier deferred / failed / killed one, so a stranded group
+	// heals on the next publish of ANY kind, not just its own next op. (Skips
+	// from this pass's reconcile are NOT unioned — an equal-epoch advisory doc is
+	// not a strand; that tip-stale case is the read path's diffLocalAhead job.)
+	const staleGids = diffStaleGroupEpochs({
+		localEpochs: collectLocalGroupEpochs(liveGroups),
+		publishedEpochs: config.publishedGroupEpochs
+	});
 	const gidsToReseal =
-		plan.resealGroups === 'all' ? liveGroups.map((g) => g.id) : plan.resealGroups;
+		plan.resealGroups === 'all'
+			? liveGroups.map((g) => g.id)
+			: [...new Set([...plan.resealGroups, ...staleGids])];
 	// Surface progress only for bulk reseals (enable / server change / rotation);
 	// steady-state reseals a single changed group and would flicker a bar for
 	// nothing. The DEK seal is local, so the Blossom upload round is the slow part.
@@ -1281,6 +1359,7 @@ async function publish(plan: PublishPlan): Promise<void> {
 	if (trackProgress) setMdProgress('Preparing groups', 0, gidsToReseal.length);
 	let resealDone = 0;
 	const resealed: TipGroupPointer[] = [];
+	const sealedEpochs: Record<string, string> = {};
 	try {
 		const results = await Promise.all(
 			gidsToReseal.map(async (gid): Promise<TipGroupPointer | null> => {
@@ -1295,6 +1374,10 @@ async function publish(plan: PublishPlan): Promise<void> {
 					store: writeStore,
 					prev
 				});
+				// Epoch AT SEAL TIME — if local advances again mid-publish, the record
+				// stays honestly behind and the next diff flags it (that state IS owed).
+				const epoch = decodeStoredGroupState(group).groupContext.epoch;
+				sealedEpochs[gid] = epoch.toString();
 				bumpMdProgress(++resealDone);
 				dbg('publish group doc', { gid, address: result.address.slice(0, 12) });
 				return { address: result.address, gid };
@@ -1322,6 +1405,14 @@ async function publish(plan: PublishPlan): Promise<void> {
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
 	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
+	// Record sealed epochs ONLY now — after the tip rewrite landed on relays. A
+	// crash between upload and tip-rewrite must leave the record stale so the
+	// next heal republishes (the tip never moved). finalizeTipPublish already
+	// persisted lastSeenTip; this is the one extra save for the owed-push record.
+	if (Object.keys(sealedEpochs).length) {
+		mergePublishedGroupEpochs(config, sealedEpochs);
+		saveConfig(config);
+	}
 
 	// Tombstone carry-forward (§10.5): persist the just-published `removed` union
 	// (own pending + carried, XOR'd vs live) as the new carry-forward store, then
@@ -1514,6 +1605,45 @@ async function startMultiDevice(): Promise<void> {
 		new Promise<void>((resolve) => setTimeout(resolve, MD_RECONCILE_TIMEOUT_MS))
 	]);
 	startTipSubscription();
+	// §10.5 trigger "on startup if local state is ahead of the tip" — evaluated
+	// even when the reconcile deduped (tip unchanged / event id seen): both
+	// signals are pure-local (stale-epoch record + meta view hash), no fetch.
+	// This is the heal moment for a change stranded by a deferred / failed /
+	// process-killed publish, which the tip-event path can never see (the tip
+	// never moved). A racing mid-flight reconcile is benign: runSerialized
+	// orders the publishes and the sweep converges on its own reconcile.
+	scheduleOwedPublish();
+}
+
+/** Pure-local owed-publish check (§10.5): schedules a republish when any live
+ *  group's local epoch is strictly ahead of the owed-push record, or the meta
+ *  view hash no longer matches the last published one. Shared shape with
+ *  handleTipEvent's divergence diff minus its fetch-gated signals. Fetches its
+ *  OWN config — `getMultiDeviceConfig()` returns a fresh JSON.parse per call,
+ *  so a config captured before the startup reconcile would miss the records
+ *  that reconcile just wrote and schedule a spurious publish. */
+function scheduleOwedPublish(): void {
+	const config = getMultiDeviceConfig();
+	if (!config) return;
+	const liveGroups = collectActiveGroups();
+	const staleGids = diffStaleGroupEpochs({
+		localEpochs: collectLocalGroupEpochs(liveGroups),
+		publishedEpochs: config.publishedGroupEpochs
+	});
+	const removed = composeTombstoneUnion(
+		config.pendingTombstones ?? [],
+		config.carriedTombstones ?? [],
+		liveGroups.map((g) => g.id)
+	);
+	const metaAhead =
+		metaViewHash({
+			lastResortKeyPackage: getLastResortKeyPackageEntry(),
+			removed
+		}) !== config.lastPublishedMetaHash;
+	if (staleGids.length || metaAhead) {
+		dbg('startup owed republish', { groups: staleGids.length, meta: metaAhead });
+		scheduleRepublish({ resealGroups: staleGids, resealMeta: metaAhead });
+	}
 }
 
 /** Tear down the session: clear the reconcile promise + stop the tip
@@ -1824,7 +1954,7 @@ async function handleTipEvent(
 
 		// §8 / §10.5 "local ahead of tip" trigger: if reconciling this peer tip left
 		// local state newer than what the tip carries, schedule a push so siblings
-		// converge. Two signals, neither needing an extra fetch:
+		// converge. Three signals, none needing an extra fetch:
 		//  - `missingFromTip`: local gids absent from the tip's group list. Closes
 		//    link-from-an-empty-device (every local group the empty tip lacks) and
 		//    backup-restore. A tombstoned-stale gid (epoch below local) is absent
@@ -1833,25 +1963,31 @@ async function handleTipEvent(
 		//  - `epochsAhead`: gids whose fetched document was at a local epoch ≥
 		//    incoming (the §8 'skipped' outcome). Catches a peer tip re-delivering a
 		//    doc we already surpassed.
+		//  - `staleEpochs`: local strictly ahead of the owed-push record
+		//    (§10.5). Closes the former residual — a republish interrupted by tab
+		//    close / a deferred or failed push — which neither signal above can see
+		//    (tip address unchanged → no fetch → no epoch compare). The heal is a
+		//    push on next read, next publish (the write path unions stale gids),
+		//    or next startup (`scheduleOwedPublish`), whichever comes first.
 		// The missed-own-commit-self-echo case (a Commit whose republish never fired
 		// because the self-echo wasn't observed) is closed by the EAGER hook in
 		// `runOutboundGroupOperation` firing unconditionally — not by this diff.
-		// Residual: a fire-and-forget republish interrupted by tab close leaves a
-		// gid in the tip at its old address with local advanced; this diff can't
-		// see it (address unchanged → no fetch → no epoch compare). It self-heals
-		// on the next local advancement in that group (the eager hook fires again)
-		// or a manual re-sync. Closing it fully needs per-gid published-epoch
-		// tracking — deferred as a narrow liveness gap, not a correctness one.
 		// Loop-safe: once the missing groups/meta are pushed, the next read finds
 		// no divergence and this is a no-op. Gated to the READ path only — the
 		// write path (`publish`) drives its own re-seal plan and must not queue a
 		// redundant second publish here.
-		const liveGids = collectActiveGroups().map((g) => g.id);
+		const liveGroupsForDiff = collectActiveGroups();
+		const liveGids = liveGroupsForDiff.map((g) => g.id);
 		const localAhead = diffLocalAhead({
 			localGids: liveGids,
 			tipGids: pointer.groups.map((g) => g.gid),
 			epochsAheadGids: localAheadGids
 		});
+		const staleGids = diffStaleGroupEpochs({
+			localEpochs: collectLocalGroupEpochs(liveGroupsForDiff),
+			publishedEpochs: config.publishedGroupEpochs
+		});
+		const localAheadUnion = [...new Set([...localAhead, ...staleGids])];
 		const removed = composeTombstoneUnion(
 			config.pendingTombstones ?? [],
 			config.carriedTombstones ?? [],
@@ -1862,13 +1998,13 @@ async function handleTipEvent(
 				lastResortKeyPackage: getLastResortKeyPackageEntry(),
 				removed
 			}) !== config.lastPublishedMetaHash;
-		if (localAhead.length || metaAhead) {
+		if (localAheadUnion.length || metaAhead) {
 			dbg('handleTipEvent scheduling local-ahead republish', {
-				groups: localAhead.length,
+				groups: localAheadUnion.length,
 				meta: metaAhead
 			});
 			scheduleRepublish({
-				resealGroups: localAhead,
+				resealGroups: localAheadUnion,
 				resealMeta: metaAhead
 			});
 		}
@@ -2119,7 +2255,22 @@ async function catchUpGroupFromChain(params: {
 	if (!group) return; // vanished (soft-deleted) mid-flight
 	const gid = getProtocolGroupId(decodeStoredGroupState(group));
 
-	// 1. Walk this group's `prev` chain from its tip document back to localEpoch (spec §8.5).
+	// 1+2 (concurrent, spec §8.5 steps 1–2): walk the `prev` chain and fetch the
+	// whole gap (messages after the decrypt frontier) AT THE SAME TIME — both
+	// depend only on the tip address + local frontier, and the chain's sole job
+	// is partitioning the gap for replay, which happens after both. This takes
+	// one coordinator RTT off every catching-up group's critical path
+	// (max(walk, gap) instead of walk + gap). Failure semantics unchanged from
+	// the sequential order: either leg failing returns with liveness preserved
+	// by the fast-forward. The sentinel-style catch also keeps an early walk
+	// return from leaving an unhandled gap rejection behind.
+	const gapPromise = fetchMessageGap(group, gid, params.decryptFrontier).catch((error) => {
+		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
+			gid: params.groupId,
+			error: errorMessage(error)
+		});
+		return null;
+	});
 	let chain: ChainStep[];
 	try {
 		chain = await walkGroupChain({
@@ -2142,23 +2293,14 @@ async function catchUpGroupFromChain(params: {
 		dbg('catchUp empty chain', { gid: params.groupId });
 		return;
 	}
-
-	// 2. Fetch the whole gap once (messages after the decrypt frontier).
-	let gap: {
-		cursor: number;
-		createdAt: number;
-		opaqueMessageBase64: string;
-	}[];
-	try {
-		gap = await fetchMessageGap(group, gid, params.decryptFrontier);
-	} catch (error) {
-		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
-			gid: params.groupId,
-			error: errorMessage(error)
-		});
-		return;
-	}
-	if (gap.length === 0) {
+	const gap:
+		| {
+				cursor: number;
+				createdAt: number;
+				opaqueMessageBase64: string;
+		  }[]
+		| null = await gapPromise;
+	if (!gap || gap.length === 0) {
 		dbg('catchUp no gap to replay', { gid: params.groupId, steps: chain.length });
 		return;
 	}

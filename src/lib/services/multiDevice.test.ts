@@ -28,6 +28,7 @@ import {
 	MULTI_DEVICE_SCHEMA_VERSION,
 	composeTombstoneUnion,
 	diffLocalAhead,
+	diffStaleGroupEpochs,
 	documentAddress,
 	groupEpoch,
 	metaViewHash,
@@ -1038,5 +1039,50 @@ describe('planLastResortRepair (spec §11.5 resolution order)', () => {
 				implicated: false
 			})
 		).toEqual({ kind: 'skip' });
+	});
+});
+
+describe('diffStaleGroupEpochs (spec §10.5 owed-push record: strictly-ahead local epochs)', () => {
+	test('local strictly ahead of the recorded epoch flags the gid', () => {
+		// The stranded case: a rename advanced local to epoch 6 but the publish
+		// was deferred/failed/killed — the record still says 5.
+		const stale = diffStaleGroupEpochs({
+			localEpochs: [
+				{ gid: 'g1', epoch: '6' },
+				{ gid: 'g2', epoch: '3' }
+			],
+			publishedEpochs: { g1: '5', g2: '3' }
+		});
+		expect(stale).toEqual(['g1']);
+	});
+
+	test('equal, below, and unrecorded epochs stay quiet', () => {
+		// Equal: converged (sealed or adopted at this epoch). Below: a replayed
+		// Welcome regression or old-backup restore must NOT trigger a republish
+		// of stale state. Unrecorded: unknown = quiet (no migration; a
+		// pre-upgrade strand is no worse than today).
+		const stale = diffStaleGroupEpochs({
+			localEpochs: [
+				{ gid: 'equal', epoch: '5' },
+				{ gid: 'below', epoch: '4' },
+				{ gid: 'fresh', epoch: '9' }
+			],
+			publishedEpochs: { equal: '5', below: '6' }
+		});
+		expect(stale).toEqual([]);
+	});
+
+	test('absent record map is quiet; epochs compare numerically, not lexically', () => {
+		// '10' < '9' lexically — BigInt comparison must rank ten above nine, or
+		// every double-digit epoch would mis-signal.
+		expect(
+			diffStaleGroupEpochs({ localEpochs: [{ gid: 'g', epoch: '10' }], publishedEpochs: undefined })
+		).toEqual([]);
+		expect(
+			diffStaleGroupEpochs({
+				localEpochs: [{ gid: 'g', epoch: '10' }],
+				publishedEpochs: { g: '9' }
+			})
+		).toEqual(['g']);
 	});
 });

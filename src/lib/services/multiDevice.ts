@@ -614,6 +614,36 @@ export function diffLocalAhead(params: {
 }
 
 /**
+ * Gids whose local epoch is STRICTLY ahead of the last epoch known reflected by
+ * the tip — the durable owed-push signal for changes stranded by a deferred,
+ * failed, or process-killed publish (§10.5 offline "queue the change" + the
+ * "on startup if local state is ahead of the tip" trigger). A stranded change
+ * has no other visible signal: the tip's per-gid address never moved, so the
+ * fetch-gated diff (`diffLocalAhead`) cannot see it. The record this diffs
+ * against is written when a document is sealed by us (after the tip rewrite
+ * lands on relays) or adopted from a peer; a §8 'skipped' outcome is
+ * deliberately NOT recorded — a skip IS an owed push.
+ *
+ * STRICTLY ahead only: local below the record (a replayed-Welcome regression,
+ * an old-backup restore) must not trigger a republish of stale state. Loop-safe
+ * by construction: the heal publish records the sealed epoch, so a converged
+ * device diffs to `[]`. Epochs compare numerically (BigInt) — they are stored
+ * as strings for config-JSON safety and string order would rank '10' < '9'.
+ */
+export function diffStaleGroupEpochs(params: {
+	localEpochs: Iterable<{ gid: string; epoch: string }>;
+	publishedEpochs: Readonly<Record<string, string>> | undefined;
+}): string[] {
+	const published = params.publishedEpochs ?? {};
+	const stale: string[] = [];
+	for (const { gid, epoch } of params.localEpochs) {
+		const recorded = published[gid];
+		if (recorded !== undefined && BigInt(epoch) > BigInt(recorded)) stale.push(gid);
+	}
+	return stale.sort();
+}
+
+/**
  * Deterministic content hash of the meta view that gets published (§4.2):
  * `lastResortKeyPackage` + the composed `removed` set. Excludes `issuedAt`
  * (which changes every publish) so the hash is a stable signal for "did the
