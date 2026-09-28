@@ -485,9 +485,16 @@ export async function confirmChatGroupDelivery(groupId: string): Promise<boolean
 		assertChatGroupIsActive(group);
 		const gid = groupIdDecoder.decode(decodeStoredGroupState(group).groupContext.groupId);
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
-			client.FetchManyGroupMessages({
-				groups: [{ gid, after: group.fetchCursor > 0 ? group.fetchCursor : undefined }]
-			})
+			client.FetchManyGroupMessages(
+				{
+					groups: [{ gid, after: group.fetchCursor > 0 ? group.fetchCursor : undefined }]
+				},
+				// Fail closed and FAST (same 8s as PostGroupMessage): an answer slower
+				// than this just fails the confirm and the head retries next pass —
+				// never an unauthorized re-post. The 20s default would hang the
+				// outbox lane for the full timeout on every dead-coordinator tick.
+				{ timeout: 8_000 }
+			)
 		);
 		if (result.messages.length > 0) {
 			await ingestIncomingChatGroupMessages(

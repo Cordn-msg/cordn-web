@@ -78,7 +78,10 @@ async function freshModules() {
 /** Wait for enqueue's persist→drain kick to land, then run (or join) a drain. */
 async function settleDrain(queue: typeof import('./chatOutboxQueue')) {
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	await queue.requestDrain();
+	// Lanes run detached and re-arm the drain when deferred work lands on them:
+	// keep awaiting chains until the cascades settle. Don't call while a lane is
+	// deliberately hung in a test — release it first.
+	for (let i = 0; i < 20; i++) await queue.requestDrain();
 }
 
 async function listEntries(storage: typeof import('$lib/storage/chatStorage')) {
@@ -148,8 +151,11 @@ describe('offline outbox queue', () => {
 		expect(projection.getPendingMessages('g1')[0]?.eventId).toBe('evt-timeout');
 		expect(projection.getPendingMessages('g1')[0]?.deliveryState).toBe('queued');
 
-		// The attempt actually landed — the confirm fetch ingests its copy, so
-		// the post-confirm re-check drops the entry without ever re-posting.
+		// The attempt actually landed — at the next retry window the confirm fetch
+		// ingests its copy, so the post-confirm re-check drops the entry without
+		// ever re-posting. (Confirm runs past backoff only: fetching on every pass
+		// would hang the lane for the full timeout on dead-coordinator ticks.)
+		vi.setSystemTime(Date.now() + 60_000);
 		mocks.confirmMock.mockImplementation(async () => {
 			mocks.listMessagesMock.mockReturnValue([{ id: 'evt-timeout' }]);
 			return true;
@@ -338,6 +344,71 @@ describe('offline outbox queue', () => {
 		await settleDrain(queue);
 		expect(await listEntries(storage)).toHaveLength(0);
 		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
+	test('a send to another group is attempted immediately while a lane hangs', async () => {
+		const { queue, storage } = await freshModules();
+		let releaseG1!: () => void;
+		const g1Gate = new Promise<void>((resolve) => {
+			releaseG1 = resolve;
+		});
+		mocks.sendMock.mockImplementation(
+			async (input: { groupId: string; onSealed?: (id: string) => Promise<void> }) => {
+				if (input.groupId === 'g1') {
+					if (input.onSealed) await input.onSealed('evt-hang');
+					await g1Gate; // dead coordinator: the attempt never settles
+					return { cursor: 1, at: Date.now() };
+				}
+				if (input.onSealed) await input.onSealed('evt-ok');
+				return { cursor: 2, at: Date.now() };
+			}
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'to-dead-coordinator' });
+		await new Promise((resolve) => setTimeout(resolve, 0)); // g1 lane now hanging
+
+		// Regression (the reported symptom): this send used to sit 'queued'
+		// behind g1's hung attempt/confirm until it timed out (up to 20s).
+		queue.enqueueTextMessage({ groupId: 'g2', content: 'to-healthy' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const g2Calls = mocks.sendMock.mock.calls.filter(
+			(call) => (call[0] as { groupId: string }).groupId === 'g2'
+		);
+		expect(g2Calls).toHaveLength(1); // attempted while g1 still hangs
+
+		releaseG1();
+		await settleDrain(queue);
+		expect(await listEntries(storage)).toHaveLength(0);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
+	test('a message queued behind its own group\u2019s hung lane is picked up when it finishes', async () => {
+		const { queue, storage } = await freshModules();
+		let releaseFirst!: () => void;
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const attempted: string[] = [];
+		mocks.sendMock.mockImplementation(
+			async (input: { content: string; onSealed?: (id: string) => Promise<void> }) => {
+				attempted.push(input.content);
+				if (input.onSealed) await input.onSealed(`evt-${input.content}`);
+				if (input.content === 'first') await firstGate;
+				return { cursor: attempted.length, at: Date.now() };
+			}
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'first' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'second' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// MLS FIFO: the arrival must NOT jump its own group's hung head.
+		expect(attempted).toEqual(['first']);
+
+		releaseFirst();
+		await settleDrain(queue);
+		expect(attempted).toEqual(['first', 'second']); // lane re-arm picked it up
+		expect(await listEntries(storage)).toHaveLength(0);
 	});
 
 	test('hydrateOutbox rebuilds the projection from durable storage', async () => {
