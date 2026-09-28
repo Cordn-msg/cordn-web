@@ -1137,10 +1137,15 @@ type PublishPlan = {
  */
 // Max groups reconciled in parallel during a tip apply. Each group's
 // `pullAndReconcileGroup` races M Blossom servers via `makeReadStore`, so this
-// bounds the concurrent fetch burst (groups × servers) on a cold link — a
-// 13-group seed at 3 servers is 39 fetches unbounded; 5×3 = 15 is plenty fast
-// without saturating the browser's connection pool behind one slow host.
-const MD_GROUP_RECONCILE_CONCURRENCY = 5;
+// bounds the concurrent fetch burst (groups × servers) on a cold link and the
+// peak memory (each slot holds decrypted per-epoch states + the fetched gap
+// during replay). 8 covers a typical fleet ENTIRELY — with the old 5, a slow
+// coordinator's groups could occupy every slot and head-of-line block the
+// fast ones (in tip order); 8 makes "one slow coordinator" cost only its own
+// groups. It stops short of unbounded: extra concurrency doesn't reduce total
+// bytes on a saturated (slow-internet) link, it inflates per-item latency and
+// starves the small coordinator RTTs behind blob transfers.
+const MD_GROUP_RECONCILE_CONCURRENCY = 8;
 
 /** Minimal order-preserving concurrency-limited map. No dependency for a pool
  * this small. */
@@ -2244,7 +2249,22 @@ async function catchUpGroupFromChain(params: {
 	if (!group) return; // vanished (soft-deleted) mid-flight
 	const gid = getProtocolGroupId(decodeStoredGroupState(group));
 
-	// 1. Walk this group's `prev` chain from its tip document back to localEpoch (spec §8.5).
+	// 1+2 (concurrent, spec §8.5 steps 1–2): walk the `prev` chain and fetch the
+	// whole gap (messages after the decrypt frontier) AT THE SAME TIME — both
+	// depend only on the tip address + local frontier, and the chain's sole job
+	// is partitioning the gap for replay, which happens after both. This takes
+	// one coordinator RTT off every catching-up group's critical path
+	// (max(walk, gap) instead of walk + gap). Failure semantics unchanged from
+	// the sequential order: either leg failing returns with liveness preserved
+	// by the fast-forward. The sentinel-style catch also keeps an early walk
+	// return from leaving an unhandled gap rejection behind.
+	const gapPromise = fetchMessageGap(group, gid, params.decryptFrontier).catch((error) => {
+		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
+			gid: params.groupId,
+			error: errorMessage(error)
+		});
+		return null;
+	});
 	let chain: ChainStep[];
 	try {
 		chain = await walkGroupChain({
@@ -2267,23 +2287,14 @@ async function catchUpGroupFromChain(params: {
 		dbg('catchUp empty chain', { gid: params.groupId });
 		return;
 	}
-
-	// 2. Fetch the whole gap once (messages after the decrypt frontier).
-	let gap: {
-		cursor: number;
-		createdAt: number;
-		opaqueMessageBase64: string;
-	}[];
-	try {
-		gap = await fetchMessageGap(group, gid, params.decryptFrontier);
-	} catch (error) {
-		dbg('catchUp gap fetch failed; fast-forward preserved liveness', {
-			gid: params.groupId,
-			error: errorMessage(error)
-		});
-		return;
-	}
-	if (gap.length === 0) {
+	const gap:
+		| {
+				cursor: number;
+				createdAt: number;
+				opaqueMessageBase64: string;
+		  }[]
+		| null = await gapPromise;
+	if (!gap || gap.length === 0) {
 		dbg('catchUp no gap to replay', { gid: params.groupId, steps: chain.length });
 		return;
 	}
