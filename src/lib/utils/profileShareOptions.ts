@@ -30,13 +30,14 @@ function toAbsoluteProfileUrl(path: string): string {
 function buildProfileSharePath(
 	ownerPubkey: string,
 	coordinatorKey: string,
-	relays: string[]
+	relays?: string[]
 ): string {
 	const base = resolve('/p/[identifier]', { identifier: nip19.npubEncode(ownerPubkey) });
 	if (normalizePubKey(coordinatorKey) === normalizePubKey(DEFAULT_CHAT_COORDINATOR_PUBKEY)) {
 		return base;
 	}
-	return `${base}?c=${nip19.nprofileEncode({ pubkey: coordinatorKey, relays })}`;
+	// No relay TLV for relay-less coordinators — receivers discover.
+	return `${base}?c=${nip19.nprofileEncode({ pubkey: coordinatorKey, ...(relays?.length ? { relays } : {}) })}`;
 }
 
 /** One share option per published coordinator (default first, short link). */

@@ -7,7 +7,6 @@
 		setDefaultChatCoordinator,
 		getCoordinatorLabel
 	} from '$lib/services/chatCoordinators.svelte';
-	import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
 	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { listChatKeyPackages } from '$lib/services/chatKeyPackages.svelte';
 	import CoordinatorPurgeDialog from './CoordinatorPurgeDialog.svelte';
@@ -67,11 +66,11 @@
 					{coordinator.pubkey}
 				</p>
 				<p class="text-xs break-all text-muted-foreground">
-					{resolveCoordinatorRelays(coordinator.pubkey).join(' · ')}
-					{#if coordinator.relays.length === 0}
-						<span
-							class="ml-1 rounded-full bg-muted px-1.5 py-0.5 align-middle text-[10px] font-medium"
-							>defaults</span
+					{#if coordinator.relays.length}
+						{coordinator.relays.join(' · ')}
+					{:else}
+						<span class="rounded-full bg-muted px-1.5 py-0.5 align-middle text-[10px] font-medium"
+							>auto-discovered</span
 						>
 					{/if}
 				</p>

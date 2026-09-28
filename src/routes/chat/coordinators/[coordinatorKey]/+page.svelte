@@ -51,10 +51,10 @@
 	import { availableKeyPackagesQueryOptions } from '$lib/queries/chatKeyPackageQueries';
 	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
 	import { listChatKeyPackages, removeChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
-	import { normalizePubKey } from '$lib/utils';
+	import { refetchCoordinatorRelays } from '$lib/services/chatRuntime';
+	import { errorMessage, normalizePubKey } from '$lib/utils';
 	import { decodeCoordinatorQueryParam } from '$lib/utils/groupShareLink';
 	import { buildCoordinatorShareUrl } from '$lib/utils/coordinatorShare';
-	import { resolveCoordinatorRelays } from '$lib/services/chatRuntime';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import Share2 from '@lucide/svelte/icons/share-2';
 	import Boxes from '@lucide/svelte/icons/boxes';
@@ -238,6 +238,24 @@
 		await acceptWelcomeAction(welcomeId);
 	}
 
+	let refetchingRelays = $state(false);
+	let refetchRelaysError = $state('');
+
+	/** Explicit relay re-resolution: overwrites the stored set (a coordinator
+	 *  that moved relays gets fixed here; automatic persistence only fills). */
+	async function refetchRelays() {
+		refetchingRelays = true;
+		refetchRelaysError = '';
+		try {
+			const urls = await refetchCoordinatorRelays(coordinatorKey);
+			if (!urls.length) refetchRelaysError = 'No relays found — keeping the current set.';
+		} catch (error) {
+			refetchRelaysError = errorMessage(error);
+		} finally {
+			refetchingRelays = false;
+		}
+	}
+
 	async function removeOwnedKeyPackage(keyPackageRef: string) {
 		try {
 			removingKeyPackageRef = keyPackageRef;
@@ -351,12 +369,28 @@
 								<div>
 									<p class="text-xs tracking-wide text-muted-foreground uppercase">Relays</p>
 									<p class="mt-1 text-sm break-all text-muted-foreground">
-										{resolveCoordinatorRelays(coordinatorKey).join(' · ')}
+										{coordinator?.relays?.length
+											? coordinator.relays.join(' · ')
+											: 'Auto-discovered'}
 									</p>
 									{#if !coordinator?.relays?.length}
 										<p class="mt-0.5 text-xs text-muted-foreground/70">
-											Client defaults — edit to pin specific relays
+											Resolved from the coordinator's published relay list — edit to pin specific
+											relays
 										</p>
+									{/if}
+									<Button
+										type="button"
+										variant="outline"
+										class="mt-2 h-7 px-2 text-xs"
+										onclick={refetchRelays}
+										disabled={refetchingRelays}
+									>
+										{#if refetchingRelays}<Spinner class="mr-2 size-3.5" />{/if}
+										{refetchingRelays ? 'Refetching…' : 'Refetch relays'}
+									</Button>
+									{#if refetchRelaysError}
+										<p class="mt-1 text-xs text-destructive">{refetchRelaysError}</p>
 									{/if}
 								</div>
 								{#if serverInfo.name || serverInfo.about || serverInfo.website || serverInfo.picture}

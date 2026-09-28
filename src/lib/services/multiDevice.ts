@@ -82,12 +82,10 @@ export interface Tombstone {
  * replicates so any device can process a Welcome built against it.
  *
  * `coordinators` carries the coordinator pubkeys this last-resort is published
- * to (cordn-web's per-coordinator publish state). Spec §4.2's shape omits it —
- * the spec assumed coordinators are discovered via group seeding (§9), which
- * breaks for a last-resort published to a coordinator with no groups on it.
- * Carrying it here restores the coordinator list + the kp's per-coordinator
- * markers on link. Optional + forward-compatible (old clients ignore it); the
- * spec can adopt it alongside the tip-seal-sender reconciliation.
+ * to (spec §4.2 + §11.5): it restores the coordinator list + the kp's
+ * per-coordinator publish markers on link, which group seeding (§9) cannot
+ * provide for a coordinator the identity has no groups on. Entries are public
+ * keys only — relay hints travel per group (`coordinatorRelays`), not here.
  *
  * NOTE: spec §4.2 specifies the TLS wire form (RFC 9420 §3) for `keyPackage`.
  * These fields hold the ts-mls library serialization (matching `clientState`,
@@ -112,6 +110,14 @@ export interface GroupDocument {
 	type: 'group';
 	gid: string;
 	coordinator: string;
+	/**
+	 * OPTIONAL (spec §4.1): relay URLs where `coordinator` is reachable, in the
+	 * producer's preference order. Locator hints only (group-ref §4.3
+	 * semantics): absent or empty means "no hint", and the consumer connects
+	 * using its own relay configuration or discovery. Adopted fill-if-empty on
+	 * seed/fast-forward — local relay configuration always wins (spec §9).
+	 */
+	coordinatorRelays?: string[];
 	issuedAt: number;
 	prev?: string;
 	clientState: string;
@@ -141,6 +147,11 @@ export interface GroupSnapshot {
 	gid: string;
 	state: ClientState;
 	coordinatorKey: string;
+	/** The writer's own saved relay configuration for that coordinator — the
+	 *  publish side of spec §4.1 `coordinatorRelays`. Saved config only, never
+	 *  the client-default fallback: a hint is never stamped with relays the
+	 *  writer does not actually use. */
+	coordinatorRelays?: string[];
 	fetchCursor: number;
 	/** High-water mark including own posted messages (spec §4.1: the document
 	 *  cursor must cover every message folded into `state`, and own sends fold
@@ -224,6 +235,8 @@ function buildGroupDocument(
 		gid: string;
 		state: ClientState;
 		coordinatorKey: string;
+		/** Relay hints from the writer's own relay configuration (spec §4.1). */
+		coordinatorRelays?: string[];
 		fetchCursor: number;
 		lastCursor: number;
 	},
@@ -234,6 +247,8 @@ function buildGroupDocument(
 		type: 'group',
 		gid: input.gid,
 		coordinator: input.coordinatorKey,
+		// Absent or empty means "no hint" (spec §4.1) — omit rather than emit [].
+		...(input.coordinatorRelays?.length ? { coordinatorRelays: [...input.coordinatorRelays] } : {}),
 		issuedAt: Date.now(),
 		prev,
 		clientState: bytesToBase64(encode(clientStateEncoder, input.state)),
@@ -305,6 +320,7 @@ export async function publishGroupDocument(params: {
 			gid: params.group.gid,
 			state: params.group.state,
 			coordinatorKey: params.group.coordinatorKey,
+			coordinatorRelays: params.group.coordinatorRelays,
 			fetchCursor: params.group.fetchCursor,
 			lastCursor: params.group.lastCursor
 		},

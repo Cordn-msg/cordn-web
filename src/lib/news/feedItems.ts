@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-28-coordinator-relays',
+		createdAt: Date.UTC(2026, 8, 28),
+		version: 1,
+		title: 'Self-hosted coordinators work everywhere',
+		body: "- 🐛 Groups synced to a linked device through multi-device now arrive knowing their coordinator's relays, so a group served by a self-hosted coordinator is reachable immediately — previously it silently fell back to the public default relays and never connected.\n- 🔄 Coordinators without saved relays are no longer pinned to the public default relays: Cordn now discovers where they listen from the coordinator's own published relay list, with the defaults kept only as a last resort.\n- 🔄 Discovered relays are remembered after first contact, so later sessions connect directly without repeating the lookup, and a coordinator's page gains a “Refetch relays” action for the rare case a coordinator moves.\n- 🔄 Coordinator cards and share links tell the truth about relays: unsaved shows an “auto-discovered” badge instead of listing relays the app may not actually use, and links only embed relays that were explicitly saved."
+	},
+	{
 		id: 'cordn-news-2026-09-28-send-keeps-up',
 		createdAt: Date.UTC(2026, 8, 28),
 		version: 1,

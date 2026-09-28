@@ -44,7 +44,7 @@ import {
 	runGroupOperation,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
-import { markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
+import { getChatCoordinator, markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import { ingestChatGroupMessages } from '$lib/services/chatGroupMessages.svelte';
@@ -1402,6 +1402,10 @@ function toGroupSnapshot(group: StoredChatGroup): GroupSnapshot {
 		gid: group.id,
 		state: decodeStoredGroupState(group),
 		coordinatorKey: group.coordinatorKey,
+		// Publish side of spec §4.1 `coordinatorRelays`: the writer's own saved
+		// relay configuration only. Empty/absent = "no hint" — the adopting device
+		// resolves through its own configuration or discovery, exactly as here.
+		coordinatorRelays: getChatCoordinator(group.coordinatorKey)?.relays,
 		fetchCursor: group.fetchCursor,
 		lastCursor: group.lastCursor
 	};
@@ -2008,8 +2012,9 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void>
 	dbg('seedGroup', { gid: doc.gid.slice(0, 8), epoch: String(epoch) });
 	// Establish the coordinator relationship so it appears in the coordinator list
 	// and operational queries (available key packages, welcomes) — mirrors the
-	// create/join seam. Idempotent if the coordinator is already known.
-	markCoordinatorUsed(doc.coordinator);
+	// create/join seam. Idempotent if the coordinator is already known. Relay
+	// hints from the document adopt fill-if-empty (spec §9).
+	markCoordinatorUsed(doc.coordinator, doc.coordinatorRelays);
 }
 
 /**
@@ -2044,6 +2049,10 @@ async function fastForwardGroup(doc: GroupDocument): Promise<void> {
 				? { status: 'active' as const, poisonedAtCursor: undefined }
 				: {})
 		});
+		// Spec §9 relay-hint adoption applies to fast-forwarding too (the doc's
+		// coordinator may differ from the locally stored one). Inside the lock,
+		// after the CAS check, so hints adopt exactly when state adopts.
+		markCoordinatorUsed(doc.coordinator, doc.coordinatorRelays);
 		dbg('fastForwardGroup', {
 			gid: existing.id.slice(0, 8),
 			epoch: `${localEpoch}→${incomingEpoch}`,

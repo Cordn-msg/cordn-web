@@ -36,6 +36,7 @@ import {
 	probeCoordinatorClientPools,
 	rebuildAllCoordinatorClients,
 	replaceCoordinatorClient,
+	resolveCoordinatorRelays,
 	withCoordinatorClient,
 	withCoordinatorClientRetry
 } from './chatRuntime';
@@ -62,6 +63,20 @@ beforeEach(() => {
 afterEach(async () => {
 	await disconnectCoordinatorClients(ACCOUNT);
 	vi.useRealTimers();
+});
+
+describe('resolveCoordinatorRelays', () => {
+	test('returns the saved relay configuration; empty for unspecified (SDK resolves)', () => {
+		// No blanket client-default fallback: a relay-less coordinator means
+		// "unspecified" and flows to the transport's resolution chain.
+		coordinatorMock.mockReturnValueOnce(undefined);
+		expect(resolveCoordinatorRelays(COORDINATOR)).toEqual([]);
+		coordinatorMock.mockReturnValueOnce({ relays: [] });
+		expect(resolveCoordinatorRelays(COORDINATOR)).toEqual([]);
+		const saved = ['wss://relay.example.com'];
+		coordinatorMock.mockReturnValueOnce({ relays: saved });
+		expect(resolveCoordinatorRelays(COORDINATOR)).toBe(saved);
+	});
 });
 
 describe('coordinator client ownership', () => {

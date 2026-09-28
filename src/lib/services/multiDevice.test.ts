@@ -213,6 +213,42 @@ describe('multiDevice core', () => {
 		expect(pulled.cursor).toBe(130);
 	});
 
+	test('publishGroupDocument carries coordinatorRelays hints; omits when absent or empty (spec §4.1)', async () => {
+		// Locator hints are the writer's own relay configuration for the
+		// coordinator; "no hint" is expressed by omission, never [].
+		const store = honestStore();
+		const pull = async (address: string) => {
+			const pulled = await pullDocument({
+				address,
+				store,
+				addressToUrl: (a) => `https://blossom.test/${a}`,
+				seal: fakeSeal(),
+				dekPubkey: OWNER
+			});
+			if (pulled.type !== 'group') throw new Error('expected a group document');
+			return pulled;
+		};
+		const hints = ['wss://relay.example.com', 'wss://backup.example.com'];
+
+		const withHints = await publishGroupDocument({
+			group: { ...snapshot(1, 'g1'), coordinatorRelays: hints },
+			seal: fakeSeal(),
+			dekPubkey: OWNER,
+			store
+		});
+		expect((await pull(withHints.address)).coordinatorRelays).toEqual(hints);
+
+		for (const relays of [undefined, []] as (string[] | undefined)[]) {
+			const without = await publishGroupDocument({
+				group: { ...snapshot(1, 'g1'), coordinatorRelays: relays },
+				seal: fakeSeal(),
+				dekPubkey: OWNER,
+				store
+			});
+			expect((await pull(without.address)).coordinatorRelays).toBeUndefined();
+		}
+	});
+
 	test('publishGroupDocument rejects a store that lies about the address', async () => {
 		const store: BlobStore = {
 			async publish() {

@@ -11,8 +11,11 @@ import { getCoordinatorServerName } from '$lib/services/coordinatorServerInfo.sv
 import { profileDisplayName } from '$lib/utils/profileName';
 import { buildUniqueSlugId, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+import { defaultRelays } from '$lib/services/relay-pool';
 
 const STORAGE_KEY = 'cordn-chat-coordinators';
+/** One-shot flag for the default-coordinator relay fill (loadCoordinators). */
+const DEFAULT_COORDINATOR_RELAYS_SEEDED_KEY = 'cordn.defaultCoordinatorRelaysSeeded';
 
 export interface StoredCoordinator {
 	id: string;
@@ -125,15 +128,24 @@ function loadCoordinators() {
 	}
 
 	// First run: seed the default coordinator so new users never have to think
-	// about coordinators — it's just there. Not flagged isDefault: that flag is a
-	// pure power-user preference (which of several is preselected in create-group),
-	// never a functional gate. Seeding only on first run (not on every empty store)
+	// about coordinators — it's just there. Its relays come from defaultRelays
+	// (they ARE the default coordinator's relays), so first contact needs no
+	// discovery round-trip. Not flagged isDefault: that flag is a pure power-user
+	// preference (which of several is preselected in create-group), never a
+	// functional gate. Seeding only on first run (not on every empty store)
 	// means a user who deliberately removes all coordinators isn't re-seeded.
 	if (firstRun) {
 		upsertChatCoordinator({
 			pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
-			label: 'Default coordinator'
+			label: 'Default coordinator',
+			relays: [...defaultRelays]
 		});
+	} else if (!localStorage.getItem(DEFAULT_COORDINATOR_RELAYS_SEEDED_KEY)) {
+		// One-time migration: installs seeded before relays were part of the
+		// default entry get them filled too. Flag-guarded so a later deliberate
+		// relay clear (back to auto-discovery) is never re-filled.
+		localStorage.setItem(DEFAULT_COORDINATOR_RELAYS_SEEDED_KEY, '1');
+		ensureDefaultCoordinatorRelays();
 	}
 }
 
@@ -334,17 +346,59 @@ export function setDefaultChatCoordinator(pubkey: string) {
 }
 
 /**
- * Mark a coordinator as recently used, ensuring it is stored first. This is
- * the single relationship-establishment seam: called from group create/join
- * and key-package publish, so any coordinator the user actually interacts with
- * is auto-curated — no manual "save" step. No relay info is available here, so
- * stored relays stay empty and resolveCoordinatorRelays falls back to client
- * defaults (behavior-preserving vs. unsaved). Never grabs the default flag.
+ * Fill the default coordinator's stored relays from defaultRelays when the
+ * entry exists but has none — the relay set installed before relays became
+ * part of the seeded entry. Fill-if-empty only: existing (user-set or
+ * hint-adopted) relays always win.
  */
-export function markCoordinatorUsed(pubkey: string) {
+export function ensureDefaultCoordinatorRelays(): void {
+	const stored = getChatCoordinator(DEFAULT_CHAT_COORDINATOR_PUBKEY);
+	if (stored && !stored.relays.length) {
+		upsertChatCoordinator({
+			pubkey: DEFAULT_CHAT_COORDINATOR_PUBKEY,
+			relays: [...defaultRelays]
+		});
+	}
+}
+
+/**
+ * Persist SDK-resolved operational relays (SDK 0.14.3 `getOperationalRelayUrls`)
+ * for a coordinator the store already knows, fill-if-empty — same §9 adoption
+ * semantics as document hints: never overwrites user-set or hint-adopted
+ * relays, never creates an entry (a removed coordinator is not resurrected).
+ * Persisting means every later client takes the configured path: no repeated
+ * discovery, our tuned pool/keepalive, and the native background poll works.
+ */
+export function markCoordinatorRelaysResolved(pubkey: string, relays: string[]): void {
 	const normalized = normalizePubKey(pubkey);
-	if (!getChatCoordinator(normalized)) {
-		upsertChatCoordinator({ pubkey: normalized });
+	const resolved = normalizeRelays(relays);
+	if (!resolved.length) return;
+	const existing = getChatCoordinator(normalized);
+	if (existing && !existing.relays.length) {
+		upsertChatCoordinator({ pubkey: normalized, relays: resolved });
+	}
+}
+
+/**
+ * Mark a coordinator as recently used, ensuring it is stored first. This is
+ * the single relationship-establishment seam: called from group create/join,
+ * key-package publish, and multi-device seed/fast-forward, so any coordinator
+ * the user actually interacts with is auto-curated — no manual "save" step.
+ * Relay hints from a multi-device group document (spec §4.1 `coordinatorRelays`)
+ * adopt fill-if-empty: they become this device's connection relays only when no
+ * relay configuration exists locally — local configuration always wins, so a
+ * manual correction is never clobbered by a stale hint republished by another
+ * device (spec §9). Never grabs the default flag.
+ */
+export function markCoordinatorUsed(pubkey: string, relayHints?: string[]) {
+	const normalized = normalizePubKey(pubkey);
+	const existing = getChatCoordinator(normalized);
+	const hints = normalizeRelays(relayHints);
+	if (!existing || (!existing.relays.length && hints.length)) {
+		// relays: hints is fill-only by the guard: omitted/empty hints on a new
+		// entry normalize to [] (same as before), and an entry with relays never
+		// reaches this upsert.
+		upsertChatCoordinator({ pubkey: normalized, relays: hints });
 	}
 	chatCoordinatorsStore.coordinators = chatCoordinatorsStore.coordinators.map((entry) =>
 		entry.pubkey === normalized ? { ...entry, lastUsedAt: Date.now() } : entry

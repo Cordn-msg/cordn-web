@@ -152,13 +152,36 @@ describe('coordinator client lifetime', () => {
 		vi.spyOn(ApplesauceRelayPool.prototype, 'subscribe').mockResolvedValue(() => {});
 		vi.spyOn(ApplesauceRelayPool.prototype, 'publish').mockResolvedValue();
 		const connect = vi.spyOn(ApplesauceRelayPool.prototype, 'connect');
-		const first = new cordnClient({ serverPubkey });
-		const second = new cordnClient({ serverPubkey });
+		// Relay-less ("default") clients now enter the transport's resolution
+		// chain; discoveryRelayUrls: [] pins it to the plain fallback path so
+		// exactly one pool connect happens per client and the ownership
+		// assertion below stays deterministic.
+		const first = new cordnClient({ serverPubkey, discoveryRelayUrls: [] });
+		const second = new cordnClient({ serverPubkey, discoveryRelayUrls: [] });
 		clients.push(first, second);
 		await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
 		expect(connect.mock.contexts[0]).not.toBe(connect.mock.contexts[1]);
 		await first.disconnect();
 		expect(second.isClosed).toBe(false);
+	});
+
+	test('relay-less clients report the resolved relay set once (onRelaysResolved / operationalRelayUrls)', async () => {
+		// Relay I/O replaced: with no discovery relays the resolution chain
+		// short-circuits to the fallbackOperationalRelayUrls path (no probe), so
+		// start() completes deterministically and the resolved set is the mocked
+		// defaultRelays — exactly what persistence should record.
+		vi.spyOn(ApplesauceRelayPool.prototype, 'subscribe').mockResolvedValue(() => {});
+		vi.spyOn(ApplesauceRelayPool.prototype, 'publish').mockResolvedValue();
+		vi.spyOn(ApplesauceRelayPool.prototype, 'connect').mockResolvedValue(undefined);
+		const resolved: string[][] = [];
+		const instance = new cordnClient({
+			serverPubkey,
+			discoveryRelayUrls: [],
+			onRelaysResolved: (urls) => resolved.push(urls)
+		});
+		clients.push(instance);
+		await vi.waitFor(() => expect(resolved).toEqual([['wss://offline.invalid']]));
+		expect(await instance.operationalRelayUrls()).toEqual(['wss://offline.invalid']);
 	});
 
 	test('one hung publication does not block another RPC on the same transport', async () => {
