@@ -12,6 +12,7 @@ import {
 	GiftWrapMode
 } from '@contextvm/sdk';
 import type { ZodType } from 'zod';
+import { ExtensionMissingError, ExtensionSigner } from 'applesauce-signers/signers';
 import { defaultRelays } from './relay-pool';
 import { errorMessage } from '$lib/utils';
 import {
@@ -117,6 +118,8 @@ export class cordnClient implements coordinatorClient {
 	readonly pool?: ApplesauceRelayPool;
 	/** Stored for lazy stable transport construction (see connectStable). */
 	private readonly stableSigner: NostrTransportOptions['signer'];
+	/** NIP-07 signers report capability via `window.nostr`, which injects late. */
+	private readonly extensionSigner: boolean;
 	private readonly transportBase: Omit<NostrTransportOptions, 'signer'>;
 	private readonly lifecycle = new AbortController();
 	readonly signal = this.lifecycle.signal;
@@ -191,9 +194,9 @@ export class cordnClient implements coordinatorClient {
 		// Stored for lazy stable construction so read/receive-only sessions never
 		// allocate the ~10 SDK helper objects the transport constructor creates.
 		const signer = providedSigner || new PrivateKeySigner(resolvedPrivateKey);
-		this.stableSigner = this.trackSigner(
-			typeof signer === 'string' ? new PrivateKeySigner(signer) : signer
-		);
+		const rawSigner = typeof signer === 'string' ? new PrivateKeySigner(signer) : signer;
+		this.extensionSigner = rawSigner instanceof ExtensionSigner;
+		this.stableSigner = this.trackSigner(rawSigner);
 		this.transportBase = {
 			serverPubkey,
 			relayHandler,
@@ -256,12 +259,20 @@ export class cordnClient implements coordinatorClient {
 		return {
 			getPublicKey: () => track(() => signer.getPublicKey()),
 			signEvent: (event) => track(() => signer.signEvent(event)),
-			nip44: signer.nip44
-				? {
-						encrypt: (pubkey, plaintext) => track(() => signer.nip44!.encrypt(pubkey, plaintext)),
-						decrypt: (pubkey, ciphertext) => track(() => signer.nip44!.decrypt(pubkey, ciphertext))
-					}
-				: undefined
+			// Live getter, never snapshotted: extension signers expose nip44 over
+			// window.nostr, which injects asynchronously. A construction-time
+			// snapshot froze "absent yet" into "absent forever" and every stable
+			// call then claimed the signer lacks NIP-44 v2 for the session.
+			get nip44() {
+				return signer.nip44
+					? {
+							encrypt: (pubkey: string, plaintext: string) =>
+								track(() => signer.nip44!.encrypt(pubkey, plaintext)),
+							decrypt: (pubkey: string, ciphertext: string) =>
+								track(() => signer.nip44!.decrypt(pubkey, ciphertext))
+						}
+					: undefined;
+			}
 		};
 	}
 
@@ -353,6 +364,14 @@ export class cordnClient implements coordinatorClient {
 				typeof this.stableSigner === 'object' &&
 				!this.stableSigner.nip44
 			) {
+				// A NIP-07 extension without window.nostr is not ready, not
+				// incapable: "Signer extension missing" routes into the signer-ready
+				// retry ladder and keeps coordinator health clean while injection
+				// completes. The capability message is for a signer that is present
+				// and genuinely lacks NIP-44 v2.
+				if (this.extensionSigner && !(typeof window !== 'undefined' && 'nostr' in window)) {
+					throw new ExtensionMissingError('Signer extension missing');
+				}
 				throw new Error('Your signer does not support NIP-44 v2, which this action requires');
 			}
 			const result = await this.withDeadline(async () => {

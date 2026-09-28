@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-27-nip44-false-alarms',
+		createdAt: Date.UTC(2026, 8, 27),
+		version: 1,
+		title: 'Signer NIP-44 false alarms are gone',
+		body: "- 🐛 Coordinators no longer wrongly report “your signer does not support NIP-44 v2” in the notifications drawer while it actually does. That message appeared when a browser-extension signer hadn't finished loading as Cordn started — and then stuck for the whole session. Cordn now waits for the signer to be available before judging its capabilities, and picks them up by itself as soon as the extension appears.\n- 🐛 The “signer doesn't support NIP-44 v2” banner no longer flashes while your extension is still loading — it only appears once the signer is actually present and truly lacks NIP-44 v2.\n- 🔄 While your signer is still waking up, the notifications drawer stays quiet (the chat area keeps its small waiting hint) instead of listing one error per coordinator."
+	},
+	{
 		id: 'cordn-news-2026-09-25-open-at-unread',
 		createdAt: Date.UTC(2026, 8, 25),
 		version: 1,
