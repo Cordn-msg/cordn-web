@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-28-send-keeps-up',
+		createdAt: Date.UTC(2026, 8, 28),
+		version: 1,
+		title: 'Sending keeps up when a coordinator is down',
+		body: '- 🐛 Messages to chats on healthy coordinators send and confirm instantly again — with one coordinator offline, every message used to sit on a clock for up to 20 seconds at a time before clearing, even though it had already arrived.\n- 🐛 Sending over a flaky connection can no longer leave a message stuck on the clock or send it twice: a message that made it through is recognized as delivered the moment it arrives, and every retry counts as the same message.\n- 🔄 On Android, notifications from your other chats arrive on time even while a coordinator is offline — notification checks no longer queue up behind the unreachable server’s timeouts.\n- 🐛 On Android, background notifications no longer stop after the app is opened fresh from closed.'
+	},
+	{
 		id: 'cordn-news-2026-09-27-nip44-false-alarms',
 		createdAt: Date.UTC(2026, 8, 27),
 		version: 1,

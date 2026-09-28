@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  * encrypt/post/persist) is fully mocked; storage runs on the real memory
  * backend (browser is false), so the durable-entry lifecycle is exercised
  * end to end: enqueue → attempt → transient/ambiguous/definitive outcomes →
- * confirm-before-retry → FIFO head-of-line blocking.
+ * per-group confirm-before-retry → FIFO head-of-line blocking → independent
+ * per-group lanes.
  */
 
 const mocks = vi.hoisted(() => {
@@ -22,7 +23,8 @@ const mocks = vi.hoisted(() => {
 		listMessagesMock: vi.fn(),
 		refreshMock: vi.fn(),
 		removedMock: vi.fn(),
-		poisonedMock: vi.fn()
+		poisonedMock: vi.fn(),
+		confirmMock: vi.fn()
 	};
 });
 
@@ -38,15 +40,12 @@ vi.mock('./accountManager.svelte', () => ({
 vi.mock('./chatGroups.svelte', () => ({
 	RemovedFromGroupError: mocks.RemovedFromGroupError,
 	ensureGroupsLoaded: vi.fn(async () => {}),
+	confirmChatGroupDelivery: (...args: unknown[]) => mocks.confirmMock(...args),
 	getChatGroup: (...args: unknown[]) => mocks.getGroupMock(...args),
 	isChatGroupPoisoned: (...args: unknown[]) => mocks.poisonedMock(...args),
 	isChatGroupRemoved: (...args: unknown[]) => mocks.removedMock(...args),
 	listChatGroupMessages: (...args: unknown[]) => mocks.listMessagesMock(...args),
 	sendChatGroupMessage: (input: unknown) => mocks.sendMock(input)
-}));
-
-vi.mock('./chatGroupWatch.svelte', () => ({
-	refreshWatchedGroups: (...args: unknown[]) => mocks.refreshMock(...args)
 }));
 
 /** Fresh module registry per test: clean queue state, clean memory storage,
@@ -67,8 +66,8 @@ async function freshModules() {
 	mocks.poisonedMock.mockReturnValue(false);
 	mocks.listMessagesMock.mockReset();
 	mocks.listMessagesMock.mockReturnValue([]);
-	mocks.refreshMock.mockReset();
-	mocks.refreshMock.mockResolvedValue(undefined);
+	mocks.confirmMock.mockReset();
+	mocks.confirmMock.mockResolvedValue(true);
 	return {
 		queue: await import('./chatOutboxQueue'),
 		storage: await import('$lib/storage/chatStorage'),
@@ -79,7 +78,10 @@ async function freshModules() {
 /** Wait for enqueue's persist→drain kick to land, then run (or join) a drain. */
 async function settleDrain(queue: typeof import('./chatOutboxQueue')) {
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	await queue.requestDrain();
+	// Lanes run detached and re-arm the drain when deferred work lands on them:
+	// keep awaiting chains until the cascades settle. Don't call while a lane is
+	// deliberately hung in a test — release it first.
+	for (let i = 0; i < 20; i++) await queue.requestDrain();
 }
 
 async function listEntries(storage: typeof import('$lib/storage/chatStorage')) {
@@ -149,11 +151,18 @@ describe('offline outbox queue', () => {
 		expect(projection.getPendingMessages('g1')[0]?.eventId).toBe('evt-timeout');
 		expect(projection.getPendingMessages('g1')[0]?.deliveryState).toBe('queued');
 
-		// The attempt actually landed: the backlog catch-up sees its event id.
-		mocks.listMessagesMock.mockReturnValue([{ id: 'evt-timeout' }]);
+		// The attempt actually landed — at the next retry window the confirm fetch
+		// ingests its copy, so the post-confirm re-check drops the entry without
+		// ever re-posting. (Confirm runs past backoff only: fetching on every pass
+		// would hang the lane for the full timeout on dead-coordinator ticks.)
+		vi.setSystemTime(Date.now() + 60_000);
+		mocks.confirmMock.mockImplementation(async () => {
+			mocks.listMessagesMock.mockReturnValue([{ id: 'evt-timeout' }]);
+			return true;
+		});
 		await settleDrain(queue);
 
-		expect(mocks.refreshMock).toHaveBeenCalled();
+		expect(mocks.confirmMock).toHaveBeenCalledWith('g1');
 		expect(mocks.sendMock).toHaveBeenCalledTimes(1); // never re-posted
 		expect(await listEntries(storage)).toHaveLength(0);
 		expect(projection.getPendingMessages('g1')).toHaveLength(0);
@@ -177,7 +186,7 @@ describe('offline outbox queue', () => {
 		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
 		expect((await listEntries(storage))[0].state).toBe('ambiguous');
 
-		// Past the window: confirm sweep proves absence, then retries.
+		// Past the window: the confirm fetch proves absence, then retries.
 		vi.setSystemTime(Date.now() + 60_000);
 		await settleDrain(queue);
 		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
@@ -251,7 +260,7 @@ describe('offline outbox queue', () => {
 		expect((await listEntries(storage))[0].state).toBe('failed');
 	});
 
-	test('ambiguous entry is not retried while the confirm sweep fails', async () => {
+	test('ambiguous entry is not retried while its confirm fetch fails', async () => {
 		const { queue, storage } = await freshModules();
 		mocks.sendMock.mockImplementation(
 			async (input: { onSealed?: (id: string) => Promise<void> }) => {
@@ -259,22 +268,147 @@ describe('offline outbox queue', () => {
 				throw new Error('Coordinator request timed out after 8000ms');
 			}
 		);
-		mocks.refreshMock.mockRejectedValue(new Error('still offline'));
+		// Dead coordinator: the per-group confirm fetch itself fails.
+		mocks.confirmMock.mockResolvedValue(false);
 
 		queue.enqueueTextMessage({ groupId: 'g1', content: 'maybe-landed' });
 		await settleDrain(queue);
 		expect((await listEntries(storage))[0].state).toBe('ambiguous');
 
-		// Past backoff, but a FAILED sweep proves nothing — no re-post (that path
+		// Past backoff, but a FAILED fetch proves nothing — no re-post (that path
 		// ships a duplicate when the original actually landed).
 		vi.setSystemTime(Date.now() + 60_000);
 		await settleDrain(queue);
 		expect(mocks.sendMock).toHaveBeenCalledTimes(1);
 
-		// Sweep recovers → absence proven → retried.
-		mocks.refreshMock.mockResolvedValue(undefined);
+		// Confirm recovers → absence proven → retried.
+		mocks.confirmMock.mockResolvedValue(true);
 		await settleDrain(queue);
 		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
+	test('retries derive the same frozen event id', async () => {
+		const { queue } = await freshModules();
+		mocks.sendMock.mockImplementation(
+			async (input: { eventCreatedAt?: number; onSealed?: (id: string) => Promise<void> }) => {
+				if (input.onSealed) await input.onSealed(`evt-${input.eventCreatedAt}`);
+				throw new Error('Coordinator request timed out after 8000ms');
+			}
+		);
+
+		const enqueuedAt = Date.now();
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'stable-id' });
+		await settleDrain(queue);
+		vi.setSystemTime(Date.now() + 60_000);
+		await settleDrain(queue);
+
+		// Every attempt seals fresh MLS bytes but derives the SAME event id, so
+		// whichever attempt lands is confirmed by id (ingestion dedupe, bubble
+		// hide, isConfirmedDelivered) — no rotating-id desync.
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+		const first = mocks.sendMock.mock.calls[0][0] as { eventCreatedAt: number };
+		const second = mocks.sendMock.mock.calls[1][0] as { eventCreatedAt: number };
+		expect(first.eventCreatedAt).toBe(Math.floor(enqueuedAt / 1000));
+		expect(second.eventCreatedAt).toBe(first.eventCreatedAt);
+	});
+
+	test('a hung send in one group does not block another group\u2019s lane', async () => {
+		const { queue, storage } = await freshModules();
+		let releaseG1!: () => void;
+		const g1Gate = new Promise<void>((resolve) => {
+			releaseG1 = resolve;
+		});
+		mocks.sendMock.mockImplementation(
+			async (input: { groupId: string; onSealed?: (id: string) => Promise<void> }) => {
+				if (input.groupId === 'g1') {
+					if (input.onSealed) await input.onSealed('evt-hang');
+					await g1Gate; // dead coordinator: the attempt never settles
+					return { cursor: 1, at: Date.now() };
+				}
+				if (input.onSealed) await input.onSealed('evt-ok');
+				return { cursor: 2, at: Date.now() };
+			}
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'to-dead-coordinator' });
+		queue.enqueueTextMessage({ groupId: 'g2', content: 'to-healthy' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// g2's lane completed while g1's attempt still hangs: its entry is
+		// delivered and dropped although the pass as a whole is in flight.
+		const entries = await listEntries(storage);
+		expect(entries).toHaveLength(1);
+		expect(entries[0].groupId).toBe('g1');
+
+		releaseG1();
+		await settleDrain(queue);
+		expect(await listEntries(storage)).toHaveLength(0);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
+	test('a send to another group is attempted immediately while a lane hangs', async () => {
+		const { queue, storage } = await freshModules();
+		let releaseG1!: () => void;
+		const g1Gate = new Promise<void>((resolve) => {
+			releaseG1 = resolve;
+		});
+		mocks.sendMock.mockImplementation(
+			async (input: { groupId: string; onSealed?: (id: string) => Promise<void> }) => {
+				if (input.groupId === 'g1') {
+					if (input.onSealed) await input.onSealed('evt-hang');
+					await g1Gate; // dead coordinator: the attempt never settles
+					return { cursor: 1, at: Date.now() };
+				}
+				if (input.onSealed) await input.onSealed('evt-ok');
+				return { cursor: 2, at: Date.now() };
+			}
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'to-dead-coordinator' });
+		await new Promise((resolve) => setTimeout(resolve, 0)); // g1 lane now hanging
+
+		// Regression (the reported symptom): this send used to sit 'queued'
+		// behind g1's hung attempt/confirm until it timed out (up to 20s).
+		queue.enqueueTextMessage({ groupId: 'g2', content: 'to-healthy' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const g2Calls = mocks.sendMock.mock.calls.filter(
+			(call) => (call[0] as { groupId: string }).groupId === 'g2'
+		);
+		expect(g2Calls).toHaveLength(1); // attempted while g1 still hangs
+
+		releaseG1();
+		await settleDrain(queue);
+		expect(await listEntries(storage)).toHaveLength(0);
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+	});
+
+	test('a message queued behind its own group\u2019s hung lane is picked up when it finishes', async () => {
+		const { queue, storage } = await freshModules();
+		let releaseFirst!: () => void;
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const attempted: string[] = [];
+		mocks.sendMock.mockImplementation(
+			async (input: { content: string; onSealed?: (id: string) => Promise<void> }) => {
+				attempted.push(input.content);
+				if (input.onSealed) await input.onSealed(`evt-${input.content}`);
+				if (input.content === 'first') await firstGate;
+				return { cursor: attempted.length, at: Date.now() };
+			}
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'first' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'second' });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// MLS FIFO: the arrival must NOT jump its own group's hung head.
+		expect(attempted).toEqual(['first']);
+
+		releaseFirst();
+		await settleDrain(queue);
+		expect(attempted).toEqual(['first', 'second']); // lane re-arm picked it up
+		expect(await listEntries(storage)).toHaveLength(0);
 	});
 
 	test('hydrateOutbox rebuilds the projection from durable storage', async () => {

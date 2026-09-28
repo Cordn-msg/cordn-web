@@ -1,7 +1,11 @@
 package org.cordn.background
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -29,7 +33,7 @@ internal object MessageFetcher {
     /** @return true if any new messages were staged+notified. */
     suspend fun run(context: Context): Boolean = withContext(Dispatchers.IO) { doFetch(context) }
 
-    private fun doFetch(context: Context): Boolean {
+    private suspend fun doFetch(context: Context): Boolean {
         val store = BackgroundStore.get(context)
         // Guard: if the user disabled delivery, neither path should notify.
         if (store.getDeliveryMode("fast") == "off") return false
@@ -44,15 +48,24 @@ internal object MessageFetcher {
         val byCoordinator: Map<String, List<BackgroundStore.PollGroupRow>> =
             groups.groupBy { it.coordinatorServerPubkey }
 
-        var notifiedAny = false
-        for ((serverPubkey, coordGroups) in byCoordinator) {
-            try {
-                notifiedAny = pollCoordinator(context, store, accountPubkey, serverPubkey, coordGroups) || notifiedAny
-            } catch (t: Throwable) {
-                // One coordinator failing must not abort the rest or retry-storm WorkManager.
-                // ponytail: swallow + continue; a transient relay failure self-corrects next cycle.
-                android.util.Log.w("CordnBg", "poll failed for coordinator $serverPubkey", t)
-            }
+        // Coordinators poll CONCURRENTLY: one dead coordinator's 30s recvTimeout
+        // costs only its own lane — sequential polling delayed every healthy
+        // coordinator's notifications by the dead one's timeout every round.
+        val notifiedAny = coroutineScope {
+            byCoordinator.map { (serverPubkey, coordGroups) ->
+                async {
+                    try {
+                        pollCoordinator(context, store, accountPubkey, serverPubkey, coordGroups)
+                    } catch (c: CancellationException) {
+                        throw c // cooperative cancel (interval/mode change) — not a failure
+                    } catch (t: Throwable) {
+                        // One coordinator failing must not abort the rest or retry-storm WorkManager.
+                        // ponytail: swallow + continue; a transient relay failure self-corrects next cycle.
+                        android.util.Log.w("CordnBg", "poll failed for coordinator $serverPubkey", t)
+                        false
+                    }
+                }
+            }.awaitAll().any { it }
         }
         if (notifiedAny) {
             // Tell a foregrounded WebView to drain the sidecar now — closes the gap where a

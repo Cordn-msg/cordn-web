@@ -3,6 +3,7 @@ import { browser } from '$app/environment';
 import { manager } from './accountManager.svelte';
 import {
 	RemovedFromGroupError,
+	confirmChatGroupDelivery,
 	ensureGroupsLoaded,
 	getChatGroup,
 	isChatGroupPoisoned,
@@ -35,7 +36,11 @@ import { errorMessage, formatUnixTimestamp, normalizePubKey } from '$lib/utils';
  * Duplicate safety: msg_post has no server-side dedup, so every attempt
  * persists its event id (via sendChatGroupMessage's onSealed hook) BEFORE the
  * post. An ambiguous outcome (timeout / app closed mid-post) is resolved by a
- * backlog catch-up + event-id check before any retry — confirm-before-retry.
+ * per-group backlog fetch + event-id check before any retry — confirm-before-
+ * retry through the entry's OWN coordinator, so a dead coordinator blocks only
+ * its group's lane. Retries also derive the SAME event id (frozen created_at
+ * at enqueue), so even a duplicate that slips through collapses everywhere via
+ * ingestion's event-id dedupe.
  *
  * Scope: text/reply/mention sends only. Media (upload-first), reactions,
  * edits, deletes, and pins keep their direct fail-fast paths.
@@ -45,6 +50,7 @@ const OUTBOX_ID_PREFIX = 'outbox:';
 const RETRY_BACKOFF_BASE_MS = 15_000;
 const RETRY_BACKOFF_MAX_MS = 5 * 60_000;
 const RETRY_INTERVAL_MS = 30_000;
+/** Web Lock name for cross-tab lane serialization (per group: `${DRAIN_LOCK}:${groupId}`). */
 const DRAIN_LOCK = 'cordn-outbox-drain';
 
 /** In-memory bookkeeping for hydrated entries (seq → record). The chatOutbox
@@ -55,6 +61,15 @@ let lastSeq = 0;
 let draining = false;
 let drainAgain = false;
 let retryTimer: ReturnType<typeof setInterval> | undefined;
+/** In-flight lanes by group — one lane per group, ever (MLS FIFO within the
+ *  group). Lanes run DETACHED from the scheduler so one coordinator's 8-20s
+ *  attempt/confirm time never delays another group's sends. */
+const laneInFlight = new Map<string, Promise<void>>();
+/** Groups whose lane was requested while their lane was running — only these
+ *  re-arm the drain on lane completion (entries arrived mid-lane). Unconditional
+ *  re-arming would hot-loop: a lane that instantly breaks on backoff would
+ *  re-dispatch itself forever. */
+const laneDeferred = new Set<string>();
 
 function activePubkey(): string {
 	const pubkey = manager.getActive()?.pubkey;
@@ -205,6 +220,14 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 			content: entry.content,
 			tags: entry.tags,
 			replyTo: entry.replyTo,
+			// Frozen at enqueue: every retry re-seals against the group's CURRENT
+			// MLS state (epoch changes stay a no-op) but derives the SAME event id,
+			// so whichever attempt lands is confirmed by id everywhere — no more
+			// permanently-stuck clocks when an earlier attempt's copy delivered.
+			// ponytail: second-resolution created_at means two identical intents
+			// enqueued within one second collide (pre-existing for direct sends too);
+			// a nonce tag fixes it if it ever bites.
+			eventCreatedAt: Math.floor(entry.createdAt / 1000),
 			// Persist the attempt marker (event id + ambiguous) BEFORE the post
 			// leaves, so any ambiguous outcome can be resolved by backlog check.
 			onSealed: async (eventId) => {
@@ -230,10 +253,10 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 			}));
 			return 'definitive';
 		}
-		// ponytail: a transient failure where the sweep below could not run
-		// (offline) still falls through to one harmless re-attempt per drain;
+		// ponytail: a transient failure where the per-group confirm could not
+		// run (offline) still falls through to one harmless re-attempt per drain;
 		// the request never reaches the coordinator while truly offline. A
-		// flapping connection inside the sweep window is the residual risk —
+		// flapping connection inside the confirm window is the residual risk —
 		// server-side msg_post dedup by event id closes it for good.
 		entry.attempts += 1;
 		entry.lastAttemptAt = Date.now();
@@ -247,6 +270,101 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 	}
 }
 
+/** Drain one group's FIFO lane. Strictly ordered within the group (MLS
+ *  generations must stay contiguous per sender), fully independent of every
+ *  other group's lane — a slow or dead coordinator stalls only its own group. */
+async function drainGroupLane(
+	groupId: string,
+	groupEntries: StoredChatOutboxRecord[]
+): Promise<void> {
+	const group = getChatGroup(groupId);
+	if (!group) {
+		// Group deleted while queued — the intents die with it.
+		for (const entry of groupEntries) await dropEntry(entry);
+		return;
+	}
+	if (isChatGroupRemoved(group) || isChatGroupPoisoned(group)) {
+		for (const entry of groupEntries) {
+			entry.state = 'failed';
+			await persistEntry(entry);
+			updatePendingMessage(groupId, bubbleId(entry), (message) => ({
+				...message,
+				deliveryState: 'error'
+			}));
+		}
+		return;
+	}
+	// Confirm-before-retry, per group: one fetch per lane at most, through
+	// THIS group's coordinator. A failed fetch (dead coordinator, offline)
+	// blocks only this lane's ambiguous head — never another group's drain.
+	let confirmed = false;
+	let confirmSucceeded = false;
+	for (const entry of groupEntries) {
+		if (isConfirmedDelivered(entry)) {
+			await dropEntry(entry);
+			continue;
+		}
+		// 'failed' is terminal until the user taps retry (retryOutboxEntry
+		// resets it) — auto-retrying a definitive failure would re-post an
+		// undeliverable intent on every drain.
+		if (entry.state === 'failed') continue;
+		if (withinBackoff(entry)) break;
+		// An ambiguous head is only retried after a successful per-group fetch
+		// proved its event id absent. Runs only when a re-post is actually due
+		// (past backoff): fetching on every pass would hang this lane for the
+		// full coordinator timeout on every dead-coordinator tick. Landed
+		// copies still drop early via the isConfirmedDelivered store check above
+		// (watch ingest), so this fetch only resolves true unknowns.
+		if (entry.state === 'ambiguous') {
+			if (!confirmed) {
+				confirmed = true;
+				// Offline the fetch cannot leave the machine — same unproven
+				// semantics as a dead coordinator; wait for an online drain trigger.
+				confirmSucceeded =
+					browser && !navigator.onLine ? false : await confirmChatGroupDelivery(groupId);
+			}
+			if (!confirmSucceeded) break;
+			// The fetch may have just ingested the landed copy — re-check.
+			if (isConfirmedDelivered(entry)) {
+				await dropEntry(entry);
+				continue;
+			}
+		}
+		const outcome = await attemptEntry(entry);
+		if (outcome === 'sent') {
+			await dropEntry(entry);
+			continue;
+		}
+		// Account switched — this lane stops; the other lanes abort at their
+		// next attempt too (assertCoordinatorOperationActive).
+		if (outcome === 'abort') return;
+		break; // transient/definitive — head blocked, rest waits (MLS order)
+	}
+}
+
+/** Run one group's lane: cross-tab serialized per group (MLS seals must never
+ *  race another tab for the same group), fresh entry list under the lock (a
+ *  sibling tab's lane may have drained the dispatch snapshot while we queued),
+ *  never rejects (detached callers must not see unhandled rejections). */
+async function runLane(ownerPubkey: string, groupId: string): Promise<void> {
+	const run = async () => {
+		const storage = await getChatStorage();
+		const entries = (await storage.listOutboxEntries(ownerPubkey)).filter(
+			(entry) => entry.groupId === groupId
+		);
+		await drainGroupLane(groupId, entries);
+	};
+	try {
+		await (browser && navigator.locks
+			? navigator.locks.request(`${DRAIN_LOCK}:${groupId}`, run)
+			: run());
+	} catch (error) {
+		// Lanes are detached; an unexpected error must not become an unhandled
+		// rejection or poison the lane registry — the next trigger retries.
+		console.warn('[outbox] lane failed', groupId, error);
+	}
+}
+
 async function drainPass(ownerPubkey: string): Promise<number> {
 	// The resume gate must be awaited OUTSIDE the per-group operation lock
 	// (sendChatGroupMessage takes it) — same deadlock rule as the UI action.
@@ -254,83 +372,32 @@ async function drainPass(ownerPubkey: string): Promise<number> {
 	if (resume) await resume.catch(() => undefined);
 
 	const storage = await getChatStorage();
-	let entries = await storage.listOutboxEntries(ownerPubkey);
+	const entries = await storage.listOutboxEntries(ownerPubkey);
 
-	// One catch-up sweep resolves all ambiguous entries: after it, any landed
-	// attempt is visible in the (reactive) message store. Reuses the single
-	// watch machinery — no parallel fetch path. Dynamic import: the watch
-	// module pulls the browser/Capacitor graph, which must stay out of tests.
-	// ponytail: skipped while navigator.onLine is false (the sweep can't fetch);
-	// ambiguous heads then simply wait for the next online drain trigger.
-	const sweepDone =
-		!browser || navigator.onLine
-			? await (async () => {
-					if (!entries.some((entry) => entry.state === 'ambiguous')) return true;
-					const watch = await import('./chatGroupWatch.svelte');
-					// Only a SUCCEEDED sweep proves the attempted id absent. A failed
-					// sweep leaves the outcome unknown and must not authorize a re-post
-					// (msg_post has no dedup — that path ships duplicates).
-					const swept = await watch.refreshWatchedGroups().then(
-						() => true,
-						() => false
-					);
-					entries = await storage.listOutboxEntries(ownerPubkey);
-					return swept;
-				})()
-			: false;
-
-	const byGroup = new Map<string, StoredChatOutboxRecord[]>();
-	for (const entry of entries) {
-		const list = byGroup.get(entry.groupId);
-		if (list) list.push(entry);
-		else byGroup.set(entry.groupId, [entry]);
-	}
-
-	for (const [groupId, groupEntries] of byGroup) {
-		const group = getChatGroup(groupId);
-		if (!group) {
-			// Group deleted while queued — the intents die with it.
-			for (const entry of groupEntries) await dropEntry(entry);
+	// Lanes are dispatched DETACHED — this pass must not wait on any lane.
+	// That was the last scheduling coupling: a dead coordinator's 20s
+	// confirm-fail/attempt hang used to hold the whole drain chain, so sends to
+	// healthy groups sat 'queued' behind it. A finished lane re-arms the drain
+	// to pick up entries that arrived while it ran (FIFO preserved: one lane
+	// per group, ever). Lanes re-list their own entries under their lock.
+	for (const groupId of new Set(entries.map((entry) => entry.groupId))) {
+		if (laneInFlight.has(groupId)) {
+			laneDeferred.add(groupId);
 			continue;
 		}
-		if (isChatGroupRemoved(group) || isChatGroupPoisoned(group)) {
-			for (const entry of groupEntries) {
-				entry.state = 'failed';
-				await persistEntry(entry);
-				updatePendingMessage(groupId, bubbleId(entry), (message) => ({
-					...message,
-					deliveryState: 'error'
-				}));
-			}
-			continue;
-		}
-		for (const entry of groupEntries) {
-			if (isConfirmedDelivered(entry)) {
-				await dropEntry(entry);
-				continue;
-			}
-			// 'failed' is terminal until the user taps retry (retryOutboxEntry
-			// resets it) — auto-retrying a definitive failure would re-post an
-			// undeliverable intent on every drain.
-			if (entry.state === 'failed') continue;
-			// An ambiguous head is only retried after a successful confirm sweep
-			// proved its event id absent; otherwise it blocks its group (FIFO).
-			if (entry.state === 'ambiguous' && !sweepDone) break;
-			if (withinBackoff(entry)) break;
-			const outcome = await attemptEntry(entry);
-			if (outcome === 'sent') {
-				await dropEntry(entry);
-				continue;
-			}
-			if (outcome === 'abort') return entries.length;
-			break; // transient/definitive — head blocked, rest waits (MLS order)
-		}
+		const lane = runLane(ownerPubkey, groupId);
+		laneInFlight.set(groupId, lane);
+		void lane.finally(() => {
+			laneInFlight.delete(groupId);
+			if (laneDeferred.delete(groupId)) return requestDrain();
+		});
 	}
 
 	// Failed entries hold no remaining work (user-driven retry only) — counting
-	// them would keep the 30s retry timer alive forever.
-	return (await storage.listOutboxEntries(ownerPubkey)).filter((entry) => entry.state !== 'failed')
-		.length;
+	// them would keep the 30s retry timer alive forever. Entries a lane is
+	// about to drop count as remaining here — the timer just stays armed one
+	// extra cycle and self-corrects on the next pass.
+	return entries.filter((entry) => entry.state !== 'failed').length;
 }
 
 async function runDrain(): Promise<void> {
@@ -346,9 +413,8 @@ async function runDrain(): Promise<void> {
 			return;
 		}
 		await ensureGroupsLoaded();
-		const remaining = await (browser && navigator.locks
-			? navigator.locks.request(DRAIN_LOCK, () => drainPass(ownerPubkey))
-			: drainPass(ownerPubkey));
+		// Scheduler only — lanes hold their own per-group locks and run detached.
+		const remaining = await drainPass(ownerPubkey);
 		if (retryTimer === undefined && remaining > 0) {
 			// ponytail: blunt 30s poll while the queue is non-empty; move onto the
 			// watch driver's tick if coordinator-outage retries ever need finesse.
@@ -367,21 +433,29 @@ async function runDrain(): Promise<void> {
 let currentDrain: Promise<void> = Promise.resolve();
 
 /** Coalescing entry point — safe to call from every trigger. Returns a promise
- *  that settles once the drain chain (including any re-run requested while a
- *  drain was in flight) has completed. */
+ *  that settles once the scheduler chain (including any re-run requested while
+ *  it was in flight) and its dispatched lanes have completed — observational
+ *  only; SCHEDULING never waits on that (draining is free while lanes run), so
+ *  a new enqueue starts its own lane immediately even while another group's
+ *  lane hangs on a dead coordinator. */
 export function requestDrain(): Promise<void> {
 	if (draining) {
 		drainAgain = true;
 		return currentDrain;
 	}
 	draining = true;
-	currentDrain = runDrain().finally(() => {
-		draining = false;
-		if (drainAgain) {
-			drainAgain = false;
-			return requestDrain();
+	currentDrain = (async () => {
+		try {
+			while (true) {
+				drainAgain = false;
+				await runDrain();
+				if (!drainAgain) break;
+			}
+		} finally {
+			draining = false;
 		}
-	});
+		await Promise.allSettled([...laneInFlight.values()]);
+	})();
 	return currentDrain;
 }
 
