@@ -98,6 +98,13 @@ const newsReleases: NewsRelease[] = [
 		body: "- 🐛 Groups synced to a linked device through multi-device now arrive knowing their coordinator's relays, so a group served by a self-hosted coordinator is reachable immediately — previously it silently fell back to the public default relays and never connected.\n- 🔄 Coordinators without saved relays are no longer pinned to the public default relays: Cordn now discovers where they listen from the coordinator's own published relay list, with the defaults kept only as a last resort.\n- 🔄 Discovered relays are remembered after first contact, so later sessions connect directly without repeating the lookup, and a coordinator's page gains a “Refetch relays” action for the rare case a coordinator moves.\n- 🔄 Coordinator cards and share links tell the truth about relays: unsaved shows an “auto-discovered” badge instead of listing relays the app may not actually use, and links only embed relays that were explicitly saved."
 	},
 	{
+		id: 'cordn-news-2026-09-28-send-keeps-up',
+		createdAt: Date.UTC(2026, 8, 28),
+		version: 1,
+		title: 'Sending keeps up when a coordinator is down',
+		body: '- 🐛 Messages to chats on healthy coordinators send and confirm instantly again — with one coordinator offline, every message used to sit on a clock for up to 20 seconds at a time before clearing, even though it had already arrived.\n- 🐛 Sending over a flaky connection can no longer leave a message stuck on the clock or send it twice: a message that made it through is recognized as delivered the moment it arrives, and every retry counts as the same message.\n- 🔄 On Android, notifications from your other chats arrive on time even while a coordinator is offline — notification checks no longer queue up behind the unreachable server’s timeouts.\n- 🐛 On Android, background notifications no longer stop after the app is opened fresh from closed.'
+	},
+	{
 		id: 'cordn-news-2026-09-27-nip44-false-alarms',
 		createdAt: Date.UTC(2026, 8, 27),
 		version: 1,
