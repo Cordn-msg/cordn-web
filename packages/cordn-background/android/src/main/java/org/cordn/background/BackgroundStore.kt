@@ -288,6 +288,15 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
         )
     }
 
+    /** Fresh read of the live path's ingest watermark (for the stale-fetch handoff check). */
+    fun getNativeCursor(gid: String): Long {
+        readableDatabase.query(
+            T_GROUPS, arrayOf("native_cursor"), "gid = ?", arrayOf(gid), null, null, null
+        ).use { c ->
+            return if (c.moveToFirst()) c.getLong(0) else 0L
+        }
+    }
+
     // ---- sidecar ----
 
     data class StagedRow(val gid: String, val cursor: Long, val msg64: String, val at: Long)

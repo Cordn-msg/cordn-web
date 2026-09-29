@@ -452,6 +452,13 @@
 		}
 	}
 
+	/** Programmatic intake for drag-and-drop onto the chat surface (mirrors the
+	 *  `+` menu's file input). Dropped files are staged for review, not sent. */
+	export function addFiles(files: File[]) {
+		if (disabled || files.length === 0) return;
+		void stageFiles(files);
+	}
+
 	// Photo and video capture share one path — both @capacitor/camera methods yield a single File the
 	// composer stages identically — so a tiny helper removes the duplicated try/stage/toast body.
 	async function captureAndStage(capture: () => Promise<File | null>) {

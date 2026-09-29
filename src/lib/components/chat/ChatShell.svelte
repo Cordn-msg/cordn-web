@@ -440,21 +440,37 @@
 	function handleSendMedia(files: File[], caption: string) {
 		if (!group || files.length === 0) return;
 		const trimmed = caption.trim();
+		const currentReplyTarget = replyTarget;
+		const optimisticReplyTarget = buildOptimisticReplyView();
 		// Fan out one optimistic message per file: one `imeta` per MLS message is
 		// the existing model, so each file uploads + sends independently — a slow
 		// or large file never blocks the others, and partial failures are
 		// per-message. The caption (if any) rides on the first file's message so
 		// single-file send keeps today's behavior (caption under the image) and a
-		// batch gets one descriptive line on its first item.
-		files.forEach((file, index) => sendOneMedia(file, index === 0 ? trimmed : ''));
+		// batch gets one descriptive line on its first item. The reply follows the
+		// same rule: one reply per send, not one per file.
+		files.forEach((file, index) =>
+			sendOneMedia(
+				file,
+				index === 0 ? trimmed : '',
+				index === 0 ? (currentReplyTarget ?? undefined) : undefined,
+				index === 0 ? optimisticReplyTarget : undefined
+			)
+		);
 
-		// Consume the caption + draft so the composer is immediately free for the
-		// next message (mirrors the text-send reset).
+		// Consume the caption + draft + reply so the composer is immediately free
+		// for the next message (mirrors the text-send reset).
 		draft = '';
 		selectedMentions = [];
+		clearReplyTarget();
 	}
 
-	function sendOneMedia(file: File, text: string) {
+	function sendOneMedia(
+		file: File,
+		text: string,
+		replyTo?: ChatMessageReplyTarget,
+		optimisticReplyTo?: ChatMessage['replyTo']
+	) {
 		const isImage = file.type.startsWith('image/');
 		const createdAt = Date.now();
 		const optimisticId = `optimistic:${crypto.randomUUID()}`;
@@ -471,6 +487,7 @@
 			dayLabel: formatUnixTimestamp(createdAt, false, true),
 			isOwn: true,
 			deliveryState: 'sending',
+			replyTo: optimisticReplyTo,
 			media: {
 				mime: file.type || 'application/octet-stream',
 				filename: file.name,
@@ -495,7 +512,7 @@
 			groupId,
 			file,
 			text,
-			replyTo: undefined,
+			replyTo,
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
@@ -533,14 +550,7 @@
 		// play the just-recorded clip before the upload resolves.
 		const previewUrl = URL.createObjectURL(result.file);
 		const currentReplyTarget = replyTarget;
-		const optimisticReplyTarget = currentReplyTarget
-			? {
-					id: currentReplyTarget.id,
-					author: currentReplyTarget.pubkey,
-					authorLabel: replyTargetAuthor || currentReplyTarget.pubkey,
-					text: currentReplyTarget.content
-				}
-			: undefined;
+		const optimisticReplyTarget = buildOptimisticReplyView();
 
 		appendOptimisticMessage({
 			id: optimisticId,
@@ -607,6 +617,9 @@
 		sendVoiceMessage(result, draft.trim());
 		draft = '';
 		selectedMentions = [];
+		// Consume the reply like the text/media sends do — the voice note carries
+		// it (first-and-only message), so the chip must not stay armed.
+		clearReplyTarget();
 	}
 
 	async function handleRetrySend(message: ChatMessage) {
@@ -647,6 +660,18 @@
 	function clearReplyTarget() {
 		replyTarget = null;
 		replyTargetAuthor = '';
+	}
+
+	/** Bubble-shaped reply view for optimistic messages (mirrors the confirmed
+	 *  mapping in `messages`); shared by the media and voice sends. */
+	function buildOptimisticReplyView(): ChatMessage['replyTo'] {
+		if (!replyTarget) return undefined;
+		return {
+			id: replyTarget.id,
+			author: replyTarget.pubkey,
+			authorLabel: replyTargetAuthor || replyTarget.pubkey,
+			text: replyTarget.content
+		};
 	}
 
 	function clearEditTarget() {
@@ -766,6 +791,10 @@
 	}
 
 	let selectedDetailEventId = $state<string | null>(null);
+	// File drag-and-drop onto the chat surface → staged in the composer for
+	// review (same as the `+` menu). Web-oriented; harmless on native.
+	let composerRef = $state<{ addFiles: (files: File[]) => void } | null>(null);
+	let dragOver = $state(false);
 	const isMobile = new IsMobile();
 	// ponytail: object ref, not $state. PaneForge's defaultSize is reactive, so
 	// feeding a $state back creates a drag loop that snaps the pane back. A
@@ -831,7 +860,31 @@
 </script>
 
 {#snippet chatColumn()}
-	<div class="flex h-full min-h-0 min-w-0 flex-col">
+	<!-- File drop zone: a pointer-only enhancement over the composer's "…" file
+	     picker (the accessible equivalent), so no ARIA role is attached. -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="flex h-full min-h-0 min-w-0 flex-col"
+		class:ring-2={dragOver}
+		class:ring-primary={dragOver}
+		class:ring-inset={dragOver}
+		ondragover={(event) => {
+			if (event.dataTransfer?.types.includes('Files')) {
+				event.preventDefault();
+				dragOver = true;
+			}
+		}}
+		ondragleave={(event) => {
+			// Only clear when the pointer leaves the chat surface (dragleave fires
+			// for child elements too).
+			if (!event.currentTarget.contains(event.relatedTarget as Node | null)) dragOver = false;
+		}}
+		ondrop={(event) => {
+			event.preventDefault();
+			dragOver = false;
+			composerRef?.addFiles(Array.from(event.dataTransfer?.files ?? []));
+		}}
+	>
 		<ChatHeader {groupId} title={displayTitle} />
 
 		{#if pinnedMessages.length > 0}
@@ -888,6 +941,7 @@
 		{/if}
 
 		<ChatComposer
+			bind:this={composerRef}
 			bind:value={draft}
 			onSubmit={handleSubmit}
 			onSendMedia={handleSendMedia}

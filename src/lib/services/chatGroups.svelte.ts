@@ -1430,7 +1430,17 @@ export function listChatGroupMessages(groupId: string): StoredChatMessage[] {
 
 export function listChatGroupSyncIssues(groupId: string): StoredChatSyncIssue[] {
 	const group = getChatGroup(groupId);
-	return group ? [...group.syncIssues].sort((a, b) => a.cursor - b.cursor) : [];
+	if (!group) return [];
+	// One issue per cursor — duplicate cursors in stored records (possible before
+	// ingestion deduped them) crash the info page's keyed {#each} (each_key_duplicate
+	// tears down the whole render tree). Dedupe here so existing records heal on read;
+	// newest createdAt wins.
+	const byCursor = new Map<number, StoredChatSyncIssue>();
+	for (const issue of group.syncIssues) {
+		const existing = byCursor.get(issue.cursor);
+		if (!existing || issue.createdAt >= existing.createdAt) byCursor.set(issue.cursor, issue);
+	}
+	return [...byCursor.values()].sort((a, b) => a.cursor - b.cursor);
 }
 
 export function clearChatGroupSyncIssues(groupId: string): void {

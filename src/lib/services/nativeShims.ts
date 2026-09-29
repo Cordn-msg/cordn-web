@@ -13,8 +13,6 @@ import { errorMessage } from '$lib/utils';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { mediaExtFromMime, replaceFileExt, sniffMediaMime } from './mediaSniff';
 import { Browser } from '@capacitor/browser';
-import { Share } from '@capacitor/share';
-import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Clipboard } from '@capacitor/clipboard';
 import {
 	Camera,
@@ -145,8 +143,8 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Web fallback shared by `saveBlob` and `shareBlob`: synthesize an `<a download>` click, which the
- * real browser honors (the WebView ignores it, which is why the native branches exist).
+ * Web fallback for `saveBlob`: synthesize an `<a download>` click, which the real browser honors
+ * (the WebView ignores it, which is why the native branch exists).
  */
 function downloadViaAnchor(blob: Blob, filename: string): void {
 	const url = URL.createObjectURL(blob);
@@ -170,9 +168,9 @@ function downloadViaAnchor(blob: Blob, filename: string): void {
  * held ~4 extra copies of the payload in the WebView and was the OOM that crashed large native
  * backups. Blobs still take the base64 path (binary callers).
  *
- * Use this for artifacts that must land on the real filesystem — e.g. the encrypted backup. For
- * media, where the system share sheet's Save-to-Photos/Files targets are the expected UX, prefer
- * `shareBlob`. Returns false on a native failure (including the user cancelling the picker).
+ * Use this for artifacts that must land on the real filesystem — the encrypted backup and media
+ * downloads both go through it (downloads should store, not share). Returns false on a native
+ * failure (including the user cancelling the picker).
  */
 export async function saveBlob(
 	data: Blob | string,
@@ -199,32 +197,6 @@ export async function saveBlob(
 		typeof data === 'string' ? new Blob([data], { type: mimeType }) : data,
 		filename
 	);
-	return true;
-}
-
-/**
- * Offer a blob via the system share sheet (Save to Files / Photos / Drive / email). Native stages
- * the blob to the app cache and shares the file URI; web uses `<a download>`. Use for media, where
- * the share sheet's handlers are the expected UX (on a real device it offers Save-to-Photos/Files;
- * the test emulator only exposes Gmail/Drive). Returns false if native staging/share throws.
- */
-export async function shareBlob(blob: Blob, filename: string): Promise<boolean> {
-	if (isNativePlatform()) {
-		try {
-			const base64 = await blobToBase64(blob);
-			const { uri } = await Filesystem.writeFile({
-				path: filename,
-				data: base64,
-				directory: Directory.Cache,
-				recursive: true
-			});
-			await Share.share({ files: [uri] });
-			return true;
-		} catch {
-			return false;
-		}
-	}
-	downloadViaAnchor(blob, filename);
 	return true;
 }
 

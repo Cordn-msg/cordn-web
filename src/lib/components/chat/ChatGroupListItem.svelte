@@ -17,6 +17,9 @@
 		getCoordinatorLabel
 	} from '$lib/services/chatCoordinators.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { isChatGroupPinned, toggleChatGroupPin } from '$lib/services/chatGroupPins.svelte';
+	import Pin from '@lucide/svelte/icons/pin';
+	import { toast } from 'svelte-sonner';
 
 	let {
 		group,
@@ -78,6 +81,71 @@
 			label: getCoordinatorLabel(group.coordinatorKey)
 		};
 	});
+	const pinned = $derived(isChatGroupPinned(group.id));
+
+	// Long-press (touch/pen) toggles pin — same convention as the message
+	// bubbles (400ms hold, cancels on scroll). Any movement beyond the gesture
+	// tolerance cancels so list scrolling stays pure.
+	const LONG_PRESS_MS = 400;
+	const GESTURE_MOVE_TOLERANCE = 10;
+	let holdTimer: ReturnType<typeof setTimeout> | null = null;
+	let suppressNextClick = false;
+	let coarsePointerActive = false;
+	let touchStartX = 0;
+	let touchStartY = 0;
+
+	function isCoarsePointer(event: PointerEvent) {
+		return event.pointerType === 'touch' || event.pointerType === 'pen';
+	}
+
+	function cancelHoldTimer() {
+		if (holdTimer) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+	}
+
+	function handlePointerDown(event: PointerEvent) {
+		suppressNextClick = false;
+		coarsePointerActive = isCoarsePointer(event);
+		if (!coarsePointerActive || event.button !== 0) return;
+		touchStartX = event.clientX;
+		touchStartY = event.clientY;
+		cancelHoldTimer();
+		holdTimer = setTimeout(() => {
+			holdTimer = null;
+			suppressNextClick = true;
+			toggleChatGroupPin(group.id);
+			navigator.vibrate?.(10);
+			toast.success(pinned ? 'Pinned to top' : 'Unpinned');
+		}, LONG_PRESS_MS);
+	}
+
+	function handlePointerMove(event: PointerEvent) {
+		if (!holdTimer) return;
+		if (
+			Math.hypot(event.clientX - touchStartX, event.clientY - touchStartY) > GESTURE_MOVE_TOLERANCE
+		) {
+			cancelHoldTimer();
+		}
+	}
+
+	function handlePointerUp() {
+		cancelHoldTimer();
+	}
+
+	// A fired long-press already toggled the pin; swallow the trailing click so
+	// the navigation doesn't also open the group.
+	function handleLinkClick(event: MouseEvent) {
+		if (suppressNextClick) {
+			suppressNextClick = false;
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+		onclick?.(event);
+	}
+
 	// Anchor is a sibling of the action button (not its parent) so the button
 	// click never navigates and we avoid nested interactive elements.
 	const linkClass = $derived.by(() => {
@@ -94,8 +162,19 @@
 
 <div class={containerClass}>
 	<!-- The caller passes route hrefs resolved with $app/paths when route params are needed. -->
-	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-	<a {href} {onclick} class={linkClass}>
+	<!-- eslint-disable svelte/no-navigation-without-resolve -->
+	<a
+		{href}
+		onclick={handleLinkClick}
+		onpointerdown={handlePointerDown}
+		onpointermove={handlePointerMove}
+		onpointerup={handlePointerUp}
+		onpointercancel={handlePointerUp}
+		oncontextmenu={(event) => {
+			if (coarsePointerActive) event.preventDefault();
+		}}
+		class={linkClass}
+	>
 		{#if isSidebar && active && !collapsed}
 			<span
 				class="size-1.5 shrink-0 rounded-full"
@@ -118,7 +197,16 @@
 				<div
 					class={isSidebar ? 'flex items-start justify-between gap-2' : 'flex items-center gap-2'}
 				>
-					<p class="truncate font-medium text-foreground">{title}</p>
+					<p class="flex min-w-0 items-center gap-1 font-medium text-foreground">
+						{#if pinned}
+							<Pin
+								class="size-3 shrink-0 text-muted-foreground"
+								aria-label="Pinned to top"
+								title="Pinned to top"
+							/>
+						{/if}
+						<span class="truncate">{title}</span>
+					</p>
 					{#if !isSidebar && group.metadata?.description}
 						<span class="hidden text-xs text-muted-foreground sm:inline">•</span>
 						<p class="hidden truncate text-xs text-muted-foreground sm:block">
@@ -136,6 +224,7 @@
 			</div>
 		{/if}
 	</a>
+	<!-- eslint-enable svelte/no-navigation-without-resolve -->
 
 	{#if showActions}
 		<ChatGroupActions {group} {title} profileHints={hints} />

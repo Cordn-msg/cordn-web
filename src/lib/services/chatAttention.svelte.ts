@@ -9,6 +9,7 @@ import {
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
+	getChatMessagePreviewText,
 	formatChatMessagePreviewText,
 	getProfileDisplayName,
 	getRepresentativeMemberPubkey,
@@ -16,10 +17,12 @@ import {
 } from '$lib/components/chat/chatGroupDisplay';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
+	getChatGroupLastReadCursor,
 	getUnreadChatGroupMessageCount,
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
+import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -124,9 +127,17 @@ export function syncChatAttention() {
 	ensureFaviconLink().href = DEFAULT_FAVICON;
 }
 
-function getNotificationBody(sender: string, content: string, profileHints: ChatGroupProfileHints) {
-	// Same mention-token rendering as the group-card previews.
-	const trimmed = formatChatMessagePreviewText(content, profileHints).trim();
+function getNotificationBody(
+	sender: string,
+	message: StoredChatMessage,
+	profileHints: ChatGroupProfileHints
+) {
+	// Same mention-token rendering as the group-card previews (media labels and
+	// system sentences included).
+	const trimmed = formatChatMessagePreviewText(
+		getChatMessagePreviewText(message),
+		profileHints
+	).trim();
 	if (trimmed) return trimmed;
 	return `New message from ${getProfileDisplayName(sender, profileHints)}`;
 }
@@ -198,23 +209,35 @@ export async function notifyForUnreadChatMessages() {
 			getChatGroupNotificationIcon(group, { activePubkey, memberPubkeys, profileHints }) ??
 			DEFAULT_FAVICON;
 
-		for (const message of nextMessages) {
-			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
-			if (message.direction !== 'inbound') continue;
+		// One notification per group pass: notify the LAST eligible message with a "+N more"
+		// suffix instead of one toast per message — a busy burst in several groups otherwise floods
+		// the shade (the web Notification tag only collapses same-group entries, native posts N).
+		const eligible = nextMessages.filter((message) => {
+			if (message.kind === SYSTEM_MESSAGE_KIND) return false;
+			if (message.direction !== 'inbound') return false;
+			// Never notify for content the user already read — the profile-hint lookup below
+			// is async, so an open + read can complete before this post goes out.
+			if (message.cursor <= getChatGroupLastReadCursor(group.id)) return false;
 			// Default-safe self-filter: without an active identity we can't attribute the message, so
 			// stay quiet rather than risk notifying for our own echo. Compare via samePubKey so a
 			// signer returning a differently-cased pubkey can't let an own message through a raw ===.
-			if (!activePubkey || samePubKey(message.sender, activePubkey)) continue;
-			if (notificationState.notifiedMessageIds.has(message.id)) continue;
+			if (!activePubkey || samePubKey(message.sender, activePubkey)) return false;
+			if (notificationState.notifiedMessageIds.has(message.id)) return false;
+			return true;
+		});
+		if (eligible.length === 0) continue;
 
-			rememberNotifiedMessage(message.id);
-			await showLocalNotification({
-				title: title || 'Cordn',
-				body: getNotificationBody(message.sender, message.content, profileHints),
-				icon,
-				groupId: group.id
-			});
-		}
+		for (const message of eligible) rememberNotifiedMessage(message.id);
+		const last = eligible[eligible.length - 1]!;
+		const extra = eligible.length - 1;
+		const body =
+			getNotificationBody(last.sender, last, profileHints) + (extra > 0 ? ` (+${extra} more)` : '');
+		await showLocalNotification({
+			title: title || 'Cordn',
+			body,
+			icon,
+			groupId: group.id
+		});
 	}
 }
 

@@ -311,22 +311,26 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 }
 
 /**
- * Dismiss every Cordn message notification. Web: closes the Notifications this tab still owns.
+ * Dismiss Cordn message notifications — all of them, or just the given groups' (reading a
+ * group clears its own entry immediately). Web: closes the Notifications this tab still owns.
  * Native: cancels each group's notification by id (per-id, never cancelAll — the ongoing
  * CHANNEL_SYNC foreground-service notification must keep running).
  */
-export async function clearShownNotifications(): Promise<void> {
+export async function clearShownNotifications(gids?: string[]): Promise<void> {
 	if (!browser) return;
 	if (isNativePlatform()) {
 		try {
-			await CordnBackground.clearMessageNotifications();
+			await CordnBackground.clearMessageNotifications(gids ? { gids } : {});
 		} catch {
 			// never block on a failed clear
 		}
 		return;
 	}
-	for (const n of activeWebNotifications) n.close();
-	activeWebNotifications.clear();
+	for (const n of activeWebNotifications) {
+		if (gids && !gids.some((gid) => n.tag === `cordn-group-${gid}`)) continue;
+		n.close();
+		activeWebNotifications.delete(n);
+	}
 }
 
 // ───────────────────────────── unified native poster + dedupe (notification consolidation) ─────────────────────────────

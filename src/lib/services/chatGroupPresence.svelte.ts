@@ -9,7 +9,11 @@ import {
 import { SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
+import { getChatMessagePreviewText } from '$lib/components/chat/chatGroupDisplay';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
+import { clearShownNotifications } from '$lib/services/nativeBridge';
+import { manager } from '$lib/services/accountManager.svelte';
+import { samePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 
@@ -103,6 +107,9 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 		}
 	};
 	savePresence();
+	// Reading dismisses the group's notifications right away — the shade must never outlive
+	// the content it points at (platform guidance: drop stale notifications immediately).
+	void clearShownNotifications([groupId]);
 }
 
 function getChatGroupLastReadMentionCursor(groupId: string): number {
@@ -146,9 +153,17 @@ export function getUnreadChatGroupMessageCount(groupId: string): number {
 	// below the read cursor. Keeps per-message sidebar/title recomputes from
 	// rescanning every group's full history.
 	if (group.lastCursor <= lastReadCursor) return 0;
+	// Own messages never count as unread: the coordinator assigns their cursor at
+	// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
+	// filter a send would badge its own group as unread. Same rule as the mention
+	// scan (`message.sender !== pubkey`); with no active identity there is nothing to
+	// attribute, so keep counting rather than hide real unread.
+	const activePubkey = manager.active?.pubkey;
 	let count = 0;
 	for (const message of group.messages) {
-		if (message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) count++;
+		if (message.cursor <= lastReadCursor || message.kind === SYSTEM_MESSAGE_KIND) continue;
+		if (activePubkey && samePubKey(message.sender, activePubkey)) continue;
+		count++;
 	}
 	return count;
 }
@@ -208,16 +223,16 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 	let latestMessage: StoredChatMessage | undefined;
 	if (group) {
 		for (const message of group.messages) {
-			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
 			if (!latestMessage || message.cursor > latestMessage.cursor) {
 				latestMessage = message;
 			}
 		}
 	}
-	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();
-	// No length cap: cards clip with CSS, and cutting here would slice `nostr:`
+	// Media and system messages render as labels/sentences (getChatMessagePreviewText);
+	// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
 	// mention tokens before names replace them — an 80-char cap ate the entire
 	// text of any mention-first message.
+	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
 	if (preview) return preview;
 
 	return group?.metadata?.description || 'Group chat';

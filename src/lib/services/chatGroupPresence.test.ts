@@ -5,6 +5,16 @@ const groups = vi.hoisted(() => new Map<string, StoredChatGroup>());
 
 vi.mock('$app/environment', () => ({ browser: false }));
 
+vi.mock('$lib/services/nativeBridge', () => ({
+	clearShownNotifications: () => Promise.resolve()
+}));
+
+const account = vi.hoisted(() => ({ pubkey: 'ee'.repeat(32) }));
+
+vi.mock('$lib/services/accountManager.svelte', () => ({
+	manager: { active: account }
+}));
+
 vi.mock('$lib/services/chatGroups.svelte', () => ({
 	getChatGroup: (id: string) => groups.get(id),
 	listChatGroups: () => [...groups.values()],
@@ -54,6 +64,24 @@ function seedGroup(id: string, cursors: number[]): void {
 }
 
 describe('chat group presence unread scans', () => {
+	test('own messages never count as unread', () => {
+		seedGroup('presence-own', [10, 20, 30]);
+		// The coordinator echoes our send back with its assigned cursor, `direction: 'inbound'`.
+		const group = groups.get('presence-own')!;
+		group.messages.push({
+			cursor: 40,
+			createdAt: 40,
+			direction: 'inbound' as const,
+			sender: account.pubkey,
+			id: 'presence-own-self',
+			kind: 9,
+			tags: [],
+			content: 'sent from this account'
+		});
+		group.lastCursor = 40;
+		expect(getUnreadChatGroupMessageCount('presence-own')).toBe(3);
+	});
+
 	test('counts unread messages until the read cursor catches up', () => {
 		seedGroup('presence-g1', [10, 20, 30]);
 		expect(getUnreadChatGroupMessageCount('presence-g1')).toBe(3);

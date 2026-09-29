@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-09-29-pinned-chats',
+		createdAt: Date.UTC(2026, 8, 29),
+		version: 1,
+		title: 'Pinned chats, drag-and-drop, and a steadier app',
+		body: "- ✨ Pin the groups you care about to the top of your chat list: press and hold a chat on your phone (or open its “⋮” menu) to pin or unpin it. Pinned chats keep their place above everything else — your pins are personal and stay on your device.\n- ✨ On the web, drop files straight onto the chat window and they wait in the message box for review — send when you're ready.\n- 🔄 Zooming into shared images on your phone finally feels right: pinch to zoom, drag to pan, and double-tap to jump between 1× and zoomed — and the image can no longer be dragged out of sight. On desktop, the mouse wheel now zooms toward the pointer.\n- 🔄 Group cards and notifications now say what actually arrived — “📷 Photo”, “📎 file.pdf”, “🎤 Voice message”, or who just joined the group — instead of falling back to the group description or “Group chat”.\n- 🐛 Busy groups no longer flood your notifications: a burst of new messages shows as a single notification per group — the newest message with a “+N more” hint — instead of one alert per message.\n- 🐛 Replying to a message while sending a photo with a caption no longer drops the reply: the photo goes out as a proper reply.\n- 🐛 On Android, downloading an image or file now saves it through the system save dialog, instead of popping up the share sheet.\n- 🐛 The bottom bar no longer vanishes: opening some groups' info pages could crash the interface until the app was restarted, caused by a duplicated internal record on the device. The record now heals itself the first time the page opens.\n- 🐛 The supporter zap counter on the news page now counts zaps sent to both of the project's addresses — it undercounted since the second one went live.\n- 🐛 On Android, notifications are tidier: reading a group clears its notification right away, and leftovers no longer linger for chats you've already read.\n- 🐛 A message you sent no longer marks its own group unread when the coordinator confirms it (the check mark) — the badge now counts only what others sent.\n- 🐛 Sender avatars no longer flash or re-fade when you open a group, a message arrives, or you scroll through history — already-loaded pictures paint instantly, and each avatar now sits at the top of its message group next to the name instead of hopping between messages."
+	},
+	{
 		id: 'cordn-news-2026-09-28-stranded-publish-heal',
 		createdAt: Date.UTC(2026, 8, 28),
 		version: 1,

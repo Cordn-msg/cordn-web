@@ -14,6 +14,7 @@ import {
 	type CoordinatorAvailableKeyPackage
 } from '$lib/services/chatGroups.svelte';
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
+import { removeChatGroupPin } from '$lib/services/chatGroupPins.svelte';
 import {
 	chatWelcomeNotificationsStore,
 	clearWelcomeSubmitting,
@@ -140,6 +141,7 @@ export async function deleteGroupAction(groupId: string | undefined) {
 			deleteChatGroup(groupId);
 		}
 		removeChatGroupPresence(groupId);
+		removeChatGroupPin(groupId);
 		await goto(resolve('/chat'));
 		return true;
 	} catch (error) {

@@ -1,5 +1,11 @@
 import { nip19 } from 'nostr-tools';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
+import type {
+	StoredChatMessage,
+	StoredChatSystemMessageData
+} from '$lib/services/chatGroupMessages.svelte';
+import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
+import { findImetaTag, type MediaReference } from '$lib/services/chatMediaCipher';
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { normalizePubKey } from '$lib/utils';
 import type { ProfileContent } from 'applesauce-core/helpers';
@@ -36,6 +42,59 @@ export function formatChatMessagePreviewText(
 
 export function getGroupActivityAt(group: StoredChatGroup): number {
 	return Math.max(group.createdAt, group.messages.at(-1)?.createdAt ?? 0);
+}
+
+/** One-line preview for a message on group cards and in notification bodies.
+ *  Media renders as a labeled placeholder (plus its caption) and system
+ *  messages as their human sentence — name slots are `nostr:` mention tokens,
+ *  so the existing `formatChatMessagePreviewText` call sites resolve them to
+ *  profile names. Plain text passes through; `''` when nothing is showable. */
+export function getChatMessagePreviewText(message: StoredChatMessage): string {
+	const body = message.content?.replace(/\s+/g, ' ').trim() ?? '';
+	if (message.kind === SYSTEM_MESSAGE_KIND) {
+		return getSystemMessagePreviewText(message.content);
+	}
+	const media = findImetaTag(message.tags ?? []);
+	if (!media) return body;
+	const label = getMediaPreviewLabel(media);
+	return body ? `${label}: ${body}` : label;
+}
+
+function getMediaPreviewLabel(media: MediaReference): string {
+	if (media.durationMs !== undefined) return '🎤 Voice message';
+	if (media.mime.startsWith('image/')) return '📷 Photo';
+	if (media.mime.startsWith('video/')) return '🎥 Video';
+	return `📎 ${media.filename}`;
+}
+
+// Mirrors the sentence templates in ChatMessageItem's system markers.
+function getSystemMessagePreviewText(content: string): string {
+	let data: StoredChatSystemMessageData;
+	try {
+		data = JSON.parse(content) as StoredChatSystemMessageData;
+	} catch {
+		return '';
+	}
+	const committer = nameToken(data.committer);
+	if (data.systemKind === 'member-added') {
+		return `${committer} added ${nameToken(data.target)} to the group`;
+	}
+	if (data.systemKind === 'member-removed') {
+		return `${committer} removed ${nameToken(data.target)} from the group`;
+	}
+	if (data.systemKind === 'metadata-changed') {
+		return `${committer} changed ${data.detail ?? 'group settings'}`;
+	}
+	return '';
+}
+
+function nameToken(pubkey?: string): string {
+	if (!pubkey) return 'Someone';
+	try {
+		return `nostr:${nip19.npubEncode(pubkey)}`;
+	} catch {
+		return 'Someone';
+	}
 }
 
 export function getDirectChatTargetPubkey(group: StoredChatGroup) {

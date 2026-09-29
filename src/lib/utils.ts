@@ -3,7 +3,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { toast } from 'svelte-sonner';
 import { isHex } from 'applesauce-core/helpers';
-import { copyText, shareBlob } from '$lib/services/nativeShims';
+import { copyText, saveBlob } from '$lib/services/nativeShims';
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -158,15 +158,16 @@ export function samePubKey(a: string, b: string): boolean {
 
 /**
  * Trigger a download of a (blob/object/remote) URL under the given filename. Web synthesizes an
- * `<a download>` click via `saveBlob`; native fetches the blob and hands it to the share sheet (the
- * WebView ignores the download attribute). Best-effort: fetch/save failures are swallowed. No-op on
- * the server. Shared by the media views (chat bubble, lightbox, message actions).
+ * `<a download>` click via `saveBlob`; native opens the system "Save as" picker through `saveBlob`
+ * (the WebView ignores the download attribute, and the share sheet reads as "share", not "save").
+ * Best-effort: fetch/save failures are swallowed. No-op on the server. Shared by the media views
+ * (chat bubble, lightbox, message actions).
  */
 export async function downloadObjectUrl(url: string, filename: string): Promise<void> {
 	if (!browser) return;
 	try {
 		const blob = await (await fetch(url)).blob();
-		await shareBlob(blob, filename);
+		await saveBlob(blob, filename, blob.type || 'application/octet-stream');
 	} catch {
 		// best-effort download trigger; a failed fetch/save is non-fatal
 	}

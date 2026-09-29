@@ -98,6 +98,15 @@ class CordnBackgroundPlugin : Plugin() {
 
     @PluginMethod
     fun clearMessageNotifications(call: PluginCall) {
+        // Per-group clear (the group was read): cancel exactly those gids. The recorded
+        // notified set keeps its entries — a later full clear re-cancels them as no-ops.
+        val requested = call.getArray("gids", JSArray()) ?: JSArray()
+        if (requested.length() > 0) {
+            val requestedGids = (0 until requested.length()).map { requested.getString(it) }
+            Notifications.clearMessageNotifications(getContext(), requestedGids)
+            call.resolve()
+            return
+        }
         // Cancel by seeded ∪ notified gid — never cancelAll (would kill the ongoing sync-service
         // notification), and the notified set covers groups unseeded since their last post.
         val store = BackgroundStore.get(getContext())

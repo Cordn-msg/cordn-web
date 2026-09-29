@@ -18,6 +18,10 @@ const config: CapacitorConfig = {
     appStartPath: '/chat'
   },
   android: {
+    // WebView console forwarding (Capacitor/Console in logcat). Default 'debug' silently
+    // disables ALL console logging in release builds, which also hides uncaught JS errors —
+    // field diagnosis relies on this (e.g. the info-page render wedge was found via logcat).
+    loggingBehavior: 'production',
     // WebView background = the app's dark theme color, so the gap behind the WebView during
     // cold-start paint and any overscroll is dark instead of white. This is the Capacitor core
     // WebView bg, NOT @capacitor/status-bar's setBackgroundColor (that one is a no-op on

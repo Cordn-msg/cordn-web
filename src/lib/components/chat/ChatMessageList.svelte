@@ -378,8 +378,8 @@
 					{@const message = messages[virtualItem.index]}
 					{#if message}
 						{@const previousMessage = messages[virtualItem.index - 1]}
-						{@const nextMessage = messages[virtualItem.index + 1]}
 						{@const systemRow = Boolean(message.systemKind)}
+						{@const runHead = !systemRow && previousMessage?.author !== message.author}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
@@ -390,8 +390,8 @@
 						>
 							<ChatMessageItem
 								{message}
-								showAuthor={!systemRow && previousMessage?.author !== message.author}
-								showAvatar={!systemRow && nextMessage?.author !== message.author}
+								showAuthor={runHead}
+								showAvatar={runHead}
 								showDayLabel={previousMessage?.dayLabel !== message.dayLabel}
 								showUnreadMarker={message.id === initialFocusMessageId}
 								{onReply}

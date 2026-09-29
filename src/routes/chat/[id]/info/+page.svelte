@@ -109,7 +109,9 @@
 	const snapshots = $derived.by(() => group?.snapshots ?? []);
 
 	const messageCount = $derived.by(() => group?.messages.length ?? 0);
-	const issueCount = $derived.by(() => group?.syncIssues.length ?? 0);
+	// Same source as the rendered list (deduped per cursor) so the count can't
+	// disagree with the rows below it.
+	const issueCount = $derived(syncIssues.length);
 	const snapshotCount = $derived.by(() => snapshots.length);
 
 	async function flushSyncIssues() {
