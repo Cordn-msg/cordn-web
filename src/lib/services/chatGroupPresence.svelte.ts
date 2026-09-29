@@ -12,6 +12,8 @@ import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatMessagePreviewText } from '$lib/components/chat/chatGroupDisplay';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 import { clearShownNotifications } from '$lib/services/nativeBridge';
+import { manager } from '$lib/services/accountManager.svelte';
+import { samePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 
@@ -151,9 +153,17 @@ export function getUnreadChatGroupMessageCount(groupId: string): number {
 	// below the read cursor. Keeps per-message sidebar/title recomputes from
 	// rescanning every group's full history.
 	if (group.lastCursor <= lastReadCursor) return 0;
+	// Own messages never count as unread: the coordinator assigns their cursor at
+	// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
+	// filter a send would badge its own group as unread. Same rule as the mention
+	// scan (`message.sender !== pubkey`); with no active identity there is nothing to
+	// attribute, so keep counting rather than hide real unread.
+	const activePubkey = manager.active?.pubkey;
 	let count = 0;
 	for (const message of group.messages) {
-		if (message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) count++;
+		if (message.cursor <= lastReadCursor || message.kind === SYSTEM_MESSAGE_KIND) continue;
+		if (activePubkey && samePubKey(message.sender, activePubkey)) continue;
+		count++;
 	}
 	return count;
 }

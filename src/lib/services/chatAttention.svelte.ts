@@ -17,6 +17,7 @@ import {
 } from '$lib/components/chat/chatGroupDisplay';
 import { manager } from '$lib/services/accountManager.svelte';
 import {
+	getChatGroupLastReadCursor,
 	getUnreadChatGroupMessageCount,
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
@@ -214,6 +215,9 @@ export async function notifyForUnreadChatMessages() {
 		const eligible = nextMessages.filter((message) => {
 			if (message.kind === SYSTEM_MESSAGE_KIND) return false;
 			if (message.direction !== 'inbound') return false;
+			// Never notify for content the user already read — the profile-hint lookup below
+			// is async, so an open + read can complete before this post goes out.
+			if (message.cursor <= getChatGroupLastReadCursor(group.id)) return false;
 			// Default-safe self-filter: without an active identity we can't attribute the message, so
 			// stay quiet rather than risk notifying for our own echo. Compare via samePubKey so a
 			// signer returning a differently-cased pubkey can't let an own message through a raw ===.
