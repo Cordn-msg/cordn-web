@@ -11,6 +11,7 @@ import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
 import { getChatMessagePreviewText } from '$lib/components/chat/chatGroupDisplay';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
+import { clearShownNotifications } from '$lib/services/nativeBridge';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 
@@ -104,6 +105,9 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 		}
 	};
 	savePresence();
+	// Reading dismisses the group's notifications right away — the shade must never outlive
+	// the content it points at (platform guidance: drop stale notifications immediately).
+	void clearShownNotifications([groupId]);
 }
 
 function getChatGroupLastReadMentionCursor(groupId: string): number {
