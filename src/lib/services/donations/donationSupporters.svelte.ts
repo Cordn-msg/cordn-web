@@ -123,6 +123,10 @@ function teardown() {
 	timelineSub = null;
 }
 
+/** Second project zap key (2026-09): the project receives zaps on both this key and
+ *  `recipientPubkey`, so the leaderboard counts receipts to either one. */
+const PROJECT_EXTRA_ZAP_PUBKEY = 'c3c6d9bb385fd827cfdb45d933a1e8ccf2905be30467151ed5fe356a10a525e9';
+
 /**
  * Ensure zap receipts for `recipientPubkey` are loading and aggregated into
  * {@link supporters}. Idempotent: a repeat call for the same recipient is a
@@ -148,11 +152,11 @@ export function loadSupporters(lnAddress: string, recipientPubkey: string) {
 				return;
 			}
 
-			// NIP-57 Appendix F: `#p` selects zaps to the recipient, `authors`
+			// NIP-57 Appendix F: `#p` selects zaps to the project's recipient keys, `authors`
 			// authenticates them to the host's nostrPubkey.
 			const filter = {
 				kinds: [9735],
-				'#p': [recipientPubkey],
+				'#p': [recipientPubkey, PROJECT_EXTRA_ZAP_PUBKEY],
 				authors: [params.nostrPubkey]
 			};
 
