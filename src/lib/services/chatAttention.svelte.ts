@@ -198,23 +198,33 @@ export async function notifyForUnreadChatMessages() {
 			getChatGroupNotificationIcon(group, { activePubkey, memberPubkeys, profileHints }) ??
 			DEFAULT_FAVICON;
 
-		for (const message of nextMessages) {
-			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
-			if (message.direction !== 'inbound') continue;
+		// One notification per group pass: notify the LAST eligible message with a "+N more"
+		// suffix instead of one toast per message — a busy burst in several groups otherwise floods
+		// the shade (the web Notification tag only collapses same-group entries, native posts N).
+		const eligible = nextMessages.filter((message) => {
+			if (message.kind === SYSTEM_MESSAGE_KIND) return false;
+			if (message.direction !== 'inbound') return false;
 			// Default-safe self-filter: without an active identity we can't attribute the message, so
 			// stay quiet rather than risk notifying for our own echo. Compare via samePubKey so a
 			// signer returning a differently-cased pubkey can't let an own message through a raw ===.
-			if (!activePubkey || samePubKey(message.sender, activePubkey)) continue;
-			if (notificationState.notifiedMessageIds.has(message.id)) continue;
+			if (!activePubkey || samePubKey(message.sender, activePubkey)) return false;
+			if (notificationState.notifiedMessageIds.has(message.id)) return false;
+			return true;
+		});
+		if (eligible.length === 0) continue;
 
-			rememberNotifiedMessage(message.id);
-			await showLocalNotification({
-				title: title || 'Cordn',
-				body: getNotificationBody(message.sender, message.content, profileHints),
-				icon,
-				groupId: group.id
-			});
-		}
+		for (const message of eligible) rememberNotifiedMessage(message.id);
+		const last = eligible[eligible.length - 1]!;
+		const extra = eligible.length - 1;
+		const body =
+			getNotificationBody(last.sender, last.content, profileHints) +
+			(extra > 0 ? ` (+${extra} more)` : '');
+		await showLocalNotification({
+			title: title || 'Cordn',
+			body,
+			icon,
+			groupId: group.id
+		});
 	}
 }
 
