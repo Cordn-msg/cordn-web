@@ -9,6 +9,7 @@ import {
 import { SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { chatMessageReferencesPubkey } from '$lib/services/chatMentions';
+import { getChatMessagePreviewText } from '$lib/components/chat/chatGroupDisplay';
 import { getChatDraftPreview } from '$lib/services/chatDrafts.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
@@ -208,16 +209,16 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 	let latestMessage: StoredChatMessage | undefined;
 	if (group) {
 		for (const message of group.messages) {
-			if (message.kind === SYSTEM_MESSAGE_KIND) continue;
 			if (!latestMessage || message.cursor > latestMessage.cursor) {
 				latestMessage = message;
 			}
 		}
 	}
-	const preview = latestMessage?.content?.replace(/\s+/g, ' ').trim();
-	// No length cap: cards clip with CSS, and cutting here would slice `nostr:`
+	// Media and system messages render as labels/sentences (getChatMessagePreviewText);
+	// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
 	// mention tokens before names replace them — an 80-char cap ate the entire
 	// text of any mention-first message.
+	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
 	if (preview) return preview;
 
 	return group?.metadata?.description || 'Group chat';
