@@ -116,6 +116,7 @@ internal object MessageFetcher {
             val toStage = ArrayList<BackgroundStore.StagedRow>(messages.length())
             val maxCursorByGid = HashMap<String, Long>()
             val countByGid = HashMap<String, Int>()
+            val freshCursorByGid = HashMap<String, Long>()
 
             for (i in 0 until messages.length()) {
                 val m = messages.optJSONObject(i) ?: continue
@@ -123,6 +124,13 @@ internal object MessageFetcher {
                 val cursor = m.optLong("cursor", -1L)
                 val msg64 = m.optString("msg_64")
                 if (gid.isEmpty() || cursor <= 0 || msg64.isEmpty()) continue
+                // Live-path handoff check (fresh read per gid): the app advances nativeCursor on
+                // every ingest, so rows can go stale while this fetch was in flight. Fetch is
+                // at-least-once; notify must be at-most-once — drop rows the live path already
+                // handled instead of re-notifying read messages as "new".
+                // ponytail: one read per gid at parse time; a concurrent advance during parsing
+                // is a ms-wide window, shrunk further by the foreground suppression.
+                if (cursor <= freshCursorByGid.getOrPut(gid) { store.getNativeCursor(gid) }) continue
                 toStage += BackgroundStore.StagedRow(gid, cursor, msg64, m.optLong("at", 0L))
                 maxCursorByGid.merge(gid, cursor) { a, b -> maxOf(a, b) }
                 countByGid.merge(gid, 1) { a, b -> a + b }
