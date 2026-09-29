@@ -24,6 +24,7 @@
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
+	import { isChatGroupPinned } from '$lib/services/chatGroupPins.svelte';
 	import { searchChatMessages } from '$lib/services/chatMessageSearch';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -103,11 +104,14 @@
 		return Boolean(summary && (summary.unreadCount > 0 || summary.unreadReferenceCount > 0));
 	}
 
-	// Same rule as the home feed: unread chats bubble to the top (newest first
-	// within the tier), read chats settle by last activity.
+	// Pinned groups hold the very top (activity order within the tier), then
+	// the existing rule: unread chats bubble up (newest first within the tier),
+	// read chats settle by last activity. Pin state is $state in chatGroupPins,
+	// so the derived re-sorts on toggle.
 	const chats = $derived.by(() =>
 		[...allChats].sort(
 			(a, b) =>
+				Number(isChatGroupPinned(b.id)) - Number(isChatGroupPinned(a.id)) ||
 				Number(hasUnreadActivity(b.id)) - Number(hasUnreadActivity(a.id)) ||
 				getGroupActivityAt(b) - getGroupActivityAt(a)
 		)

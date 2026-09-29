@@ -19,7 +19,10 @@
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import CheckCheck from '@lucide/svelte/icons/check-check';
+	import Pin from '@lucide/svelte/icons/pin';
+	import PinOff from '@lucide/svelte/icons/pin-off';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { isChatGroupPinned, toggleChatGroupPin } from '$lib/services/chatGroupPins.svelte';
 
 	let {
 		group,
@@ -33,6 +36,7 @@
 
 	let showDeleteDialog = $state(false);
 	const submitting = $derived(chatGroupInfoActionsStore.deleteSubmitting);
+	const pinned = $derived(isChatGroupPinned(group.id));
 
 	// Only resolve hints + recompute the title when the caller didn't pass one,
 	// so the common case (rendered inside ChatGroupListItem) doesn't double up.
@@ -92,6 +96,15 @@
 			>
 				<CheckCheck class="size-4" />
 				<span>Mark as read</span>
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onclick={() => toggleChatGroupPin(group.id)} class="gap-2">
+				{#if pinned}
+					<PinOff class="size-4" />
+					<span>Unpin from top</span>
+				{:else}
+					<Pin class="size-4" />
+					<span>Pin to top</span>
+				{/if}
 			</DropdownMenu.Item>
 			<DropdownMenu.Item
 				onclick={() => (showDeleteDialog = true)}

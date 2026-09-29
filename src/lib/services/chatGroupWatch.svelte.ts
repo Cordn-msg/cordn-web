@@ -42,6 +42,7 @@ import {
 	loadChatGroupPresenceForOwner,
 	pruneChatGroupPresence
 } from '$lib/services/chatGroupPresence.svelte';
+import { loadChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
 import {
@@ -1085,6 +1086,7 @@ if (browser) {
 		const nextOwnerPubkey = account ? normalizePubKey(account.pubkey) : undefined;
 		const groupLoadPromise = reloadChatGroupsForOwner(nextOwnerPubkey);
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
+		loadChatGroupPinsForOwner(nextOwnerPubkey);
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
 		loadJoinRequestsForOwner(nextOwnerPubkey);
 		clearAllCoordinatorBackoff();

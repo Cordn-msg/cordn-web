@@ -28,6 +28,7 @@
 		markAllChatGroupsRead
 	} from '$lib/services/chatGroupPresence.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
+	import { isChatGroupPinned } from '$lib/services/chatGroupPins.svelte';
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
@@ -60,10 +61,10 @@
 		const items = pool.length > 0 ? pool : newsFeedItems;
 		return items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
 	});
-	// Rows sort exactly like chats: unread items bubble to the top (newest
-	// first within the tier); read items settle by their last activity. News
-	// participates with the same rule, so it is never pinned above a group
-	// with newer unread activity.
+	// Rows sort exactly like chats: pinned groups hold the top, then unread
+	// items bubble up (newest first within the tier); read items settle by their
+	// last activity. News participates with the same rule, so it is never pinned
+	// above a group with newer unread activity.
 	type FeedRow =
 		| { kind: 'news'; unread: boolean; activityAt: number }
 		| {
@@ -89,7 +90,13 @@
 				activityAt: newsActivityAt
 			});
 		}
-		return rows.sort((a, b) => Number(b.unread) - Number(a.unread) || b.activityAt - a.activityAt);
+		const isRowPinned = (row: FeedRow) => row.kind === 'group' && isChatGroupPinned(row.group.id);
+		return rows.sort(
+			(a, b) =>
+				Number(isRowPinned(b)) - Number(isRowPinned(a)) ||
+				Number(b.unread) - Number(a.unread) ||
+				b.activityAt - a.activityAt
+		);
 	});
 	const keyPackages = $derived.by(() => listChatKeyPackages($activeAccount?.pubkey));
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());

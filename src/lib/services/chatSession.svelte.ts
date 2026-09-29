@@ -4,6 +4,7 @@ import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { deleteChatGroupsForOwner } from '$lib/services/chatGroups.svelte';
 import { deleteChatKeyPackagesForOwner } from '$lib/services/chatKeyPackages.svelte';
 import { deleteChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
+import { deleteChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
 import {
 	deleteJoinRequestsForOwner,
 	deleteSentJoinRequestsForOwner
@@ -26,6 +27,7 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 		deleteChatGroupsForOwner(ownerPubkey),
 		deleteChatKeyPackagesForOwner(ownerPubkey),
 		Promise.resolve(deleteChatGroupPresenceForOwner(ownerPubkey)),
+		Promise.resolve(deleteChatGroupPinsForOwner(ownerPubkey)),
 		Promise.resolve(deleteWelcomeNotificationsForOwner(ownerPubkey)),
 		Promise.resolve(deleteJoinRequestsForOwner(ownerPubkey)),
 		Promise.resolve(deleteSentJoinRequestsForOwner(ownerPubkey)),
