@@ -19,15 +19,35 @@ export function useProfile(getPubkey: () => string): {
 	readonly current: ProfileContent | undefined;
 } {
 	let profile = $state<ProfileContent | undefined>(undefined);
+	let boundPubkey = '';
+	let sub: { unsubscribe(): void } | undefined;
 
-	$effect(() => {
-		const pubkey = getPubkey();
+	const bind = (pubkey: string) => {
+		if (pubkey === boundPubkey) return;
+		sub?.unsubscribe();
+		sub = undefined;
+		boundPubkey = pubkey;
 		// Reset on pubkey change so a stale profile never shows for the new key.
 		profile = undefined;
-		const sub = eventStore.model(ProfileModel, pubkey).subscribe((p) => {
+		// The shared model replays its cached value synchronously on subscribe
+		// (ReplaySubject), so a profile seen before resolves during init — before
+		// the first paint — instead of leaving a blank/fallback frame behind an
+		// effect that only runs after mount.
+		sub = eventStore.model(ProfileModel, pubkey).subscribe((p) => {
 			profile = p;
 		});
-		return () => sub.unsubscribe();
+	};
+
+	// Synchronous seed for the initial pubkey; the effect rebinds on change and
+	// unsubscribes on destroy.
+	bind(getPubkey());
+	$effect(() => {
+		bind(getPubkey());
+		return () => {
+			sub?.unsubscribe();
+			sub = undefined;
+			boundPubkey = '';
+		};
 	});
 
 	return {

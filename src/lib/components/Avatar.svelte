@@ -1,3 +1,13 @@
+<script module lang="ts">
+	import { SvelteSet } from 'svelte/reactivity';
+
+	/** Pictures already fetched + decoded this session. Module scope on purpose:
+	 *  a remounted avatar (group open, scrolling back into the virtual window) must
+	 *  paint its bitmap at full opacity immediately instead of replaying the load
+	 *  fade for an image the browser already has. */
+	const loadedPictures = new SvelteSet<string>();
+</script>
+
 <script lang="ts">
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
 	import { pubkeyToHexColor, cn } from '$lib/utils';
@@ -16,11 +26,10 @@
 	}: { pubkey: string; picture?: string; size?: string; alt?: string } = $props();
 
 	const showImage = $derived(getLoadAvatars());
-	// Fade the picture in over the always-painted fallback color: the avatar
-	// element remounts whenever the run's avatar hops to a newer message, and the
-	// fresh <img> can't paint pixels until its bitmap is fetched/decoded. The
-	// crossfade turns that into a smooth transition instead of a color flash.
-	let loaded = $state(false);
+	// Fade a never-seen picture in over the always-painted fallback color (the
+	// bitmap can't paint until fetched/decoded); already-loaded pictures skip
+	// the fade entirely via the session-wide set above.
+	const loaded = $derived(picture ? loadedPictures.has(picture) : false);
 </script>
 
 {#if picture && showImage}
@@ -36,7 +45,7 @@
 				loaded ? 'opacity-100' : 'opacity-0'
 			)}
 			decoding="sync"
-			onload={() => (loaded = true)}
+			onload={() => picture && loadedPictures.add(picture)}
 		/>
 	</div>
 {:else}
