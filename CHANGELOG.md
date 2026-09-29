@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.5.1 — 2026-09-29
+
+### Features
+
+- **chat:** drag and drop files into the chat composer
+- **chat:** pin groups to the top of the list
+- **coordinators:** persist resolved relays after first discovery + refetch action
+- resolve profile names in group card previews and notifications
+- render coordinator label on group info page
+- unread marker + virtualizer-proof open-at-unread landing
+- ui ux wins for 0.5.x patch
+
+### Fixes
+
+- **chat:** stop avatar re-renders on group open and new messages
+- **chat:** own messages never count as unread
+- **chat:** clear a group's notifications when it is read
+- **native:** don't notify for messages the live path already handled
+- **donations:** count zaps to both project pubkeys
+- **chat:** real previews for media and system messages on cards
+- **chat:** keep the reply when sending media with a caption
+- **chat:** one sync issue per cursor — info page render crash
+- **native:** save downloads via the Save-as picker instead of the share sheet
+- **chat:** collapse notifications to one per group per pass
+- **chat:** working pinch-zoom, pan and double-tap in the media lightbox
+- **multi-device:** scheduleOwedPublish must read a fresh config
+- **multi-device:** durable owed-push record heals stranded publishes (spec §10.5)
+- feeditems
+- **coordinators:** resolve relay-less coordinators via discovery instead of defaulting to contextvm relays
+- **multi-device:** adopt coordinator relay hints from group documents (spec §4.1/§9)
+- close seedBackground account-switch race; simplify dispatch pass
+- **outbox:** decouple lane scheduling so a dead coordinator never delays other groups' sends
+- decouple coordinators so one outage can't stall the others
+- keep drawer and capability banner quiet while the signer wakes up
+- stop false NIP-44 unsupported reports for late-injected signers
+- open-at-first-unread actually lands on the first unread
+- keep the bottom-pin glued to the bottom while rows settle
+- read marks cover stored messages above the ingest counter
+- assign scroll anchor via instance local, not store member syntax
+- smooth virtualized chat scrolling
+
+### Performance
+
+- **multi-device:** overlap chain walk with gap fetch, widen reconcile pool
+
+### Docs
+
+- **news:** pinned chats + notification/lightbox/save/render-fix release card
+- **news:** catch-up speed bullet on the stranded-publish card
+- **news:** stranded-publish heal release card
+- **news:** coordinator relay-hints + discovery release card
+- **news:** publish send-keeps-up release card
+- **news:** publish nip44-false-alarms release card
+- **news:** publish open-at-unread release card
+
+### Refactor
+
+- polish pass on ui ux patches
+
+### Chore
+
+- **native:** drop unused @capacitor/filesystem and @capacitor/share
+
+### Other
+
+- update laeserin pubkey
+- add hanshan nip 05
+
 ## 0.5.0 — 2026-09-22
 
 ### Features
