@@ -463,4 +463,40 @@ describe('ingestChatGroupMessages()', () => {
 		expect(group.fetchCursor).toBe(11);
 		expect(group.lastCursor).toBe(11);
 	});
+
+	test('a re-delivered cursor replaces its sync issue instead of duplicating it', async () => {
+		// Regression (info-page render crash): a cursor that fails, then is
+		// re-delivered after a fetch-cursor regression (backlog re-fetch from an
+		// older watermark), used to append a SECOND issue with the same cursor.
+		// The info page renders sync issues keyed by cursor — duplicate keys
+		// threw each_key_duplicate and tore down the whole render tree.
+		vi.mocked(decryptGroupPayloadBase64)
+			.mockRejectedValueOnce(new Error('decryption failed'))
+			.mockRejectedValueOnce(new Error('decryption failed again'));
+
+		const group = {
+			state: {
+				groupContext: { epoch: 5n },
+				ratchetTree: [],
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [] as Array<{ cursor: number; createdAt: number; detail: string }>,
+			status: 'active' as const
+		};
+
+		const msg = { cursor: 11, createdAt: 300, opaqueMessageBase64: 'sealed-message' };
+		await ingestChatGroupMessages({ group, mdActive: false, messages: [msg] });
+		// Backlog re-fetch from an older watermark: the same cursor fails again.
+		group.fetchCursor = 0;
+		group.lastCursor = 0;
+		await ingestChatGroupMessages({ group, mdActive: false, messages: [msg] });
+
+		const issues = group.syncIssues.filter((i) => i.cursor === 11);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.detail).toMatch(/decryption failed again/);
+	});
 });

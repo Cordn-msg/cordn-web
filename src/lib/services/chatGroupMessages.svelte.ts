@@ -480,6 +480,23 @@ function createSystemMessagesFromCommitProposals(input: {
 	return messages;
 }
 
+/** Sync issues are keyed by cursor everywhere downstream (the info page renders
+ *  them with cursor {#each} keys), so at most one issue per cursor may be
+ *  stored — a re-fetched cursor that fails again must REPLACE the previous
+ *  detail, never append (duplicate keys crash the Svelte render tree).
+ *  Replaces the former ad-hoc `some()` guards that only covered 2 of 6 paths. */
+function recordSyncIssue(
+	group: GroupMessageIngestionTarget,
+	issues: StoredChatSyncIssue[],
+	issue: StoredChatSyncIssue
+) {
+	group.syncIssues = group.syncIssues.filter((existing) => existing.cursor !== issue.cursor);
+	group.syncIssues.push(issue);
+	const passIndex = issues.findIndex((existing) => existing.cursor === issue.cursor);
+	if (passIndex === -1) issues.push(issue);
+	else issues[passIndex] = issue;
+}
+
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
@@ -549,26 +566,20 @@ export async function ingestChatGroupMessages(params: {
 			// the document state arrives) and dedup the advisory issue per cursor.
 			// Single-device keeps fail-and-advance: no document rescues it.
 			if (params.mdActive) {
-				if (!group.syncIssues.some((i) => i.cursor === message.cursor)) {
-					const issue = {
-						cursor: message.cursor,
-						createdAt: message.createdAt,
-						detail: `Sealed payload decrypt failed: ${detail}`
-					};
-					group.syncIssues.push(issue);
-					issues.push(issue);
-				}
+				recordSyncIssue(group, issues, {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `Sealed payload decrypt failed: ${detail}`
+				});
 				continue;
 			}
 			group.fetchCursor = message.cursor;
 			group.lastCursor = Math.max(group.lastCursor, message.cursor);
-			const issue = {
+			recordSyncIssue(group, issues, {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				detail: `Sealed payload decrypt failed: ${detail}`
-			};
-			group.syncIssues.push(issue);
-			issues.push(issue);
+			});
 			continue;
 		}
 
@@ -615,13 +626,11 @@ export async function ingestChatGroupMessages(params: {
 			if (error instanceof SiblingCommitSkippedError) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
-				const issue = {
+				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
 					detail: error.message
-				};
-				group.syncIssues.push(issue);
-				issues.push(issue);
+				});
 				// Sibling Commit skipped (§10): the group document owns the MLS state,
 				// but the presentation-layer system messages would be lost without the
 				// state-diff synthesis (which never ran). Rebuild them from the Commit's
@@ -691,18 +700,13 @@ export async function ingestChatGroupMessages(params: {
 				// document owns. Leaving the cursor at the decrypt frontier lets a
 				// chained catch-up (spec §8.5) re-fetch this message once the chain
 				// state arrives — advancing here makes it unrecoverable (the
-				// coordinator never resends by cursor). Dedup the advisory issue: the
-				// same ahead-of-epoch cursor re-delivers on each backlog re-fetch
-				// until catch-up resolves it, so one issue per cursor is enough.
-				if (!group.syncIssues.some((i) => i.cursor === message.cursor)) {
-					const issue = {
-						cursor: message.cursor,
-						createdAt: message.createdAt,
-						detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
-					};
-					group.syncIssues.push(issue);
-					issues.push(issue);
-				}
+				// coordinator never resends by cursor). recordSyncIssue keeps one
+				// issue per cursor across the re-deliveries.
+				recordSyncIssue(group, issues, {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
+				});
 				continue;
 			}
 
@@ -716,13 +720,11 @@ export async function ingestChatGroupMessages(params: {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 
-				const issue = {
+				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
 					detail
-				};
-				group.syncIssues.push(issue);
-				issues.push(issue);
+				});
 
 				// Mark group as poisoned on fatal MLS decryption failure
 				// (undecryptable stale message that is not a former epoch issue)
@@ -743,17 +745,15 @@ export async function ingestChatGroupMessages(params: {
 		}
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
-			const issue = {
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			recordSyncIssue(group, issues, {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				detail: createUnauthorizedAdminRejectionDetail({
 					groupId: group.metadata?.name ?? 'unknown'
 				})
-			};
-			group.fetchCursor = message.cursor;
-			group.lastCursor = Math.max(group.lastCursor, message.cursor);
-			group.syncIssues.push(issue);
-			issues.push(issue);
+			});
 			if (isPendingOperationMessage) {
 				rejectedPendingCommitMessages.add(message.opaqueMessageBase64);
 			}
