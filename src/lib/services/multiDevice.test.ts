@@ -38,6 +38,7 @@ import {
 	publishGroupDocument,
 	publishMetaDocument,
 	pullDocument,
+	nextPullRetryDelayMs,
 	pullRetryDelayMs,
 	reconcileMetaDocument,
 	sealDocument,
@@ -500,6 +501,15 @@ describe('fetch liveness (spec §8: a failed fetch is never reconciled)', () => 
 		expect(pullRetryDelayMs(3)).toBe(45_000);
 		expect(pullRetryDelayMs(4)).toBe(135_000);
 		expect(pullRetryDelayMs(10)).toBe(300_000);
+	});
+
+	test('nextPullRetryDelayMs arms for the SOONEST due pull, not the latest', () => {
+		const now = 1_000_000;
+		const overdue = { address: 'a', attempts: 1, lastAttemptAt: now - 5_000 };
+		const later = { address: 'b', attempts: 4, lastAttemptAt: now };
+		expect(nextPullRetryDelayMs([overdue, later], now)).toBe(0); // overdue fires now
+		expect(nextPullRetryDelayMs([later, overdue], now)).toBe(0); // order-independent
+		expect(nextPullRetryDelayMs([later], now)).toBe(135_000);
 	});
 
 	test('a changed tip address always fetches; unchanged is a no-op only when healthy', () => {

@@ -558,7 +558,7 @@ function runUnsealRescue(): void {
 function advancePastUnopenablePayload(groupId: string | undefined): boolean {
 	const held = heldUnopenableByGroup.get(groupId);
 	return (
-		held?.rescued === true && !(groupId !== undefined && isGroupDocumentPullUnresolved(groupId))
+		held?.rescued === true && (groupId === undefined || !isGroupDocumentPullUnresolved(groupId))
 	);
 }
 

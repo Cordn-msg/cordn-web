@@ -68,7 +68,7 @@ import {
 	diffLocalAhead,
 	diffStaleGroupEpochs,
 	metaViewHash,
-	pullRetryDelayMs,
+	nextPullRetryDelayMs,
 	shouldReconcileGroupDocument,
 	type UnresolvedDocumentPull,
 	type Nip44Seal,
@@ -1772,10 +1772,8 @@ function scheduleUnresolvedRetry(): void {
 	const entries = Object.values(getMultiDeviceConfig()?.unresolvedDocumentPulls ?? {});
 	if (!entries.length) return;
 	const now = Date.now();
-	const dueIn = Math.max(
-		0,
-		...entries.map((entry) => entry.lastAttemptAt + pullRetryDelayMs(entry.attempts) - now)
-	);
+	// Fire for the SOONEST due entry; the rest re-check their own backoff then.
+	const dueIn = nextPullRetryDelayMs(entries, now);
 	unresolvedRetryTimer = setTimeout(() => {
 		void retryUnresolvedPulls();
 	}, dueIn);
@@ -1808,10 +1806,12 @@ async function retryUnresolvedPulls(): Promise<void> {
  * Delta-gated: `handleTipEvent` bails on `lastSeenTipEventId` when no peer moved
  * the tip, so the common case is one relay round-trip (`fetchLatestTipEvent`,
  * capped at 2s for the outbound path so a degraded relay can't stall an admin
- * op — on timeout it proceeds without the reconcile and the tip subscription
- * re-converges). No-op when MD is off. Failures are swallowed — a network blip
- * here must not block the outbound op; the coordinator catch-up + sibling-skip
- * still guard correctness, and the tip subscription re-converges on its own.
+ * op — on timeout user ops proceed without the reconcile and the tip subscription
+ * re-converges). No-op when MD is off. Returns whether the tip was reconciled:
+ * user ops proceed either way (a network blip must not block them; the
+ * coordinator catch-up + sibling-skip still guard correctness), while the
+ * §10.1 repair discipline defers on `false` instead of committing from stale
+ * state. The tip subscription re-converges on its own.
  *
  * The explicit `fetchLatestTipEvent` (a fresh `relayPool.request`, NOT a
  * subscription read) is also what heals a half-open tip subscription for the

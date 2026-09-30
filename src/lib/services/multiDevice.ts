@@ -212,9 +212,17 @@ export interface UnresolvedDocumentPull {
 	lastAttemptAt: number;
 }
 
-/** Retry backoff for failed pulls: 5s → 15s → 60s → 5min cap (spec §8). */
+/** Retry backoff for failed pulls: 5s → 15s → 45s → 135s → 5min cap (spec §8). */
 export function pullRetryDelayMs(attempts: number): number {
 	return Math.min(5000 * 3 ** Math.max(attempts - 1, 0), 300_000);
+}
+
+/** Milliseconds until the SOONEST failed-pull retry is due (spec §8). One timer
+ *  covers every failed gid, so it must fire for the earliest one — the later
+ *  entries re-check their own backoff when it does. Non-empty entries. */
+export function nextPullRetryDelayMs(entries: UnresolvedDocumentPull[], now: number): number {
+	const dueAt = entries.map((entry) => entry.lastAttemptAt + pullRetryDelayMs(entry.attempts));
+	return Math.max(0, Math.min(...dueAt) - now);
 }
 
 /**
