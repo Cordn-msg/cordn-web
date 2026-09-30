@@ -34,6 +34,11 @@ export interface StoredChatGroupRecord {
 	poisonedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: string;
+	/** The adopted group-document identity (spec §10 rank input: content
+	 *  address + document cursor) — the fork tie-break needs to know WHICH
+	 *  document the local state came from. Absent on records seeded before
+	 *  this field existed (treated as unrankable → no fork adoption). */
+	appliedDocument?: { address: string; cursor: number };
 	/** Not-yet-delivered outbound epoch ops (mostly add-member Welcomes awaiting
 	 *  Commit re-ingestion). Persisted on the group record so a reload before
 	 *  finalization no longer strands a Welcome; the in-memory Map in

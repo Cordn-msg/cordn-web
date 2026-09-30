@@ -159,8 +159,83 @@ export interface GroupSnapshot {
 	lastCursor: number;
 }
 
-/** Per-group outcome of reconciliation (spec §8). */
-export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'skipped';
+/** Per-group outcome of reconciliation (spec §8, §10). */
+export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'fork-resolved' | 'skipped';
+
+/** The adopted group-document identity for a live group (spec §10 rank input). */
+export interface AppliedDocument {
+	/** Content address of the adopted document (fork identity + tie-break input). */
+	address: string;
+	/** Document cursor carried at publish/adopt time (tie-break input). */
+	cursor: number;
+}
+
+/**
+ * Decide one group-document application (spec §8 forward-only + spec §10
+ * equal-epoch fork rule). Pure: the caller decodes the document first
+ * (undecodable → `skipped` without calling this) and applies the result.
+ */
+export function decideGroupDocumentApply(params: {
+	incomingEpoch: bigint | undefined;
+	localEpoch: bigint | undefined;
+	incomingCursor: number;
+	incomingAddress?: string;
+	adopted?: AppliedDocument;
+}): ReconcileOutcome {
+	const { incomingEpoch, localEpoch, incomingCursor, incomingAddress, adopted } = params;
+	if (incomingEpoch === undefined) return 'skipped'; // undecodable is advisory
+	if (localEpoch === undefined) return 'seeded'; // absent → install (spec §8 case 1)
+	if (incomingEpoch > localEpoch) return 'fast-forwarded'; // strictly newer (§8)
+	if (incomingEpoch < localEpoch) return 'skipped'; // anti-downgrade (§8)
+	// Equal epoch. Same document (or unknown identity) is advisory — skip.
+	// Different identity = the §10 symmetric-race fork: two tip-endorsed
+	// documents at one epoch. Deterministic rank (RFC 9750 §5.2.2): higher
+	// document cursor, then lexicographically greater content address. The
+	// loser adopts the winner AT the equal epoch — the single forward-only
+	// exception, bounded to the fleet's own tip-endorsed documents — so both
+	// devices converge instead of chatting into the void forever. Without the
+	// exception the equal epoch can never resolve (the ≤ anti-downgrade would
+	// skip both).
+	if (!incomingAddress || !adopted || incomingAddress === adopted.address) return 'skipped';
+	const wins =
+		incomingCursor > adopted.cursor ||
+		(incomingCursor === adopted.cursor && incomingAddress > adopted.address);
+	return wins ? 'fork-resolved' : 'skipped';
+}
+
+/** One failed group-document fetch awaiting retry (spec §8 fetch liveness). */
+export interface UnresolvedDocumentPull {
+	/** The tip address whose fetch failed. Cleared only when a fetch of this
+	 *  address succeeds (a newer tip address supersedes it). */
+	address: string;
+	attempts: number;
+	lastAttemptAt: number;
+}
+
+/** Retry backoff for failed pulls: 5s → 15s → 60s → 5min cap (spec §8). */
+export function pullRetryDelayMs(attempts: number): number {
+	return Math.min(5000 * 3 ** Math.max(attempts - 1, 0), 300_000);
+}
+
+/**
+ * Should this gid's document be fetched (spec §8 fetch liveness)? A tip
+ * address matching the last-seen one is normally a no-op, EXCEPT for a gid
+ * whose fetch failed — that must keep retrying (beyond backoff), or one
+ * flaky fetch strands the device behind the fleet forever (the observed
+ * incident: failed pull + tip dedup = permanent stranding).
+ */
+export function shouldReconcileGroupDocument(params: {
+	lastSeenAddress?: string;
+	tipAddress: string;
+	unresolved?: UnresolvedDocumentPull;
+	now: number;
+}): boolean {
+	const { lastSeenAddress, tipAddress, unresolved, now } = params;
+	if (lastSeenAddress !== tipAddress) return true; // changed → always fetch
+	if (!unresolved) return false; // unchanged + healthy → nothing to do
+	if (unresolved.address !== tipAddress) return true; // tip moved since the failure
+	return now - unresolved.lastAttemptAt >= pullRetryDelayMs(unresolved.attempts);
+}
 
 /** Per-tombstone outcome of reconciliation (spec §8 case 4). */
 export type ReconcileTombstoneOutcome = 'dropped' | 'ignored';
@@ -175,10 +250,12 @@ export interface ReconcileTarget {
 	localEpoch(gid: string): bigint | undefined;
 	/**
 	 * Seed a missing group, fast-forward a present group to a strictly newer
-	 * epoch, or skip. A sibling Commit's new private keys travel here (§10)
-	 * since the stream can't convey them (shared-leaf UpdatePath).
+	 * epoch, resolve an equal-epoch fork (§10), or skip. A sibling Commit's new
+	 * private keys travel here (§10) since the stream can't convey them
+	 * (shared-leaf UpdatePath). `address` is the fetched document's content
+	 * address (spec §10 fork identity) — omit only when unknown (pre-fork docs).
 	 */
-	applyGroupDocument(doc: GroupDocument): Promise<ReconcileOutcome>;
+	applyGroupDocument(doc: GroupDocument, address?: string): Promise<ReconcileOutcome>;
 	/** Apply one tombstone (§8): drop a local group whose epoch ≤ the tombstone
 	 * epoch; ignore stale/unknown. Returns `dropped` if a local group was removed. */
 	applyTombstone(tombstone: Tombstone): Promise<ReconcileTombstoneOutcome>;
@@ -314,7 +391,7 @@ export async function publishGroupDocument(params: {
 	dekPubkey: string;
 	store: BlobStore;
 	prev?: string;
-}): Promise<PublishResult> {
+}): Promise<PublishResult & { cursor: number }> {
 	const doc = buildGroupDocument(
 		{
 			gid: params.group.gid,
@@ -327,7 +404,10 @@ export async function publishGroupDocument(params: {
 		params.prev
 	);
 	const sealed = await sealDocument(doc, params.seal, params.dekPubkey);
-	return publishSealed(sealed, params.store);
+	const result = await publishSealed(sealed, params.store);
+	// The published cursor rides along so the caller can record the document
+	// identity (`AppliedDocument`) — the rank input for the spec §10 tie-break.
+	return { ...result, cursor: doc.cursor };
 }
 
 /** Publish the meta document (§4.2): a current-state set with no `prev`. A

@@ -58,6 +58,7 @@ import {
 	pullDocument,
 	reconcileMetaDocument,
 	composeTombstoneUnion,
+	decideGroupDocumentApply,
 	groupEpoch,
 	groupMetadata,
 	walkGroupChain,
@@ -67,6 +68,9 @@ import {
 	diffLocalAhead,
 	diffStaleGroupEpochs,
 	metaViewHash,
+	pullRetryDelayMs,
+	shouldReconcileGroupDocument,
+	type UnresolvedDocumentPull,
 	type Nip44Seal,
 	type BlobStore,
 	type GroupDocument,
@@ -202,6 +206,13 @@ export interface MultiDeviceOwnerConfig {
 	 * Persisted BEFORE the relay publish so loopback short-circuits.
 	 */
 	lastSeenTipEventId?: string;
+	/**
+	 * Per-gid failed group-document fetches awaiting retry (spec §8 fetch
+	 * liveness). A gid listed here is NOT reconciled: the dedup gates must keep
+	 * re-pulling it (beyond backoff) until a fetch succeeds — the observed
+	 * incident was one failed pull + tip dedup = permanent stranding.
+	 */
+	unresolvedDocumentPulls?: Record<string, UnresolvedDocumentPull>;
 	/**
 	 * Per-gid epoch of group state known reflected by the tip (§10.5 owed-push
 	 * record): written when we seal a document — only after the tip rewrite
@@ -1199,7 +1210,18 @@ async function applyTip(
 	await mapPool(pointer.groups, MD_GROUP_RECONCILE_CONCURRENCY, async (group) => {
 		try {
 			const lastSeenGroup = lastSeen?.groups.find((g) => g.gid === group.gid);
-			if (lastSeenGroup?.address === group.address) return;
+			// §8 fetch liveness: an unchanged tip address is a no-op ONLY when healthy.
+			// A gid whose fetch failed must keep retrying past backoff, and a tip that
+			// moved past the failed address fetches immediately.
+			if (
+				!shouldReconcileGroupDocument({
+					lastSeenAddress: lastSeenGroup?.address,
+					tipAddress: group.address,
+					unresolved: config.unresolvedDocumentPulls?.[group.gid],
+					now: Date.now()
+				})
+			)
+				return;
 			dbg('applyTip group changed', { gid: group.gid, address: group.address.slice(0, 12) });
 			try {
 				const { doc, outcome } = await pullAndReconcileGroup(
@@ -1209,19 +1231,40 @@ async function applyTip(
 					dekPubkey,
 					config
 				);
+				// Fetch + apply succeeded → the gid is reconciled again.
+				if (config.unresolvedDocumentPulls?.[group.gid]) {
+					delete config.unresolvedDocumentPulls[group.gid];
+					saveConfig(config);
+				}
 				if (outcome === 'seeded') counts.seeded++;
 				else if (outcome === 'fast-forwarded') counts.fastForwarded++;
-				else {
+				else if (outcome === 'fork-resolved') {
+					counts.forkResolved = (counts.forkResolved ?? 0) + 1;
+				} else {
 					counts.skipped++;
 					// §8 skip ⟺ local epoch ≥ document epoch ⟺ local is ahead of the tip
 					// for this gid. Record for the read-path divergence diff.
 					localAheadGids.push(group.gid);
 				}
-				if (outcome === 'seeded' || outcome === 'fast-forwarded') {
+				if (outcome !== 'skipped') {
 					const epoch = groupEpoch(doc);
 					if (epoch !== undefined) adoptionEpochs[group.gid] = epoch.toString();
 				}
 			} catch (error) {
+				// §8 fetch liveness: a failed fetch is NOT reconciled. Record it so the
+				// dedup gates keep retrying (beyond backoff) instead of stranding this
+				// gid behind the fleet forever. Attempts reset when the tip moves.
+				const previous = config.unresolvedDocumentPulls?.[group.gid];
+				config.unresolvedDocumentPulls = {
+					...(config.unresolvedDocumentPulls ?? {}),
+					[group.gid]: {
+						address: group.address,
+						attempts: (previous?.address === group.address ? previous.attempts : 0) + 1,
+						lastAttemptAt: Date.now()
+					}
+				};
+				saveConfig(config);
+				scheduleUnresolvedRetry();
 				dbg('applyTip group reconcile failed', { gid: group.gid, error });
 			}
 		} finally {
@@ -1378,6 +1421,17 @@ async function publish(plan: PublishPlan): Promise<void> {
 				// stays honestly behind and the next diff flags it (that state IS owed).
 				const epoch = decodeStoredGroupState(group).groupContext.epoch;
 				sealedEpochs[gid] = epoch.toString();
+				// Record the published document identity (spec §10 rank input) — a fork
+				// cannot be ranked against our own publications otherwise. Re-read the
+				// record first: the upload is concurrent with live ingestion, which may
+				// have replaced it under us.
+				const fresh = getChatGroup(gid);
+				if (fresh) {
+					replaceGroup(gid, {
+						...fresh,
+						appliedDocument: { address: result.address, cursor: result.cursor }
+					});
+				}
 				bumpMdProgress(++resealDone);
 				dbg('publish group doc', { gid, address: result.address.slice(0, 12) });
 				return { address: result.address, gid };
@@ -1613,6 +1667,9 @@ async function startMultiDevice(): Promise<void> {
 	// never moved). A racing mid-flight reconcile is benign: runSerialized
 	// orders the publishes and the sweep converges on its own reconcile.
 	scheduleOwedPublish();
+	// §8 fetch liveness: retry document pulls that failed in a previous session —
+	// a cold start MUST NOT inherit a previous fetch failure as a permanent skip.
+	scheduleUnresolvedRetry();
 }
 
 /** Pure-local owed-publish check (§10.5): schedules a republish when any live
@@ -1693,6 +1750,54 @@ export async function reconcileMultiDeviceNow(): Promise<MultiDeviceReconcileRes
 	return { status: 'ok', counts };
 }
 
+let unresolvedRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Spec §8 fetch liveness: is this gid's document fetch still failing? */
+export function isGroupDocumentPullUnresolved(gid: string): boolean {
+	const config = getMultiDeviceConfig();
+	return !!config?.unresolvedDocumentPulls?.[gid];
+}
+
+/**
+ * Arm the next failed-pull retry (spec §8 fetch liveness). ONE timer covers
+ * both retry jobs: re-pulling failed documents AND re-fetching the tip (the
+ * dead-tip-subscription fallback — a fresh `fetchLatestTipEvent` request
+ * reaches the relay even when the subscription is half-open and silent), so
+ * polling exists only while something is broken. Idempotent re-arm.
+ */
+function scheduleUnresolvedRetry(): void {
+	if (unresolvedRetryTimer !== undefined) clearTimeout(unresolvedRetryTimer);
+	unresolvedRetryTimer = undefined;
+	if (!browser) return;
+	const entries = Object.values(getMultiDeviceConfig()?.unresolvedDocumentPulls ?? {});
+	if (!entries.length) return;
+	const now = Date.now();
+	const dueIn = Math.max(
+		0,
+		...entries.map((entry) => entry.lastAttemptAt + pullRetryDelayMs(entry.attempts) - now)
+	);
+	unresolvedRetryTimer = setTimeout(() => {
+		void retryUnresolvedPulls();
+	}, dueIn);
+}
+
+async function retryUnresolvedPulls(): Promise<void> {
+	try {
+		const config = getMultiDeviceConfig();
+		const account = manager.getActive();
+		if (!config || !account) return;
+		// Fresh tip fetch: covers the tip-moved-while-the-sub-was-dead case as well
+		// as the plain same-address retry (`handleTipEvent` lets a replayed event id
+		// through while unresolved pulls exist).
+		const tipEvent = await fetchLatestTipEvent(config);
+		if (tipEvent) await handleTipEvent(tipEvent, normalizePubKey(account.pubkey));
+	} catch (error) {
+		dbg('unresolved pull retry failed', { error: errorMessage(error) });
+	} finally {
+		scheduleUnresolvedRetry();
+	}
+}
+
 /** §10 mitigation #1: reconcile the tip before staging an epoch-advancing Commit
  * (invite / remove / metadata). If a sibling Commit advanced the group's epoch,
  * this fast-forwards the local state first, so the outbound Commit isn't authored
@@ -1722,19 +1827,25 @@ export async function reconcileMultiDeviceNow(): Promise<MultiDeviceReconcileRes
  * on the coordinator stream before its group document is published — is left to
  * the tip subscription's seconds-later convergence; the spec marks full
  * auto-resolution of that as disproportionate (§10 mitigation #3). */
-export async function reconcileTipForOutbound(): Promise<void> {
-	if (!browser) return;
+export async function reconcileTipForOutbound(): Promise<boolean> {
+	if (!browser) return true;
 	const config = getMultiDeviceConfig();
-	if (!config) return;
+	if (!config) return true;
 	const account = manager.getActive();
-	if (!account) return;
+	if (!account) return true;
 	try {
 		const tipEvent = await fetchLatestTipEvent(config, 2000);
-		if (tipEvent) await handleTipEvent(tipEvent, normalizePubKey(account.pubkey));
+		if (!tipEvent) return false; // no tip / fetch timeout → tip state unknown
+		await handleTipEvent(tipEvent, normalizePubKey(account.pubkey));
+		// Success = this tip is now recorded (setLastSeenTip runs after applyTip).
+		// A parse / DEK / apply failure leaves the id unrecorded → "unknown", and
+		// the §10.1 repair discipline must treat unknown as not-reconciled.
+		return getMultiDeviceConfig()?.lastSeenTipEventId === tipEvent.id;
 	} catch (error) {
 		dbg('reconcileTipForOutbound failed', {
 			error: errorMessage(error)
 		});
+		return false;
 	}
 }
 
@@ -1742,6 +1853,9 @@ export async function reconcileTipForOutbound(): Promise<void> {
 export interface ReconcileCounts {
 	seeded: number;
 	fastForwarded: number;
+	/** Equal-epoch forks resolved via the spec §10 rank tie-break. Optional for
+	 *  tip-history entries persisted before this field existed. */
+	forkResolved?: number;
 	skipped: number;
 	dropped: number;
 	ignored: number;
@@ -1848,7 +1962,7 @@ async function pullAndReconcileGroup(
 		dekSeal,
 		dekPubkey,
 		config
-	}).applyGroupDocument(doc);
+	}).applyGroupDocument(doc, group.address);
 	// No store reload: seedGroup adds via persistGroup (reactive store + IDB in
 	// one shot), and fast-forward mutates an existing record in place
 	// (replaceGroup). The store is current for the caller + reactive UI.
@@ -1903,8 +2017,14 @@ async function handleTipEvent(
 	// §10.5 tip-address check: an event id we've already processed is our own
 	// self-echo (publish loopback) or a duplicate relay delivery — skip without
 	// parsing or fetching. This is the cheap dedup layer above the per-doc
-	// address delta.
-	if (config?.lastSeenTipEventId === outer.id) return null;
+	// address delta. EXCEPT while a document fetch is unresolved (§8 fetch
+	// liveness): a relay replay of the last tip is then a retry opportunity, not
+	// noise — the per-gid backoff gate inside `applyTip` bounds the attempts.
+	if (
+		config?.lastSeenTipEventId === outer.id &&
+		!Object.keys(config.unresolvedDocumentPulls ?? {}).length
+	)
+		return null;
 	// Re-entrancy guard: the same tip can arrive concurrently — a cold reconcile
 	// overlapping the live subscription, or a relay burst — before setLastSeenTip
 	// records the event id (which only happens AFTER applyTip). lastSeenTipEventId
@@ -2035,35 +2155,45 @@ function makeReconcileTarget(catchUp?: {
 			if (!group) return undefined;
 			return decodeStoredGroupState(group).groupContext.epoch;
 		},
-		async applyGroupDocument(doc) {
+		async applyGroupDocument(doc, address) {
 			const existing = getChatGroup(doc.gid);
+			const incomingEpoch = groupEpoch(doc);
 			if (!existing) {
+				// Undecodable is advisory garbage — never installs (spec §8/§10).
+				if (incomingEpoch === undefined) return 'skipped';
 				// ownerPubkey labels the seeded group record (the active identity); the
 				// seal is confidentiality-only (DEK), not used for labeling.
 				const account = requireActiveAccount('You must be logged in to seed a group');
-				await seedGroup(doc, normalizePubKey(account.pubkey));
+				await seedGroup(doc, normalizePubKey(account.pubkey), address);
 				return 'seeded';
 			}
-			const incomingEpoch = groupEpoch(doc);
 			const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
-			// Forward-only epoch check (spec §8) — the rollback defense.
-			if (incomingEpoch === undefined || incomingEpoch <= localEpoch) {
-				return 'skipped';
-			}
+			// §8 forward-only epoch check + §10 equal-epoch fork rule (the rollback
+			// defense lives in `decideGroupDocumentApply`'s deterministic rank order).
+			const outcome = decideGroupDocumentApply({
+				incomingEpoch,
+				localEpoch,
+				incomingCursor: doc.cursor,
+				incomingAddress: address,
+				adopted: existing.appliedDocument
+			});
+			if (outcome === 'skipped') return outcome;
+			const fork = outcome === 'fork-resolved';
 			// Capture the pre-fast-forward decrypt frontier + local state. fast-forward
 			// advances both to the tip, so the chained catch-up (spec §8.5) needs the
 			// values from BEFORE it ran to know where the lossless gap starts and
 			// what state decrypts range 0.
 			const decryptFrontier = existing.fetchCursor;
 			const localStateBase64 = existing.stateBase64;
-			await fastForwardGroup(doc); // liveness first (locked CAS write)
+			await fastForwardGroup(doc, address, { allowEqualEpoch: fork }); // liveness first (locked CAS write)
 			// Background lossless recovery (§8.5): replay the message gap epoch-by-epoch
 			// so messages sent during the behind window aren't lost. Fire-and-forget —
 			// fast-forward already restored liveness. Skipped when the decrypt frontier
 			// is already at the adopted cursor: an online device sibling-skipped the
 			// Commit on the stream, so there's no gap to recover (saves the chain walk
-			// + gap fetch on every online sibling-Commit fast-forward).
-			if (catchUp && decryptFrontier < doc.cursor) {
+			// + gap fetch on every online sibling-Commit fast-forward). A §10 fork
+			// adoption has no chain to bridge — the losing branch is gone by design.
+			if (catchUp && !fork && decryptFrontier < doc.cursor) {
 				void catchUpGroupFromChain({
 					groupId: doc.gid,
 					localEpoch,
@@ -2081,7 +2211,7 @@ function makeReconcileTarget(catchUp?: {
 					})
 				);
 			}
-			return 'fast-forwarded';
+			return outcome;
 		},
 		async applyTombstone(tombstone) {
 			const existing = getChatGroup(tombstone.gid);
@@ -2107,7 +2237,7 @@ function makeReconcileTarget(catchUp?: {
 }
 
 /** Seed a missing group from a group document (spec §9). */
-async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void> {
+async function seedGroup(doc: GroupDocument, ownerPubkey: string, address?: string): Promise<void> {
 	// ponytail: joinEpoch 0 — seeded groups adopt the writer's current state via
 	// clientState, so there's no pre-membership boundary to filter (spec §9).
 	const epoch = groupEpoch(doc);
@@ -2119,6 +2249,9 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void>
 		stateBase64: doc.clientState,
 		lastCursor: doc.cursor,
 		fetchCursor: doc.cursor,
+		// Adopted document identity (spec §10 rank input) — absent only when the
+		// fetched address was unknown.
+		...(address ? { appliedDocument: { address, cursor: doc.cursor } } : {}),
 		messages: [],
 		syncIssues: [],
 		// Initial healthy snapshot — the recovery baseline `loadAndNormalizeChatGroup`
@@ -2154,20 +2287,27 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string): Promise<void>
 }
 
 /**
- * Fast-forward a group to a strictly newer epoch (§8). Runs under the per-group
- * lock (`runGroupOperation`) so it can't clobber (nor be clobbered by) a
+ * Fast-forward a group to a strictly newer epoch (§8), or — with
+ * `allowEqualEpoch` — adopt the ranked winner of a §10 equal-epoch fork (the
+ * single forward-only exception). Runs under the per-group lock
+ * (`runGroupOperation`) so it can't clobber (nor be clobbered by) a
  * concurrent live-delivery cycle — both mutate the same record. Re-reads +
  * re-checks the epoch UNDER the lock (CAS): a watch cycle may have caught up
  * while we waited, in which case this is a no-op.
  */
-async function fastForwardGroup(doc: GroupDocument): Promise<void> {
+async function fastForwardGroup(
+	doc: GroupDocument,
+	address?: string,
+	opts?: { allowEqualEpoch?: boolean }
+): Promise<void> {
 	await runGroupOperation(doc.gid, async () => {
 		const existing = getChatGroup(doc.gid);
 		if (!existing) return; // vanished (soft-deleted) while waiting for the lock
 		const incomingEpoch = groupEpoch(doc);
 		const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
 		// Re-check under the lock (CAS): a concurrent cycle may have caught up.
-		if (incomingEpoch === undefined || incomingEpoch <= localEpoch) return;
+		if (incomingEpoch === undefined) return;
+		if (opts?.allowEqualEpoch ? incomingEpoch !== localEpoch : incomingEpoch <= localEpoch) return;
 		replaceGroup(existing.id, {
 			...existing,
 			stateBase64: doc.clientState,
@@ -2176,6 +2316,22 @@ async function fastForwardGroup(doc: GroupDocument): Promise<void> {
 			// Cursor advances to the document's (the adopted state processed through it).
 			fetchCursor: Math.max(existing.fetchCursor, doc.cursor),
 			lastCursor: Math.max(existing.lastCursor, doc.cursor),
+			// Adopted document identity (spec §10 rank input) — fork detection needs
+			// it; absent when the fetched address was unknown (pre-fork docs).
+			...(address ? { appliedDocument: { address, cursor: doc.cursor } } : {}),
+			// §10 conflict signal: a resolved fork MUST be surfaced, not silent.
+			...(opts?.allowEqualEpoch
+				? {
+						syncIssues: [
+							...existing.syncIssues.filter((issue) => issue.cursor !== doc.cursor),
+							{
+								cursor: doc.cursor,
+								createdAt: Date.now(),
+								detail: `Equal-epoch fork at ${incomingEpoch} resolved: adopted the ranked document ${address?.slice(0, 12) ?? '(unknown)'}`
+							}
+						]
+					}
+				: {}),
 			// The adopted state is authoritative (owner-signed, content-addressed), so
 			// clear any transient poisoning from the stale-state ingestion window — an
 			// ahead-of-local-epoch message the device couldn't decrypt before this

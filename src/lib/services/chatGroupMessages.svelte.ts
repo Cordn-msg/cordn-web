@@ -17,6 +17,10 @@ import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
+import {
+	isGroupDocumentPullUnresolved,
+	reconcileMultiDeviceNow
+} from '$lib/services/multiDevice.svelte';
 
 import { ChatKinds, SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import {
@@ -69,6 +73,8 @@ export interface ChatCordnMessageEnvelope extends UnsignedEvent {
 }
 
 export interface GroupMessageIngestionTarget {
+	/** Group id (StoredChatGroup); optional for bare test targets. */
+	id?: string;
 	state: ClientState;
 	metadata?: {
 		name: string;
@@ -497,6 +503,65 @@ function recordSyncIssue(
 	else issues[passIndex] = issue;
 }
 
+// ── Spec §10.6: unseal-failure rescue + bounded hold ────────────────────────
+const UNSEAL_STREAK_RESCUE_THRESHOLD = 3;
+const RESCUE_COOLDOWN_MS = 30_000;
+const unsealStreakByGroup = new Map<string | undefined, number>();
+const rescueCooldownByGroup = new Map<string | undefined, number>();
+const heldUnopenableByGroup = new Map<string | undefined, { rescued: boolean }>();
+
+function noteUnsealSuccess(groupId: string | undefined): void {
+	unsealStreakByGroup.delete(groupId);
+	// Any successful decrypt invalidates a convergence proof — the next
+	// unopenable payload deserves a fresh hold window.
+	heldUnopenableByGroup.delete(groupId);
+}
+
+function noteUnsealFailure(groupId: string | undefined): void {
+	const streak = (unsealStreakByGroup.get(groupId) ?? 0) + 1;
+	unsealStreakByGroup.set(groupId, streak);
+	if (streak < UNSEAL_STREAK_RESCUE_THRESHOLD) return;
+	const last = rescueCooldownByGroup.get(groupId) ?? 0;
+	if (Date.now() - last < RESCUE_COOLDOWN_MS) return;
+	rescueCooldownByGroup.set(groupId, Date.now());
+	runUnsealRescue();
+}
+
+/**
+ * Spec §10.6 rescue: force a reconcile that bypasses the tip dedup — the heal
+ * for a dead tip subscription / a stranded document pull behind a wall of
+ * undecryptable messages. When the rescue proves CONVERGENCE (applied no new
+ * state), any payload that still fails is permanently unopenable (e.g. a
+ * losing-branch commit): its hold is released so the bounded-hold rule can
+ * advance past it. A failed rescue keeps the holds — nothing was learned.
+ */
+function runUnsealRescue(): void {
+	void reconcileMultiDeviceNow()
+		.then((result) => {
+			if (result.status !== 'ok') return;
+			const { seeded, fastForwarded, forkResolved } = result.counts;
+			if (seeded + fastForwarded + (forkResolved ?? 0) > 0) return; // state moved — keep holding
+			for (const [gid] of heldUnopenableByGroup) {
+				heldUnopenableByGroup.set(gid, { rescued: true });
+			}
+		})
+		.catch(() => {});
+}
+
+/**
+ * Spec §10.6 bounded hold: may the cursor advance past a payload that fails
+ * to decrypt? True only after a rescue proved convergence AND no document
+ * fetch is still failing (spec §8) — then the payload is permanently
+ * unopenable and the stream (and the native notification watermark) must not
+ * stall on it forever.
+ */
+function advancePastUnopenablePayload(groupId: string | undefined): boolean {
+	const held = heldUnopenableByGroup.get(groupId);
+	return (
+		held?.rescued === true && !(groupId !== undefined && isGroupDocumentPullUnresolved(groupId))
+	);
+}
+
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
@@ -564,22 +629,23 @@ export async function ingestChatGroupMessages(params: {
 			// Mirror it: do NOT advance the cursor (leave it at the decrypt
 			// frontier so a post-fast-forward re-fetch retries the message once
 			// the document state arrives) and dedup the advisory issue per cursor.
-			// Single-device keeps fail-and-advance: no document rescues it.
-			if (params.mdActive) {
-				recordSyncIssue(group, issues, {
-					cursor: message.cursor,
-					createdAt: message.createdAt,
-					detail: `Sealed payload decrypt failed: ${detail}`
-				});
-				continue;
-			}
-			group.fetchCursor = message.cursor;
-			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			// The hold is BOUNDED though (§10.6): once a rescue proved convergence
+			// (no new state) and no fetch is still failing, the payload is
+			// permanently unopenable — advance past it so the stream and the native
+			// notification watermark cannot stall on it forever. Single-device
+			// keeps fail-and-advance: no document rescues it.
 			recordSyncIssue(group, issues, {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				detail: `Sealed payload decrypt failed: ${detail}`
 			});
+			noteUnsealFailure(group.id);
+			if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
+				heldUnopenableByGroup.set(group.id, { rescued: false });
+				continue;
+			}
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			continue;
 		}
 
@@ -701,12 +767,20 @@ export async function ingestChatGroupMessages(params: {
 				// chained catch-up (spec §8.5) re-fetch this message once the chain
 				// state arrives — advancing here makes it unrecoverable (the
 				// coordinator never resends by cursor). recordSyncIssue keeps one
-				// issue per cursor across the re-deliveries.
+				// issue per cursor across the re-deliveries. BOUNDED (§10.6): once a
+				// rescue proved convergence and no fetch is failing, advance past it.
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
 					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
 				});
+				noteUnsealFailure(group.id);
+				if (!advancePastUnopenablePayload(group.id)) {
+					heldUnopenableByGroup.set(group.id, { rescued: false });
+					continue;
+				}
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				continue;
 			}
 
@@ -719,6 +793,7 @@ export async function ingestChatGroupMessages(params: {
 			) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				noteUnsealFailure(group.id);
 
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
@@ -743,6 +818,8 @@ export async function ingestChatGroupMessages(params: {
 
 			throw error;
 		}
+
+		noteUnsealSuccess(group.id);
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;

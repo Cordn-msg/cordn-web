@@ -146,6 +146,7 @@
 	// nothing instead of five zeroes.
 	const countLabels: Record<keyof ReconcileCounts, string> = {
 		seeded: 'seed',
+		forkResolved: 'fork',
 		fastForwarded: 'fwd',
 		skipped: 'skip',
 		dropped: 'drop',

@@ -27,6 +27,7 @@ vi.mock('ts-mls', async () => {
 import {
 	MULTI_DEVICE_SCHEMA_VERSION,
 	composeTombstoneUnion,
+	decideGroupDocumentApply,
 	diffLocalAhead,
 	diffStaleGroupEpochs,
 	documentAddress,
@@ -37,8 +38,10 @@ import {
 	publishGroupDocument,
 	publishMetaDocument,
 	pullDocument,
+	pullRetryDelayMs,
 	reconcileMetaDocument,
 	sealDocument,
+	shouldReconcileGroupDocument,
 	walkGroupChain,
 	buildInventory,
 	partitionGapByEpoch,
@@ -389,6 +392,160 @@ describe('group reconciliation via ReconcileTarget.applyGroupDocument (spec §8)
 		const outcome = await makeTarget(local).applyGroupDocument(groupDoc(2, 'g'));
 		expect(outcome).toBe('skipped');
 		expect(local.get('g')).toBe(5n); // unchanged
+	});
+});
+
+describe('decideGroupDocumentApply (spec §8 forward-only + spec §10 fork rule)', () => {
+	const ADOPTED = { address: 'a'.repeat(64), cursor: 10 };
+
+	test('seed when absent, fast-forward strictly newer, skip older or undecodable', () => {
+		expect(
+			decideGroupDocumentApply({ incomingEpoch: 2n, localEpoch: undefined, incomingCursor: 5 })
+		).toBe('seeded');
+		expect(decideGroupDocumentApply({ incomingEpoch: 6n, localEpoch: 5n, incomingCursor: 5 })).toBe(
+			'fast-forwarded'
+		);
+		expect(decideGroupDocumentApply({ incomingEpoch: 4n, localEpoch: 5n, incomingCursor: 5 })).toBe(
+			'skipped'
+		);
+		// Undecodable is advisory garbage — never installs, never adopts.
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: undefined,
+				localEpoch: undefined,
+				incomingCursor: 99,
+				incomingAddress: 'z'.repeat(64),
+				adopted: ADOPTED
+			})
+		).toBe('skipped');
+	});
+
+	test('equal epoch + same document identity is advisory (replay-safe)', () => {
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 10,
+				incomingAddress: ADOPTED.address,
+				adopted: ADOPTED
+			})
+		).toBe('skipped');
+	});
+
+	test('equal epoch without identities on either side never adopts', () => {
+		expect(
+			decideGroupDocumentApply({ incomingEpoch: 5n, localEpoch: 5n, incomingCursor: 99 })
+		).toBe('skipped');
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 99,
+				incomingAddress: 'z'.repeat(64)
+			})
+		).toBe('skipped');
+	});
+
+	test('fork: document cursor dominates the content address', () => {
+		// Cursor winner holds the SMALLER address — cursor must decide.
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 11,
+				incomingAddress: '0'.repeat(64),
+				adopted: ADOPTED
+			})
+		).toBe('fork-resolved');
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 9,
+				incomingAddress: 'z'.repeat(64),
+				adopted: ADOPTED
+			})
+		).toBe('skipped');
+	});
+
+	test('fork: equal cursors fall back to the lexicographically greater address', () => {
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 10,
+				incomingAddress: 'b'.repeat(64),
+				adopted: ADOPTED
+			})
+		).toBe('fork-resolved');
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingCursor: 10,
+				incomingAddress: '0'.repeat(64),
+				adopted: ADOPTED
+			})
+		).toBe('skipped');
+	});
+});
+
+describe('fetch liveness (spec §8: a failed fetch is never reconciled)', () => {
+	const ADDRESS = 'a'.repeat(64);
+	const NOW = 1_000_000;
+
+	test('pullRetryDelayMs backs off 5s → 15s → 45s → 135s → 5min cap', () => {
+		expect(pullRetryDelayMs(1)).toBe(5_000);
+		expect(pullRetryDelayMs(2)).toBe(15_000);
+		expect(pullRetryDelayMs(3)).toBe(45_000);
+		expect(pullRetryDelayMs(4)).toBe(135_000);
+		expect(pullRetryDelayMs(10)).toBe(300_000);
+	});
+
+	test('a changed tip address always fetches; unchanged is a no-op only when healthy', () => {
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: 'b'.repeat(64),
+				tipAddress: ADDRESS,
+				now: NOW
+			})
+		).toBe(true);
+		expect(
+			shouldReconcileGroupDocument({ lastSeenAddress: ADDRESS, tipAddress: ADDRESS, now: NOW })
+		).toBe(false);
+	});
+
+	test('a failed pull retries the SAME address past backoff (the incident regression)', () => {
+		const unresolved = { address: ADDRESS, attempts: 1, lastAttemptAt: NOW - 4_999 };
+		// Not yet due → skip this attempt…
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: ADDRESS,
+				unresolved,
+				now: NOW
+			})
+		).toBe(false);
+		// …due → retry despite the unchanged tip address.
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: ADDRESS,
+				unresolved,
+				now: NOW + 1
+			})
+		).toBe(true);
+	});
+
+	test('a tip that moved past the failed address fetches immediately', () => {
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: 'b'.repeat(64),
+				unresolved: { address: ADDRESS, attempts: 3, lastAttemptAt: NOW },
+				now: NOW
+			})
+		).toBe(true);
 	});
 });
 
