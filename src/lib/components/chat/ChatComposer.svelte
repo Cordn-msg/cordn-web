@@ -19,7 +19,6 @@
 	} from '$lib/services/voiceRecorder.svelte';
 	import { toast } from 'svelte-sonner';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
-	import AtSign from '@lucide/svelte/icons/at-sign';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Reply from '@lucide/svelte/icons/reply';
 	import SendHorizontal from '@lucide/svelte/icons/send-horizontal';
@@ -30,6 +29,8 @@
 	import Trash from '@lucide/svelte/icons/trash-2';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChatComposerActions from './ChatComposerActions.svelte';
+	import { Spinner } from '$lib/components/ui/spinner';
+	import { isHeicMime } from '$lib/services/mediaSniff';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { nip19 } from 'nostr-tools';
 	import ProfileCard from '../ProfileCard.svelte';
@@ -54,8 +55,6 @@
 		focusKey = 0,
 		mentionCandidates = [],
 		selectedMentions = $bindable([]),
-		unreadReferenceCount = 0,
-		onNavigateToReference = () => {},
 		onSendMedia = () => {},
 		onSendVoice = () => {}
 	}: {
@@ -69,8 +68,6 @@
 		focusKey?: number;
 		mentionCandidates?: ChatMentionCandidate[];
 		selectedMentions?: ChatMentionReference[];
-		unreadReferenceCount?: number;
-		onNavigateToReference?: () => void | Promise<void>;
 		/** Send media files (with the current draft as caption). */
 		onSendMedia?: (files: File[], caption: string) => void;
 		/** Send a recorded voice note. The composer drives the recorder UX; this
@@ -90,8 +87,11 @@
 		readonly id: string;
 		readonly file: File;
 		readonly previewUrl: string;
+		/** Sanitize (EXIF strip / HEIC transcode) still running for this chip. */
+		readonly processing: boolean;
 	}
 	let pendingAttachments = $state<StagedAttachment[]>([]);
+	const attachmentsProcessing = $derived(pendingAttachments.some((entry) => entry.processing));
 
 	// Voice-note recorder. Created once; send happens only via explicit
 	// gestures/buttons (release-to-send, drag-up-to-lock, trash to cancel) — there
@@ -346,6 +346,7 @@
 	// attachment is honored by BOTH paths — otherwise Enter with text + an image
 	// would silently send only the text.
 	function dispatchSubmit() {
+		if (attachmentsProcessing) return;
 		if (pendingAttachments.length > 0) {
 			const files = pendingAttachments.map((attachment) => attachment.file);
 			const caption = value;
@@ -465,20 +466,43 @@
 		});
 	}
 
-	// Sanitize images before staging (metadata strip / HEIC transcode), so the
-	// preview shows the exact bytes that will be encrypted + uploaded. Sequential
-	// on purpose: each file's preview appears as soon as it's ready.
+	// Chips appear INSTANTLY with the original bytes; sanitize (metadata strip /
+	// HEIC transcode) runs per-file in the background and swaps the staged File in
+	// place — the wait is visible on the chip (spinner) instead of silently
+	// delaying its appearance. HEIC on native gets no preview until the transcode
+	// lands: the WebView can't render HEIC, so an object URL would show a broken
+	// image, not a preview. Send waits for all chips (spec binds mime/filename to
+	// the exact plaintext — unsanitized bytes must never leave).
 	async function stageFiles(files: File[]) {
 		for (const original of files) {
-			const file = await sanitizeImageFile(original);
+			const id = crypto.randomUUID();
 			pendingAttachments = [
 				...pendingAttachments,
 				{
-					id: crypto.randomUUID(),
-					file,
-					previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : ''
+					id,
+					file: original,
+					previewUrl:
+						original.type.startsWith('image/') && !(isHeicMime(original.type) && isNativePlatform())
+							? URL.createObjectURL(original)
+							: '',
+					processing: true
 				}
 			];
+			void sanitizeImageFile(original).then((sanitized) => {
+				pendingAttachments = pendingAttachments.map((entry) => {
+					if (entry.id !== id) return entry;
+					// Keep the existing preview when it already shows the same pixels
+					// (EXIF strip / re-encode changes bytes, not the image): swapping the
+					// object URL would re-decode and can flicker. Only the HEIC upgrade
+					// (no preview yet, sanitized is renderable) mints a fresh URL.
+					const previewUrl = entry.previewUrl
+						? entry.previewUrl
+						: sanitized.type.startsWith('image/')
+							? URL.createObjectURL(sanitized)
+							: '';
+					return { ...entry, file: sanitized, previewUrl, processing: false };
+				});
+			});
 		}
 	}
 
@@ -670,17 +694,26 @@
 					<div
 						class="flex max-w-[16rem] items-center gap-2 rounded-xl border border-border bg-card py-1.5 pr-1 pl-1.5"
 					>
-						{#if attachment.previewUrl}
-							<img
-								src={attachment.previewUrl}
-								alt={attachment.file.name}
-								class="size-10 shrink-0 rounded-lg object-cover"
-							/>
-						{:else}
-							<div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-								<Paperclip class="size-4 text-muted-foreground" />
-							</div>
-						{/if}
+						<div class="relative shrink-0">
+							{#if attachment.previewUrl}
+								<img
+									src={attachment.previewUrl}
+									alt={attachment.file.name}
+									class="size-10 shrink-0 rounded-lg object-cover"
+								/>
+							{:else}
+								<div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+									<Paperclip class="size-4 text-muted-foreground" />
+								</div>
+							{/if}
+							{#if attachment.processing}
+								<div
+									class="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70"
+								>
+									<Spinner class="size-4" aria-label="Preparing attachment" />
+								</div>
+							{/if}
+						</div>
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-xs font-medium">{attachment.file.name}</p>
 							<p class="text-[11px] text-muted-foreground">
@@ -820,21 +853,6 @@
 					onPickDocument={pickDocument}
 				/>
 				<div class="flex min-w-0 flex-1 flex-col gap-2">
-					{#if unreadReferenceCount > 0}
-						<div class="flex justify-center">
-							<Button
-								type="button"
-								variant="secondary"
-								size="sm"
-								class="h-8 gap-2 rounded-full shadow-lg"
-								onclick={onNavigateToReference}
-								aria-label="Jump to unread reference"
-							>
-								<AtSign class="size-4" />
-								<span>{unreadReferenceCount}</span>
-							</Button>
-						</div>
-					{/if}
 					{#if activeMention && mentionMatches.length > 0}
 						<div class="rounded-xl border border-border bg-popover p-1 shadow-lg">
 							{#each mentionMatches as candidate, index (candidate.pubkey)}
@@ -896,7 +914,9 @@
 					<Button
 						type="submit"
 						class="h-11 shrink-0 rounded-xl px-4"
-						disabled={disabled || (!value.trim() && pendingAttachments.length === 0)}
+						disabled={disabled ||
+							attachmentsProcessing ||
+							(!value.trim() && pendingAttachments.length === 0)}
 					>
 						<SendHorizontal class="size-4" />
 					</Button>
