@@ -21,6 +21,11 @@ const {
 	)
 }));
 
+const { reconcileMultiDeviceNowMock, isGroupDocumentPullUnresolvedMock } = vi.hoisted(() => ({
+	reconcileMultiDeviceNowMock: vi.fn<() => Promise<unknown>>(async () => ({ status: 'off' })),
+	isGroupDocumentPullUnresolvedMock: vi.fn(() => false)
+}));
+
 vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
 	return {
@@ -49,6 +54,17 @@ vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
 	})),
 	encryptGroupPayloadBase64: vi.fn()
 }));
+
+// Spec §10.6 rescue + bounded-hold interaction: mock ONLY the two seams the
+// ingest ladder calls, keep the rest of the module real.
+vi.mock('$lib/services/multiDevice.svelte', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/services/multiDevice.svelte')>();
+	return {
+		...actual,
+		reconcileMultiDeviceNow: reconcileMultiDeviceNowMock,
+		isGroupDocumentPullUnresolved: isGroupDocumentPullUnresolvedMock
+	};
+});
 
 import { ingestChatGroupMessages } from './chatGroupMessages.svelte';
 
@@ -127,6 +143,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
@@ -195,6 +212,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
@@ -262,6 +280,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
@@ -498,5 +517,89 @@ describe('ingestChatGroupMessages()', () => {
 		const issues = group.syncIssues.filter((i) => i.cursor === 11);
 		expect(issues).toHaveLength(1);
 		expect(issues[0]?.detail).toMatch(/decryption failed again/);
+	});
+});
+
+describe('spec §10.6 unseal-failure rescue + bounded hold', () => {
+	function makeGroup(id: string) {
+		return {
+			id,
+			state: {
+				ratchetTree: [],
+				groupMetadata: { name: 'demo', adminPubkeys: [] }
+			} as never,
+			metadata: { name: 'demo' },
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [] as { cursor: number; createdAt: number; detail: string }[]
+		};
+	}
+
+	/** runUnsealRescue is fire-and-forget: await the reconcile call, then flush
+	 *  its .then (which releases the holds on a converged rescue). */
+	async function flushRescue(): Promise<void> {
+		await vi.waitFor(() => expect(reconcileMultiDeviceNowMock).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+
+	beforeEach(() => {
+		reconcileMultiDeviceNowMock.mockClear();
+		isGroupDocumentPullUnresolvedMock.mockReset();
+		isGroupDocumentPullUnresolvedMock.mockReturnValue(false);
+	});
+
+	test('a converged rescue advances past permanently unopenable payloads (bounded hold)', async () => {
+		// Converged rescue: applied no new state → the payloads are unopenable for
+		// good and the hold must release (the incident's stall class).
+		reconcileMultiDeviceNowMock.mockResolvedValue({
+			status: 'ok',
+			counts: { seeded: 0, fastForwarded: 0, skipped: 3, dropped: 0, ignored: 0 }
+		});
+		vi.mocked(decryptGroupPayloadBase64).mockRejectedValue(new Error('invalid tag'));
+
+		const group = makeGroup('gid-bounded-hold');
+		const messages = [7, 8, 9].map((cursor) => ({
+			cursor,
+			createdAt: 100 + cursor,
+			opaqueMessageBase64: 'sealed'
+		}));
+
+		// Three unseal failures → the K=3 streak fires the rescue; meanwhile the
+		// cursor HOLDS at the decrypt frontier so a post-fast-forward re-fetch can
+		// still retry these messages.
+		await ingestChatGroupMessages({ group, messages, mdActive: true });
+		expect(group.fetchCursor).toBe(0);
+		expect(reconcileMultiDeviceNowMock).toHaveBeenCalledTimes(1);
+		await flushRescue();
+
+		// Convergence proved → the next pass records + advances past them.
+		await ingestChatGroupMessages({ group, messages: messages.slice(0, 1), mdActive: true });
+		expect(group.fetchCursor).toBe(7);
+		// Notification honesty: unopenable payloads never inflate the message list
+		// (unread counts) — they live in syncIssues only.
+		expect(group.messages).toHaveLength(0);
+		expect(group.syncIssues.map((issue) => issue.cursor).sort((a, b) => a - b)).toEqual([7, 8, 9]);
+	});
+
+	test('holds while a document fetch is unresolved, even after a converged rescue', async () => {
+		reconcileMultiDeviceNowMock.mockResolvedValue({
+			status: 'ok',
+			counts: { seeded: 0, fastForwarded: 0, skipped: 3, dropped: 0, ignored: 0 }
+		});
+		isGroupDocumentPullUnresolvedMock.mockReturnValue(true); // spec §8: not converged
+		vi.mocked(decryptGroupPayloadBase64).mockRejectedValue(new Error('invalid tag'));
+
+		const group = makeGroup('gid-hold-unresolved');
+		const messages = [7, 8, 9].map((cursor) => ({
+			cursor,
+			createdAt: 100 + cursor,
+			opaqueMessageBase64: 'sealed'
+		}));
+		await ingestChatGroupMessages({ group, messages, mdActive: true });
+		await flushRescue();
+
+		await ingestChatGroupMessages({ group, messages: messages.slice(0, 1), mdActive: true });
+		expect(group.fetchCursor).toBe(0); // still holding — a fetch is failing
 	});
 });

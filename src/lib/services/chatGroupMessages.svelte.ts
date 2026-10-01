@@ -17,6 +17,10 @@ import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
+import {
+	isGroupDocumentPullUnresolved,
+	reconcileMultiDeviceNow
+} from '$lib/services/multiDevice.svelte';
 
 import { ChatKinds, SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import {
@@ -69,7 +73,12 @@ export interface ChatCordnMessageEnvelope extends UnsignedEvent {
 }
 
 export interface GroupMessageIngestionTarget {
+	/** Group id (StoredChatGroup); optional for bare test targets. */
+	id?: string;
 	state: ClientState;
+	/** Last skipped sibling Commit (spec §10 step 1 fork evidence); carried to
+	 *  the persisted record by the caller. */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
 	metadata?: {
 		name: string;
 		description?: string;
@@ -201,6 +210,94 @@ async function processMessageBase64(params: {
 		message: decoded[0],
 		callback: params.callback
 	});
+}
+
+/**
+ * Apply one sealed message to a throwaway copy of a state (spec §10 fork
+ * evidence probes). Reports what the message means to THIS state without
+ * touching any stored group: `opened` — the payload unsealed and the MLS
+ * message applied/rejected-by-policy cleanly; `epochMoved` — a Commit applied
+ * and advanced the epoch; `siblingSkipped` — a Commit from this identity's own
+ * shared leaf (the §10 sibling-skip); `thirdParty` — the message is from
+ * another leaf, or a Commit that applied (a shared-leaf Commit carries no
+ * signal: it can only be skipped here). Used by the step-1 race replay and
+ * the step-2 third-party verdict.
+ */
+export async function probeSealedMessage(params: {
+	state: ClientState;
+	sealedMsg64: string;
+	localStablePubkey: string;
+}): Promise<{
+	state: ClientState;
+	opened: boolean;
+	epochMoved: boolean;
+	siblingSkipped: boolean;
+	thirdParty: boolean;
+}> {
+	const unopened = {
+		state: params.state,
+		opened: false,
+		epochMoved: false,
+		siblingSkipped: false,
+		thirdParty: false
+	};
+	let opaqueMessageBase64: string;
+	try {
+		opaqueMessageBase64 = (
+			await decryptGroupPayloadBase64({
+				state: params.state,
+				encryptedBase64: params.sealedMsg64
+			})
+		).opaqueMessageBase64;
+	} catch {
+		return unopened;
+	}
+	const epochBefore = params.state.groupContext.epoch;
+	let processed: Awaited<ReturnType<typeof processMessageBase64>>;
+	try {
+		processed = await processMessageBase64({
+			state: params.state,
+			opaqueMessageBase64,
+			callback: (incoming) => {
+				const self = safeNormalizePubKey(params.localStablePubkey);
+				if (incoming.kind === 'commit' && incoming.senderLeafIndex !== undefined && self) {
+					const sender = listGroupMembers(params.state).find(
+						(member) => member.leafIndex === incoming.senderLeafIndex
+					);
+					if (sender && safeNormalizePubKey(sender.stablePubkey) === self) {
+						throw new SiblingCommitSkippedError();
+					}
+				}
+				return createAdminAuthorizationCallback({
+					state: params.state,
+					metadata: getCordnGroupMetadataExtension(params.state)
+				})(incoming);
+			}
+		});
+	} catch (error) {
+		if (error instanceof SiblingCommitSkippedError) {
+			return {
+				state: params.state,
+				opened: true,
+				epochMoved: false,
+				siblingSkipped: true,
+				thirdParty: false
+			};
+		}
+		return unopened;
+	}
+	const epochMoved = processed.newState.groupContext.epoch !== epochBefore;
+	let thirdParty = epochMoved;
+	if (!thirdParty && processed.kind === 'applicationMessage') {
+		try {
+			thirdParty =
+				safeNormalizePubKey(decodeAuthenticatedSender(processed.aad)) !==
+				safeNormalizePubKey(params.localStablePubkey);
+		} catch {
+			thirdParty = false;
+		}
+	}
+	return { state: processed.newState, opened: true, epochMoved, siblingSkipped: false, thirdParty };
 }
 
 /**
@@ -497,6 +594,65 @@ function recordSyncIssue(
 	else issues[passIndex] = issue;
 }
 
+// ── Spec §10.6: unseal-failure rescue + bounded hold ────────────────────────
+const UNSEAL_STREAK_RESCUE_THRESHOLD = 3;
+const RESCUE_COOLDOWN_MS = 30_000;
+const unsealStreakByGroup = new Map<string | undefined, number>();
+const rescueCooldownByGroup = new Map<string | undefined, number>();
+const heldUnopenableByGroup = new Map<string | undefined, { rescued: boolean }>();
+
+function noteUnsealSuccess(groupId: string | undefined): void {
+	unsealStreakByGroup.delete(groupId);
+	// Any successful decrypt invalidates a convergence proof — the next
+	// unopenable payload deserves a fresh hold window.
+	heldUnopenableByGroup.delete(groupId);
+}
+
+function noteUnsealFailure(groupId: string | undefined): void {
+	const streak = (unsealStreakByGroup.get(groupId) ?? 0) + 1;
+	unsealStreakByGroup.set(groupId, streak);
+	if (streak < UNSEAL_STREAK_RESCUE_THRESHOLD) return;
+	const last = rescueCooldownByGroup.get(groupId) ?? 0;
+	if (Date.now() - last < RESCUE_COOLDOWN_MS) return;
+	rescueCooldownByGroup.set(groupId, Date.now());
+	runUnsealRescue();
+}
+
+/**
+ * Spec §10.6 rescue: force a reconcile that bypasses the tip dedup — the heal
+ * for a dead tip subscription / a stranded document pull behind a wall of
+ * undecryptable messages. When the rescue proves CONVERGENCE (applied no new
+ * state), any payload that still fails is permanently unopenable (e.g. a
+ * losing-branch commit): its hold is released so the bounded-hold rule can
+ * advance past it. A failed rescue keeps the holds — nothing was learned.
+ */
+function runUnsealRescue(): void {
+	void reconcileMultiDeviceNow()
+		.then((result) => {
+			if (result.status !== 'ok') return;
+			const { seeded, fastForwarded, forkResolved } = result.counts;
+			if (seeded + fastForwarded + (forkResolved ?? 0) > 0) return; // state moved — keep holding
+			for (const [gid] of heldUnopenableByGroup) {
+				heldUnopenableByGroup.set(gid, { rescued: true });
+			}
+		})
+		.catch(() => {});
+}
+
+/**
+ * Spec §10.6 bounded hold: may the cursor advance past a payload that fails
+ * to decrypt? True only after a rescue proved convergence AND no document
+ * fetch is still failing (spec §8) — then the payload is permanently
+ * unopenable and the stream (and the native notification watermark) must not
+ * stall on it forever.
+ */
+function advancePastUnopenablePayload(groupId: string | undefined): boolean {
+	const held = heldUnopenableByGroup.get(groupId);
+	return (
+		held?.rescued === true && (groupId === undefined || !isGroupDocumentPullUnresolved(groupId))
+	);
+}
+
 export async function ingestChatGroupMessages(params: {
 	group: GroupMessageIngestionTarget;
 	messages: RawChatGroupMessage[];
@@ -564,22 +720,23 @@ export async function ingestChatGroupMessages(params: {
 			// Mirror it: do NOT advance the cursor (leave it at the decrypt
 			// frontier so a post-fast-forward re-fetch retries the message once
 			// the document state arrives) and dedup the advisory issue per cursor.
-			// Single-device keeps fail-and-advance: no document rescues it.
-			if (params.mdActive) {
-				recordSyncIssue(group, issues, {
-					cursor: message.cursor,
-					createdAt: message.createdAt,
-					detail: `Sealed payload decrypt failed: ${detail}`
-				});
-				continue;
-			}
-			group.fetchCursor = message.cursor;
-			group.lastCursor = Math.max(group.lastCursor, message.cursor);
+			// The hold is BOUNDED though (§10.6): once a rescue proved convergence
+			// (no new state) and no fetch is still failing, the payload is
+			// permanently unopenable — advance past it so the stream and the native
+			// notification watermark cannot stall on it forever. Single-device
+			// keeps fail-and-advance: no document rescues it.
 			recordSyncIssue(group, issues, {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
 				detail: `Sealed payload decrypt failed: ${detail}`
 			});
+			noteUnsealFailure(group.id);
+			if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
+				heldUnopenableByGroup.set(group.id, { rescued: false });
+				continue;
+			}
+			group.fetchCursor = message.cursor;
+			group.lastCursor = Math.max(group.lastCursor, message.cursor);
 			continue;
 		}
 
@@ -626,6 +783,14 @@ export async function ingestChatGroupMessages(params: {
 			if (error instanceof SiblingCommitSkippedError) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				// Fork evidence (spec §10 step 1): a Commit posted from this epoch
+				// afterwards LOST the race to this one — the coordinator sequenced the
+				// sibling's Commit first. Remembered so `recordCommitRace` can mark the
+				// branch `dead` without asking the stream (which can no longer answer).
+				group.skippedSiblingCommit = {
+					epoch: group.state.groupContext.epoch.toString(),
+					cursor: message.cursor
+				};
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
@@ -701,12 +866,20 @@ export async function ingestChatGroupMessages(params: {
 				// chained catch-up (spec §8.5) re-fetch this message once the chain
 				// state arrives — advancing here makes it unrecoverable (the
 				// coordinator never resends by cursor). recordSyncIssue keeps one
-				// issue per cursor across the re-deliveries.
+				// issue per cursor across the re-deliveries. BOUNDED (§10.6): once a
+				// rescue proved convergence and no fetch is failing, advance past it.
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
 					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
 				});
+				noteUnsealFailure(group.id);
+				if (!advancePastUnopenablePayload(group.id)) {
+					heldUnopenableByGroup.set(group.id, { rescued: false });
+					continue;
+				}
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				continue;
 			}
 
@@ -719,6 +892,7 @@ export async function ingestChatGroupMessages(params: {
 			) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				noteUnsealFailure(group.id);
 
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
@@ -743,6 +917,8 @@ export async function ingestChatGroupMessages(params: {
 
 			throw error;
 		}
+
+		noteUnsealSuccess(group.id);
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;

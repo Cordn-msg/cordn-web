@@ -9,6 +9,8 @@ const enqueuePendingEpochOperationMock = vi.fn();
 const removeMemberFromGroupMock = vi.fn();
 const getCoordinatorClientMock = vi.fn();
 const pruneZombieKeyPackagesMock = vi.fn().mockResolvedValue(undefined);
+const createSelfUpdateCommitMock = vi.fn();
+const reconcileTipForOutboundMock = vi.fn();
 
 vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
@@ -76,6 +78,16 @@ vi.mock('$lib/services/chatGroupProtocol', async (importOriginal) => {
 	};
 });
 
+// The §10.1 repair discipline gate lives in `reconcileTipForOutbound`'s
+// result: mock ONLY it, keep the rest of the module real.
+vi.mock('$lib/services/multiDevice.svelte', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/services/multiDevice.svelte')>();
+	return {
+		...actual,
+		reconcileTipForOutbound: reconcileTipForOutboundMock
+	};
+});
+
 vi.mock('$lib/services/chatGroupSessions.svelte', () => ({
 	buildPersistedChatGroup: buildPersistedChatGroupMock,
 	createWorkingChatGroupSession: createWorkingChatGroupSessionMock,
@@ -84,6 +96,7 @@ vi.mock('$lib/services/chatGroupSessions.svelte', () => ({
 
 vi.mock('$lib/services/chatMlsUtils', () => ({
 	addMembersToGroup: vi.fn(),
+	createSelfUpdateCommit: createSelfUpdateCommitMock,
 	encodeWelcomeBase64: vi.fn(),
 	findMemberLeafIndexByStablePubkey: vi.fn(() => 4),
 	getCordnGroupMetadataExtension: vi.fn(),
@@ -206,7 +219,12 @@ describe('recoverPoisonedChatGroup()', () => {
 		clientStateDecoderMock.mockReset();
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -366,7 +384,12 @@ describe('inviteChatGroupMember()', () => {
 		clientStateDecoderMock.mockReset();
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -411,7 +434,14 @@ describe('inviteChatGroupMember()', () => {
 		const postGroupMessageMock = vi.fn().mockResolvedValue({ cursor: 5, at: 1000 });
 		getCoordinatorClientMock.mockReturnValue({ PostGroupMessage: postGroupMessageMock });
 		removeMemberFromGroupMock.mockResolvedValue({
-			newState: { groupContext: { groupId: new Uint8Array([100]), epoch: 2n } },
+			newState: {
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				}
+			},
 			commitMessageBase64: 'commit'
 		});
 		createWorkingChatGroupSessionMock.mockReturnValue({ metadata: { name: 'demo' } });
@@ -650,7 +680,12 @@ describe('loadGroups snapshot baseline', () => {
 		// Seed storage with a group that has no snapshots and a decodable state
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -813,5 +848,112 @@ describe('listChatGroupMessages()', () => {
 		expect(listed).toBe(listChatGroupMessages(groupId));
 
 		await storage.deleteGroup(groupId);
+	});
+});
+
+describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', () => {
+	const postGroupMessageMock = vi.fn(async () => ({ cursor: 42 }));
+
+	/** Seed a stored group + load it into the store the service reads. */
+	async function seedRepairGroup(groupId: string, epoch: bigint): Promise<void> {
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+		await storage.putGroup({
+			id: groupId,
+			ownerPubkey: 'bb'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			lastCursor: 0,
+			fetchCursor: 5,
+			status: 'active',
+			stateBytes: new Uint8Array([1]),
+			messages: [],
+			syncIssues: []
+		});
+		const { reloadChatGroupsForOwner } = await import('./chatGroups.svelte');
+		await reloadChatGroupsForOwner('bb'.repeat(32));
+		requireActiveAccountMock.mockReturnValue({ pubkey: 'bb'.repeat(32) });
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn(async () => ({ messages: [] })),
+			PostGroupMessage: postGroupMessageMock
+		});
+	}
+
+	test('defers the repair when the pre-commit tip reconcile fails', async () => {
+		reconcileTipForOutboundMock.mockReset();
+		reconcileTipForOutboundMock.mockResolvedValue(false);
+		createSelfUpdateCommitMock.mockReset();
+		postGroupMessageMock.mockClear();
+
+		const { repairSharedLeafRatchetDivergence } = await import('./chatGroups.svelte');
+		await expect(repairSharedLeafRatchetDivergence('gid-repair-defer', '5')).rejects.toThrow(
+			/deferring/
+		);
+		// The stale-state risk IS the commit: nothing may be staged or posted.
+		expect(createSelfUpdateCommitMock).not.toHaveBeenCalled();
+		expect(postGroupMessageMock).not.toHaveBeenCalled();
+	});
+
+	test('skips the repair when the epoch advanced since detection', async () => {
+		reconcileTipForOutboundMock.mockReset();
+		reconcileTipForOutboundMock.mockResolvedValue(true);
+		createSelfUpdateCommitMock.mockReset();
+		postGroupMessageMock.mockClear();
+		await seedRepairGroup('gid-repair-stale-epoch', 6n); // detection was at epoch 5
+
+		const { repairSharedLeafRatchetDivergence } = await import('./chatGroups.svelte');
+		await repairSharedLeafRatchetDivergence('gid-repair-stale-epoch', '5');
+		expect(createSelfUpdateCommitMock).not.toHaveBeenCalled();
+		expect(postGroupMessageMock).not.toHaveBeenCalled();
+	});
+
+	test('commits the self-update when the reconcile succeeded at the same epoch', async () => {
+		reconcileTipForOutboundMock.mockReset();
+		reconcileTipForOutboundMock.mockResolvedValue(true);
+		createSelfUpdateCommitMock.mockReset();
+		createSelfUpdateCommitMock.mockResolvedValue({
+			commitMessageBase64: 'commit-b64',
+			newState: {
+				groupContext: {
+					epoch: 6n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				groupMetadata: undefined
+			}
+		});
+		createWorkingChatGroupSessionMock.mockReturnValue({});
+		buildPersistedChatGroupMock.mockReturnValue({
+			id: 'gid-repair-commit',
+			ownerPubkey: 'bb'.repeat(32),
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 100,
+			stateBase64: 'AA==',
+			lastCursor: 0,
+			fetchCursor: 5,
+			messages: [],
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n
+		});
+		postGroupMessageMock.mockClear();
+		await seedRepairGroup('gid-repair-commit', 5n); // detection at epoch 5 — current
+
+		const { repairSharedLeafRatchetDivergence } = await import('./chatGroups.svelte');
+		await repairSharedLeafRatchetDivergence('gid-repair-commit', '5');
+		expect(createSelfUpdateCommitMock).toHaveBeenCalledTimes(1);
+		expect(postGroupMessageMock).toHaveBeenCalledTimes(1);
 	});
 });

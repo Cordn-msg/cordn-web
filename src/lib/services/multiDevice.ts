@@ -159,8 +159,244 @@ export interface GroupSnapshot {
 	lastCursor: number;
 }
 
-/** Per-group outcome of reconciliation (spec §8). */
-export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'skipped';
+/** Per-group outcome of reconciliation (spec §8, §10). */
+export type ReconcileOutcome = 'seeded' | 'fast-forwarded' | 'fork-resolved' | 'skipped';
+
+/** The adopted group-document identity for a live group (spec §10 rank input). */
+export interface AppliedDocument {
+	/** Content address of the adopted document (tie-break input). */
+	address: string;
+	/** Document cursor carried at publish/adopt time (tie-break input). */
+	cursor: number;
+	/** Epoch fingerprint of the state it carried (spec §10 detection). */
+	fingerprint?: string;
+}
+
+/**
+ * Spec §10 detection: the epoch fingerprint of a state — `epoch`, `treeHash`
+ * and `confirmedTranscriptHash` of the GroupContext (RFC 9420 §5.1), hex. Two
+ * states with the same fingerprint are the same state; two at one epoch with
+ * different fingerprints are two Commits from one base epoch. A re-publish
+ * re-seals and changes the content address, never the fingerprint. Encoding
+ * matches the reference implementation (cordn CLI `epochFingerprint`) so
+ * conformance vectors can compare across clients.
+ */
+export function stateFingerprint(state: ClientState): string {
+	const context = state.groupContext;
+	return `${context.epoch.toString(16)}:${bytesToHex(context.treeHash)}:${bytesToHex(context.confirmedTranscriptHash)}`;
+}
+
+/**
+ * The adoption gate under the reconcile lock (spec §8 forward-only): a
+ * normal fast-forward adopts strictly-newer state only; a §10 fork adoption
+ * (the equal-epoch exception) may also adopt AT the local epoch — so the fork
+ * path accepts equal-or-newer, never older.
+ */
+export function isStaleAdoption(
+	incomingEpoch: bigint,
+	localEpoch: bigint,
+	allowEqualEpoch: boolean
+): boolean {
+	return allowEqualEpoch ? incomingEpoch < localEpoch : incomingEpoch <= localEpoch;
+}
+
+/** Where a fork decision came from (spec §10 resolution steps 1–3). */
+export type ForkDecisionSource = 'coordinator-order' | 'third-party' | 'rank';
+
+/** The recorded fork winner (spec §10: the rank alone never overturns it). */
+export interface StoredForkDecision {
+	/** The FORK epoch (the racing Commits' produced epoch) — not the document's. */
+	epoch: string;
+	/** Epoch fingerprint of the winning branch's state at resolution time. */
+	fingerprint: string;
+	by: ForkDecisionSource;
+}
+
+/** Pre-resolution application decision (spec §8 forward-only + §10 detection). */
+export type ApplyDecision = 'seeded' | 'fast-forwarded' | 'skipped' | 'fork';
+
+/**
+ * Decide one group-document application up to the §10 fork resolution (spec
+ * §8 forward-only + §10 detection). Pure: the caller decodes the document
+ * first (undecodable → `skipped` without calling this) and resolves a `fork`
+ * via `decideForkResolution`. Fork identity is the EPOCH FINGERPRINT, never the
+ * content address: a re-publish of one state is advisory, not a fork.
+ */
+export function decideGroupDocumentApply(params: {
+	incomingEpoch: bigint | undefined;
+	localEpoch: bigint | undefined;
+	incomingFingerprint?: string;
+	localFingerprint?: string;
+}): ApplyDecision {
+	const { incomingEpoch, localEpoch, incomingFingerprint, localFingerprint } = params;
+	if (incomingEpoch === undefined) return 'skipped'; // undecodable is advisory
+	if (localEpoch === undefined) return 'seeded'; // absent → install (spec §8 case 1)
+	if (incomingEpoch > localEpoch) return 'fast-forwarded'; // strictly newer (§8)
+	if (incomingEpoch < localEpoch) return 'skipped'; // anti-downgrade (§8)
+	// Equal epoch: the same state (a re-publish — advisory) or two Commits from
+	// one base epoch (spec §10). The fingerprint tells them apart; the address
+	// cannot, since a re-seal changes it while carrying the same state.
+	if (incomingFingerprint !== undefined && incomingFingerprint === localFingerprint) {
+		return 'skipped';
+	}
+	return 'fork';
+}
+
+/**
+ * Resolve a §10 fork between the local state and the incoming document's
+ * branch. The tier order is normative (spec §10 resolution): (1) the
+ * coordinator-order branch mark — self-sufficient, since the racing loser
+ * recorded `dead` and adopts while the winner recorded `live` and keeps;
+ * (2) the third-party verdict; (3) a recorded decision (never overturned by
+ * the rank alone), else the rank thunk (spec §10.3). The thunk may fetch
+ * chains and is called ONLY where nothing else decides.
+ */
+export async function decideForkResolution(params: {
+	forkEpoch: string;
+	incomingFingerprint: string;
+	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
+	verdict?: boolean;
+	recorded?: StoredForkDecision;
+	rank: () => boolean | Promise<boolean>;
+}): Promise<{ adopt: boolean; by: ForkDecisionSource }> {
+	const { forkEpoch, incomingFingerprint, branch, verdict, recorded } = params;
+	if (branch) return { adopt: branch.kind === 'dead', by: 'coordinator-order' };
+	if (verdict !== undefined) return { adopt: verdict, by: 'third-party' };
+	if (recorded && recorded.epoch === forkEpoch) {
+		return { adopt: recorded.fingerprint === incomingFingerprint, by: recorded.by };
+	}
+	return { adopt: await params.rank(), by: 'rank' };
+}
+
+/** One walked `prev`-chain link for the §8 descent check. */
+export interface ChainFingerprint {
+	epoch: bigint;
+	fingerprint: string;
+}
+
+/** Cap on the retained epoch-fingerprint history (spec §8 descent check). */
+const RETAINED_FINGERPRINTS = 16;
+
+/** Record a state's fingerprint in the group's held history (spec §10
+ * detection; the §8 descent check compares chains against it). Copy-on-write;
+ * the fingerprint is CONSTANT within an epoch (the GroupContext fields move
+ * only on Commits), so any state seen at the epoch identifies its branch. */
+export function noteStateFingerprint(
+	held: Record<string, string> | undefined,
+	state: ClientState,
+	cap: number = RETAINED_FINGERPRINTS
+): Record<string, string> {
+	const next = { ...(held ?? {}) };
+	next[state.groupContext.epoch.toString()] = stateFingerprint(state);
+	const epochs = Object.keys(next)
+		.map((epoch) => BigInt(epoch))
+		.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	for (const epoch of epochs.slice(0, Math.max(0, epochs.length - cap))) {
+		delete next[epoch.toString()];
+	}
+	return next;
+}
+
+/**
+ * Spec §8 descent check over a walked `prev` chain (newest first): does the
+ * incoming document's branch descend from the local state? `descends` — the
+ * chain passes through the local state at the local epoch (plain advance);
+ * `forkedAt` — it meets a state this device held at an EARLIER epoch but never
+ * its current one (the chain jumped over the local epoch): a fork that has
+ * moved on, whatever the document's current epoch, and the returned epoch is
+ * the FORK epoch (the base + 1 — the racing Commits' produced epoch), the key
+ * for the recorded decision and the commit-point rank (spec §10); `unknown` —
+ * no shared epoch found (chain unreadable / not available to check) — the
+ * forward-only advance applies (spec §8: liveness first).
+ */
+export function classifyChainDescent(
+	chain: ChainFingerprint[],
+	held: Record<string, string>,
+	localEpoch: bigint
+): 'descends' | { kind: 'forkedAt'; epoch: bigint } | 'unknown' {
+	for (const link of chain) {
+		if (link.epoch > localEpoch) continue;
+		const ours = held[link.epoch.toString()];
+		if (ours !== undefined && ours === link.fingerprint) {
+			return link.epoch === localEpoch ? 'descends' : { kind: 'forkedAt', epoch: link.epoch + 1n };
+		}
+	}
+	return 'unknown';
+}
+
+/** Rank inputs for one fork branch (spec §10.3). */
+export interface ForkBranchRank {
+	/** Lowest-cursor document at the fork epoch on the branch's chain — the
+	 * commit-point document, whose cursor is that Commit's stream position (or
+	 * the Commit's own cursor, for the device that authored it). */
+	commit?: { cursor: number; address: string };
+	/** The branch's live document — the fallback where no commit-point doc is known. */
+	live?: { cursor: number; address: string };
+}
+
+/**
+ * Spec §10.3 fork rank: `true` = adopt `theirs`. With commit-point docs on both
+ * sides the LOWER commit cursor wins — the coordinator's order read off the
+ * chains. Where a side has none, the live documents decide: higher cursor, then
+ * the lexicographically greater content address. A side with no live document
+ * loses to anything. Deterministic, commutative, idempotent — the shared floor.
+ */
+export function forkRankAdoptsTheirs(ours: ForkBranchRank, theirs: ForkBranchRank): boolean {
+	if (ours.commit && theirs.commit) {
+		return (
+			theirs.commit.cursor < ours.commit.cursor ||
+			(theirs.commit.cursor === ours.commit.cursor && theirs.commit.address > ours.commit.address)
+		);
+	}
+	return (
+		!ours.live ||
+		!theirs.live ||
+		theirs.live.cursor > ours.live.cursor ||
+		(theirs.live.cursor === ours.live.cursor && theirs.live.address > ours.live.address)
+	);
+}
+
+/** One failed group-document fetch awaiting retry (spec §8 fetch liveness). */
+export interface UnresolvedDocumentPull {
+	/** The tip address whose fetch failed. Cleared only when a fetch of this
+	 *  address succeeds (a newer tip address supersedes it). */
+	address: string;
+	attempts: number;
+	lastAttemptAt: number;
+}
+
+/** Retry backoff for failed pulls: 5s → 15s → 45s → 135s → 5min cap (spec §8). */
+export function pullRetryDelayMs(attempts: number): number {
+	return Math.min(5000 * 3 ** Math.max(attempts - 1, 0), 300_000);
+}
+
+/** Milliseconds until the SOONEST failed-pull retry is due (spec §8). One timer
+ *  covers every failed gid, so it must fire for the earliest one — the later
+ *  entries re-check their own backoff when it does. Non-empty entries. */
+export function nextPullRetryDelayMs(entries: UnresolvedDocumentPull[], now: number): number {
+	const dueAt = entries.map((entry) => entry.lastAttemptAt + pullRetryDelayMs(entry.attempts));
+	return Math.max(0, Math.min(...dueAt) - now);
+}
+
+/**
+ * Should this gid's document be fetched (spec §8 fetch liveness)? A tip
+ * address matching the last-seen one is normally a no-op, EXCEPT for a gid
+ * whose fetch failed — that must keep retrying (beyond backoff), or one
+ * flaky fetch strands the device behind the fleet forever (the observed
+ * incident: failed pull + tip dedup = permanent stranding).
+ */
+export function shouldReconcileGroupDocument(params: {
+	lastSeenAddress?: string;
+	tipAddress: string;
+	unresolved?: UnresolvedDocumentPull;
+	now: number;
+}): boolean {
+	const { lastSeenAddress, tipAddress, unresolved, now } = params;
+	if (lastSeenAddress !== tipAddress) return true; // changed → always fetch
+	if (!unresolved) return false; // unchanged + healthy → nothing to do
+	if (unresolved.address !== tipAddress) return true; // tip moved since the failure
+	return now - unresolved.lastAttemptAt >= pullRetryDelayMs(unresolved.attempts);
+}
 
 /** Per-tombstone outcome of reconciliation (spec §8 case 4). */
 export type ReconcileTombstoneOutcome = 'dropped' | 'ignored';
@@ -175,10 +411,12 @@ export interface ReconcileTarget {
 	localEpoch(gid: string): bigint | undefined;
 	/**
 	 * Seed a missing group, fast-forward a present group to a strictly newer
-	 * epoch, or skip. A sibling Commit's new private keys travel here (§10)
-	 * since the stream can't convey them (shared-leaf UpdatePath).
+	 * epoch, resolve an equal-epoch fork (§10), or skip. A sibling Commit's new
+	 * private keys travel here (§10) since the stream can't convey them
+	 * (shared-leaf UpdatePath). `address` is the fetched document's content
+	 * address (spec §10 fork identity) — omit only when unknown (pre-fork docs).
 	 */
-	applyGroupDocument(doc: GroupDocument): Promise<ReconcileOutcome>;
+	applyGroupDocument(doc: GroupDocument, address?: string): Promise<ReconcileOutcome>;
 	/** Apply one tombstone (§8): drop a local group whose epoch ≤ the tombstone
 	 * epoch; ignore stale/unknown. Returns `dropped` if a local group was removed. */
 	applyTombstone(tombstone: Tombstone): Promise<ReconcileTombstoneOutcome>;
@@ -314,7 +552,39 @@ export async function publishGroupDocument(params: {
 	dekPubkey: string;
 	store: BlobStore;
 	prev?: string;
-}): Promise<PublishResult> {
+	/** The epoch's commit point (spec §8.5 gen-0 state, §10.3 rank): the state
+	 * right after this device's own Commit, at the Commit's cursor, pre-encoded.
+	 * Published ahead of the live document, once, whenever the live state has
+	 * moved past it — a sibling's catch-up can then open what arrived in between
+	 * and the branch's Commit cursor is on record for the rank. */
+	commitPoint?: { clientState: string; cursor: number; published?: boolean };
+}): Promise<PublishResult & { cursor: number; commitPointPublished?: PublishResult }> {
+	let prev = params.prev;
+	let commitPointPublished: PublishResult | undefined;
+	const commitPoint = params.commitPoint;
+	if (commitPoint && !commitPoint.published && params.group.fetchCursor > commitPoint.cursor) {
+		const pointDoc = {
+			...buildGroupDocument(
+				{
+					gid: params.group.gid,
+					state: params.group.state,
+					coordinatorKey: params.group.coordinatorKey,
+					coordinatorRelays: params.group.coordinatorRelays,
+					fetchCursor: commitPoint.cursor,
+					lastCursor: commitPoint.cursor
+				},
+				prev
+			),
+			// The stored commit-point state, byte-exact (never re-encoded — it is
+			// `encode(clientStateEncoder, state)` from the Commit's adoption).
+			clientState: commitPoint.clientState
+		};
+		commitPointPublished = await publishSealed(
+			await sealDocument(pointDoc, params.seal, params.dekPubkey),
+			params.store
+		);
+		prev = commitPointPublished.address;
+	}
 	const doc = buildGroupDocument(
 		{
 			gid: params.group.gid,
@@ -324,10 +594,17 @@ export async function publishGroupDocument(params: {
 			fetchCursor: params.group.fetchCursor,
 			lastCursor: params.group.lastCursor
 		},
-		params.prev
+		prev
 	);
 	const sealed = await sealDocument(doc, params.seal, params.dekPubkey);
-	return publishSealed(sealed, params.store);
+	const result = await publishSealed(sealed, params.store);
+	// The published cursor rides along so the caller can record the document
+	// identity (`AppliedDocument`) — the rank input for the spec §10 tie-break.
+	return {
+		...result,
+		cursor: doc.cursor,
+		...(commitPointPublished ? { commitPointPublished } : {})
+	};
 }
 
 /** Publish the meta document (§4.2): a current-state set with no `prev`. A

@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-01-md-convergence',
+		createdAt: Date.UTC(2026, 9, 1),
+		version: 1,
+		title: 'Linked devices heal their own splits',
+		body: "- 🐛 A group could fall permanently out of sync on one of your linked devices after a bad connection — new messages stopped decrypting there and never recovered on their own. Cordn now keeps retrying what failed to sync until it succeeds, and a run of messages that won't decrypt triggers an immediate re-sync instead of waiting.\n- 🐛 When two of your linked devices changed a group at the same moment — both inviting someone, say — the group could split into two histories that never rejoined, leaving the group's messages unreadable on one side forever. Your devices now work out which change the group actually followed, rejoin it automatically, and leave a note in the group's sync issues saying what happened. Messages sent during the split on the abandoned side remain unreadable — that loss is baked into the encryption — but it's now a narrow window instead of a permanent fork, and it's visible instead of silent.\n- 🐛 The automatic repair that runs when two of your own devices send at the same time no longer makes things worse: it used to sometimes commit its fix while the device was out of sync — one of the causes of those splits — and now waits until the device is fully caught up.\n- 🔄 A single message that can never be decrypted (sealed under state the group has left behind) no longer stalls its chat forever: once Cordn verifies it is fully caught up, it skips past that message, marks it in the group's sync issues, and later messages flow again."
+	},
+	{
 		id: 'cordn-news-2026-09-29-pinned-chats',
 		createdAt: Date.UTC(2026, 8, 29),
 		version: 1,

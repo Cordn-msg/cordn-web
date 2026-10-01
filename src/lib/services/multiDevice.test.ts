@@ -27,6 +27,12 @@ vi.mock('ts-mls', async () => {
 import {
 	MULTI_DEVICE_SCHEMA_VERSION,
 	composeTombstoneUnion,
+	decideGroupDocumentApply,
+	decideForkResolution,
+	isStaleAdoption,
+	classifyChainDescent,
+	forkRankAdoptsTheirs,
+	stateFingerprint,
 	diffLocalAhead,
 	diffStaleGroupEpochs,
 	documentAddress,
@@ -37,8 +43,11 @@ import {
 	publishGroupDocument,
 	publishMetaDocument,
 	pullDocument,
+	nextPullRetryDelayMs,
+	pullRetryDelayMs,
 	reconcileMetaDocument,
 	sealDocument,
+	shouldReconcileGroupDocument,
 	walkGroupChain,
 	buildInventory,
 	partitionGapByEpoch,
@@ -56,10 +65,12 @@ import {
 } from './multiDevice';
 import { nip44 } from 'applesauce-core/helpers/encryption';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { clientStateDecoder } from 'ts-mls';
 
-/** Fake encoder: stamp `{epoch, gid}` as UTF-8 bytes. Decoder inverts it. */
-function fakeStateBytes(epoch: number, gid: string): Uint8Array {
-	return new TextEncoder().encode(JSON.stringify({ epoch, gid }));
+/** Fake encoder: stamp `{epoch, gid, v}` as UTF-8 bytes. Decoder inverts it and
+ * fabricates the GroupContext hashes the epoch fingerprint reads (spec §10). */
+function fakeStateBytes(epoch: number, gid: string, v = '0'): Uint8Array {
+	return new TextEncoder().encode(JSON.stringify({ epoch, gid, v }));
 }
 
 // encode returns the bytes the test's fake state already provides.
@@ -67,7 +78,17 @@ encodeMock.mockImplementation((_encoder, state) => state.__bytes);
 // decoder returns [state, offset] like ts-mls.
 decoderMock.mockImplementation((bytes) => {
 	const parsed = JSON.parse(new TextDecoder().decode(bytes));
-	return [{ groupContext: { epoch: BigInt(parsed.epoch) } }, bytes.length];
+	const digest = new TextEncoder().encode(`${parsed.gid}:${parsed.v ?? '0'}`);
+	return [
+		{
+			groupContext: {
+				epoch: BigInt(parsed.epoch),
+				treeHash: digest,
+				confirmedTranscriptHash: digest
+			}
+		},
+		bytes.length
+	];
 });
 
 /** Invertible cipher stand-in for the NIP-44 seal (confidentiality-only). */
@@ -190,6 +211,55 @@ describe('multiDevice core', () => {
 			dekPubkey: OWNER
 		});
 		if (pulled.type === 'group') expect(pulled.prev).toBe('prevaddr');
+	});
+
+	test('publishGroupDocument chains the epoch commit-point document under the live one (spec §10.3)', async () => {
+		const blobs = new Map<string, Uint8Array>();
+		const store = honestStore(blobs);
+		const seal = fakeSeal();
+		const result = await publishGroupDocument({
+			group: snapshot(5, 'g1', 30),
+			seal,
+			dekPubkey: OWNER,
+			store,
+			prev: 'prevaddr',
+			commitPoint: { clientState: bytesToBase64Local(fakeStateBytes(5, 'g1', 'cp')), cursor: 12 }
+		});
+		// The commit point went out as its own document, chained under the live one.
+		expect(result.commitPointPublished).toBeDefined();
+		expect(result.commitPointPublished!.address).not.toBe(result.address);
+		expect(blobs.size).toBe(2);
+		const live = await pullDocument({
+			address: result.address,
+			store,
+			addressToUrl: (a) => `https://blossom.test/${a}`,
+			seal,
+			dekPubkey: OWNER
+		});
+		const point = await pullDocument({
+			address: result.commitPointPublished!.address,
+			store,
+			addressToUrl: (a) => `https://blossom.test/${a}`,
+			seal,
+			dekPubkey: OWNER
+		});
+		if (live.type === 'group' && point.type === 'group') {
+			expect(live.prev).toBe(result.commitPointPublished!.address);
+			expect(point.prev).toBe('prevaddr');
+			// The point carries the Commit's state and cursor — its stream position.
+			expect(point.cursor).toBe(12);
+			expect(point.clientState).toBe(bytesToBase64Local(fakeStateBytes(5, 'g1', 'cp')));
+		}
+		// Not yet past the commit point → the live document IS the commit point.
+		const single = honestStore();
+		const result2 = await publishGroupDocument({
+			group: snapshot(5, 'g1', 12),
+			seal,
+			dekPubkey: OWNER,
+			store: single,
+			commitPoint: { clientState: bytesToBase64Local(fakeStateBytes(5, 'g1', 'cp')), cursor: 12 }
+		});
+		expect(result2.commitPointPublished).toBeUndefined();
 	});
 
 	test('publishGroupDocument covers own unechoed sends: cursor = max(fetchCursor, lastCursor)', async () => {
@@ -389,6 +459,278 @@ describe('group reconciliation via ReconcileTarget.applyGroupDocument (spec §8)
 		const outcome = await makeTarget(local).applyGroupDocument(groupDoc(2, 'g'));
 		expect(outcome).toBe('skipped');
 		expect(local.get('g')).toBe(5n); // unchanged
+	});
+});
+
+describe('decideGroupDocumentApply (spec §8 forward-only + spec §10 detection)', () => {
+	const FP = '5:aa:bb';
+
+	test('seed when absent, fast-forward strictly newer, skip older or undecodable', () => {
+		expect(decideGroupDocumentApply({ incomingEpoch: 2n, localEpoch: undefined })).toBe('seeded');
+		expect(decideGroupDocumentApply({ incomingEpoch: 6n, localEpoch: 5n })).toBe('fast-forwarded');
+		expect(decideGroupDocumentApply({ incomingEpoch: 4n, localEpoch: 5n })).toBe('skipped');
+		// Undecodable is advisory garbage — never installs, never adopts.
+		expect(decideGroupDocumentApply({ incomingEpoch: undefined, localEpoch: undefined })).toBe(
+			'skipped'
+		);
+	});
+
+	test('equal epoch + same fingerprint is advisory — a re-publish is not a fork', () => {
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingFingerprint: FP,
+				localFingerprint: FP
+			})
+		).toBe('skipped');
+	});
+
+	test('equal epoch + different fingerprints is the §10 fork signal', () => {
+		expect(
+			decideGroupDocumentApply({
+				incomingEpoch: 5n,
+				localEpoch: 5n,
+				incomingFingerprint: '5:aa:cc',
+				localFingerprint: FP
+			})
+		).toBe('fork');
+		// A pre-fingerprint document cannot be compared — treated as a fork and
+		// resolved by the deterministic tier order, never adopted blind.
+		expect(decideGroupDocumentApply({ incomingEpoch: 5n, localEpoch: 5n })).toBe('fork');
+	});
+});
+
+describe('isStaleAdoption (the adoption gate under the lock, spec §8/§10)', () => {
+	test('fast-forward needs strictly newer; a fork adoption takes equal-or-newer', () => {
+		// Normal fast-forward: only strictly newer adopts.
+		expect(isStaleAdoption(6n, 5n, false)).toBe(false);
+		expect(isStaleAdoption(5n, 5n, false)).toBe(true);
+		expect(isStaleAdoption(4n, 5n, false)).toBe(true);
+		// §10 fork adoption: equal (the exception) AND newer (the chain-jump case).
+		expect(isStaleAdoption(5n, 5n, true)).toBe(false);
+		expect(isStaleAdoption(7n, 5n, true)).toBe(false);
+		expect(isStaleAdoption(4n, 5n, true)).toBe(true);
+	});
+});
+
+describe('stateFingerprint (spec §10 detection)', () => {
+	test('constant within an epoch; different branches differ', () => {
+		const state = (epoch: number, gid: string, v: string) =>
+			clientStateDecoder(fakeStateBytes(epoch, gid, v), 0)![0];
+		// Same branch: re-published copies of one state share the fingerprint.
+		expect(stateFingerprint(state(5, 'g1', 'a'))).toBe(stateFingerprint(state(5, 'g1', 'a')));
+		// Two Commits from one base epoch (different v) differ — the fork signal.
+		expect(stateFingerprint(state(5, 'g1', 'a'))).not.toBe(stateFingerprint(state(5, 'g1', 'b')));
+	});
+});
+
+describe('decideForkResolution (spec §10 resolution: evidence over rank)', () => {
+	const INCOMING = '5:aa:cc';
+	const LOCAL = '5:aa:bb';
+
+	test('the coordinator-order mark decides and the rank is never consulted', async () => {
+		const rank = vi.fn(() => true);
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				branch: { kind: 'live', sinceEpoch: '6' },
+				rank
+			})
+		).toEqual({ adopt: false, by: 'coordinator-order' });
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				branch: { kind: 'dead', sinceEpoch: '6' },
+				rank
+			})
+		).toEqual({ adopt: true, by: 'coordinator-order' });
+		expect(rank).not.toHaveBeenCalled();
+	});
+
+	test('the third-party verdict decides where no mark exists', async () => {
+		const rank = vi.fn(() => true);
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				verdict: true,
+				rank
+			})
+		).toEqual({ adopt: true, by: 'third-party' });
+		expect(rank).not.toHaveBeenCalled();
+	});
+
+	test('a recorded decision stands against the rank; the rank alone decides otherwise', async () => {
+		// The recorded winner is OURS — a replayed loser that outranks it still loses.
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				recorded: { epoch: '5', fingerprint: LOCAL, by: 'third-party' },
+				rank: () => true
+			})
+		).toEqual({ adopt: false, by: 'third-party' });
+		// The recorded winner is the incoming — adopted despite a rank that says otherwise.
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				recorded: { epoch: '5', fingerprint: INCOMING, by: 'rank' },
+				rank: () => false
+			})
+		).toEqual({ adopt: true, by: 'rank' });
+		// A record for ANOTHER fork epoch binds nothing — that fork's rank decides.
+		expect(
+			await decideForkResolution({
+				forkEpoch: '5',
+				incomingFingerprint: INCOMING,
+				recorded: { epoch: '4', fingerprint: LOCAL, by: 'third-party' },
+				rank: () => true
+			})
+		).toEqual({ adopt: true, by: 'rank' });
+	});
+});
+
+describe('classifyChainDescent (spec §8 descent check)', () => {
+	const held = { '3': 'fp3', '4': 'fp4' };
+
+	test('through our current state = advance; through an earlier held state = fork; else unknown', () => {
+		// The chain passes through our state at our epoch (local 4): plain advance.
+		expect(
+			classifyChainDescent(
+				[
+					{ epoch: 5n, fingerprint: 'fp5' },
+					{ epoch: 4n, fingerprint: 'fp4' }
+				],
+				held,
+				4n
+			)
+		).toBe('descends');
+		// The chain meets a state we held at epoch 3 and jumps over our epoch 4:
+		// a fork that has moved on — the returned epoch is the racing Commits'
+		// produced epoch (base + 1), the decision/rank key, not the shared base.
+		expect(
+			classifyChainDescent(
+				[
+					{ epoch: 6n, fingerprint: 'fp6' },
+					{ epoch: 5n, fingerprint: 'fp5' },
+					{ epoch: 3n, fingerprint: 'fp3' }
+				],
+				held,
+				4n
+			)
+		).toEqual({ kind: 'forkedAt', epoch: 4n });
+		// No shared epoch found (unreadable / not available to check): forward-only.
+		expect(classifyChainDescent([{ epoch: 6n, fingerprint: 'fp6' }], held, 4n)).toBe('unknown');
+		expect(classifyChainDescent([{ epoch: 3n, fingerprint: 'not-fp3' }], held, 4n)).toBe('unknown');
+	});
+});
+
+describe('forkRankAdoptsTheirs (spec §10.3: commit-point rank)', () => {
+	test('with commit-point docs the LOWER Commit cursor wins — coordinator order', () => {
+		// Ours landed at cursor 5, theirs at 9 — ours committed first. Their live
+		// documents rank the other way (the writer synced more) and must not matter.
+		const ours = {
+			commit: { cursor: 5, address: '0'.repeat(64) },
+			live: { cursor: 20, address: 'z'.repeat(64) }
+		};
+		const theirs = {
+			commit: { cursor: 9, address: 'z'.repeat(64) },
+			live: { cursor: 30, address: 'z'.repeat(64) }
+		};
+		expect(forkRankAdoptsTheirs(ours, theirs)).toBe(false);
+		expect(forkRankAdoptsTheirs(theirs, ours)).toBe(true);
+	});
+
+	test('commit tie → greater address; no commit docs → the live-document rank', () => {
+		const a = { commit: { cursor: 5, address: '0'.repeat(64) } };
+		const b = { commit: { cursor: 5, address: 'f'.repeat(64) } };
+		expect(forkRankAdoptsTheirs(a, b)).toBe(true);
+		expect(forkRankAdoptsTheirs(b, a)).toBe(false);
+		// Where a side has no document at the fork epoch the live documents decide:
+		// HIGHER cursor wins (the pre-commit-point shared floor), then address.
+		const ours = { live: { cursor: 10, address: 'z'.repeat(64) } };
+		const theirs = { live: { cursor: 11, address: '0'.repeat(64) } };
+		expect(forkRankAdoptsTheirs(ours, theirs)).toBe(true);
+		expect(forkRankAdoptsTheirs(theirs, ours)).toBe(false);
+		const low = { live: { cursor: 10, address: '0'.repeat(64) } };
+		const high = { live: { cursor: 10, address: 'f'.repeat(64) } };
+		expect(forkRankAdoptsTheirs(low, high)).toBe(true);
+		// Unrankable sides (no live document identity) default to adopting the
+		// incoming — the liveness floor both reference implementations share.
+		expect(forkRankAdoptsTheirs({}, theirs)).toBe(true);
+		expect(forkRankAdoptsTheirs(theirs, {})).toBe(true);
+	});
+});
+
+describe('fetch liveness (spec §8: a failed fetch is never reconciled)', () => {
+	const ADDRESS = 'a'.repeat(64);
+	const NOW = 1_000_000;
+
+	test('pullRetryDelayMs backs off 5s → 15s → 45s → 135s → 5min cap', () => {
+		expect(pullRetryDelayMs(1)).toBe(5_000);
+		expect(pullRetryDelayMs(2)).toBe(15_000);
+		expect(pullRetryDelayMs(3)).toBe(45_000);
+		expect(pullRetryDelayMs(4)).toBe(135_000);
+		expect(pullRetryDelayMs(10)).toBe(300_000);
+	});
+
+	test('nextPullRetryDelayMs arms for the SOONEST due pull, not the latest', () => {
+		const now = 1_000_000;
+		const overdue = { address: 'a', attempts: 1, lastAttemptAt: now - 5_000 };
+		const later = { address: 'b', attempts: 4, lastAttemptAt: now };
+		expect(nextPullRetryDelayMs([overdue, later], now)).toBe(0); // overdue fires now
+		expect(nextPullRetryDelayMs([later, overdue], now)).toBe(0); // order-independent
+		expect(nextPullRetryDelayMs([later], now)).toBe(135_000);
+	});
+
+	test('a changed tip address always fetches; unchanged is a no-op only when healthy', () => {
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: 'b'.repeat(64),
+				tipAddress: ADDRESS,
+				now: NOW
+			})
+		).toBe(true);
+		expect(
+			shouldReconcileGroupDocument({ lastSeenAddress: ADDRESS, tipAddress: ADDRESS, now: NOW })
+		).toBe(false);
+	});
+
+	test('a failed pull retries the SAME address past backoff (the incident regression)', () => {
+		const unresolved = { address: ADDRESS, attempts: 1, lastAttemptAt: NOW - 4_999 };
+		// Not yet due → skip this attempt…
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: ADDRESS,
+				unresolved,
+				now: NOW
+			})
+		).toBe(false);
+		// …due → retry despite the unchanged tip address.
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: ADDRESS,
+				unresolved,
+				now: NOW + 1
+			})
+		).toBe(true);
+	});
+
+	test('a tip that moved past the failed address fetches immediately', () => {
+		expect(
+			shouldReconcileGroupDocument({
+				lastSeenAddress: ADDRESS,
+				tipAddress: 'b'.repeat(64),
+				unresolved: { address: ADDRESS, attempts: 3, lastAttemptAt: NOW },
+				now: NOW
+			})
+		).toBe(true);
 	});
 });
 

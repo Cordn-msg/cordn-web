@@ -25,6 +25,8 @@ export interface PersistedChatGroupLike {
 	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
 	poisonedAtCursor?: number;
+	/** Last skipped sibling Commit (spec §10 step 1 fork evidence). */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
 }
 
 export interface WorkingChatGroupSession {
@@ -37,6 +39,8 @@ export interface WorkingChatGroupSession {
 	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
 	poisonedAtCursor?: number;
+	/** Written by ingestion's sibling-skip hook (spec §10 step 1). */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
 }
 
 export function createWorkingChatGroupSession(
@@ -122,6 +126,11 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		syncIssues: params.workingGroup.syncIssues.slice(-50),
 		status: params.workingGroup.status,
 		removedAtCursor: params.workingGroup.removedAtCursor,
-		poisonedAtCursor: params.workingGroup.poisonedAtCursor
+		poisonedAtCursor: params.workingGroup.poisonedAtCursor,
+		// Fork evidence written by ingestion's sibling-skip hook (spec §10 step
+		// 1) — a fresh skip replaces, no skip keeps the previous one (cleared on
+		// document adoption).
+		skippedSiblingCommit:
+			params.workingGroup.skippedSiblingCommit ?? params.group.skippedSiblingCommit
 	};
 }

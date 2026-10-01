@@ -34,6 +34,39 @@ export interface StoredChatGroupRecord {
 	poisonedAtCursor?: number;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch?: string;
+	/** The adopted group-document identity (spec §10: content address, document
+	 *  cursor, state fingerprint) — the rank fallback needs to know WHICH
+	 *  document the local state came from. Absent on records seeded before
+	 *  this field existed (treated as unrankable → no fork adoption). */
+	appliedDocument?: { address: string; cursor: number; fingerprint?: string };
+	/** Epoch fingerprints (spec §10 detection) of the states this device has
+	 *  held, keyed by epoch (retention-capped). What a document's `prev` chain
+	 *  is compared against to tell an advance on our branch from a fork that
+	 *  moved on (spec §8 descent check). */
+	epochFingerprints?: Record<string, string>;
+	/** Which side of a shared-leaf race this device's state is on (spec §10
+	 *  step 1, coordinator order), recorded right after posting a Commit while
+	 *  the pre-Commit state can still read the race. `live` — no competing
+	 *  Commit from the shared leaf preceded ours; `dead` — one did, so the
+	 *  group applied the sibling's. Cleared whenever a document is adopted. */
+	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
+	/** The last Commit from this device's own shared leaf that ingestion
+	 *  skipped (a sibling's, spec §10), at the epoch it was skipped in. A
+	 *  Commit posted from that same epoch afterwards lost the race to it. */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** The state right after this device's own Commit produced the current
+	 *  epoch, at that Commit's stream cursor — the epoch's commit point (spec
+	 *  §8.5 gen-0 state, §10.3 rank). Published ahead of the live document,
+	 *  once, when the live state has moved past it. */
+	commitPoint?: { epoch: string; cursor: number; clientState: string; published?: boolean };
+	/** The fork decision recorded for the fork epoch (spec §10): the winning
+	 *  branch's fingerprint and what decided it. A decision from evidence is
+	 *  not overturned by the rank fallback alone. */
+	forkDecision?: {
+		epoch: string;
+		fingerprint: string;
+		by: 'coordinator-order' | 'third-party' | 'rank';
+	};
 	/** Not-yet-delivered outbound epoch ops (mostly add-member Welcomes awaiting
 	 *  Commit re-ingestion). Persisted on the group record so a reload before
 	 *  finalization no longer strands a Welcome; the in-memory Map in

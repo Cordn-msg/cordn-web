@@ -35,9 +35,11 @@ import {
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
 	isStaleGenerationIssue,
+	probeSealedMessage,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { noteStateFingerprint } from '$lib/services/multiDevice';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
 import {
@@ -116,6 +118,22 @@ export interface StoredChatGroup {
 	metadata?: GroupMetadataInput;
 	joinedWithKeyPackageRef?: string;
 	joinEpoch: bigint;
+	/** The adopted group-document identity (spec §10). */
+	appliedDocument?: { address: string; cursor: number; fingerprint?: string };
+	/** Epoch fingerprints of held states, keyed by epoch (spec §8 descent check). */
+	epochFingerprints?: Record<string, string>;
+	/** Shared-leaf race side (spec §10 step 1); cleared on document adoption. */
+	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
+	/** Last skipped sibling Commit (spec §10 step 1 evidence). */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** The epoch's commit point (spec §8.5 gen-0, §10.3 rank). */
+	commitPoint?: { epoch: string; cursor: number; clientState: string; published?: boolean };
+	/** Recorded fork winner for the fork epoch (spec §10). */
+	forkDecision?: {
+		epoch: string;
+		fingerprint: string;
+		by: 'coordinator-order' | 'third-party' | 'rank';
+	};
 }
 
 export interface CoordinatorAvailableKeyPackage {
@@ -179,6 +197,12 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		poisonedAtCursor: group.poisonedAtCursor,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
 		joinEpoch: group.joinEpoch > 0n ? group.joinEpoch.toString() : undefined,
+		appliedDocument: group.appliedDocument,
+		epochFingerprints: group.epochFingerprints,
+		branch: group.branch,
+		skippedSiblingCommit: group.skippedSiblingCommit,
+		commitPoint: group.commitPoint,
+		forkDecision: group.forkDecision,
 		stateBytes: base64ToBytes(group.stateBase64),
 		// Passed through un-cloned: both storage backends clone what they
 		// actually persist (IDB per written message, memory backend on write),
@@ -232,7 +256,13 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		poisonedAtCursor: group.poisonedAtCursor,
 		metadata,
 		joinedWithKeyPackageRef: group.joinedWithKeyPackageRef,
-		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : 0n
+		joinEpoch: group.joinEpoch !== undefined ? BigInt(group.joinEpoch) : 0n,
+		appliedDocument: group.appliedDocument,
+		epochFingerprints: group.epochFingerprints,
+		branch: group.branch,
+		skippedSiblingCommit: group.skippedSiblingCommit,
+		commitPoint: group.commitPoint,
+		forkDecision: group.forkDecision
 	};
 }
 
@@ -673,9 +703,18 @@ export async function runGroupOperation<T>(
  */
 async function runOutboundGroupOperation<T>(
 	groupId: string,
-	operation: () => Promise<T>
+	operation: () => Promise<T>,
+	opts?: { requireReconciled?: boolean }
 ): Promise<T> {
-	await reconcileTipForOutbound();
+	const reconciled = await reconcileTipForOutbound();
+	// Spec §10.1 repair discipline: an epoch-advancing repair MUST NOT be
+	// authored from stale state — a failed pre-commit reconcile defers it (the
+	// next detection retries), where a commit would risk forking the fleet from
+	// a behind epoch. User ops (invite/remove/metadata) keep the §10 mitigation
+	// #1 trade: self-heal instead of refuse.
+	if (opts?.requireReconciled && !reconciled) {
+		throw new Error('Tip reconcile failed; deferring the epoch-advancing commit');
+	}
 	const result = await runGroupOperation(groupId, operation);
 	// Multi-device re-publish (spec §10): an epoch-advancing outbound Commit
 	// (invite / remove / metadata / self-update) just completed and persisted new local state
@@ -720,64 +759,175 @@ async function runOutboundGroupOperation<T>(
  */
 const ratchetRepairEpochByGroup = new Map<string, string>();
 
-async function repairSharedLeafRatchetDivergence(
+/**
+ * Fork evidence for one of our own Commits (spec §10). Step 1 (coordinator
+ * order) is gathered while it still can be: right after posting and BEFORE the
+ * new state is adopted, replay what the coordinator stored before our post
+ * against the pre-Commit state. A Commit from our own shared leaf in there — a
+ * sibling's, which the replay skips — or anything that moves the epoch means
+ * the group applied that Commit first and ours is on a `dead` branch; nothing
+ * before ours means the group applied ours (`live`). Once the state advances,
+ * the competing Commit is sealed under a key this device no longer holds, so
+ * the question cannot be asked later. A fetch failure leaves the mark unchanged
+ * (the fallback rank still converges). Also captures the epoch's commit point —
+ * the new state at the Commit's cursor — for spec §8.5 catch-up and the §10.3
+ * rank.
+ */
+async function adoptOwnCommitEvidence(params: {
+	account: ReturnType<typeof requireActiveAccount>;
+	group: StoredChatGroup;
+	preState: ClientState;
+	newState: ClientState;
+	/** The gen-0 state's stored encoding — the commit-point document's body. */
+	newStateBase64: string;
+	posted: { cursor: number; msg64: string };
+}): Promise<{
+	epochFingerprints: Record<string, string>;
+	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
+	commitPoint: NonNullable<StoredChatGroup['commitPoint']>;
+}> {
+	const baseEpoch = params.preState.groupContext.epoch;
+	const sinceEpoch = (baseEpoch + 1n).toString();
+	const held = noteStateFingerprint(params.group.epochFingerprints, params.preState);
+	let lost: boolean | undefined;
+	if (params.group.skippedSiblingCommit?.epoch === baseEpoch.toString()) {
+		lost = true;
+	} else {
+		try {
+			const result = await withCoordinatorClientRetry(
+				params.account,
+				params.group.coordinatorKey,
+				(client) =>
+					client.FetchManyGroupMessages({
+						groups: [
+							{
+								gid: groupIdDecoder.decode(params.preState.groupContext.groupId),
+								after: params.group.fetchCursor
+							}
+						]
+					})
+			);
+			const earlier = result.messages
+				.filter((m) => m.cursor < params.posted.cursor && m.msg_64 !== params.posted.msg64)
+				.sort((a, b) => a.cursor - b.cursor);
+			if (earlier.length === 0) {
+				lost = false;
+			} else {
+				let probeState = params.preState;
+				let epochMoved = false;
+				let siblingSkipped = false;
+				for (const message of earlier) {
+					const probed = await probeSealedMessage({
+						state: probeState,
+						sealedMsg64: message.msg_64,
+						localStablePubkey: normalizePubKey(params.account.pubkey)
+					});
+					probeState = probed.state;
+					epochMoved ||= probed.epochMoved;
+					siblingSkipped ||= probed.siblingSkipped;
+				}
+				lost = epochMoved || siblingSkipped;
+			}
+		} catch {
+			lost = undefined;
+		}
+	}
+	const branch =
+		lost === undefined
+			? params.group.branch
+			: lost
+				? ({ kind: 'dead', sinceEpoch } as const)
+				: params.group.branch?.kind === 'dead'
+					? params.group.branch
+					: ({ kind: 'live', sinceEpoch } as const);
+	return {
+		epochFingerprints: noteStateFingerprint(held, params.newState),
+		branch,
+		commitPoint: {
+			epoch: params.newState.groupContext.epoch.toString(),
+			cursor: params.posted.cursor,
+			clientState: params.newStateBase64
+		}
+	};
+}
+
+export async function repairSharedLeafRatchetDivergence(
 	groupId: string,
 	detectedAtEpoch: string
 ): Promise<void> {
-	await runOutboundGroupOperation(groupId, async () => {
-		if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) return;
-		ratchetRepairEpochByGroup.set(groupId, detectedAtEpoch);
-		try {
-			const account = requireActiveAccount('You must be logged in to repair group state');
-			const group = await assertGroupCanPerformOutboundOperation(groupId);
-			const state = decodeStoredGroupState(group);
+	await runOutboundGroupOperation(
+		groupId,
+		async () => {
+			if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) return;
+			ratchetRepairEpochByGroup.set(groupId, detectedAtEpoch);
+			try {
+				const account = requireActiveAccount('You must be logged in to repair group state');
+				const group = await assertGroupCanPerformOutboundOperation(groupId);
+				const state = decodeStoredGroupState(group);
+				// Spec §10.1 re-verify at the CURRENT epoch: a fresh epoch is itself a
+				// repair (the fast-forward resynced the ratchet), so a self-update on a
+				// stale detection would be pure churn — and churn forks.
+				if (state.groupContext.epoch.toString() !== detectedAtEpoch) return;
 
-			const commitResult = await createSelfUpdateCommit({ state });
-			const sealedCommit = await sealForPosting({
-				state,
-				opaqueMessageBase64: commitResult.commitMessageBase64
-			});
+				const commitResult = await createSelfUpdateCommit({ state });
+				const sealedCommit = await sealForPosting({
+					state,
+					opaqueMessageBase64: commitResult.commitMessageBase64
+				});
 
-			enqueuePendingEpochOperation(pendingEpochOperations, {
-				kind: 'self-update',
-				groupId: group.id,
-				commitMessageBase64: sealedCommit.msg_64
-			});
+				enqueuePendingEpochOperation(pendingEpochOperations, {
+					kind: 'self-update',
+					groupId: group.id,
+					commitMessageBase64: sealedCommit.msg_64
+				});
 
-			const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
-				client.PostGroupMessage(sealedCommit)
-			);
+				const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+					client.PostGroupMessage(sealedCommit)
+				);
 
-			// A self-update changes no membership or metadata, so there are no
-			// system messages to synthesize; persist the new epoch like any
-			// other outbound Commit.
-			const workingGroup = createWorkingChatGroupSession(group, commitResult.newState);
-			const nextGroup = buildPersistedChatGroup({
-				group,
-				workingGroup,
-				encodeState,
-				metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState))
-			});
+				// A self-update changes no membership or metadata, so there are no
+				// system messages to synthesize; persist the new epoch like any
+				// other outbound Commit.
+				const workingGroup = createWorkingChatGroupSession(group, commitResult.newState);
+				const nextGroup = buildPersistedChatGroup({
+					group,
+					workingGroup,
+					encodeState,
+					metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState))
+				});
+				Object.assign(
+					nextGroup,
+					await adoptOwnCommitEvidence({
+						account,
+						group,
+						preState: state,
+						newState: commitResult.newState,
+						newStateBase64: nextGroup.stateBase64,
+						posted: { cursor: posted.cursor, msg64: sealedCommit.msg_64 }
+					})
+				);
 
-			const tentativeSnapshot = createOutboundTentativeSnapshot({
-				groupId: group.id,
-				stateBase64: nextGroup.stateBase64,
-				fetchCursor: nextGroup.fetchCursor,
-				newEpoch: commitResult.newState.groupContext.epoch,
-				triggerCursor: posted.cursor
-			});
-			nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
+				const tentativeSnapshot = createOutboundTentativeSnapshot({
+					groupId: group.id,
+					stateBase64: nextGroup.stateBase64,
+					fetchCursor: nextGroup.fetchCursor,
+					newEpoch: commitResult.newState.groupContext.epoch,
+					triggerCursor: posted.cursor
+				});
+				nextGroup.snapshots = replaceTentativeSnapshot(nextGroup.snapshots, tentativeSnapshot);
 
-			replaceGroup(group.id, nextGroup);
-		} catch (error) {
-			// Transient failure (e.g. coordinator unreachable): release the
-			// rate-limit key so the next detection retries the repair.
-			if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) {
-				ratchetRepairEpochByGroup.delete(groupId);
+				replaceGroup(group.id, nextGroup);
+			} catch (error) {
+				// Transient failure (e.g. coordinator unreachable): release the
+				// rate-limit key so the next detection retries the repair.
+				if (ratchetRepairEpochByGroup.get(groupId) === detectedAtEpoch) {
+					ratchetRepairEpochByGroup.delete(groupId);
+				}
+				throw error;
 			}
-			throw error;
-		}
-	});
+		},
+		{ requireReconciled: true }
+	);
 }
 
 function scheduleSharedLeafRatchetRepair(groupId: string, detectedAtEpoch: string): void {
@@ -1171,6 +1321,17 @@ export async function inviteChatGroupMembers(input: {
 			encodeState,
 			metadata: toPersistedGroupMetadata(sync.workingGroup.metadata)
 		});
+		Object.assign(
+			nextGroup,
+			await adoptOwnCommitEvidence({
+				account,
+				group,
+				preState: state,
+				newState: commitResult.newState,
+				newStateBase64: syncBaseGroup.stateBase64,
+				posted: { cursor: posted.cursor, msg64: sealedAddCommit.msg_64 }
+			})
+		);
 
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
@@ -1313,6 +1474,17 @@ export async function removeChatGroupMember(input: {
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 				group.metadata
 		});
+		Object.assign(
+			nextGroup,
+			await adoptOwnCommitEvidence({
+				account,
+				group,
+				preState: state,
+				newState: commitResult.newState,
+				newStateBase64: nextGroup.stateBase64,
+				posted: { cursor: posted.cursor, msg64: sealedRemoveCommit.msg_64 }
+			})
+		);
 
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
@@ -1404,6 +1576,17 @@ export async function updateChatGroupMetadata(input: {
 			metadata:
 				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ?? metadata
 		});
+		Object.assign(
+			nextGroup,
+			await adoptOwnCommitEvidence({
+				account,
+				group,
+				preState: state,
+				newState: commitResult.newState,
+				newStateBase64: nextGroup.stateBase64,
+				posted: { cursor: posted.cursor, msg64: sealedMetadataCommit.msg_64 }
+			})
+		);
 
 		// Create tentative snapshot for the new epoch
 		const tentativeSnapshot = createOutboundTentativeSnapshot({
