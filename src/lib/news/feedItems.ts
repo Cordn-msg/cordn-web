@@ -98,6 +98,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Copy a screenshot or an image and paste it directly into the message box — on the web and on Android. It lands as an attachment you can review before sending, with a caption if you want one, exactly like photos picked from your gallery.'
 	},
 	{
+		id: 'cordn-news-2026-10-01-reaction-timeline',
+		createdAt: Date.UTC(2026, 9, 1),
+		version: 1,
+		title: 'Reactions in plain sight, attachments without the wait',
+		body: '- ✨ Reactions no longer hide on old messages: every reaction now appears in the chat at the moment it happened — “Alice, Bob +3 reacted 👍” — and a tap on See jumps straight to the message it was about. Prefer a messages-only timeline? Turn it off in Settings → Chat behavior.\n- 🐛 Photos and files show up in the message box the instant you pick them: preparing them privately (stripping metadata, converting HEIC photos) now runs in the background behind a small spinner on the attachment, instead of delaying its appearance — most noticeable on phones. Send unlocks as soon as the attachment is ready, since what goes out is exactly the prepared file.\n- 🔄 The unread-mentions “@” counter moved out of the message box: it now floats beside the scroll-to-bottom button at the bottom-right of the chat, keeping the composer compact.'
+	},
+	{
 		id: 'cordn-news-2026-10-01-md-convergence',
 		createdAt: Date.UTC(2026, 9, 1),
 		version: 1,
