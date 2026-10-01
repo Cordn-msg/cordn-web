@@ -23,6 +23,7 @@
 	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import * as Marker from '$lib/components/ui/marker/index.js';
+	import MarkerName from './MarkerName.svelte';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
@@ -132,6 +133,8 @@
 				return X;
 			case 'metadata-changed':
 				return Pencil;
+			case 'reaction':
+				return SmilePlus;
 			default:
 				return Info;
 		}
@@ -521,6 +524,27 @@
 				{:else if message.systemKind === 'metadata-changed'}
 					{@render systemName(systemCommitterName)}
 					changed {message.systemDetail ?? 'group settings'}
+				{:else if message.systemKind === 'reaction'}
+					{@const senders = message.reactionSenders ?? []}
+					{@const emojis = message.reactionEmojis ?? []}
+					{#each senders.slice(0, 2) as sender, index (sender)}
+						{#if index > 0}<span>, </span>{/if}
+						<MarkerName pubkey={sender} />
+					{/each}
+					{#if senders.length > 2}+{senders.length - 2}{/if}
+					reacted
+					{#each emojis.slice(0, 3) as emoji (emoji)}{emoji}{/each}
+					{#if emojis.length > 3}…{/if}
+					{#if message.reactionTarget}
+						<button
+							type="button"
+							class="ml-1 rounded-sm text-xs font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+							onclick={() => onNavigateToMessage(message.reactionTarget!)}
+							aria-label="See the reacted message"
+						>
+							See
+						</button>
+					{/if}
 				{/if}
 				<span class="ml-1 align-baseline text-[10px] whitespace-nowrap text-muted-foreground/50">
 					{message.timeLabel}

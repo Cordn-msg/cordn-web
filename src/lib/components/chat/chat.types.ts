@@ -35,10 +35,17 @@ export interface ChatMessage {
 	pinnedBy?: string;
 	unreadReference?: boolean;
 	unreadReferenceCursor?: number;
-	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed';
+	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed' | 'reaction';
 	systemTarget?: string;
 	systemCommitter?: string;
 	systemDetail?: string;
+	/** Reaction marker only: composite row id of the reacted-to message.
+	 *  Undefined when the target is unknown (no jump offered). */
+	reactionTarget?: string;
+	/** Reaction marker only: distinct reaction emojis, in arrival order. */
+	reactionEmojis?: string[];
+	/** Reaction marker only: distinct reactor pubkeys, in arrival order. */
+	reactionSenders?: string[];
 	/** Media attachment. Optimistic/draft messages carry a local plaintext
 	 *  `previewUrl` (shown immediately during upload); confirmed messages leave
 	 *  this undefined and resolve the `imeta` lazily via the encrypted-media

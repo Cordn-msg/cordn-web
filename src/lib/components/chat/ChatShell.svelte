@@ -33,9 +33,12 @@
 		buildAnnotationIndex,
 		getMessageThreadReference,
 		type ChatMessageReplyTarget,
+		getMessageReactionReference,
 		type MessageTarget
 	} from '$lib/chat/references';
 	import { ChatKinds, SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
+	import { mergeAdjacentReactionMarkers } from './reactionMarkers';
+	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
 	import { formatUnixTimestamp, normalizePubKey, samePubKey } from '$lib/utils';
 	import {
@@ -264,9 +267,35 @@
 			}
 		}
 
+		// Reads reactive module state, so toggling the setting applies instantly.
+		const reactionMarkers = getShowReactionMarkers();
 		const confirmedMessages = storedMessages
-			.filter((message) => !isAnnotationKind(message.kind))
+			.filter((message) =>
+				message.kind === ChatKinds.Reaction ? reactionMarkers : !isAnnotationKind(message.kind)
+			)
 			.map((message) => {
+				// Kind-7 reactions render as marker rows in the linear timeline
+				// (systemKind 'reaction') in addition to the chips on the target.
+				// Malformed references (no e/p/k tags) drop out here, mirroring the
+				// chip fold. The jump target is the composite row id of the target.
+				if (message.kind === ChatKinds.Reaction) {
+					const reference = getMessageReactionReference(
+						message.kind,
+						message.content,
+						message.tags
+					);
+					if (!reference) return null;
+					const target = byEventId.get(reference.targetId);
+					return {
+						...toChatMessage(message),
+						text: '',
+						systemKind: 'reaction',
+						systemCommitter: message.sender,
+						reactionTarget: target ? `${target.id}:${target.cursor}` : undefined,
+						reactionEmojis: [reference.reaction],
+						reactionSenders: [message.sender]
+					} satisfies ChatMessage;
+				}
 				if (message.kind === SYSTEM_MESSAGE_KIND) {
 					const data = parseSystemMessageData(message.content);
 					return {
@@ -348,7 +377,11 @@
 		const pending = getPendingMessages(groupId).filter(
 			(message) => !byEventId.has(message.eventId)
 		);
-		return [...confirmedMessages, ...pending].sort(compareChatMessages);
+		return mergeAdjacentReactionMarkers(
+			[...confirmedMessages, ...pending]
+				.filter((message): message is ChatMessage => message !== null)
+				.sort(compareChatMessages)
+		);
 	});
 
 	// Ordered pin list for the top ribbon. Newest-pinned-first; resolves the
