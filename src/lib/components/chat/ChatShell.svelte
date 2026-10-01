@@ -908,6 +908,8 @@
 					bind:this={messageListRef}
 					{messages}
 					{initialFocusMessageId}
+					unreadReferenceCount={unreadReferenceTargets.length}
+					onNavigateToReference={navigateToNextReference}
 					onReply={handleReply}
 					onReact={handleReact}
 					onEdit={handleEdit}
@@ -954,8 +956,6 @@
 			focusKey={composerFocusKey}
 			{mentionCandidates}
 			bind:selectedMentions
-			unreadReferenceCount={unreadReferenceTargets.length}
-			onNavigateToReference={navigateToNextReference}
 		/>
 	</div>
 {/snippet}

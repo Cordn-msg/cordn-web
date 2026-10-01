@@ -4,6 +4,7 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { scale } from 'svelte/transition';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import AtSign from '@lucide/svelte/icons/at-sign';
 	import { Button } from '$lib/components/ui/button';
 	import ChatMessageItem from './ChatMessageItem.svelte';
 	import { estimateChatMessageHeight } from './chatMessageRenderCache';
@@ -19,9 +20,15 @@
 		onRetrySend = () => {},
 		onVisibleUnreadReference = () => {},
 		onOpenRich = () => {},
-		onPin = () => {}
+		onPin = () => {},
+		unreadReferenceCount = 0,
+		onNavigateToReference = () => {}
 	}: {
 		messages: ChatMessage[];
+		/** Unread @-mentions of the viewer: shown as a floating jump button
+		 *  stacked above scroll-to-bottom (moved out of the composer). */
+		unreadReferenceCount?: number;
+		onNavigateToReference?: () => void | Promise<void>;
 		/** Open-at-first-unread target ("<eventId>:<cursor>"), set once per group by
 		 *  ChatShell before the group is marked read. Empty → open at the bottom. */
 		initialFocusMessageId?: string;
@@ -411,21 +418,41 @@
 		</div>
 	</div>
 
-	{#if showScrollToBottom}
-		<div
-			class="absolute right-4 bottom-4 z-10 md:right-6"
-			transition:scale={{ start: 0.8, duration: 150 }}
-		>
-			<Button
-				type="button"
-				size="icon"
-				variant="secondary"
-				class="h-10 w-10 rounded-full shadow-lg"
-				onclick={scrollToBottom}
-				aria-label="Scroll to bottom"
-			>
-				<ChevronDown class="size-5" />
-			</Button>
+	{#if showScrollToBottom || unreadReferenceCount > 0}
+		<div class="absolute right-4 bottom-4 z-10 flex flex-col items-end gap-2 md:right-6">
+			{#if unreadReferenceCount > 0}
+				<Button
+					type="button"
+					size="icon"
+					variant="secondary"
+					class="relative h-10 w-10 rounded-full shadow-lg"
+					onclick={() => void onNavigateToReference()}
+					aria-label="Jump to unread reference"
+				>
+					<AtSign class="size-4" />
+					{#if unreadReferenceCount > 1}
+						<span
+							class="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground"
+						>
+							{unreadReferenceCount}
+						</span>
+					{/if}
+				</Button>
+			{/if}
+			{#if showScrollToBottom}
+				<div transition:scale={{ start: 0.8, duration: 150 }}>
+					<Button
+						type="button"
+						size="icon"
+						variant="secondary"
+						class="h-10 w-10 rounded-full shadow-lg"
+						onclick={scrollToBottom}
+						aria-label="Scroll to bottom"
+					>
+						<ChevronDown class="size-5" />
+					</Button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
