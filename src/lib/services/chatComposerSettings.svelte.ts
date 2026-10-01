@@ -57,3 +57,26 @@ function isTouchPrimary(): boolean {
 export function enterKeySends(): boolean {
 	return resolveEnterKeySends(enterKeyMode, isTouchPrimary());
 }
+
+/**
+ * Whether confirmed reactions render as marker rows in the message timeline
+ * (in addition to the chips on the reacted-to message). Default on; users in
+ * high-traffic groups can turn it off to keep the timeline messages-only.
+ */
+const SHOW_REACTION_MARKERS_KEY = 'cordn.showReactionMarkers';
+
+function loadShowReactionMarkers(): boolean {
+	if (!browser) return true;
+	return localStorage.getItem(SHOW_REACTION_MARKERS_KEY) !== 'false';
+}
+
+let showReactionMarkers = $state(loadShowReactionMarkers());
+
+export function getShowReactionMarkers(): boolean {
+	return showReactionMarkers;
+}
+
+export function setShowReactionMarkers(value: boolean): void {
+	showReactionMarkers = value;
+	if (browser) localStorage.setItem(SHOW_REACTION_MARKERS_KEY, String(value));
+}

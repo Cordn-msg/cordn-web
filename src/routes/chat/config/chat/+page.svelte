@@ -5,8 +5,11 @@
 		getEnterKeyMode,
 		setEnterKeyMode,
 		enterKeySends,
+		getShowReactionMarkers,
+		setShowReactionMarkers,
 		type EnterKeyMode
 	} from '$lib/services/chatComposerSettings.svelte';
+	import { Switch } from '$lib/components/ui/switch';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
 	import Check from '@lucide/svelte/icons/check';
 
@@ -29,6 +32,12 @@
 	];
 
 	let mode = $state(getEnterKeyMode());
+	let reactionMarkers = $state(getShowReactionMarkers());
+
+	function toggleReactionMarkers(next: boolean) {
+		reactionMarkers = next;
+		setShowReactionMarkers(next);
+	}
 
 	function pick(next: EnterKeyMode) {
 		mode = next;
@@ -56,7 +65,7 @@
 		<div class="min-w-0">
 			<h1 class="text-lg font-semibold tracking-tight">Chat behavior</h1>
 			<p class="truncate text-sm text-muted-foreground">
-				How the Enter key behaves while writing messages.
+				How the Enter key behaves and what the message timeline shows.
 			</p>
 		</div>
 	</header>
@@ -95,6 +104,17 @@
 						</div>
 					</button>
 				{/each}
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Show reactions in the timeline</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Render reactions as timeline rows at the moment they happened, in addition to the chips
+						on each message.
+					</p>
+				</div>
+				<Switch bind:checked={reactionMarkers} onCheckedChange={toggleReactionMarkers} />
 			</div>
 
 			<div class="text-center">
