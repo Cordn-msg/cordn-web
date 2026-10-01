@@ -29,6 +29,7 @@ import {
 	composeTombstoneUnion,
 	decideGroupDocumentApply,
 	decideForkResolution,
+	isStaleAdoption,
 	classifyChainDescent,
 	forkRankAdoptsTheirs,
 	stateFingerprint,
@@ -500,6 +501,19 @@ describe('decideGroupDocumentApply (spec §8 forward-only + spec §10 detection)
 	});
 });
 
+describe('isStaleAdoption (the adoption gate under the lock, spec §8/§10)', () => {
+	test('fast-forward needs strictly newer; a fork adoption takes equal-or-newer', () => {
+		// Normal fast-forward: only strictly newer adopts.
+		expect(isStaleAdoption(6n, 5n, false)).toBe(false);
+		expect(isStaleAdoption(5n, 5n, false)).toBe(true);
+		expect(isStaleAdoption(4n, 5n, false)).toBe(true);
+		// §10 fork adoption: equal (the exception) AND newer (the chain-jump case).
+		expect(isStaleAdoption(5n, 5n, true)).toBe(false);
+		expect(isStaleAdoption(7n, 5n, true)).toBe(false);
+		expect(isStaleAdoption(4n, 5n, true)).toBe(true);
+	});
+});
+
 describe('stateFingerprint (spec §10 detection)', () => {
 	test('constant within an epoch; different branches differ', () => {
 		const state = (epoch: number, gid: string, v: string) =>
@@ -596,7 +610,8 @@ describe('classifyChainDescent (spec §8 descent check)', () => {
 			)
 		).toBe('descends');
 		// The chain meets a state we held at epoch 3 and jumps over our epoch 4:
-		// a fork that has moved on, whatever the document's own epoch is.
+		// a fork that has moved on — the returned epoch is the racing Commits'
+		// produced epoch (base + 1), the decision/rank key, not the shared base.
 		expect(
 			classifyChainDescent(
 				[
@@ -607,7 +622,7 @@ describe('classifyChainDescent (spec §8 descent check)', () => {
 				held,
 				4n
 			)
-		).toEqual({ kind: 'forkedAt', epoch: 3n });
+		).toEqual({ kind: 'forkedAt', epoch: 4n });
 		// No shared epoch found (unreadable / not available to check): forward-only.
 		expect(classifyChainDescent([{ epoch: 6n, fingerprint: 'fp6' }], held, 4n)).toBe('unknown');
 		expect(classifyChainDescent([{ epoch: 3n, fingerprint: 'not-fp3' }], held, 4n)).toBe('unknown');

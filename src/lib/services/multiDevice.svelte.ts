@@ -62,6 +62,7 @@ import {
 	reconcileMetaDocument,
 	composeTombstoneUnion,
 	decideGroupDocumentApply,
+	isStaleAdoption,
 	decideForkResolution,
 	classifyChainDescent,
 	forkRankAdoptsTheirs,
@@ -2384,7 +2385,11 @@ async function fastForwardGroup(
 		const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
 		// Re-check under the lock (CAS): a concurrent cycle may have caught up.
 		if (incomingEpoch === undefined || !decoded) return;
-		if (opts?.allowEqualEpoch ? incomingEpoch !== localEpoch : incomingEpoch <= localEpoch) return;
+		// Normal fast-forward needs strictly newer; a §10 fork adoption may also
+		// adopt AT the local epoch (the equal-epoch exception) — so the fork path
+		// accepts equal-or-newer (the chain-jump case adopts a newer document).
+		const stale = isStaleAdoption(incomingEpoch, localEpoch, opts?.allowEqualEpoch === true);
+		if (stale) return;
 		const fingerprint = stateFingerprint(decoded);
 		replaceGroup(existing.id, {
 			...existing,

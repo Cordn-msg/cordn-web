@@ -186,6 +186,20 @@ export function stateFingerprint(state: ClientState): string {
 	return `${context.epoch.toString(16)}:${bytesToHex(context.treeHash)}:${bytesToHex(context.confirmedTranscriptHash)}`;
 }
 
+/**
+ * The adoption gate under the reconcile lock (spec §8 forward-only): a
+ * normal fast-forward adopts strictly-newer state only; a §10 fork adoption
+ * (the equal-epoch exception) may also adopt AT the local epoch — so the fork
+ * path accepts equal-or-newer, never older.
+ */
+export function isStaleAdoption(
+	incomingEpoch: bigint,
+	localEpoch: bigint,
+	allowEqualEpoch: boolean
+): boolean {
+	return allowEqualEpoch ? incomingEpoch < localEpoch : incomingEpoch <= localEpoch;
+}
+
 /** Where a fork decision came from (spec §10 resolution steps 1–3). */
 export type ForkDecisionSource = 'coordinator-order' | 'third-party' | 'rank';
 
@@ -260,8 +274,8 @@ export interface ChainFingerprint {
 	fingerprint: string;
 }
 
-/** Default cap on the retained epoch-fingerprint history (spec §8 descent check). */
-export const RETAINED_FINGERPRINTS = 16;
+/** Cap on the retained epoch-fingerprint history (spec §8 descent check). */
+const RETAINED_FINGERPRINTS = 16;
 
 /** Record a state's fingerprint in the group's held history (spec §10
  * detection; the §8 descent check compares chains against it). Copy-on-write;
@@ -289,9 +303,11 @@ export function noteStateFingerprint(
  * chain passes through the local state at the local epoch (plain advance);
  * `forkedAt` — it meets a state this device held at an EARLIER epoch but never
  * its current one (the chain jumped over the local epoch): a fork that has
- * moved on, whatever the document's current epoch; `unknown` — no shared epoch
- * found (chain unreadable / not available to check) — the forward-only advance
- * applies (spec §8: liveness first).
+ * moved on, whatever the document's current epoch, and the returned epoch is
+ * the FORK epoch (the base + 1 — the racing Commits' produced epoch), the key
+ * for the recorded decision and the commit-point rank (spec §10); `unknown` —
+ * no shared epoch found (chain unreadable / not available to check) — the
+ * forward-only advance applies (spec §8: liveness first).
  */
 export function classifyChainDescent(
 	chain: ChainFingerprint[],
@@ -302,7 +318,7 @@ export function classifyChainDescent(
 		if (link.epoch > localEpoch) continue;
 		const ours = held[link.epoch.toString()];
 		if (ours !== undefined && ours === link.fingerprint) {
-			return link.epoch === localEpoch ? 'descends' : { kind: 'forkedAt', epoch: link.epoch };
+			return link.epoch === localEpoch ? 'descends' : { kind: 'forkedAt', epoch: link.epoch + 1n };
 		}
 	}
 	return 'unknown';
