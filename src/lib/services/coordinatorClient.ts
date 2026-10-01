@@ -126,7 +126,7 @@ export class cordnClient implements coordinatorClient {
 	readonly relays: string[];
 	private disconnectPromise: Promise<void> | undefined;
 	private signerOperations = 0;
-	/** Deadlines hit since the last completed call — 2 in a row = wedged transport. */
+	/** Deadlines hit since the last successful call — 2 in a row = wedged transport. */
 	private consecutiveTimeouts = 0;
 	private readonly streamStarts = new Map<string, () => void>();
 
@@ -339,10 +339,11 @@ export class cordnClient implements coordinatorClient {
 				// streams for a single slow RPC. Teardown is still the only garbage
 				// collection for the SDK's infinite publish retries (no per-request
 				// abort reaches pool.publish), so retire the owner on the SECOND
-				// timeout without an intervening completed call — a wedged transport.
-				// ponytail: stray publish-retry loops are bounded by the next
-				// teardown/swap, not cancelled per request; upgrade path: thread a
-				// per-request abort signal into pool.publish.
+				// timeout with no intervening success — a wedged transport.
+				// ponytail: only success resets the counter — error responses would
+				// leave strays unbounded on flaky transports (bounded strays beat
+				// perfect wedge detection); strays die with the next teardown/swap,
+				// not per request. Upgrade path: abort signal into pool.publish.
 				this.consecutiveTimeouts += 1;
 				if (this.consecutiveTimeouts >= 2) void this.disconnect();
 			}, timeout);

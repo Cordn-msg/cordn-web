@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+type HealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
+
 const { accountManagerMock, queryClientMock, coordinatorMock } = vi.hoisted(() => ({
 	accountManagerMock: { getActive: vi.fn() },
 	queryClientMock: { cancelQueries: vi.fn(), invalidateQueries: vi.fn() },
@@ -12,7 +14,6 @@ vi.mock('$lib/services/chatCoordinators.svelte', () => ({ getChatCoordinator: co
 vi.mock('$lib/query-client', () => ({ queryClient: queryClientMock }));
 vi.mock('$lib/services/relay-pool', () => ({ defaultRelays: [] }));
 vi.mock('$lib/services/coordinatorClient', () => {
-	type HealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
 	class StubCordnClient {
 		private lifecycle = new AbortController();
 		signal = this.lifecycle.signal;
@@ -230,8 +231,6 @@ describe('pool liveness probes', () => {
 });
 
 describe('coordinator health marking', () => {
-	type HealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
-
 	function emitHealth(client: unknown, signal: HealthSignal) {
 		(client as { onHealth?: (signal: HealthSignal) => void }).onHealth?.(signal);
 	}
