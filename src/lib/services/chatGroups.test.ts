@@ -219,7 +219,12 @@ describe('recoverPoisonedChatGroup()', () => {
 		clientStateDecoderMock.mockReset();
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -379,7 +384,12 @@ describe('inviteChatGroupMember()', () => {
 		clientStateDecoderMock.mockReset();
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -424,7 +434,14 @@ describe('inviteChatGroupMember()', () => {
 		const postGroupMessageMock = vi.fn().mockResolvedValue({ cursor: 5, at: 1000 });
 		getCoordinatorClientMock.mockReturnValue({ PostGroupMessage: postGroupMessageMock });
 		removeMemberFromGroupMock.mockResolvedValue({
-			newState: { groupContext: { groupId: new Uint8Array([100]), epoch: 2n } },
+			newState: {
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				}
+			},
 			commitMessageBase64: 'commit'
 		});
 		createWorkingChatGroupSessionMock.mockReturnValue({ metadata: { name: 'demo' } });
@@ -663,7 +680,12 @@ describe('loadGroups snapshot baseline', () => {
 		// Seed storage with a group that has no snapshots and a decodable state
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch: 2n },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -836,7 +858,12 @@ describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', ()
 	async function seedRepairGroup(groupId: string, epoch: bigint): Promise<void> {
 		clientStateDecoderMock.mockReturnValue([
 			{
-				groupContext: { groupId: new Uint8Array([100]), epoch },
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
 				ratchetTree: [],
 				groupActiveState: { kind: 'active' }
 			}
@@ -898,7 +925,14 @@ describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', ()
 		createSelfUpdateCommitMock.mockReset();
 		createSelfUpdateCommitMock.mockResolvedValue({
 			commitMessageBase64: 'commit-b64',
-			newState: { groupContext: { epoch: 6n }, groupMetadata: undefined }
+			newState: {
+				groupContext: {
+					epoch: 6n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				groupMetadata: undefined
+			}
 		});
 		createWorkingChatGroupSessionMock.mockReturnValue({});
 		buildPersistedChatGroupMock.mockReturnValue({

@@ -47,7 +47,10 @@ import {
 import { getChatCoordinator, markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
-import { ingestChatGroupMessages } from '$lib/services/chatGroupMessages.svelte';
+import {
+	ingestChatGroupMessages,
+	probeSealedMessage
+} from '$lib/services/chatGroupMessages.svelte';
 import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
 import { errorMessage, normalizePubKey } from '$lib/utils';
 import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
@@ -59,6 +62,11 @@ import {
 	reconcileMetaDocument,
 	composeTombstoneUnion,
 	decideGroupDocumentApply,
+	decideForkResolution,
+	classifyChainDescent,
+	forkRankAdoptsTheirs,
+	noteStateFingerprint,
+	stateFingerprint,
 	groupEpoch,
 	groupMetadata,
 	walkGroupChain,
@@ -79,6 +87,9 @@ import {
 	type Tombstone,
 	type ReconcileTarget,
 	type ReconcileOutcome,
+	type StoredForkDecision,
+	type ForkBranchRank,
+	type ChainFingerprint,
 	type ChainStep,
 	type TipGroupPointer,
 	type TipPointer
@@ -1415,21 +1426,36 @@ async function publish(plan: PublishPlan): Promise<void> {
 					seal: dekSeal,
 					dekPubkey,
 					store: writeStore,
-					prev
+					prev,
+					// Spec §8.5 gen-0 state / §10.3 rank: the epoch's commit-point
+					// document is chained under the live one whenever the live state
+					// has moved past the Commit.
+					commitPoint: group.commitPoint
 				});
 				// Epoch AT SEAL TIME — if local advances again mid-publish, the record
 				// stays honestly behind and the next diff flags it (that state IS owed).
 				const epoch = decodeStoredGroupState(group).groupContext.epoch;
 				sealedEpochs[gid] = epoch.toString();
-				// Record the published document identity (spec §10 rank input) — a fork
-				// cannot be ranked against our own publications otherwise. Re-read the
-				// record first: the upload is concurrent with live ingestion, which may
+				// Record the published document identity (spec §10) — a fork cannot be
+				// ranked against our own publications otherwise. Re-read the record
+				// first: the upload is concurrent with live ingestion, which may
 				// have replaced it under us.
 				const fresh = getChatGroup(gid);
 				if (fresh) {
 					replaceGroup(gid, {
 						...fresh,
-						appliedDocument: { address: result.address, cursor: result.cursor }
+						appliedDocument: {
+							address: result.address,
+							cursor: result.cursor,
+							fingerprint: stateFingerprint(decodeStoredGroupState(group))
+						},
+						// The commit point is on record: published as its own document, or
+						// carried by the live one (spec §10.3).
+						...(fresh.commitPoint &&
+						fresh.commitPoint.epoch === epoch.toString() &&
+						!fresh.commitPoint.published
+							? { commitPoint: { ...fresh.commitPoint, published: true } }
+							: {})
 					});
 				}
 				bumpMdProgress(++resealDone);
@@ -2167,25 +2193,61 @@ function makeReconcileTarget(catchUp?: {
 				await seedGroup(doc, normalizePubKey(account.pubkey), address);
 				return 'seeded';
 			}
-			const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
-			// §8 forward-only epoch check + §10 equal-epoch fork rule (the rollback
-			// defense lives in `decideGroupDocumentApply`'s deterministic rank order).
-			const outcome = decideGroupDocumentApply({
+			const localState = decodeStoredGroupState(existing);
+			const localEpoch = localState.groupContext.epoch;
+			const incomingState = clientStateDecoder(base64ToBytes(doc.clientState), 0)?.[0];
+			// §8 forward-only epoch check + §10 detection: fork identity is the
+			// epoch fingerprint, never the content address — a re-publish of one
+			// state re-seals (new address) and is advisory, not a fork.
+			const decision = decideGroupDocumentApply({
 				incomingEpoch,
 				localEpoch,
-				incomingCursor: doc.cursor,
-				incomingAddress: address,
-				adopted: existing.appliedDocument
+				incomingFingerprint: incomingState ? stateFingerprint(incomingState) : undefined,
+				localFingerprint: stateFingerprint(localState)
 			});
-			if (outcome === 'skipped') return outcome;
-			const fork = outcome === 'fork-resolved';
+			if (decision === 'skipped') return 'skipped';
+			// A newer-epoch document is an advance only when its branch descends
+			// from the local state (spec §8): the `prev` chain either passes through
+			// our state at our epoch, or meets a state we held at an earlier epoch —
+			// a fork that has since committed on, which the plain forward-only rule
+			// would carry this device onto. Without chain access the forward-only
+			// rule applies (liveness first).
+			let forkEpoch: bigint | undefined = decision === 'fork' ? localEpoch : undefined;
+			const chain = catchUp
+				? {
+						store: makeReadStore(readServers(catchUp.pointer, catchUp.config)),
+						addressToUrl: (a: string) => urlFromTip(a, catchUp.pointer),
+						seal: catchUp.dekSeal,
+						dekPubkey: catchUp.dekPubkey
+					}
+				: undefined;
+			if (decision === 'fast-forwarded' && chain && incomingState) {
+				const links = await fetchChainFingerprints({
+					startPrev: doc.prev,
+					groupId: doc.gid,
+					...chain
+				});
+				const descent = classifyChainDescent(links, existing.epochFingerprints ?? {}, localEpoch);
+				if (descent !== 'unknown' && descent !== 'descends') forkEpoch = descent.epoch;
+			}
+			if (forkEpoch !== undefined && incomingState) {
+				return resolveGroupFork({
+					existing,
+					localState,
+					theirs: incomingState,
+					doc,
+					address,
+					forkEpoch,
+					chain
+				});
+			}
 			// Capture the pre-fast-forward decrypt frontier + local state. fast-forward
 			// advances both to the tip, so the chained catch-up (spec §8.5) needs the
 			// values from BEFORE it ran to know where the lossless gap starts and
 			// what state decrypts range 0.
 			const decryptFrontier = existing.fetchCursor;
 			const localStateBase64 = existing.stateBase64;
-			await fastForwardGroup(doc, address, { allowEqualEpoch: fork }); // liveness first (locked CAS write)
+			await fastForwardGroup(doc, address); // liveness first (locked CAS write)
 			// Background lossless recovery (§8.5): replay the message gap epoch-by-epoch
 			// so messages sent during the behind window aren't lost. Fire-and-forget —
 			// fast-forward already restored liveness. Skipped when the decrypt frontier
@@ -2193,7 +2255,7 @@ function makeReconcileTarget(catchUp?: {
 			// Commit on the stream, so there's no gap to recover (saves the chain walk
 			// + gap fetch on every online sibling-Commit fast-forward). A §10 fork
 			// adoption has no chain to bridge — the losing branch is gone by design.
-			if (catchUp && !fork && decryptFrontier < doc.cursor) {
+			if (catchUp && decryptFrontier < doc.cursor) {
 				void catchUpGroupFromChain({
 					groupId: doc.gid,
 					localEpoch,
@@ -2211,7 +2273,7 @@ function makeReconcileTarget(catchUp?: {
 					})
 				);
 			}
-			return outcome;
+			return 'fast-forwarded';
 		},
 		async applyTombstone(tombstone) {
 			const existing = getChatGroup(tombstone.gid);
@@ -2241,6 +2303,8 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string, address?: stri
 	// ponytail: joinEpoch 0 — seeded groups adopt the writer's current state via
 	// clientState, so there's no pre-membership boundary to filter (spec §9).
 	const epoch = groupEpoch(doc);
+	const seededState = clientStateDecoder(base64ToBytes(doc.clientState), 0)?.[0];
+	const seededFingerprint = seededState ? stateFingerprint(seededState) : undefined;
 	const seeded: StoredChatGroup = {
 		id: doc.gid,
 		ownerPubkey,
@@ -2249,9 +2313,21 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string, address?: stri
 		stateBase64: doc.clientState,
 		lastCursor: doc.cursor,
 		fetchCursor: doc.cursor,
-		// Adopted document identity (spec §10 rank input) — absent only when the
-		// fetched address was unknown.
-		...(address ? { appliedDocument: { address, cursor: doc.cursor } } : {}),
+		// Adopted document identity (spec §10) — absent only when the fetched
+		// address was unknown.
+		...(address
+			? {
+					appliedDocument: {
+						address,
+						cursor: doc.cursor,
+						...(seededFingerprint ? { fingerprint: seededFingerprint } : {})
+					}
+				}
+			: {}),
+		// Held-state history for the §8 descent check (spec §10 detection).
+		...(seededFingerprint
+			? { epochFingerprints: noteStateFingerprint(undefined, seededState!) }
+			: {}),
 		messages: [],
 		syncIssues: [],
 		// Initial healthy snapshot — the recovery baseline `loadAndNormalizeChatGroup`
@@ -2298,16 +2374,18 @@ async function seedGroup(doc: GroupDocument, ownerPubkey: string, address?: stri
 async function fastForwardGroup(
 	doc: GroupDocument,
 	address?: string,
-	opts?: { allowEqualEpoch?: boolean }
+	opts?: { allowEqualEpoch?: boolean; forkDecision?: StoredForkDecision }
 ): Promise<void> {
 	await runGroupOperation(doc.gid, async () => {
 		const existing = getChatGroup(doc.gid);
 		if (!existing) return; // vanished (soft-deleted) while waiting for the lock
-		const incomingEpoch = groupEpoch(doc);
+		const decoded = clientStateDecoder(base64ToBytes(doc.clientState), 0)?.[0];
+		const incomingEpoch = decoded?.groupContext.epoch;
 		const localEpoch = decodeStoredGroupState(existing).groupContext.epoch;
 		// Re-check under the lock (CAS): a concurrent cycle may have caught up.
-		if (incomingEpoch === undefined) return;
+		if (incomingEpoch === undefined || !decoded) return;
 		if (opts?.allowEqualEpoch ? incomingEpoch !== localEpoch : incomingEpoch <= localEpoch) return;
+		const fingerprint = stateFingerprint(decoded);
 		replaceGroup(existing.id, {
 			...existing,
 			stateBase64: doc.clientState,
@@ -2316,18 +2394,27 @@ async function fastForwardGroup(
 			// Cursor advances to the document's (the adopted state processed through it).
 			fetchCursor: Math.max(existing.fetchCursor, doc.cursor),
 			lastCursor: Math.max(existing.lastCursor, doc.cursor),
-			// Adopted document identity (spec §10 rank input) — fork detection needs
-			// it; absent when the fetched address was unknown (pre-fork docs).
-			...(address ? { appliedDocument: { address, cursor: doc.cursor } } : {}),
+			// Adopted document identity (spec §10) — fork detection needs it;
+			// absent when the fetched address was unknown (pre-fork docs).
+			...(address ? { appliedDocument: { address, cursor: doc.cursor, fingerprint } } : {}),
+			// Held-state history grows with the adopted state (spec §8 descent check).
+			epochFingerprints: noteStateFingerprint(existing.epochFingerprints, decoded),
+			// The recorded fork winner (spec §10): the rank alone never overturns it.
+			...(opts?.forkDecision ? { forkDecision: opts.forkDecision } : {}),
+			// Adoption clears the race evidence (spec §10): what this device knew
+			// about its own Commit's race no longer describes the adopted state.
+			branch: undefined,
+			skippedSiblingCommit: undefined,
+			commitPoint: undefined,
 			// §10 conflict signal: a resolved fork MUST be surfaced, not silent.
-			...(opts?.allowEqualEpoch
+			...(opts?.forkDecision
 				? {
 						syncIssues: [
 							...existing.syncIssues.filter((issue) => issue.cursor !== doc.cursor),
 							{
 								cursor: doc.cursor,
 								createdAt: Date.now(),
-								detail: `Equal-epoch fork at ${incomingEpoch} resolved: adopted the ranked document ${address?.slice(0, 12) ?? '(unknown)'}`
+								detail: `Fork at epoch ${opts.forkDecision.epoch} resolved: adopted the other branch (${opts.forkDecision.by})`
 							}
 						]
 					}
@@ -2363,6 +2450,243 @@ function decodeClientStateBase64(base64: string): ClientState {
 }
 
 /** Fetch the raw message gap from a cursor (spec §8.5 gap fetch). */
+/**
+ * Walk a `prev` chain from `startPrev`, collecting each document's epoch
+ * fingerprint for the §8 descent check (spec §8). A link that cannot be read
+ * ends the walk — `classifyChainDescent` treats the tail as `unknown`, which
+ * keeps the forward-only advance (liveness first).
+ */
+async function fetchChainFingerprints(params: {
+	startPrev: string | undefined;
+	groupId: string;
+	store: BlobStore;
+	addressToUrl: (address: string) => string;
+	seal: Nip44Seal;
+	dekPubkey: string;
+}): Promise<ChainFingerprint[]> {
+	const links: ChainFingerprint[] = [];
+	let address = params.startPrev;
+	for (let hop = 0; hop < 1000 && address; hop++) {
+		let doc;
+		try {
+			doc = await pullDocument({
+				address,
+				store: params.store,
+				addressToUrl: params.addressToUrl,
+				seal: params.seal,
+				dekPubkey: params.dekPubkey
+			});
+		} catch {
+			break;
+		}
+		if (doc.type !== 'group' || doc.gid !== params.groupId) break;
+		const decoded = clientStateDecoder(base64ToBytes(doc.clientState), 0);
+		if (!decoded) break;
+		links.push({ epoch: decoded[0].groupContext.epoch, fingerprint: stateFingerprint(decoded[0]) });
+		address = doc.prev;
+	}
+	return links;
+}
+
+/**
+ * One fork branch's §10.3 rank input: the lowest-cursor document at the fork
+ * epoch on its `prev` chain — the commit-point document, whose cursor is that
+ * Commit's position in the stream. `walkGroupChain` already keeps exactly the
+ * oldest document per epoch, so it does the walk unchanged. `undefined` where
+ * the chain carries none at that epoch or cannot be read — the live-document
+ * rank then decides (spec §10.3).
+ */
+async function forkBranchCommitRank(params: {
+	tipAddress: string;
+	groupId: string;
+	forkEpoch: bigint;
+	store: BlobStore;
+	addressToUrl: (address: string) => string;
+	seal: Nip44Seal;
+	dekPubkey: string;
+}): Promise<{ cursor: number; address: string } | undefined> {
+	try {
+		const chain = await walkGroupChain({
+			tipAddress: params.tipAddress,
+			groupId: params.groupId,
+			localEpoch: params.forkEpoch - 1n,
+			store: params.store,
+			addressToUrl: params.addressToUrl,
+			seal: params.seal,
+			dekPubkey: params.dekPubkey
+		});
+		const step = chain.find((s) => s.epoch === params.forkEpoch);
+		return step ? { cursor: step.cursor, address: step.address } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Spec §10 step 2 (third-party verdict): which branch do the other members
+ * follow? Fetch messages past the local cursor and run each under both
+ * branches on throwaway probes; the first from another leaf — an application
+ * message, or a Commit that applies — that opens under exactly one branch's
+ * keys names it. A Commit or a message from our own shared leaf carries no
+ * signal. `true` = theirs, `false` = ours, `undefined` = nothing to judge (or
+ * the fetch failed — the fallback rank still converges).
+ */
+async function thirdPartyVerdict(params: {
+	group: StoredChatGroup;
+	theirs: ClientState;
+}): Promise<boolean | undefined> {
+	const local = decodeStoredGroupState(params.group);
+	let messages: Awaited<ReturnType<typeof fetchMessageGap>>;
+	try {
+		messages = await fetchMessageGap(
+			params.group,
+			getProtocolGroupId(local),
+			params.group.fetchCursor
+		);
+	} catch {
+		return undefined;
+	}
+	const localStablePubkey = params.group.ownerPubkey ?? '';
+	let ours = local;
+	let theirs = params.theirs;
+	for (const message of [...messages].sort((a, b) => a.cursor - b.cursor)) {
+		// Our own posts carry no signal (they open under both branches by
+		// construction — both derive from the state that produced them).
+		if (
+			params.group.messages.some((m) => m.direction === 'outbound' && m.cursor === message.cursor)
+		) {
+			continue;
+		}
+		const onOurs = await probeSealedMessage({
+			state: ours,
+			sealedMsg64: message.opaqueMessageBase64,
+			localStablePubkey
+		});
+		const onTheirs = await probeSealedMessage({
+			state: theirs,
+			sealedMsg64: message.opaqueMessageBase64,
+			localStablePubkey
+		});
+		ours = onOurs.state;
+		theirs = onTheirs.state;
+		if (onTheirs.thirdParty && !onOurs.opened) return true;
+		if (onOurs.thirdParty && !onTheirs.opened) return false;
+	}
+	return undefined;
+}
+
+/**
+ * Spec §10.3 rank for a fork between the local state and the incoming
+ * document's branch: commit-point documents at the fork epoch where the chains
+ * carry them (the LOWER Commit cursor wins — coordinator order read off the
+ * chains), the live-document rank where a side has none.
+ */
+async function forkRank(params: {
+	existing: StoredChatGroup;
+	doc: GroupDocument;
+	address?: string;
+	forkEpoch: bigint;
+	chain?: {
+		store: BlobStore;
+		addressToUrl: (a: string) => string;
+		seal: Nip44Seal;
+		dekPubkey: string;
+	};
+}): Promise<boolean> {
+	const live = (d?: { address: string; cursor: number }): ForkBranchRank['live'] =>
+		d ? { cursor: d.cursor, address: d.address } : undefined;
+	const ours: ForkBranchRank = { live: live(params.existing.appliedDocument) };
+	const theirs: ForkBranchRank = {
+		live: params.address ? { cursor: params.doc.cursor, address: params.address } : undefined
+	};
+	// Our own Commit's cursor is the commit point (spec §10.3: the authoring
+	// device knows it directly) — used where it beats any chained document.
+	const own = params.existing.commitPoint;
+	if (own && own.epoch === params.forkEpoch.toString()) {
+		ours.commit = { cursor: own.cursor, address: '' };
+	}
+	if (params.chain && params.address && params.existing.appliedDocument) {
+		const walk = (tipAddress: string) =>
+			forkBranchCommitRank({
+				tipAddress,
+				groupId: params.doc.gid,
+				forkEpoch: params.forkEpoch,
+				...params.chain!
+			});
+		const [oursCommit, theirsCommit] = await Promise.all([
+			walk(params.existing.appliedDocument.address),
+			walk(params.address)
+		]);
+		if (oursCommit && (!ours.commit || oursCommit.cursor < ours.commit.cursor)) {
+			ours.commit = oursCommit;
+		}
+		theirs.commit = theirsCommit;
+	}
+	return forkRankAdoptsTheirs(ours, theirs);
+}
+
+/**
+ * Resolve a §10 fork between the local state and the incoming document's
+ * branch (spec §10 resolution): the coordinator-order mark (self-sufficient —
+ * the racing loser marked `dead` and adopts, the winner `live` and keeps), then
+ * the third-party verdict, then the recorded decision / commit-point rank.
+ * Keeps ours → record + surface, no state change. Adopts → the §8 forward-only
+ * exception, with the decision recorded so the rank alone can never overturn it.
+ */
+async function resolveGroupFork(params: {
+	existing: StoredChatGroup;
+	localState: ClientState;
+	theirs: ClientState;
+	doc: GroupDocument;
+	address?: string;
+	forkEpoch: bigint;
+	chain?: {
+		store: BlobStore;
+		addressToUrl: (a: string) => string;
+		seal: Nip44Seal;
+		dekPubkey: string;
+	};
+}): Promise<ReconcileOutcome> {
+	const incomingFingerprint = stateFingerprint(params.theirs);
+	// Step 2 runs only where the mark cannot answer — it costs a fetch + probes.
+	const verdict = params.existing.branch
+		? undefined
+		: await thirdPartyVerdict({ group: params.existing, theirs: params.theirs });
+	const decision = await decideForkResolution({
+		forkEpoch: params.forkEpoch.toString(),
+		incomingFingerprint,
+		branch: params.existing.branch,
+		verdict,
+		recorded: params.existing.forkDecision,
+		rank: () => forkRank({ ...params, chain: params.chain })
+	});
+	const winner = decision.adopt ? incomingFingerprint : stateFingerprint(params.localState);
+	const forkDecision: StoredForkDecision = {
+		epoch: params.forkEpoch.toString(),
+		fingerprint: winner,
+		by: decision.by
+	};
+	if (!decision.adopt) {
+		// Keep ours: record + surface (spec §10 — a fork MUST be surfaced, not
+		// silent) and leave the state untouched.
+		replaceGroup(params.existing.id, {
+			...params.existing,
+			forkDecision,
+			syncIssues: [
+				...params.existing.syncIssues.filter((issue) => issue.cursor !== params.doc.cursor),
+				{
+					cursor: params.doc.cursor,
+					createdAt: Date.now(),
+					detail: `Fork at epoch ${params.forkEpoch} resolved: kept this device's branch (${decision.by})`
+				}
+			]
+		});
+		return 'skipped';
+	}
+	await fastForwardGroup(params.doc, params.address, { allowEqualEpoch: true, forkDecision });
+	return 'fork-resolved';
+}
+
 async function fetchMessageGap(
 	group: StoredChatGroup,
 	gid: string,

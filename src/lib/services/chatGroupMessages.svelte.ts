@@ -76,6 +76,9 @@ export interface GroupMessageIngestionTarget {
 	/** Group id (StoredChatGroup); optional for bare test targets. */
 	id?: string;
 	state: ClientState;
+	/** Last skipped sibling Commit (spec §10 step 1 fork evidence); carried to
+	 *  the persisted record by the caller. */
+	skippedSiblingCommit?: { epoch: string; cursor: number };
 	metadata?: {
 		name: string;
 		description?: string;
@@ -207,6 +210,94 @@ async function processMessageBase64(params: {
 		message: decoded[0],
 		callback: params.callback
 	});
+}
+
+/**
+ * Apply one sealed message to a throwaway copy of a state (spec §10 fork
+ * evidence probes). Reports what the message means to THIS state without
+ * touching any stored group: `opened` — the payload unsealed and the MLS
+ * message applied/rejected-by-policy cleanly; `epochMoved` — a Commit applied
+ * and advanced the epoch; `siblingSkipped` — a Commit from this identity's own
+ * shared leaf (the §10 sibling-skip); `thirdParty` — the message is from
+ * another leaf, or a Commit that applied (a shared-leaf Commit carries no
+ * signal: it can only be skipped here). Used by the step-1 race replay and
+ * the step-2 third-party verdict.
+ */
+export async function probeSealedMessage(params: {
+	state: ClientState;
+	sealedMsg64: string;
+	localStablePubkey: string;
+}): Promise<{
+	state: ClientState;
+	opened: boolean;
+	epochMoved: boolean;
+	siblingSkipped: boolean;
+	thirdParty: boolean;
+}> {
+	const unopened = {
+		state: params.state,
+		opened: false,
+		epochMoved: false,
+		siblingSkipped: false,
+		thirdParty: false
+	};
+	let opaqueMessageBase64: string;
+	try {
+		opaqueMessageBase64 = (
+			await decryptGroupPayloadBase64({
+				state: params.state,
+				encryptedBase64: params.sealedMsg64
+			})
+		).opaqueMessageBase64;
+	} catch {
+		return unopened;
+	}
+	const epochBefore = params.state.groupContext.epoch;
+	let processed: Awaited<ReturnType<typeof processMessageBase64>>;
+	try {
+		processed = await processMessageBase64({
+			state: params.state,
+			opaqueMessageBase64,
+			callback: (incoming) => {
+				const self = safeNormalizePubKey(params.localStablePubkey);
+				if (incoming.kind === 'commit' && incoming.senderLeafIndex !== undefined && self) {
+					const sender = listGroupMembers(params.state).find(
+						(member) => member.leafIndex === incoming.senderLeafIndex
+					);
+					if (sender && safeNormalizePubKey(sender.stablePubkey) === self) {
+						throw new SiblingCommitSkippedError();
+					}
+				}
+				return createAdminAuthorizationCallback({
+					state: params.state,
+					metadata: getCordnGroupMetadataExtension(params.state)
+				})(incoming);
+			}
+		});
+	} catch (error) {
+		if (error instanceof SiblingCommitSkippedError) {
+			return {
+				state: params.state,
+				opened: true,
+				epochMoved: false,
+				siblingSkipped: true,
+				thirdParty: false
+			};
+		}
+		return unopened;
+	}
+	const epochMoved = processed.newState.groupContext.epoch !== epochBefore;
+	let thirdParty = epochMoved;
+	if (!thirdParty && processed.kind === 'applicationMessage') {
+		try {
+			thirdParty =
+				safeNormalizePubKey(decodeAuthenticatedSender(processed.aad)) !==
+				safeNormalizePubKey(params.localStablePubkey);
+		} catch {
+			thirdParty = false;
+		}
+	}
+	return { state: processed.newState, opened: true, epochMoved, siblingSkipped: false, thirdParty };
 }
 
 /**
@@ -692,6 +783,14 @@ export async function ingestChatGroupMessages(params: {
 			if (error instanceof SiblingCommitSkippedError) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
+				// Fork evidence (spec §10 step 1): a Commit posted from this epoch
+				// afterwards LOST the race to this one — the coordinator sequenced the
+				// sibling's Commit first. Remembered so `recordCommitRace` can mark the
+				// branch `dead` without asking the stream (which can no longer answer).
+				group.skippedSiblingCommit = {
+					epoch: group.state.groupContext.epoch.toString(),
+					cursor: message.cursor
+				};
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,

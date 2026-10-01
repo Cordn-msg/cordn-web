@@ -143,6 +143,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
@@ -211,6 +212,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
@@ -278,6 +280,7 @@ describe('ingestChatGroupMessages()', () => {
 
 		const group = {
 			state: {
+				groupContext: { epoch: 1n },
 				ratchetTree,
 				groupMetadata: { name: 'demo', adminPubkeys: [] }
 			} as never,
