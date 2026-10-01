@@ -126,6 +126,8 @@ export class cordnClient implements coordinatorClient {
 	readonly relays: string[];
 	private disconnectPromise: Promise<void> | undefined;
 	private signerOperations = 0;
+	/** Deadlines hit since the last completed call — 2 in a row = wedged transport. */
+	private consecutiveTimeouts = 0;
 	private readonly streamStarts = new Map<string, () => void>();
 
 	get isClosed(): boolean {
@@ -333,12 +335,22 @@ export class cordnClient implements coordinatorClient {
 				const error = new Error(`Coordinator request timed out after ${timeout}ms`);
 				this.onHealth?.({ status: 'degraded', error: error.message });
 				reject(error);
-				void this.disconnect();
+				// One timeout is a blip — tearing down here kills healthy group
+				// streams for a single slow RPC. Teardown is still the only garbage
+				// collection for the SDK's infinite publish retries (no per-request
+				// abort reaches pool.publish), so retire the owner on the SECOND
+				// timeout without an intervening completed call — a wedged transport.
+				// ponytail: stray publish-retry loops are bounded by the next
+				// teardown/swap, not cancelled per request; upgrade path: thread a
+				// per-request abort signal into pool.publish.
+				this.consecutiveTimeouts += 1;
+				if (this.consecutiveTimeouts >= 2) void this.disconnect();
 			}, timeout);
 		});
 		try {
 			const result = await Promise.race([operation(), interrupted]);
 			this.signal.throwIfAborted();
+			this.consecutiveTimeouts = 0;
 			return result;
 		} finally {
 			clearTimeout(timer);

@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import { SvelteMap } from 'svelte/reactivity';
 import { normalizePubKey } from '$lib/utils';
 
@@ -62,6 +63,14 @@ export function markCoordinatorHealthy(coordinatorKey: string) {
 }
 
 export function markCoordinatorDegraded(coordinatorKey: string, error: string) {
+	// Hidden-tab failures (timer throttling, dead radio) are not coordinator
+	// evidence — the same rule recordCoordinatorFailure applies to the retry
+	// ladder. A mark here would arm the read breaker and brand the coordinator
+	// "unreachable" the moment the user returns. Unknown visibility marks.
+	if (browser && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+		return;
+	}
+	console.debug('[coordinator] degraded mark', { coordinatorKey, error });
 	writeHealth(coordinatorKey, {
 		status: 'degraded',
 		lastError: error,
@@ -126,10 +135,12 @@ export class CoordinatorReadBackoffError extends Error {
  */
 export function throwIfCoordinatorInReadBackoff(coordinatorKey: string): void {
 	const health = readHealth(coordinatorKey);
-	if (
-		health.lastFailureAt !== undefined &&
-		Date.now() - health.lastFailureAt < COORDINATOR_READ_BACKOFF_MS
-	) {
+	if (health.lastFailureAt === undefined) return;
+	const elapsed = Date.now() - health.lastFailureAt;
+	// Negative elapsed = the clock stepped backward: expire the window (worst
+	// case: one extra real RPC) instead of holding it open until wall time
+	// crawls past the stale timestamp again.
+	if (elapsed >= 0 && elapsed < COORDINATOR_READ_BACKOFF_MS) {
 		throw new CoordinatorReadBackoffError();
 	}
 }

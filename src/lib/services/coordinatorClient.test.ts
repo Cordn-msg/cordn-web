@@ -198,7 +198,10 @@ describe('coordinator client lifetime', () => {
 		expect(relay.pendingPublishes.size).toBe(0);
 	});
 
-	test('the post deadline retires the owner and its publisher, without replaying', async () => {
+	test('a single timeout spares the owner; a second one retires it and its publisher', async () => {
+		// Teardown is the only GC for the SDK's infinite publish retries, but one
+		// slow RPC must not kill healthy group streams on the same transport — so
+		// the owner is retired only on the second timeout (wedged transport).
 		vi.useFakeTimers();
 		const { instance, relay } = client();
 		relay.stallPublish = true;
@@ -207,9 +210,19 @@ describe('coordinator client lifetime', () => {
 		await requestAt(relay);
 		await vi.advanceTimersByTimeAsync(8_000);
 		await failed;
+		expect(instance.isClosed).toBe(false);
+		expect(relay.requests).toHaveLength(1); // the ambiguous call is never replayed
+		// Strays stay retrying (the request + its SDK timeout-cancel notification)
+		// and die with the next teardown — at most a handful per blip.
+		expect(relay.pendingPublishes.size).toBe(2);
+		const secondPost = instance.PostGroupMessage({ gid: 'group', msg_64: 'cGF5bG9hZA==' });
+		const secondFailed = expect(secondPost).rejects.toThrow(/timed out/);
+		await requestAt(relay, 1);
+		await vi.advanceTimersByTimeAsync(8_000);
+		await secondFailed;
 		expect(instance.isClosed).toBe(true);
 		expect(relay.pendingPublishes.size).toBe(0);
-		expect(relay.requests).toHaveLength(1);
+		expect(relay.requests).toHaveLength(2);
 		await expect(instance.FetchPendingWelcomes({})).rejects.toThrow('Connection closed');
 	});
 
@@ -223,7 +236,8 @@ describe('coordinator client lifetime', () => {
 		await relay.progress(request, { progressToken: request.token, progress: 1 });
 		await vi.advanceTimersByTimeAsync(10_000);
 		await failed;
-		expect(instance.isClosed).toBe(true);
+		// A single timeout no longer retires the owner (see the teardown-threshold test).
+		expect(instance.isClosed).toBe(false);
 	});
 
 	test('disconnect during local setup prevents a late tool call', async () => {
@@ -338,7 +352,7 @@ describe('stream readiness', () => {
 		await call.abort('test complete');
 	});
 
-	test('a handle with no start frame expires and closes its pool', async () => {
+	test('a handle with no start frame expires at its deadline', async () => {
 		vi.useFakeTimers();
 		const { instance, relay } = client();
 		relay.stallPublish = true;
@@ -347,8 +361,10 @@ describe('stream readiness', () => {
 		await requestAt(relay);
 		await vi.advanceTimersByTimeAsync(20_000);
 		await failed;
-		expect(instance.isClosed).toBe(true);
-		expect(relay.pendingPublishes.size).toBe(0);
+		// First timeout is a blip (see the teardown-threshold test): the owner
+		// survives and its stranded publish retry dies with the next teardown.
+		expect(instance.isClosed).toBe(false);
+		expect(relay.pendingPublishes.size).toBe(1);
 	});
 
 	test('local stream abort does not await a stuck abort publication', async () => {
