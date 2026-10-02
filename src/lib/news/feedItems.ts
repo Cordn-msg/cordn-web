@@ -98,6 +98,20 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Copy a screenshot or an image and paste it directly into the message box — on the web and on Android. It lands as an attachment you can review before sending, with a caption if you want one, exactly like photos picked from your gallery.'
 	},
 	{
+		id: 'cordn-news-2026-10-01-nostr-embeds',
+		createdAt: Date.UTC(2026, 9, 1),
+		version: 1,
+		title: 'Notes from the wider Nostr world, right inside the chat',
+		body: '- ✨ Pasting a nevent, naddr, or note link (with or without the nostr: prefix) now renders the note as an inline card in the chat — author, time, and content, loaded straight from the relays. A ⋯ menu on each card copies the entity or opens it in nostr.at, njump.me, or Jumble, and if an event can’t be found you still get a link out to it.\n- ✨ Markdown tables now render in messages, embedded notes, and news cards — pipe rows with a --- separator line, including column alignment.\n- 🔄 Very long messages and embedded notes clamp behind a “Show more” button to keep the timeline compact; you can turn that off in Settings → Chat behavior.\n- 🔄 Prefer links to stay links? Turn note embeds off in Settings → Chat behavior — pasted references stay plain text and nothing is fetched from relays, and a new “Open in app” entry in the ⋯ menu hands the note to an installed Nostr app on your device.'
+	},
+	{
+		id: 'cordn-news-2026-10-01-reaction-timeline',
+		createdAt: Date.UTC(2026, 9, 1),
+		version: 1,
+		title: 'Reactions in plain sight, attachments without the wait',
+		body: '- ✨ Reactions no longer hide on old messages: every reaction now appears in the chat at the moment it happened — “Alice, Bob +3 reacted 👍” — and a tap on See jumps straight to the message it was about. Prefer a messages-only timeline? Turn it off in Settings → Chat behavior.\n- ✨ You can take a reaction back: tap your own reaction chip — or your emoji in the reaction picker — to remove it — and if that was a slip, one more tap puts it right back. Reactions you send now stand out on the chip, so the tap target is clear.\n- 🐛 Photos and files show up in the message box the instant you pick them: preparing them privately (stripping metadata, converting HEIC photos) now runs in the background behind a small spinner on the attachment, instead of delaying its appearance — most noticeable on phones. Send unlocks as soon as the attachment is ready, since what goes out is exactly the prepared file.\n- 🔄 Profile pictures anchor to the newest message of a group again — the recent move to the top of the group left the latest messages without an identity anchor beside them.\n- 🔄 The unread-mentions “@” counter moved out of the message box: it now floats beside the scroll-to-bottom button at the bottom-right of the chat, keeping the composer compact.'
+	},
+	{
 		id: 'cordn-news-2026-10-01-md-convergence',
 		createdAt: Date.UTC(2026, 9, 1),
 		version: 1,

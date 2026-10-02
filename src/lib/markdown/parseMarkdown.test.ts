@@ -179,3 +179,59 @@ describe('mayContainMarkdown', () => {
 		expect(mayContainMarkdown('[x](https://a)')).toBe(true);
 	});
 });
+
+describe('parseMarkdown tables', () => {
+	const table = single(['| a | b |', '|---|:-:|', '| 1 | 2 |', '| 3 | 4 |'].join('\n')) as Extract<
+		Block[number],
+		{ type: 'table' }
+	>;
+
+	it('parses header, alignment, and body rows', () => {
+		expect(table.type).toBe('table');
+		expect(table.header).toHaveLength(2);
+		expect(table.rows).toHaveLength(2);
+		expect(table.aligns).toEqual([undefined, 'center']);
+	});
+
+	it('pads short rows and drops extra cells to the header width', () => {
+		const ragged = single('| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |') as Extract<
+			Block[number],
+			{ type: 'table' }
+		>;
+		expect(ragged.rows[0]).toHaveLength(3);
+		expect(ragged.rows[1]).toHaveLength(3);
+	});
+
+	it('renders cells as inline nodes (emphasis inside cells works)', () => {
+		const styled = single('| a |\n|---|\n| **x** |') as Extract<Block[number], { type: 'table' }>;
+		const cell = styled.rows[0][0];
+		expect(cell[0].type).toBe('strong');
+	});
+
+	it('keeps a lone delimiter-less pipe line as a paragraph', () => {
+		expect(single('a | b').type).toBe('paragraph');
+		expect(single('a\nb').type).toBe('paragraph');
+	});
+
+	it('unescapes escaped pipes inside cells', () => {
+		const escaped = single('| a | b |\n|---|---|\n| x \\| y | z |') as Extract<
+			Block[number],
+			{ type: 'table' }
+		>;
+		const cell = escaped.rows[0][0];
+		expect(cell[0]).toEqual({ type: 'text', text: 'x | y' });
+	});
+
+	it('parses left/right alignment markers', () => {
+		const aligned = single('| a | b | c |\n|:--|--:|:-:|') as Extract<
+			Block[number],
+			{ type: 'table' }
+		>;
+		expect(aligned.aligns).toEqual(['left', 'right', 'center']);
+	});
+
+	it('flags pipe text as potential markdown', () => {
+		expect(mayContainMarkdown('| a | b |\n|---|---|')).toBe(true);
+		expect(mayContainMarkdown('plain text')).toBe(false);
+	});
+});

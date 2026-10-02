@@ -33,9 +33,12 @@
 		buildAnnotationIndex,
 		getMessageThreadReference,
 		type ChatMessageReplyTarget,
+		getMessageReactionReference,
 		type MessageTarget
 	} from '$lib/chat/references';
 	import { ChatKinds, SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
+	import { mergeAdjacentReactionMarkers, pruneAdjacentReactionTargets } from './reactionMarkers';
+	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
 	import { formatUnixTimestamp, normalizePubKey, samePubKey } from '$lib/utils';
 	import {
@@ -92,6 +95,9 @@
 	// kind-Reaction message on success — the fold's author-set union makes the
 	// overlap window a no-op). Not a row, so the outbox is the wrong home.
 	let optimisticReactions = $state<Record<string, string[]>>({});
+	// Confirmed reactions pending their kind-5 deletion (target eventId → emojis):
+	// my membership hides optimistically and reverts on send failure.
+	let optimisticReactionRemovals = $state<Record<string, string[]>>({});
 	let selectedMentions = $state<ChatMentionReference[]>([]);
 	let composerFocusKey = $state(0);
 	let handledMessageTarget = $state('');
@@ -237,6 +243,7 @@
 		optimisticEdits = {};
 		optimisticDeletes = {};
 		optimisticReactions = {};
+		optimisticReactionRemovals = {};
 	});
 
 	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
@@ -264,9 +271,35 @@
 			}
 		}
 
+		// Reads reactive module state, so toggling the setting applies instantly.
+		const reactionMarkers = getShowReactionMarkers();
 		const confirmedMessages = storedMessages
-			.filter((message) => !isAnnotationKind(message.kind))
+			.filter((message) =>
+				message.kind === ChatKinds.Reaction ? reactionMarkers : !isAnnotationKind(message.kind)
+			)
 			.map((message) => {
+				// Kind-7 reactions render as marker rows in the linear timeline
+				// (systemKind 'reaction') in addition to the chips on the target.
+				// Malformed references (no e/p/k tags) drop out here, mirroring the
+				// chip fold. The jump target is the composite row id of the target.
+				if (message.kind === ChatKinds.Reaction) {
+					if (deletedIds.has(message.id)) return null; // un-reacted
+					const reference = getMessageReactionReference(
+						message.kind,
+						message.content,
+						message.tags
+					);
+					if (!reference) return null;
+					const target = byEventId.get(reference.targetId);
+					return {
+						...toChatMessage(message),
+						text: '',
+						systemKind: 'reaction',
+						reactionTarget: target ? `${target.id}:${target.cursor}` : undefined,
+						reactionEmojis: [reference.reaction],
+						reactionSenders: [message.sender]
+					} satisfies ChatMessage;
+				}
 				if (message.kind === SYSTEM_MESSAGE_KIND) {
 					const data = parseSystemMessageData(message.content);
 					return {
@@ -293,12 +326,24 @@
 				// confirmed reaction (or a concurrent peer one) can't double-count
 				// (authors dedup by pubkey). Deleted targets show no chips (old ternary's
 				// `!deleted && reactions : []` semantics preserved).
-				const reactionEntries = (deleted ? [] : [...(reactions ?? []).values()]).map((entry) => ({
-					emoji: entry.emoji,
-					count: entry.authors.size,
-					reactedByMe: entry.authors.has(activePubkey),
-					reactors: Array.from(entry.authors)
-				}));
+				// Pending removals hide my membership optimistically (count drops, chip
+				// disappears at zero); the confirmed kind-5 fold takes over on ingest.
+				const removingMine = new Set(optimisticReactionRemovals[message.id] ?? []);
+				const reactionEntries = (deleted ? [] : [...(reactions ?? []).values()])
+					.map((entry) => {
+						const mine = entry.reactors.has(activePubkey) && removingMine.has(entry.emoji);
+						const count = entry.reactors.size - (mine ? 1 : 0);
+						if (count === 0) return null;
+						return {
+							emoji: entry.emoji,
+							count,
+							reactedByMe: entry.reactors.has(activePubkey) && !mine,
+							reactors: Array.from(entry.reactors.keys()).filter(
+								(pubkey) => !(mine && pubkey === activePubkey)
+							)
+						};
+					})
+					.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 				if (!deleted) {
 					for (const emoji of optimisticReactions[message.id] ?? []) {
 						const existing = reactionEntries.find((entry) => entry.emoji === emoji);
@@ -348,7 +393,13 @@
 		const pending = getPendingMessages(groupId).filter(
 			(message) => !byEventId.has(message.eventId)
 		);
-		return [...confirmedMessages, ...pending].sort(compareChatMessages);
+		return pruneAdjacentReactionTargets(
+			mergeAdjacentReactionMarkers(
+				[...confirmedMessages, ...pending]
+					.filter((message): message is ChatMessage => message !== null)
+					.sort(compareChatMessages)
+			)
+		);
 	});
 
 	// Ordered pin list for the top ribbon. Newest-pinned-first; resolves the
@@ -713,6 +764,65 @@
 		}
 	}
 
+	async function handleUnreact(message: ChatMessage, emoji: string) {
+		if (message.deleted) return;
+		const storedMessage = messageMaps.byEventId.get(message.eventId);
+		if (!storedMessage) return;
+		const currentTarget = storedMessage.id;
+
+		// Un-reacting an add still in flight just drops the overlay. If the
+		// kind-7 already reached the server, the chip reappears when its
+		// confirmed copy ingests (one more tap removes it for good) — the
+		// same accepted double-tap race as handleReact.
+		const pendingAdds = optimisticReactions[currentTarget] ?? [];
+		if (pendingAdds.includes(emoji)) {
+			const next = { ...optimisticReactions };
+			const emojis = pendingAdds.filter((pending) => pending !== emoji);
+			if (emojis.length === 0) delete next[currentTarget];
+			else next[currentTarget] = emojis;
+			optimisticReactions = next;
+			return;
+		}
+
+		const mine = messageMaps.reactionMap.get(currentTarget)?.get(emoji)?.reactors.get(activePubkey);
+		if (!mine?.size) return;
+
+		optimisticReactionRemovals = {
+			...optimisticReactionRemovals,
+			[currentTarget]: [...(optimisticReactionRemovals[currentTarget] ?? []), emoji]
+		};
+		const revert = () => {
+			const next = { ...optimisticReactionRemovals };
+			const emojis = (next[currentTarget] ?? []).filter((pending) => pending !== emoji);
+			if (emojis.length === 0) delete next[currentTarget];
+			else next[currentTarget] = emojis;
+			optimisticReactionRemovals = next;
+		};
+
+		// One kind-5 per reaction event (reacting from several devices leaves
+		// several ids); a single failure reverts the optimistic hide.
+		let allSent = true;
+		for (const eventId of mine) {
+			const deleteTarget: MessageTarget = {
+				id: eventId,
+				pubkey: activePubkey,
+				kind: ChatKinds.Reaction
+			};
+			const sent = await sendGroupMessageAction(
+				groupId,
+				'',
+				undefined,
+				undefined,
+				[],
+				undefined,
+				deleteTarget
+			);
+			allSent = allSent && Boolean(sent);
+		}
+		sendError = chatComposerActionsStore.error;
+		if (!allSent) revert();
+	}
+
 	function handleEdit(message: ChatMessage) {
 		if (message.deleted) return;
 
@@ -908,8 +1018,11 @@
 					bind:this={messageListRef}
 					{messages}
 					{initialFocusMessageId}
+					unreadReferenceCount={unreadReferenceTargets.length}
+					onNavigateToReference={navigateToNextReference}
 					onReply={handleReply}
 					onReact={handleReact}
+					onUnreact={handleUnreact}
 					onEdit={handleEdit}
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
@@ -954,8 +1067,6 @@
 			focusKey={composerFocusKey}
 			{mentionCandidates}
 			bind:selectedMentions
-			unreadReferenceCount={unreadReferenceTargets.length}
-			onNavigateToReference={navigateToNextReference}
 		/>
 	</div>
 {/snippet}

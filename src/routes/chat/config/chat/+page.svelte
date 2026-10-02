@@ -5,8 +5,15 @@
 		getEnterKeyMode,
 		setEnterKeyMode,
 		enterKeySends,
+		getShowReactionMarkers,
+		setShowReactionMarkers,
+		getCollapseLongMessages,
+		setCollapseLongMessages,
+		getRenderNostrEmbeds,
+		setRenderNostrEmbeds,
 		type EnterKeyMode
 	} from '$lib/services/chatComposerSettings.svelte';
+	import { Switch } from '$lib/components/ui/switch';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
 	import Check from '@lucide/svelte/icons/check';
 
@@ -42,7 +49,10 @@
 
 <svelte:head>
 	<title>Chat behavior | Cordn</title>
-	<meta name="description" content="Configure how the Enter key behaves while writing messages." />
+	<meta
+		name="description"
+		content="Configure how the Enter key behaves and what the message timeline shows."
+	/>
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -56,7 +66,7 @@
 		<div class="min-w-0">
 			<h1 class="text-lg font-semibold tracking-tight">Chat behavior</h1>
 			<p class="truncate text-sm text-muted-foreground">
-				How the Enter key behaves while writing messages.
+				How the Enter key behaves and what the message timeline shows.
 			</p>
 		</div>
 	</header>
@@ -95,6 +105,39 @@
 						</div>
 					</button>
 				{/each}
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Show reactions in the timeline</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Render reactions as timeline rows at the moment they happened, in addition to the chips
+						on each message.
+					</p>
+				</div>
+				<Switch checked={getShowReactionMarkers()} onCheckedChange={setShowReactionMarkers} />
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Collapse long messages</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Clamp very long messages and embedded nostr events behind a “Show more” button, keeping
+						the chat timeline compact.
+					</p>
+				</div>
+				<Switch checked={getCollapseLongMessages()} onCheckedChange={setCollapseLongMessages} />
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Render embedded nostr notes</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Pasted nostr links (nevent, naddr, note) display as inline cards, loading the note from
+						relays. Turn off to keep them as plain text — the ⋯ menu still opens them elsewhere.
+					</p>
+				</div>
+				<Switch checked={getRenderNostrEmbeds()} onCheckedChange={setRenderNostrEmbeds} />
 			</div>
 
 			<div class="text-center">

@@ -57,3 +57,59 @@ function isTouchPrimary(): boolean {
 export function enterKeySends(): boolean {
 	return resolveEnterKeySends(enterKeyMode, isTouchPrimary());
 }
+
+/**
+ * A boolean chat-behavior setting persisted to localStorage, default on
+ * (only the explicit string "false" turns it off, so old installs keep the
+ * default). Module $state → reading the getter in a template/effect is
+ * reactive, so toggles apply live without remounts.
+ */
+function persistedChatBool(key: string) {
+	let value = $state(browser ? localStorage.getItem(key) !== 'false' : true);
+	return {
+		get: () => value,
+		set(next: boolean) {
+			value = next;
+			if (browser) localStorage.setItem(key, String(next));
+		}
+	};
+}
+
+/** Whether confirmed reactions render as marker rows in the message timeline
+ *  (in addition to the chips on the reacted-to message). Default on; users in
+ *  high-traffic groups can turn it off to keep the timeline messages-only. */
+const showReactionMarkersSetting = persistedChatBool('cordn.showReactionMarkers');
+
+/** Whether long messages and embedded nostr events render clamped behind a
+ *  "Show more" toggle (the inline-body boundedness contract). Default on. */
+const collapseLongMessagesSetting = persistedChatBool('cordn.collapseLongMessages');
+
+/** Whether pasted nostr event links (nevent/naddr/note) render as inline
+ *  embed cards that fetch the event from relays. Default on; turned off the
+ *  link stays a plain reference with the ⋯ menu (open externally) and no
+ *  relay fetch happens. */
+const renderNostrEmbedsSetting = persistedChatBool('cordn.renderNostrEmbeds');
+
+export function getShowReactionMarkers(): boolean {
+	return showReactionMarkersSetting.get();
+}
+
+export function setShowReactionMarkers(value: boolean): void {
+	showReactionMarkersSetting.set(value);
+}
+
+export function getCollapseLongMessages(): boolean {
+	return collapseLongMessagesSetting.get();
+}
+
+export function setCollapseLongMessages(value: boolean): void {
+	collapseLongMessagesSetting.set(value);
+}
+
+export function getRenderNostrEmbeds(): boolean {
+	return renderNostrEmbedsSetting.get();
+}
+
+export function setRenderNostrEmbeds(value: boolean): void {
+	renderNostrEmbedsSetting.set(value);
+}

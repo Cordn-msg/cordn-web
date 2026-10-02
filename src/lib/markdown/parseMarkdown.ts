@@ -7,7 +7,8 @@
  * Supported subset (deliberately small, WhatsApp/Discord-grade — not
  * CommonMark-conformant):
  * - blocks: headings (1–3), paragraphs, unordered/ordered lists, fenced code
- *   blocks (```), blockquotes (`>`), blank-line block breaks
+ *   blocks (```), blockquotes (`>`), GFM-style pipe tables (header row +
+ *   `---|---` delimiter row, per-column `:---:` alignment), blank-line breaks
  * - inline: `**strong**`, `*em*`/`_em_` (word-boundary), `~~del~~`,
  *   `` `code spans` `` (no nesting inside), `[text](href)` with scheme
  *   validation (http/https/relative only — anything else stays literal text),
@@ -17,7 +18,8 @@
  * Known ceilings (fine for chat; revisit if LLM-style documents ever matter):
  * `***bold-italic***` nests one level only; nested lists/quotes flatten;
  * link text is flattened to plain text; emphasis pairing is greedy
- * nearest-match, not CommonMark's flanking algorithm.
+ * nearest-match, not CommonMark's flanking algorithm; tables have no
+ * caption/colspan and body rows are padded/truncated to the header width.
  */
 
 export type MarkdownInlineNode =
@@ -34,7 +36,13 @@ export type MarkdownBlock =
 	| { type: 'paragraph'; inline: MarkdownInlineNode[] }
 	| { type: 'list'; ordered: boolean; items: MarkdownInlineNode[][] }
 	| { type: 'code'; text: string; lang?: string }
-	| { type: 'quote'; inline: MarkdownInlineNode[] };
+	| { type: 'quote'; inline: MarkdownInlineNode[] }
+	| {
+			type: 'table';
+			header: MarkdownInlineNode[][];
+			aligns: Array<'left' | 'center' | 'right' | undefined>;
+			rows: MarkdownInlineNode[][][];
+	  };
 
 // ---------------------------------------------------------------------------
 // Inline pass
@@ -260,6 +268,32 @@ const UL_RE = /^[-*]\s+(.*)$/;
 const OL_RE = /^\d+\.\s+(.*)$/;
 const FENCE_RE = /^```\s*(\S*)\s*$/;
 
+// ---------------------------------------------------------------------------
+// Tables (GFM-lite)
+// ---------------------------------------------------------------------------
+
+/** `---|:---:|---:` — pipe-separated dash cells; must contain a pipe so a
+ *  lone `---` (horizontal-rule-ish prose) stays a paragraph. */
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const isTableSeparator = (line: string) => line.includes('|') && TABLE_SEPARATOR_RE.test(line);
+
+/** Split on unescaped pipes; `\|` becomes a literal pipe in the cell. */
+function splitTableRow(line: string): string[] {
+	const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+	return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
+}
+
+function tableAlignOf(cell: string): 'left' | 'center' | 'right' | undefined {
+	const left = cell.startsWith(':');
+	const right = cell.endsWith(':');
+	if (left && right) return 'center';
+	if (right) return 'right';
+	if (left) return 'left';
+	return undefined;
+}
+
+const isTableRow = (line: string) => /(?<!\\)\|/.test(line.trim());
+
 export function parseMarkdown(source: string): MarkdownBlock[] {
 	const lines = source.replace(/\r\n?/g, '\n').split('\n');
 	const blocks: MarkdownBlock[] = [];
@@ -332,6 +366,27 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
 			continue;
 		}
 
+		// Table: current line is the header row, next line the delimiter row.
+		// Checked before quote/list/paragraph so the header line can't be
+		// swallowed by an earlier construct; a paragraph line directly above
+		// flushes first (GFM keeps only the last line as the header).
+		if (isTableRow(line) && isTableSeparator(lines[i + 1] ?? '')) {
+			flushAll();
+			const header = splitTableRow(line).map(parseInline);
+			const aligns = splitTableRow(lines[i + 1]).map(tableAlignOf);
+			i += 2;
+			const rows: MarkdownInlineNode[][][] = [];
+			while (i < lines.length && lines[i].trim() && isTableRow(lines[i])) {
+				const cells = splitTableRow(lines[i]).map(parseInline);
+				// GFM: extra cells drop, missing cells pad — header defines width.
+				rows.push(Array.from({ length: header.length }, (_, c) => cells[c] ?? parseInline('')));
+				i++;
+			}
+			i--; // the for-loop's i++ re-advances past the last consumed line
+			blocks.push({ type: 'table', header, aligns, rows });
+			continue;
+		}
+
 		if (trimmed.startsWith('>')) {
 			flushParagraph();
 			flushList();
@@ -376,5 +431,5 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
 export function mayContainMarkdown(text: string): boolean {
 	// `#`/`>` only matter at line start (headings, quotes) so URL fragments and
 	// comparison prose don't trigger a parse; `*_`~[` and `[` anywhere do.
-	return /[*_`~[]/.test(text) || /^\s*(#|>|-\s|\d+\.\s|```)/m.test(text);
+	return /[*_`~[|]/.test(text) || /^\s*(#|>|-\s|\d+\.\s|```)/m.test(text);
 }

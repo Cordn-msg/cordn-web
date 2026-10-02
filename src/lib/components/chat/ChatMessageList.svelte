@@ -4,6 +4,7 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { scale } from 'svelte/transition';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import AtSign from '@lucide/svelte/icons/at-sign';
 	import { Button } from '$lib/components/ui/button';
 	import ChatMessageItem from './ChatMessageItem.svelte';
 	import { estimateChatMessageHeight } from './chatMessageRenderCache';
@@ -14,19 +15,27 @@
 		initialFocusMessageId = '',
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
+		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onVisibleUnreadReference = () => {},
 		onOpenRich = () => {},
-		onPin = () => {}
+		onPin = () => {},
+		unreadReferenceCount = 0,
+		onNavigateToReference = () => {}
 	}: {
 		messages: ChatMessage[];
+		/** Unread @-mentions of the viewer: shown as a floating jump button
+		 *  stacked above scroll-to-bottom (moved out of the composer). */
+		unreadReferenceCount?: number;
+		onNavigateToReference?: () => void | Promise<void>;
 		/** Open-at-first-unread target ("<eventId>:<cursor>"), set once per group by
 		 *  ChatShell before the group is marked read. Empty → open at the bottom. */
 		initialFocusMessageId?: string;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
+		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
@@ -378,8 +387,13 @@
 					{@const message = messages[virtualItem.index]}
 					{#if message}
 						{@const previousMessage = messages[virtualItem.index - 1]}
+						{@const nextMessage = messages[virtualItem.index + 1]}
 						{@const systemRow = Boolean(message.systemKind)}
 						{@const runHead = !systemRow && previousMessage?.author !== message.author}
+						<!-- Pfp anchors to the NEWEST message of a run (bottom-aligned like Signal): the hop to
+							a new tail only mounts an Avatar whose picture prop is already resolved and cached
+							(loadedPictures paints it at full opacity instantly), so no fade replays. -->
+						{@const runTail = !systemRow && nextMessage?.author !== message.author}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
@@ -391,11 +405,12 @@
 							<ChatMessageItem
 								{message}
 								showAuthor={runHead}
-								showAvatar={runHead}
+								showAvatar={runTail}
 								showDayLabel={previousMessage?.dayLabel !== message.dayLabel}
 								showUnreadMarker={message.id === initialFocusMessageId}
 								{onReply}
 								{onReact}
+								{onUnreact}
 								{onEdit}
 								{onDelete}
 								{onRetrySend}
@@ -411,21 +426,41 @@
 		</div>
 	</div>
 
-	{#if showScrollToBottom}
-		<div
-			class="absolute right-4 bottom-4 z-10 md:right-6"
-			transition:scale={{ start: 0.8, duration: 150 }}
-		>
-			<Button
-				type="button"
-				size="icon"
-				variant="secondary"
-				class="h-10 w-10 rounded-full shadow-lg"
-				onclick={scrollToBottom}
-				aria-label="Scroll to bottom"
-			>
-				<ChevronDown class="size-5" />
-			</Button>
+	{#if showScrollToBottom || unreadReferenceCount > 0}
+		<div class="absolute right-4 bottom-4 z-10 flex flex-col items-end gap-2 md:right-6">
+			{#if unreadReferenceCount > 0}
+				<Button
+					type="button"
+					size="icon"
+					variant="secondary"
+					class="relative h-10 w-10 rounded-full shadow-lg"
+					onclick={() => void onNavigateToReference()}
+					aria-label="Jump to unread reference"
+				>
+					<AtSign class="size-4" />
+					{#if unreadReferenceCount > 1}
+						<span
+							class="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground"
+						>
+							{unreadReferenceCount}
+						</span>
+					{/if}
+				</Button>
+			{/if}
+			{#if showScrollToBottom}
+				<div transition:scale={{ start: 0.8, duration: 150 }}>
+					<Button
+						type="button"
+						size="icon"
+						variant="secondary"
+						class="h-10 w-10 rounded-full shadow-lg"
+						onclick={scrollToBottom}
+						aria-label="Scroll to bottom"
+					>
+						<ChevronDown class="size-5" />
+					</Button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>

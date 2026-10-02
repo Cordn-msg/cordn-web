@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { nip19 } from 'nostr-tools';
 import { chatMessageReferencesPubkey, parseChatProfileMentions } from '$lib/services/chatMentions';
 import { encodeGroupRef } from '@cordn/core';
 
@@ -29,6 +30,67 @@ describe('parseChatProfileMentions cordn1 recognition', () => {
 		// validation only after decode; here isGroupRef rejects short tails, so no link.
 		const parts = parseChatProfileMentions('see cordn1xyz');
 		expect(parts.filter((p) => p.type === 'link')).toHaveLength(0);
+	});
+});
+
+describe('parseChatProfileMentions embedded events', () => {
+	it('tokenizes a bare nevent as an event part with relay-hint pointer', () => {
+		const pointer = {
+			id: 'ab'.repeat(32),
+			relays: ['wss://relay.example'],
+			author: 'cd'.repeat(32)
+		};
+		const code = nip19.neventEncode(pointer);
+		const parts = parseChatProfileMentions(`look ${code} please`);
+		const events = parts.filter((p) => p.type === 'event');
+		expect(events).toHaveLength(1);
+		if (events[0].type === 'event') {
+			expect(events[0].pointer).toEqual(pointer);
+			expect(events[0].text).toBe(code);
+		}
+	});
+
+	it('keeps the nostr: prefix optional for events', () => {
+		const code = nip19.noteEncode('ab'.repeat(32));
+		const bare = parseChatProfileMentions(`x ${code}`).filter((p) => p.type === 'event');
+		const prefixed = parseChatProfileMentions(`x nostr:${code}`).filter((p) => p.type === 'event');
+		expect(bare).toHaveLength(1);
+		expect(prefixed).toHaveLength(1);
+	});
+
+	it('decodes naddr to an address pointer', () => {
+		const pointer = { kind: 30023, pubkey: 'ab'.repeat(32), identifier: 'hello' };
+		const code = nip19.naddrEncode(pointer);
+		const parts = parseChatProfileMentions(`read nostr:${code}`);
+		const events = parts.filter((p) => p.type === 'event');
+		expect(events).toHaveLength(1);
+		if (events[0].type === 'event') {
+			// toMatchObject: nip19 decode adds an empty relays array when none were encoded.
+			expect(events[0].pointer).toMatchObject(pointer);
+		}
+	});
+
+	it('keeps a bech32 inside a URL as part of the link', () => {
+		const code = nip19.noteEncode('ab'.repeat(32));
+		const parts = parseChatProfileMentions(`see https://njump.me/${code} now`);
+		const links = parts.filter((p) => p.type === 'link');
+		const events = parts.filter((p) => p.type === 'event');
+		expect(links).toHaveLength(1);
+		expect(events).toHaveLength(0);
+		if (links[0].type === 'link') {
+			expect(links[0].href).toBe(`https://njump.me/${code}`);
+		}
+	});
+
+	it('leaves invalid bech32 as plain text', () => {
+		const parts = parseChatProfileMentions('see nevent1notvalid');
+		expect(parts.filter((p) => p.type === 'event')).toHaveLength(0);
+	});
+
+	it('still requires the nostr: prefix for profiles (unchanged)', () => {
+		const npub = nip19.npubEncode('ab'.repeat(32));
+		const parts = parseChatProfileMentions(`hi ${npub}`);
+		expect(parts.filter((p) => p.type === 'profile')).toHaveLength(0);
 	});
 });
 

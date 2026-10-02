@@ -15,6 +15,10 @@
 		messageId,
 		isOwn = false
 	}: { blocks: MarkdownBlock[]; messageId: string; isOwn?: boolean } = $props();
+
+	// Static strings only: Tailwind generates classes it can see in source.
+	const alignClass = (align: 'left' | 'center' | 'right' | undefined) =>
+		align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : '';
 </script>
 
 <div class="max-w-full min-w-0 space-y-1.5">
@@ -51,6 +55,43 @@
 					'max-w-full overflow-x-auto rounded-lg p-2 text-xs leading-relaxed',
 					isOwn ? 'bg-primary-foreground/10' : 'bg-muted'
 				)}><code class="block whitespace-pre">{block.text}</code></pre>
+		{:else if block.type === 'table'}
+			<!-- overflow-x-auto: wide tables scroll inside the bubble instead of
+			     blowing out the row/virtualizer width. -->
+			<div class="max-w-full min-w-0 overflow-x-auto">
+				<table class="w-full max-w-full border-collapse text-left">
+					<thead>
+						<tr>
+							{#each block.header as cell, cellIndex (cellIndex)}
+								<th
+									class={cn(
+										'border-b px-2 py-1 font-semibold whitespace-nowrap',
+										isOwn ? 'border-primary-foreground/30' : 'border-border',
+										alignClass(block.aligns[cellIndex])
+									)}
+								>
+									<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+								</th>
+							{/each}
+						</tr>
+					</thead>
+					<tbody>
+						{#each block.rows as row, rowIndex (rowIndex)}
+							<tr
+								class={cn(
+									isOwn ? 'border-b border-primary-foreground/15' : 'border-b border-border/60'
+								)}
+							>
+								{#each row as cell, cellIndex (cellIndex)}
+									<td class={cn('px-2 py-1 align-top', alignClass(block.aligns[cellIndex]))}>
+										<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+									</td>
+								{/each}
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{:else}
 			<blockquote
 				class={cn(

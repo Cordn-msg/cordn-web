@@ -1,4 +1,5 @@
 import { nip19 } from 'nostr-tools';
+import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
 import { isGroupRef } from '@cordn/core';
 
 import type { ChatMentionReference } from '$lib/components/chat/chat.types';
@@ -12,10 +13,15 @@ export interface SerializedChatMentions {
 export type ChatMentionTextPart =
 	| { type: 'text'; text: string }
 	| { type: 'profile'; text: string; pubkey: string }
+	| { type: 'event'; text: string; pointer: EventPointer | AddressPointer }
 	| { type: 'link'; text: string; href: string };
 
 const NOSTR_PROFILE_REFERENCE_PATTERN =
 	/nostr:((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
+// Embedded events: bare or `nostr:`-prefixed nevent/naddr/note bech32 (unlike
+// profiles, the prefix is optional — clients paste both forms interchangeably).
+const NOSTR_EVENT_REFERENCE_PATTERN =
+	/(?:nostr:)?((?:nevent|naddr|note)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
 const URL_PATTERN = /https?:\/\/[^\s<]+[^\s<.,!?;:()[\]{}"']/g;
 // Bare cordn1 group reference (spec/applications/group-ref.md). Loose charset;
 // isGroupRef validates the matched token before it becomes a link.
@@ -112,29 +118,66 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 	const parts: ChatMentionTextPart[] = [];
 	let lastIndex = 0;
 
-	for (const match of content.matchAll(NOSTR_PROFILE_REFERENCE_PATTERN)) {
-		const text = match[0];
-		const code = match[1];
-		const index = match.index ?? 0;
+	// URL spans win over embedded events: a bech32 inside a URL (njump/relay
+	// links) stays part of the link instead of splitting it — same guard as the
+	// cordn1 overlap rule below.
+	const urlSpans: (readonly [number, number])[] = [];
+	for (const match of content.matchAll(URL_PATTERN)) {
+		urlSpans.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+	}
+	const inUrl = (index: number, length: number) =>
+		urlSpans.some(([start, end]) => index >= start && index + length <= end);
 
-		if (index > lastIndex) {
-			appendTextWithLinks(parts, content.slice(lastIndex, index));
+	type Token =
+		| { index: number; text: string; kind: 'profile'; code: string }
+		| { index: number; text: string; kind: 'event'; code: string };
+	const tokens: Token[] = [];
+	for (const match of content.matchAll(NOSTR_PROFILE_REFERENCE_PATTERN)) {
+		tokens.push({
+			index: match.index ?? 0,
+			text: match[0],
+			kind: 'profile',
+			code: match[1]
+		});
+	}
+	for (const match of content.matchAll(NOSTR_EVENT_REFERENCE_PATTERN)) {
+		const index = match.index ?? 0;
+		if (inUrl(index, match[0].length)) continue;
+		tokens.push({ index, text: match[0], kind: 'event', code: match[1] });
+	}
+	tokens.sort((a, b) => a.index - b.index);
+
+	for (const token of tokens) {
+		if (token.index > lastIndex) {
+			appendTextWithLinks(parts, content.slice(lastIndex, token.index));
 		}
 
 		try {
-			const decoded = nip19.decode(code);
-			if (decoded.type === 'npub') {
-				parts.push({ type: 'profile', text, pubkey: decoded.data });
-			} else if (decoded.type === 'nprofile') {
-				parts.push({ type: 'profile', text, pubkey: decoded.data.pubkey });
+			const decoded = nip19.decode(token.code);
+			if (token.kind === 'profile') {
+				if (decoded.type === 'npub') {
+					parts.push({ type: 'profile', text: token.text, pubkey: decoded.data });
+				} else if (decoded.type === 'nprofile') {
+					parts.push({ type: 'profile', text: token.text, pubkey: decoded.data.pubkey });
+				} else {
+					appendTextWithLinks(parts, token.text);
+				}
+			} else if (decoded.type === 'nevent' || decoded.type === 'note') {
+				parts.push({
+					type: 'event',
+					text: token.text,
+					pointer: decoded.type === 'nevent' ? decoded.data : { id: decoded.data }
+				});
+			} else if (decoded.type === 'naddr') {
+				parts.push({ type: 'event', text: token.text, pointer: decoded.data });
 			} else {
-				appendTextWithLinks(parts, text);
+				appendTextWithLinks(parts, token.text);
 			}
 		} catch {
-			appendTextWithLinks(parts, text);
+			appendTextWithLinks(parts, token.text);
 		}
 
-		lastIndex = index + text.length;
+		lastIndex = token.index + token.text.length;
 	}
 
 	if (lastIndex < content.length) {

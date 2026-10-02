@@ -23,6 +23,7 @@
 	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import * as Marker from '$lib/components/ui/marker/index.js';
+	import MarkerName from './MarkerName.svelte';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
@@ -66,6 +67,7 @@
 		showUnreadMarker = false,
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
+		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
@@ -84,6 +86,7 @@
 		showUnreadMarker?: boolean;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
+		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
@@ -132,6 +135,8 @@
 				return X;
 			case 'metadata-changed':
 				return Pencil;
+			case 'reaction':
+				return SmilePlus;
 			default:
 				return Info;
 		}
@@ -229,8 +234,16 @@
 		mobileSheetOpen = false;
 	}
 
+	// Tapping your own emoji removes it (WhatsApp/Signal deselect convention)
+	// instead of re-sending a duplicate kind-7.
+	function toggleReaction(reaction: string) {
+		return message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)
+			? onUnreact(message, reaction)
+			: onReact(message, reaction);
+	}
+
 	async function chooseReaction(reaction: string) {
-		await onReact(message, reaction);
+		await toggleReaction(reaction);
 		dismissActionSurfaces();
 	}
 
@@ -246,7 +259,7 @@
 		const reaction = normalizeCustomReaction(customReaction);
 		if (!reaction) return;
 		persistCustomReaction(reaction);
-		await onReact(message, reaction);
+		await toggleReaction(reaction);
 		customReaction = '';
 		customReactionOpen = false;
 		reactionMenuOpen = false;
@@ -521,6 +534,27 @@
 				{:else if message.systemKind === 'metadata-changed'}
 					{@render systemName(systemCommitterName)}
 					changed {message.systemDetail ?? 'group settings'}
+				{:else if message.systemKind === 'reaction'}
+					{@const senders = message.reactionSenders ?? []}
+					{@const emojis = message.reactionEmojis ?? []}
+					{#each senders.slice(0, 2) as sender, index (sender)}
+						{#if index > 0}<span>, </span>{/if}
+						<MarkerName pubkey={sender} />
+					{/each}
+					{#if senders.length > 2}+{senders.length - 2}{/if}
+					reacted
+					{#each emojis.slice(0, 3) as emoji (emoji)}{emoji}{/each}
+					{#if emojis.length > 3}…{/if}
+					{#if message.reactionTarget}
+						<button
+							type="button"
+							class="ml-1 rounded-sm text-xs font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+							onclick={() => onNavigateToMessage(message.reactionTarget!)}
+							aria-label="See the reacted message"
+						>
+							See
+						</button>
+					{/if}
 				{/if}
 				<span class="ml-1 align-baseline text-[10px] whitespace-nowrap text-muted-foreground/50">
 					{message.timeLabel}
@@ -897,10 +931,15 @@
 											<button
 												{...props}
 												type="button"
-												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-												aria-label={`${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
+												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/50 bg-primary/15 text-foreground ring-1 ring-primary/30 hover:bg-primary/25' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+												aria-label={reaction.reactedByMe
+													? `${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. You reacted — tap to remove.`
+													: `${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
 												title={getReactionLabel(reaction)}
-												onclick={() => openRich()}
+												onclick={() =>
+													reaction.reactedByMe
+														? void onUnreact(message, reaction.emoji)
+														: openRich()}
 												onpointerenter={activateInteractionControls}
 												onfocus={activateInteractionControls}
 											>

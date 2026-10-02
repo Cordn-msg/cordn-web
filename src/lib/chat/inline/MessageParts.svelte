@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import InlineMediaUrl from '$lib/components/chat/InlineMediaUrl.svelte';
+	import NostrEventEmbed from '$lib/components/chat/NostrEventEmbed.svelte';
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
@@ -35,6 +36,9 @@
 		>
 			@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
 		</span>
+	{:else if part.type === 'event'}
+		<!-- Block span inside the bubble <p>: a div here would be invalid nesting. -->
+		<NostrEventEmbed pointer={part.pointer} text={part.text} {isOwn} />
 	{:else if part.type === 'link' && mediaUrlKind(part.href)}
 		<InlineMediaUrl href={part.href} {isOwn} />
 	{:else if part.type === 'link'}

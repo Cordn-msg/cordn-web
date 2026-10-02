@@ -215,9 +215,51 @@ describe('buildAnnotationIndex', () => {
 		});
 
 		const index = buildAnnotationIndex([original, editTarget, reaction, edit, del]);
-		expect(index.reactionMap.get('orig')?.get('🔥')?.authors.has('bbbb')).toBe(true);
+		expect(index.reactionMap.get('orig')?.get('🔥')?.reactors.has('bbbb')).toBe(true);
 		expect(index.editMap.get('editTarget')?.content).toBe('hello (edited)');
 		expect(index.deletedIds.has('orig')).toBe(true);
+	});
+	test('deleting a reaction event un-chips the author; sibling events survive', () => {
+		const original = msg({ id: 'orig', kind: 9, content: 'hello', sender: 'aaaa' });
+		const reaction = (id: string) =>
+			msg({
+				id,
+				kind: 7,
+				content: '🔥',
+				sender: 'bbbb',
+				tags: [
+					['e', 'orig', '', 'aaaa'],
+					['p', 'aaaa'],
+					['k', '9']
+				]
+			});
+		const del = msg({
+			id: 'd1',
+			kind: 5,
+			sender: 'bbbb',
+			tags: [
+				['e', 'r2', '', 'bbbb'],
+				['k', '7']
+			]
+		});
+
+		// Two reaction events from the same author: deleting one keeps the chip.
+		const kept = buildAnnotationIndex([original, reaction('r1'), reaction('r2'), del]);
+		expect(kept.reactionMap.get('orig')?.get('🔥')?.reactors.has('bbbb')).toBe(true);
+		expect(kept.reactionMap.get('orig')?.get('🔥')?.reactors.get('bbbb')).toEqual(new Set(['r1']));
+
+		// Deleting the last one removes the author entirely.
+		const delAll = msg({
+			id: 'd2',
+			kind: 5,
+			sender: 'bbbb',
+			tags: [
+				['e', 'r1', '', 'bbbb'],
+				['k', '7']
+			]
+		});
+		const gone = buildAnnotationIndex([original, reaction('r1'), reaction('r2'), del, delAll]);
+		expect(gone.reactionMap.get('orig')?.get('🔥')).toBeUndefined();
 	});
 
 	test('rejects edit/delete from a sender who did not author the target', () => {
