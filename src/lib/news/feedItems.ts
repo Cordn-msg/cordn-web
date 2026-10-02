@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-02-composer-paste',
+		createdAt: Date.UTC(2026, 9, 2),
+		version: 1,
+		title: 'Paste photos straight into the chat',
+		body: '- ✨ Copy a screenshot or an image and paste it directly into the message box — on the web and on Android. It lands as an attachment you can review before sending, with a caption if you want one, exactly like photos picked from your gallery.'
+	},
+	{
 		id: 'cordn-news-2026-10-01-md-convergence',
 		createdAt: Date.UTC(2026, 9, 1),
 		version: 1,

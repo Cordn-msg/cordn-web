@@ -44,10 +44,13 @@ const SaveAs = registerPlugin<SaveAsPlugin>('SaveAs');
 /**
  * Local Capacitor plugin (SanitizeImagePlugin, in the Android app module) that re-encodes an image
  * to a metadata-free baseline JPEG with the platform decoder (API 28+). Used for HEIC/HEIF
- * captures, which the WebView cannot decode at all — Chromium has no HEVC image support.
+ * captures, which the WebView cannot decode at all — Chromium has no HEVC image support. Also
+ * reads image clips from the system clipboard (`readClipboardImageFile` below).
  */
 interface SanitizeImagePlugin {
 	toJpeg(options: { base64: string }): Promise<{ base64: string }>;
+	/** Resolves without `base64` when the clipboard holds no image (empty, text-only). */
+	readClipboardImage(): Promise<{ base64?: string; mime?: string }>;
 }
 const SanitizeImage = registerPlugin<SanitizeImagePlugin>('SanitizeImage');
 
@@ -90,6 +93,34 @@ export async function nativeImageToJpeg(file: File): Promise<File | null> {
 		const { base64 } = await SanitizeImage.toJpeg({ base64: bytesToBase64Local(bytes) });
 		return new File([base64ToBytesLocal(base64) as BlobPart], replaceFileExt(file.name, 'jpg'), {
 			type: 'image/jpeg'
+		});
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Read an image from the system clipboard as a composer-ready File, or null when there is none.
+ *
+ * The Android WebView fires the composer's paste event for image-only clips but delivers an EMPTY
+ * payload — clipboardData.files and text are both absent (web-facing file paste is gated behind
+ * Chromium's kClipboardFiles) — so the JS paste handler rescues that gesture by reading the
+ * clipboard through the platform. Called only from an explicit paste gesture, which satisfies
+ * Android 10+'s focused-foreground read rule; Android 12+ shows its standard clipboard-read toast
+ * for clips from other apps. Returns null on web, non-image clips, and any failure (sendable beats
+ * blocked — the user still has the gallery/camera path).
+ */
+export async function readClipboardImageFile(): Promise<File | null> {
+	if (!isNativePlatform()) return null;
+	try {
+		const { base64, mime: declared } = await SanitizeImage.readClipboardImage();
+		if (!base64) return null;
+		const bytes = base64ToBytesLocal(base64);
+		// Truthful labels (the AEAD AAD binds mime/filename to the exact bytes): prefer the
+		// clipboard's declared type, fall back to magic bytes like mediaResultToFile does.
+		const mime = declared || sniffMediaMime(bytes, false) || 'image/png';
+		return new File([bytes as BlobPart], `photo-${Date.now()}.${mediaExtFromMime(mime)}`, {
+			type: mime
 		});
 	} catch {
 		return null;
