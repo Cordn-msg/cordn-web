@@ -234,14 +234,16 @@
 		mobileSheetOpen = false;
 	}
 
+	// Tapping your own emoji removes it (WhatsApp/Signal deselect convention)
+	// instead of re-sending a duplicate kind-7.
+	function toggleReaction(reaction: string) {
+		return message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)
+			? onUnreact(message, reaction)
+			: onReact(message, reaction);
+	}
+
 	async function chooseReaction(reaction: string) {
-		// Tapping your own emoji in the picker removes it (WhatsApp/Signal
-		// deselect convention) instead of re-sending a duplicate kind-7.
-		if (message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)) {
-			await onUnreact(message, reaction);
-		} else {
-			await onReact(message, reaction);
-		}
+		await toggleReaction(reaction);
 		dismissActionSurfaces();
 	}
 
@@ -257,11 +259,7 @@
 		const reaction = normalizeCustomReaction(customReaction);
 		if (!reaction) return;
 		persistCustomReaction(reaction);
-		if (message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)) {
-			await onUnreact(message, reaction);
-		} else {
-			await onReact(message, reaction);
-		}
+		await toggleReaction(reaction);
 		customReaction = '';
 		customReactionOpen = false;
 		reactionMenuOpen = false;

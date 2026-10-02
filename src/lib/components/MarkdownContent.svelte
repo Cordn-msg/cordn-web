@@ -14,6 +14,10 @@
 	} = $props();
 
 	const blocks = $derived(blocksProp ?? parseMarkdown(source));
+
+	// Static strings only: Tailwind generates classes it can see in source.
+	const alignClass = (align: 'left' | 'center' | 'right' | undefined) =>
+		align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : '';
 </script>
 
 {#if blocks.length}
@@ -54,11 +58,7 @@
 									<th
 										class={cn(
 											'border-b px-2 py-1 font-semibold whitespace-nowrap',
-											block.aligns[cellIndex] === 'center'
-												? 'text-center'
-												: block.aligns[cellIndex] === 'right'
-													? 'text-right'
-													: ''
+											alignClass(block.aligns[cellIndex])
 										)}
 									>
 										<MarkdownInline nodes={cell} />
@@ -70,16 +70,7 @@
 							{#each block.rows as row, rowIndex (rowIndex)}
 								<tr class="border-b border-border/60">
 									{#each row as cell, cellIndex (cellIndex)}
-										<td
-											class={cn(
-												'px-2 py-1 align-top',
-												block.aligns[cellIndex] === 'center'
-													? 'text-center'
-													: block.aligns[cellIndex] === 'right'
-														? 'text-right'
-														: ''
-											)}
-										>
+										<td class={cn('px-2 py-1 align-top', alignClass(block.aligns[cellIndex]))}>
 											<MarkdownInline nodes={cell} />
 										</td>
 									{/each}

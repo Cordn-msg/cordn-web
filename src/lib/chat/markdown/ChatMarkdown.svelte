@@ -15,6 +15,10 @@
 		messageId,
 		isOwn = false
 	}: { blocks: MarkdownBlock[]; messageId: string; isOwn?: boolean } = $props();
+
+	// Static strings only: Tailwind generates classes it can see in source.
+	const alignClass = (align: 'left' | 'center' | 'right' | undefined) =>
+		align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : '';
 </script>
 
 <div class="max-w-full min-w-0 space-y-1.5">
@@ -63,11 +67,7 @@
 									class={cn(
 										'border-b px-2 py-1 font-semibold whitespace-nowrap',
 										isOwn ? 'border-primary-foreground/30' : 'border-border',
-										block.aligns[cellIndex] === 'center'
-											? 'text-center'
-											: block.aligns[cellIndex] === 'right'
-												? 'text-right'
-												: ''
+										alignClass(block.aligns[cellIndex])
 									)}
 								>
 									<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
@@ -83,16 +83,7 @@
 								)}
 							>
 								{#each row as cell, cellIndex (cellIndex)}
-									<td
-										class={cn(
-											'px-2 py-1 align-top',
-											block.aligns[cellIndex] === 'center'
-												? 'text-center'
-												: block.aligns[cellIndex] === 'right'
-													? 'text-right'
-													: ''
-										)}
-									>
+									<td class={cn('px-2 py-1 align-top', alignClass(block.aligns[cellIndex]))}>
 										<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
 									</td>
 								{/each}
