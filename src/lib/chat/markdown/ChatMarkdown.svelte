@@ -51,6 +51,56 @@
 					'max-w-full overflow-x-auto rounded-lg p-2 text-xs leading-relaxed',
 					isOwn ? 'bg-primary-foreground/10' : 'bg-muted'
 				)}><code class="block whitespace-pre">{block.text}</code></pre>
+		{:else if block.type === 'table'}
+			<!-- overflow-x-auto: wide tables scroll inside the bubble instead of
+			     blowing out the row/virtualizer width. -->
+			<div class="max-w-full min-w-0 overflow-x-auto">
+				<table class="w-full max-w-full border-collapse text-left">
+					<thead>
+						<tr>
+							{#each block.header as cell, cellIndex (cellIndex)}
+								<th
+									class={cn(
+										'border-b px-2 py-1 font-semibold whitespace-nowrap',
+										isOwn ? 'border-primary-foreground/30' : 'border-border',
+										block.aligns[cellIndex] === 'center'
+											? 'text-center'
+											: block.aligns[cellIndex] === 'right'
+												? 'text-right'
+												: ''
+									)}
+								>
+									<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+								</th>
+							{/each}
+						</tr>
+					</thead>
+					<tbody>
+						{#each block.rows as row, rowIndex (rowIndex)}
+							<tr
+								class={cn(
+									isOwn ? 'border-b border-primary-foreground/15' : 'border-b border-border/60'
+								)}
+							>
+								{#each row as cell, cellIndex (cellIndex)}
+									<td
+										class={cn(
+											'px-2 py-1 align-top',
+											block.aligns[cellIndex] === 'center'
+												? 'text-center'
+												: block.aligns[cellIndex] === 'right'
+													? 'text-right'
+													: ''
+										)}
+									>
+										<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+									</td>
+								{/each}
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{:else}
 			<blockquote
 				class={cn(

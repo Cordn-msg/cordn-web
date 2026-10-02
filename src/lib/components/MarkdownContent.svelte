@@ -45,6 +45,49 @@
 				{/if}
 			{:else if block.type === 'code'}
 				<pre><code>{block.text}</code></pre>
+			{:else if block.type === 'table'}
+				<div class="max-w-full overflow-x-auto">
+					<table class="w-full max-w-full border-collapse text-left">
+						<thead>
+							<tr>
+								{#each block.header as cell, cellIndex (cellIndex)}
+									<th
+										class={cn(
+											'border-b px-2 py-1 font-semibold whitespace-nowrap',
+											block.aligns[cellIndex] === 'center'
+												? 'text-center'
+												: block.aligns[cellIndex] === 'right'
+													? 'text-right'
+													: ''
+										)}
+									>
+										<MarkdownInline nodes={cell} />
+									</th>
+								{/each}
+							</tr>
+						</thead>
+						<tbody>
+							{#each block.rows as row, rowIndex (rowIndex)}
+								<tr class="border-b border-border/60">
+									{#each row as cell, cellIndex (cellIndex)}
+										<td
+											class={cn(
+												'px-2 py-1 align-top',
+												block.aligns[cellIndex] === 'center'
+													? 'text-center'
+													: block.aligns[cellIndex] === 'right'
+														? 'text-right'
+														: ''
+											)}
+										>
+											<MarkdownInline nodes={cell} />
+										</td>
+									{/each}
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			{:else}
 				<blockquote><MarkdownInline nodes={block.inline} /></blockquote>
 			{/if}
