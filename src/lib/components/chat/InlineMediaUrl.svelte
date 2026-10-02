@@ -45,7 +45,7 @@
 	{#if show}
 		<button
 			type="button"
-			class="mt-1 block max-h-64 w-full max-w-[16rem] overflow-hidden rounded-2xl sm:max-w-[20rem]"
+			class="mt-1 block max-h-64 w-full max-w-[min(100%,16rem)] overflow-hidden rounded-2xl sm:max-w-[min(100%,20rem)]"
 			aria-label="Open image"
 			onclick={() => openMediaLightbox({ url: href, filename, mime: 'image/*' })}
 		>
@@ -68,7 +68,7 @@
 			src={href}
 			controls
 			preload="metadata"
-			class="mt-1 max-h-72 max-w-[16rem] rounded-2xl sm:max-w-[20rem]"
+			class="mt-1 max-h-72 max-w-[min(100%,16rem)] rounded-2xl sm:max-w-[min(100%,20rem)]"
 		></video>
 	{:else}
 		{@render loadButton()}

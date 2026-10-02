@@ -58,12 +58,15 @@
 		window.location.href = `nostr:${entity}`;
 	}
 
+	// Short labels: on phone-width bubbles the label competes with the author
+	// chip in one row — "Long-form article" starved the chip to per-character
+	// wrap even after truncation landed.
 	const KIND_LABELS: Record<number, string> = {
 		[kinds.ShortTextNote]: 'Note',
-		[kinds.LongFormArticle]: 'Long-form article',
-		[kinds.Metadata]: 'Profile metadata',
-		[kinds.Contacts]: 'Contact list',
-		[kinds.RelayList]: 'Relay list'
+		[kinds.LongFormArticle]: 'Article',
+		[kinds.Metadata]: 'Metadata',
+		[kinds.Contacts]: 'Contacts',
+		[kinds.RelayList]: 'Relays'
 	};
 	const kindLabel = (kind: number) => KIND_LABELS[kind] ?? `Kind ${kind}`;
 	/** Prose kinds render content; everything else is a label-only card. */
@@ -199,7 +202,10 @@
 {:else}
 	<!-- Fixed min width: the bubble sizes to its content, so without one the
 	     skeleton collapses to a sliver until the event resolves. -->
-	<span class={cn(cardClass, 'w-60 animate-pulse space-y-1.5')} aria-label="Loading nostr event">
+	<span
+		class={cn(cardClass, 'w-60 max-w-full animate-pulse space-y-1.5')}
+		aria-label="Loading nostr event"
+	>
 		<span class="block h-3 w-1/3 rounded-full bg-muted"></span>
 		<span class="block h-3 w-3/4 rounded-full bg-muted"></span>
 		<span class="block h-3 w-1/2 rounded-full bg-muted"></span>
