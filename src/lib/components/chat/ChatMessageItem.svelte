@@ -67,6 +67,7 @@
 		showUnreadMarker = false,
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
+		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
@@ -85,6 +86,7 @@
 		showUnreadMarker?: boolean;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
+		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
@@ -233,7 +235,13 @@
 	}
 
 	async function chooseReaction(reaction: string) {
-		await onReact(message, reaction);
+		// Tapping your own emoji in the picker removes it (WhatsApp/Signal
+		// deselect convention) instead of re-sending a duplicate kind-7.
+		if (message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)) {
+			await onUnreact(message, reaction);
+		} else {
+			await onReact(message, reaction);
+		}
 		dismissActionSurfaces();
 	}
 
@@ -249,7 +257,11 @@
 		const reaction = normalizeCustomReaction(customReaction);
 		if (!reaction) return;
 		persistCustomReaction(reaction);
-		await onReact(message, reaction);
+		if (message.reactions?.some((entry) => entry.emoji === reaction && entry.reactedByMe)) {
+			await onUnreact(message, reaction);
+		} else {
+			await onReact(message, reaction);
+		}
 		customReaction = '';
 		customReactionOpen = false;
 		reactionMenuOpen = false;
@@ -921,10 +933,15 @@
 											<button
 												{...props}
 												type="button"
-												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground hover:bg-primary/15' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
-												aria-label={`${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
+												class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${reaction.reactedByMe ? 'border-primary/50 bg-primary/15 text-foreground ring-1 ring-primary/30 hover:bg-primary/25' : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'}`}
+												aria-label={reaction.reactedByMe
+													? `${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. You reacted — tap to remove.`
+													: `${reaction.emoji}: ${reaction.count} reaction${reaction.count === 1 ? '' : 's'}. Tap to see who reacted.`}
 												title={getReactionLabel(reaction)}
-												onclick={() => openRich()}
+												onclick={() =>
+													reaction.reactedByMe
+														? void onUnreact(message, reaction.emoji)
+														: openRich()}
 												onpointerenter={activateInteractionControls}
 												onfocus={activateInteractionControls}
 											>

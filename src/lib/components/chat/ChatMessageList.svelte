@@ -15,6 +15,7 @@
 		initialFocusMessageId = '',
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
+		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
@@ -34,6 +35,7 @@
 		initialFocusMessageId?: string;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
+		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
@@ -403,6 +405,7 @@
 								showUnreadMarker={message.id === initialFocusMessageId}
 								{onReply}
 								{onReact}
+								{onUnreact}
 								{onEdit}
 								{onDelete}
 								{onRetrySend}

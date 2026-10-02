@@ -41,9 +41,9 @@
 		if (!byEmoji) return [];
 		return Array.from(byEmoji.values()).map((entry) => ({
 			emoji: entry.emoji,
-			count: entry.authors.size,
-			reactedByMe: activePubkey ? entry.authors.has(activePubkey) : false,
-			reactors: Array.from(entry.authors)
+			count: entry.reactors.size,
+			reactedByMe: activePubkey ? entry.reactors.has(activePubkey) : false,
+			reactors: Array.from(entry.reactors.keys())
 		}));
 	}
 

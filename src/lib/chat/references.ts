@@ -337,7 +337,10 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 
 export interface ReactionIndexEntry {
 	emoji: string;
-	authors: Set<string>;
+	/** Reactor pubkey -> their kind-7 event ids (multi-device reacting adds
+	 *  ids; membership means "at least one live reaction event", so deleting
+	 *  one of two events keeps the chip). */
+	reactors: Map<string, Set<string>>;
 }
 
 export interface AnnotationIndex {
@@ -365,9 +368,10 @@ export interface PinIndexEntry {
  *  shell (for the inline view-model fold) and search consume this so the
  *  resolution rules cannot drift between them.
  *
- *  `messages` is iterated once per annotation kind (reactions, deletes, edits,
- *  pins) in creation order — deletes must be known before edits resolve, so
- *  that ordering is load-bearing; pins are order-independent. */
+ *  `messages` is iterated once per annotation kind (deletes, reactions,
+ *  edits, pins) in creation order — deletes must be known before reactions
+ *  and edits resolve, so that ordering is load-bearing; pins are
+ *  order-independent. */
 export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationIndex {
 	const byEventId = new Map(messages.map((message) => [message.id, message]));
 	const reactionMap = new Map<string, Map<string, ReactionIndexEntry>>();
@@ -375,24 +379,9 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 	const deletedIds = new Set<string>();
 	const pinSet = new Map<string, PinIndexEntry>();
 
-	for (const message of messages) {
-		const reference = getMessageReactionReference(message.kind, message.content, message.tags);
-		if (!reference) continue;
-
-		const sender = safeNormalizePubKey(message.sender);
-		if (!sender) continue; // malformed sender: the reaction can't be attributed
-
-		const byEmoji = reactionMap.get(reference.targetId) ?? new Map<string, ReactionIndexEntry>();
-		const entry = byEmoji.get(reference.reaction) ?? {
-			emoji: reference.reaction,
-			authors: new Set<string>()
-		};
-
-		entry.authors.add(sender);
-		byEmoji.set(reference.reaction, entry);
-		reactionMap.set(reference.targetId, byEmoji);
-	}
-
+	// Deletes resolve first: a deleted event must not contribute to the
+	// reaction/edit folds below (this includes kind-5 deletions of kind-7
+	// reaction events themselves — removing a reaction un-chips it).
 	for (const message of messages) {
 		const reference = getMessageDeleteReference(message.kind, message.tags);
 		if (!reference) continue;
@@ -403,6 +392,28 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 		if (!samePubKey(original.sender, message.sender)) continue;
 
 		deletedIds.add(reference.targetId);
+	}
+
+	for (const message of messages) {
+		if (deletedIds.has(message.id)) continue;
+
+		const reference = getMessageReactionReference(message.kind, message.content, message.tags);
+		if (!reference) continue;
+
+		const sender = safeNormalizePubKey(message.sender);
+		if (!sender) continue; // malformed sender: the reaction can't be attributed
+
+		const byEmoji = reactionMap.get(reference.targetId) ?? new Map<string, ReactionIndexEntry>();
+		const entry = byEmoji.get(reference.reaction) ?? {
+			emoji: reference.reaction,
+			reactors: new Map<string, Set<string>>()
+		};
+
+		const eventIds = entry.reactors.get(sender) ?? new Set<string>();
+		eventIds.add(message.id);
+		entry.reactors.set(sender, eventIds);
+		byEmoji.set(reference.reaction, entry);
+		reactionMap.set(reference.targetId, byEmoji);
 	}
 
 	for (const message of messages) {
