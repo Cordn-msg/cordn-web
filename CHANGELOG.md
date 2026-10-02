@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.5.2 — 2026-10-02
+
+### Features
+
+- **chat:** open-in-app handoff and an embeds on/off setting
+- **markdown:** GFM-style pipe tables in the custom parser
+- **chat:** embed pasted nostr events inline with long-content clamping
+- **chat:** remove your own reactions; visibly mark them as yours
+- **chat:** add setting to toggle reaction timeline rows
+- **chat:** render reactions as marker rows in the message timeline
+- **chat:** paste images into the composer on web and android
+- **news:** linked devices heal their own splits
+- **md:** fork evidence, descent check, commit-point rank (spec §8/§10)
+
+### Fixes
+
+- **chat:** remove phantom spacing between embed card sections
+- **chat:** kill phantom line-box gap in embed header
+- **chat:** embed header stacks meta under the author; media fills phone bubbles
+- **chat:** adaptive fixes for embeds and inline media on narrow screens
+- **chat:** embed meta contrast, article titles, three external viewers
+- **chat:** readable embed author names + inline avatar
+- **chat:** embed card polish — skeleton width, author contrast, ⋯ menu
+- **chat:** stop rendering the runTail comment as message text
+- **chat:** anchor run avatars to the newest message again
+- **chat:** suppress reaction rows directly under their target
+- **chat:** move unread-mention jump button beside scroll-to-bottom
+- **chat:** stage attachments instantly with visible processing state
+- **coordinator:** stop marking healthy coordinators unreachable
+- **md:** fork-epoch keying + the chain-jump adoption gate
+- **md:** arm failed-pull retries for the soonest due gid
+- **md:** converge reliably — fetch liveness, fork tie-break, repair discipline, bounded hold
+
+### Docs
+
+- **news:** split nostr embeds and markdown tables into their own release card
+- **news:** note removed reactions are one tap to restore
+- **news:** announce reaction timeline, instant attachments, mention button move
+- **news:** publish coordinator-health release card
+
+### Refactor
+
+- **settings:** dedupe persisted chat-behavior bools
+- **chat:** fold review findings from the final pass
+- **chat:** drop unused systemCommitter on reaction rows
+
+### Chore
+
+- **coordinator:** align teardown-policy comments with behavior
+- ignore .pi (pi agent local config)
+
 ## 0.5.1 — 2026-09-29
 
 ### Features
