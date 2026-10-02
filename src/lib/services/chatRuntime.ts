@@ -75,10 +75,15 @@ class AccountCoordinatorClientRegistry {
 			onHealth: (signal) => {
 				if (client && this.peekClient(serverPubkey) !== client) return;
 				if (signal.status === 'healthy') markCoordinatorHealthy(serverPubkey);
-				// A signer that cannot sign means no request ever reached the
-				// coordinator — that is local identity state, not reachability, so it
-				// must not mark the coordinator degraded.
-				else if (!isSignerUnavailableError(signal.error))
+				// Only network-class failures are reachability evidence. A signer
+				// that cannot sign never reached the coordinator (local identity
+				// state), and neither do server application errors or contract
+				// parse failures — marking those armed the read breaker and surfaced
+				// "Coordinator unreachable" for a healthy coordinator.
+				else if (
+					!isSignerUnavailableError(signal.error) &&
+					isTransientCoordinatorError(signal.error)
+				)
 					markCoordinatorDegraded(serverPubkey, signal.error);
 			},
 			onServerInfo: (info) => {

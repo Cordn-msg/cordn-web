@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+type HealthSignal = { status: 'healthy' } | { status: 'degraded'; error: string };
+
 const { accountManagerMock, queryClientMock, coordinatorMock } = vi.hoisted(() => ({
 	accountManagerMock: { getActive: vi.fn() },
 	queryClientMock: { cancelQueries: vi.fn(), invalidateQueries: vi.fn() },
@@ -17,8 +19,10 @@ vi.mock('$lib/services/coordinatorClient', () => {
 		signal = this.lifecycle.signal;
 		relays: string[];
 		isSigning = false;
-		constructor(options: { relays: string[] }) {
+		onHealth?: (signal: HealthSignal) => void;
+		constructor(options: { relays: string[]; onHealth?: (signal: HealthSignal) => void }) {
 			this.relays = options.relays;
+			this.onHealth = options.onHealth;
 		}
 		get isClosed() {
 			return this.signal.aborted;
@@ -40,6 +44,7 @@ import {
 	withCoordinatorClient,
 	withCoordinatorClientRetry
 } from './chatRuntime';
+import { coordinatorHealthStore, getCoordinatorHealthTone } from './coordinatorHealth.svelte';
 
 const ACCOUNT = { id: 'acc-1', pubkey: 'aa'.repeat(32), signer: {} } as never;
 const COORDINATOR = 'bb'.repeat(32);
@@ -222,5 +227,34 @@ describe('pool liveness probes', () => {
 		await probeCoordinatorClientPools('window focus');
 		await probeCoordinatorClientPools('page resumed');
 		expect(probed).toBe(1);
+	});
+});
+
+describe('coordinator health marking', () => {
+	function emitHealth(client: unknown, signal: HealthSignal) {
+		(client as { onHealth?: (signal: HealthSignal) => void }).onHealth?.(signal);
+	}
+
+	beforeEach(() => {
+		coordinatorHealthStore.byCoordinator.clear();
+	});
+
+	test('only network-class failures mark the coordinator degraded', () => {
+		const client = getCoordinatorClient(ACCOUNT, COORDINATOR);
+		// Non-network failures are not reachability evidence: no degraded mark,
+		// so no read breaker and no "Coordinator unreachable" for a healthy
+		// coordinator (server application errors, contract parse failures,
+		// signer-capability gaps).
+		emitHealth(client, { status: 'degraded', error: 'Unrecognized key(s) in object: consumed' });
+		expect(getCoordinatorHealthTone(COORDINATOR)).toBe('unknown');
+		emitHealth(client, { status: 'degraded', error: 'Your signer does not support NIP-44 v2' });
+		expect(getCoordinatorHealthTone(COORDINATOR)).toBe('unknown');
+		emitHealth(client, {
+			status: 'degraded',
+			error: 'Coordinator request timed out after 20000ms'
+		});
+		expect(getCoordinatorHealthTone(COORDINATOR)).toBe('degraded');
+		emitHealth(client, { status: 'healthy' });
+		expect(getCoordinatorHealthTone(COORDINATOR)).toBe('healthy');
 	});
 });
