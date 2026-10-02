@@ -6,7 +6,16 @@
 	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { useNostrEvent } from '$lib/services/useNostrEvent.svelte';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
-	import { formatUnixTimestamp, cn } from '$lib/utils';
+	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
+	import { MESSAGE_PART_CONTAINER_CLASS } from '$lib/chat/messageTextClasses';
+	import {
+		DropdownMenuRoot,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
+	import { Button } from '$lib/components/ui/button';
+	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import { kinds } from 'nostr-tools';
 	import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
 
@@ -17,7 +26,8 @@
 	 * content through the SAME pipeline as cordn messages (markdown cache →
 	 * mention/link parts), so links/media inside remote notes work unchanged.
 	 * Content kinds beyond text notes and long-form show a label-only card —
-	 * their content is lists/metadata JSON, not prose.
+	 * their content is lists/metadata JSON, not prose. The ⋯ menu copies the
+	 * entity or opens it on nostr.at.
 	 */
 	let {
 		pointer,
@@ -52,7 +62,18 @@
 			isOwn ? 'border-primary-foreground/25 bg-primary-foreground/10' : 'border-border bg-muted/30'
 		)
 	);
-	const externalHref = $derived(`https://njump.me/${text.replace(/^nostr:/, '')}`);
+	// Author chip mirrors the @mention chip styling so names keep the same
+	// contrast on both bubble colors (ProfileCard inline inherits text-current).
+	const authorChipClass = $derived(
+		cn(
+			'inline-flex min-w-0 max-w-full rounded-full px-1 font-semibold',
+			MESSAGE_PART_CONTAINER_CLASS,
+			isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
+		)
+	);
+	// The bech32 without any nostr: prefix — the canonical form to copy/link.
+	const entity = $derived(text.replace(/^nostr:/, ''));
+	const externalHref = $derived(`https://nostr.at/${entity}`);
 	const markdownBlocks = $derived(
 		event.current && CONTENT_KINDS.has(event.current.kind)
 			? getCachedChatMarkdownBlocks(event.current.id, event.current.content)
@@ -60,14 +81,43 @@
 	);
 </script>
 
+{#snippet overflowMenu()}
+	<DropdownMenuRoot>
+		<DropdownMenuTrigger>
+			{#snippet child({ props })}
+				<Button
+					{...props}
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					class="size-6 shrink-0 rounded-lg text-muted-foreground"
+					aria-label="Event actions"
+					onclick={(e) => e.stopPropagation()}
+				>
+					<Ellipsis class="size-4" />
+				</Button>
+			{/snippet}
+		</DropdownMenuTrigger>
+		<DropdownMenuContent side="bottom" align="end" sideOffset={4} class="rounded-2xl p-1">
+			<DropdownMenuItem onclick={() => void copyToClipboard(entity)}>Copy entity</DropdownMenuItem>
+			<DropdownMenuItem onclick={() => void openMessageLink(externalHref)}>
+				Open in nostr.at
+			</DropdownMenuItem>
+		</DropdownMenuContent>
+	</DropdownMenuRoot>
+{/snippet}
+
 {#if event.current}
 	<span class={cardClass}>
 		<span class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-			<span class="min-w-0 truncate font-medium text-foreground">
+			<span class={authorChipClass}>
 				<ProfileCard pubkey={event.current.pubkey} mode="inline" profileLink={false} />
 			</span>
 			<span class="shrink-0">{kindLabel(event.current.kind)}</span>
 			<span class="shrink-0">{formatUnixTimestamp(event.current.created_at, true, false)}</span>
+			<span class="ml-auto flex shrink-0 items-center">
+				{@render overflowMenu()}
+			</span>
 		</span>
 		{#if CONTENT_KINDS.has(event.current.kind) && event.current.content}
 			<span class="mt-1 block text-sm">
@@ -91,14 +141,16 @@
 				type="button"
 				class="shrink-0 font-medium underline-offset-2 hover:underline"
 				onclick={() => void openMessageLink(externalHref)}
-				aria-label="Open on njump"
+				aria-label="Open on nostr.at"
 			>
 				Open externally
 			</button>
 		</span>
 	</span>
 {:else}
-	<span class={cn(cardClass, 'animate-pulse space-y-1.5')} aria-label="Loading nostr event">
+	<!-- Fixed min width: the bubble sizes to its content, so without one the
+	     skeleton collapses to a sliver until the event resolves. -->
+	<span class={cn(cardClass, 'w-60 animate-pulse space-y-1.5')} aria-label="Loading nostr event">
 		<span class="block h-3 w-1/3 rounded-full bg-muted"></span>
 		<span class="block h-3 w-3/4 rounded-full bg-muted"></span>
 		<span class="block h-3 w-1/2 rounded-full bg-muted"></span>
