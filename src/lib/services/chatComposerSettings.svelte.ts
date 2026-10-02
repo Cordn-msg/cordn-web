@@ -59,71 +59,57 @@ export function enterKeySends(): boolean {
 }
 
 /**
- * Whether confirmed reactions render as marker rows in the message timeline
- * (in addition to the chips on the reacted-to message). Default on; users in
- * high-traffic groups can turn it off to keep the timeline messages-only.
+ * A boolean chat-behavior setting persisted to localStorage, default on
+ * (only the explicit string "false" turns it off, so old installs keep the
+ * default). Module $state → reading the getter in a template/effect is
+ * reactive, so toggles apply live without remounts.
  */
-const SHOW_REACTION_MARKERS_KEY = 'cordn.showReactionMarkers';
-
-function loadShowReactionMarkers(): boolean {
-	if (!browser) return true;
-	return localStorage.getItem(SHOW_REACTION_MARKERS_KEY) !== 'false';
+function persistedChatBool(key: string) {
+	let value = $state(browser ? localStorage.getItem(key) !== 'false' : true);
+	return {
+		get: () => value,
+		set(next: boolean) {
+			value = next;
+			if (browser) localStorage.setItem(key, String(next));
+		}
+	};
 }
 
-let showReactionMarkers = $state(loadShowReactionMarkers());
+/** Whether confirmed reactions render as marker rows in the message timeline
+ *  (in addition to the chips on the reacted-to message). Default on; users in
+ *  high-traffic groups can turn it off to keep the timeline messages-only. */
+const showReactionMarkersSetting = persistedChatBool('cordn.showReactionMarkers');
+
+/** Whether long messages and embedded nostr events render clamped behind a
+ *  "Show more" toggle (the inline-body boundedness contract). Default on. */
+const collapseLongMessagesSetting = persistedChatBool('cordn.collapseLongMessages');
+
+/** Whether pasted nostr event links (nevent/naddr/note) render as inline
+ *  embed cards that fetch the event from relays. Default on; turned off the
+ *  link stays a plain reference with the ⋯ menu (open externally) and no
+ *  relay fetch happens. */
+const renderNostrEmbedsSetting = persistedChatBool('cordn.renderNostrEmbeds');
 
 export function getShowReactionMarkers(): boolean {
-	return showReactionMarkers;
+	return showReactionMarkersSetting.get();
 }
 
 export function setShowReactionMarkers(value: boolean): void {
-	showReactionMarkers = value;
-	if (browser) localStorage.setItem(SHOW_REACTION_MARKERS_KEY, String(value));
+	showReactionMarkersSetting.set(value);
 }
-
-/**
- * Whether long messages and embedded nostr events render clamped behind a
- * "Show more" toggle (the inline-body boundedness contract). Default on;
- * turning it off renders everything at full height.
- */
-const COLLAPSE_LONG_MESSAGES_KEY = 'cordn.collapseLongMessages';
-
-function loadCollapseLongMessages(): boolean {
-	if (!browser) return true;
-	return localStorage.getItem(COLLAPSE_LONG_MESSAGES_KEY) !== 'false';
-}
-
-let collapseLongMessages = $state(loadCollapseLongMessages());
 
 export function getCollapseLongMessages(): boolean {
-	return collapseLongMessages;
+	return collapseLongMessagesSetting.get();
 }
 
 export function setCollapseLongMessages(value: boolean): void {
-	collapseLongMessages = value;
-	if (browser) localStorage.setItem(COLLAPSE_LONG_MESSAGES_KEY, String(value));
+	collapseLongMessagesSetting.set(value);
 }
-
-/**
- * Whether pasted nostr event links (nevent/naddr/note) render as inline
- * embed cards that fetch the event from relays. Default on; turned off the
- * link stays a plain reference with the ⋯ menu (open externally) and no
- * relay fetch happens.
- */
-const RENDER_NOSTR_EMBEDS_KEY = 'cordn.renderNostrEmbeds';
-
-function loadRenderNostrEmbeds(): boolean {
-	if (!browser) return true;
-	return localStorage.getItem(RENDER_NOSTR_EMBEDS_KEY) !== 'false';
-}
-
-let renderNostrEmbeds = $state(loadRenderNostrEmbeds());
 
 export function getRenderNostrEmbeds(): boolean {
-	return renderNostrEmbeds;
+	return renderNostrEmbedsSetting.get();
 }
 
 export function setRenderNostrEmbeds(value: boolean): void {
-	renderNostrEmbeds = value;
-	if (browser) localStorage.setItem(RENDER_NOSTR_EMBEDS_KEY, String(value));
+	renderNostrEmbedsSetting.set(value);
 }

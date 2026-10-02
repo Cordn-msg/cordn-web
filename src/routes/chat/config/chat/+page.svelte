@@ -36,24 +36,6 @@
 	];
 
 	let mode = $state(getEnterKeyMode());
-	let reactionMarkers = $state(getShowReactionMarkers());
-	let collapseLongMessages = $state(getCollapseLongMessages());
-	let renderNostrEmbeds = $state(getRenderNostrEmbeds());
-
-	function toggleReactionMarkers(next: boolean) {
-		reactionMarkers = next;
-		setShowReactionMarkers(next);
-	}
-
-	function toggleCollapseLongMessages(next: boolean) {
-		collapseLongMessages = next;
-		setCollapseLongMessages(next);
-	}
-
-	function toggleRenderNostrEmbeds(next: boolean) {
-		renderNostrEmbeds = next;
-		setRenderNostrEmbeds(next);
-	}
 
 	function pick(next: EnterKeyMode) {
 		mode = next;
@@ -67,7 +49,10 @@
 
 <svelte:head>
 	<title>Chat behavior | Cordn</title>
-	<meta name="description" content="Configure how the Enter key behaves while writing messages." />
+	<meta
+		name="description"
+		content="Configure how the Enter key behaves and what the message timeline shows."
+	/>
 </svelte:head>
 
 <div class="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -130,7 +115,7 @@
 						on each message.
 					</p>
 				</div>
-				<Switch bind:checked={reactionMarkers} onCheckedChange={toggleReactionMarkers} />
+				<Switch checked={getShowReactionMarkers()} onCheckedChange={setShowReactionMarkers} />
 			</div>
 
 			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
@@ -141,7 +126,7 @@
 						the chat timeline compact.
 					</p>
 				</div>
-				<Switch bind:checked={collapseLongMessages} onCheckedChange={toggleCollapseLongMessages} />
+				<Switch checked={getCollapseLongMessages()} onCheckedChange={setCollapseLongMessages} />
 			</div>
 
 			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
@@ -152,7 +137,7 @@
 						relays. Turn off to keep them as plain text — the ⋯ menu still opens them elsewhere.
 					</p>
 				</div>
-				<Switch bind:checked={renderNostrEmbeds} onCheckedChange={toggleRenderNostrEmbeds} />
+				<Switch checked={getRenderNostrEmbeds()} onCheckedChange={setRenderNostrEmbeds} />
 			</div>
 
 			<div class="text-center">
