@@ -62,13 +62,14 @@
 			isOwn ? 'border-primary-foreground/25 bg-primary-foreground/10' : 'border-border bg-muted/30'
 		)
 	);
-	// Author chip mirrors the @mention chip styling so names keep the same
-	// contrast on both bubble colors (ProfileCard inline inherits text-current).
+	// Author chip mirrors the @mention chip styling, with an explicit text
+	// color: ProfileCard inline inherits text-current, and the header row's
+	// muted-foreground on an own bubble (bg-primary) is unreadable.
 	const authorChipClass = $derived(
 		cn(
-			'inline-flex min-w-0 max-w-full rounded-full px-1 font-semibold',
+			'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
 			MESSAGE_PART_CONTAINER_CLASS,
-			isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
+			isOwn ? 'bg-primary-foreground/15 text-primary-foreground' : 'bg-muted text-foreground'
 		)
 	);
 	// The bech32 without any nostr: prefix — the canonical form to copy/link.
@@ -111,7 +112,12 @@
 	<span class={cardClass}>
 		<span class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
 			<span class={authorChipClass}>
-				<ProfileCard pubkey={event.current.pubkey} mode="inline" profileLink={false} />
+				<ProfileCard
+					pubkey={event.current.pubkey}
+					mode="inline"
+					showInlineAvatar={true}
+					profileLink={false}
+				/>
 			</span>
 			<span class="shrink-0">{kindLabel(event.current.kind)}</span>
 			<span class="shrink-0">{formatUnixTimestamp(event.current.created_at, true, false)}</span>
