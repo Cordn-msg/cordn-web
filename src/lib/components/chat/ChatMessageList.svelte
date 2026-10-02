@@ -390,9 +390,9 @@
 						{@const nextMessage = messages[virtualItem.index + 1]}
 						{@const systemRow = Boolean(message.systemKind)}
 						{@const runHead = !systemRow && previousMessage?.author !== message.author}
-						// Pfp anchors to the NEWEST message of a run (bottom-aligned like // Signal): the hop to
-						a new tail only mounts an Avatar whose picture // prop is already resolved and cached (loadedPictures
-						→ full opacity // instantly), so no fade/fallback replays.
+						<!-- Pfp anchors to the NEWEST message of a run (bottom-aligned like Signal): the hop to
+							a new tail only mounts an Avatar whose picture prop is already resolved and cached
+							(loadedPictures paints it at full opacity instantly), so no fade replays. -->
 						{@const runTail = !systemRow && nextMessage?.author !== message.author}
 						<div
 							data-index={virtualItem.index}
