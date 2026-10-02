@@ -62,6 +62,10 @@
 			isOwn ? 'border-primary-foreground/25 bg-primary-foreground/10' : 'border-border bg-muted/30'
 		)
 	);
+	// Kind/time meta + the ⋯ trigger sit on the card surface: muted-foreground
+	// is unreadable on own bubbles (bg-primary), so the meta color follows the
+	// bubble side like every other secondary text in a row.
+	const metaClass = $derived(isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground');
 	// Author chip mirrors the @mention chip styling, with an explicit text
 	// color: ProfileCard inline inherits text-current, and the header row's
 	// muted-foreground on an own bubble (bg-primary) is unreadable.
@@ -75,6 +79,13 @@
 	// The bech32 without any nostr: prefix — the canonical form to copy/link.
 	const entity = $derived(text.replace(/^nostr:/, ''));
 	const externalHref = $derived(`https://nostr.at/${entity}`);
+	// NIP-23 long-form carries title/summary in tags, not content — without
+	// the title an article reads as a wall of header-less text.
+	const articleTitle = $derived(
+		event.current?.kind === kinds.LongFormArticle
+			? (event.current.tags.find((tag) => tag[0] === 'title')?.[1] ?? '')
+			: ''
+	);
 	const markdownBlocks = $derived(
 		event.current && CONTENT_KINDS.has(event.current.kind)
 			? getCachedChatMarkdownBlocks(event.current.id, event.current.content)
@@ -91,7 +102,7 @@
 					type="button"
 					variant="ghost"
 					size="icon-sm"
-					class="size-6 shrink-0 rounded-lg text-muted-foreground"
+					class={cn('size-6 shrink-0 rounded-lg', metaClass)}
 					aria-label="Event actions"
 					onclick={(e) => e.stopPropagation()}
 				>
@@ -104,13 +115,21 @@
 			<DropdownMenuItem onclick={() => void openMessageLink(externalHref)}>
 				Open in nostr.at
 			</DropdownMenuItem>
+			<DropdownMenuItem onclick={() => void openMessageLink(`https://njump.me/${entity}`)}>
+				Open in njump.me
+			</DropdownMenuItem>
+			<DropdownMenuItem
+				onclick={() => void openMessageLink(`https://jumble.social/notes/${entity}`)}
+			>
+				Open in Jumble
+			</DropdownMenuItem>
 		</DropdownMenuContent>
 	</DropdownMenuRoot>
 {/snippet}
 
 {#if event.current}
 	<span class={cardClass}>
-		<span class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+		<span class={cn('flex min-w-0 items-center gap-2 text-xs', metaClass)}>
 			<span class={authorChipClass}>
 				<ProfileCard
 					pubkey={event.current.pubkey}
@@ -125,6 +144,9 @@
 				{@render overflowMenu()}
 			</span>
 		</span>
+		{#if articleTitle}
+			<span class="mt-1 block text-sm font-semibold">{articleTitle}</span>
+		{/if}
 		{#if CONTENT_KINDS.has(event.current.kind) && event.current.content}
 			<span class="mt-1 block text-sm">
 				<CollapsibleText length={event.current.content.length} {isOwn}>
