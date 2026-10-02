@@ -155,9 +155,12 @@
 	<span class={cardClass}>
 		<!-- Two lines on purpose: the author chip owns the first row (a sibling
 		     kind/time label capped it to per-character wrap on phones), the
-		     meta wraps below, and ⋯ stays top-right. -->
-		<span class={cn('flex min-w-0 items-start gap-2 text-xs', metaClass)}>
-			<span class="min-w-0 flex-1">
+		     meta wraps below, and ⋯ stays top-right. The chip wrapper is a FLEX
+		     box, not a block+inline line box: mixed text-xs/text-sm metrics with
+		     a baseline-shifted avatar made the line box much taller than the
+		     chip, which read as a big gap under the name. -->
+		<span class={cn('flex min-w-0 items-center gap-2 text-xs leading-none', metaClass)}>
+			<span class="flex min-w-0 flex-1 items-center">
 				<span class={authorChipClass}>
 					<ProfileCard
 						pubkey={event.current.pubkey}
@@ -169,14 +172,14 @@
 			</span>
 			{@render overflowMenu()}
 		</span>
-		<span class={cn('mt-0.5 block text-xs', metaClass)}>
+		<span class={cn('mt-0.5 block text-xs leading-4', metaClass)}>
 			{kindLabel(event.current.kind)} · {formatUnixTimestamp(event.current.created_at, true, false)}
 		</span>
 		{#if articleTitle}
-			<span class="mt-1 block text-sm font-semibold">{articleTitle}</span>
+			<span class="mt-0.5 block text-sm font-semibold">{articleTitle}</span>
 		{/if}
 		{#if CONTENT_KINDS.has(event.current.kind) && event.current.content}
-			<span class="mt-1 block text-sm">
+			<span class="mt-0.5 block text-sm">
 				<CollapsibleText length={event.current.content.length} {isOwn}>
 					{#if markdownBlocks}
 						<ChatMarkdown blocks={markdownBlocks} messageId={event.current.id} {isOwn} />
