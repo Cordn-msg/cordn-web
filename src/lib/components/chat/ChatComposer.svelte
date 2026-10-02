@@ -4,7 +4,13 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
 	import { metadataRelays } from '$lib/services/relay-pool';
-	import { capturePhoto, captureVideo, pickImagesFromGallery } from '$lib/services/nativeShims';
+	import {
+		capturePhoto,
+		captureVideo,
+		isNativePlatform,
+		pickImagesFromGallery,
+		readClipboardImageFile
+	} from '$lib/services/nativeShims';
 	import { formatBytes, errorMessage, formatClock } from '$lib/utils';
 	import {
 		createVoiceRecorder,
@@ -392,6 +398,30 @@
 	function handleInput(event: Event) {
 		updateMentionState(event.currentTarget as HTMLTextAreaElement);
 		requestAnimationFrame(() => resizeTextarea());
+	}
+
+	// Paste-to-attach. Desktop delivers screenshots / copied images through the paste event's
+	// clipboardData.files. The Android WebView fires the same event for image-only clips but
+	// delivers an EMPTY payload (web-facing file paste is gated behind Chromium's kClipboardFiles;
+	// see dotnet/maui#31005), so on native an empty paste is rescued by reading the clipboard
+	// through the platform. The no-text guard keeps ordinary text pastes off the native read —
+	// every read would trigger Android 12+'s "app pasted from your clipboard" toast for a
+	// result we'd throw away.
+	function handlePaste(event: ClipboardEvent) {
+		if (disabled) return;
+		const data = event.clipboardData;
+		const files = data?.files;
+		if (files && files.length > 0) {
+			// Files staged, text half of a mixed clip dropped — mirrors drag-and-drop.
+			event.preventDefault();
+			void stageFiles(Array.from(files));
+			return;
+		}
+		if (isNativePlatform() && !data?.getData('text/plain')) {
+			void readClipboardImageFile().then((file) => {
+				if (file) void stageFiles([file]);
+			});
+		}
 	}
 
 	function updateMentionState(target: HTMLTextAreaElement) {
@@ -847,6 +877,7 @@
 						{disabled}
 						onkeydown={handleKeyDown}
 						oninput={handleInput}
+						onpaste={handlePaste}
 						class={COMPOSER_INPUT_WRAP_CLASS}
 						style={`max-height: ${expanded ? 320 : 128}px; min-height: ${expanded ? 144 : 44}px;`}
 					/>
