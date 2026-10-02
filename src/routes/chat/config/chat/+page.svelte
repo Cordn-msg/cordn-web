@@ -9,6 +9,8 @@
 		setShowReactionMarkers,
 		getCollapseLongMessages,
 		setCollapseLongMessages,
+		getRenderNostrEmbeds,
+		setRenderNostrEmbeds,
 		type EnterKeyMode
 	} from '$lib/services/chatComposerSettings.svelte';
 	import { Switch } from '$lib/components/ui/switch';
@@ -36,6 +38,7 @@
 	let mode = $state(getEnterKeyMode());
 	let reactionMarkers = $state(getShowReactionMarkers());
 	let collapseLongMessages = $state(getCollapseLongMessages());
+	let renderNostrEmbeds = $state(getRenderNostrEmbeds());
 
 	function toggleReactionMarkers(next: boolean) {
 		reactionMarkers = next;
@@ -45,6 +48,11 @@
 	function toggleCollapseLongMessages(next: boolean) {
 		collapseLongMessages = next;
 		setCollapseLongMessages(next);
+	}
+
+	function toggleRenderNostrEmbeds(next: boolean) {
+		renderNostrEmbeds = next;
+		setRenderNostrEmbeds(next);
 	}
 
 	function pick(next: EnterKeyMode) {
@@ -134,6 +142,17 @@
 					</p>
 				</div>
 				<Switch bind:checked={collapseLongMessages} onCheckedChange={toggleCollapseLongMessages} />
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Render embedded nostr notes</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Pasted nostr links (nevent, naddr, note) display as inline cards, loading the note from
+						relays. Turn off to keep them as plain text — the ⋯ menu still opens them elsewhere.
+					</p>
+				</div>
+				<Switch bind:checked={renderNostrEmbeds} onCheckedChange={toggleRenderNostrEmbeds} />
 			</div>
 
 			<div class="text-center">

@@ -5,6 +5,7 @@
 	import CollapsibleText from '$lib/components/chat/CollapsibleText.svelte';
 	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { useNostrEvent } from '$lib/services/useNostrEvent.svelte';
+	import { getRenderNostrEmbeds } from '$lib/services/chatComposerSettings.svelte';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
 	import { MESSAGE_PART_CONTAINER_CLASS } from '$lib/chat/messageTextClasses';
@@ -36,14 +37,26 @@
 	}: { pointer: EventPointer | AddressPointer; text: string; isOwn?: boolean } = $props();
 
 	const NOT_FOUND_TIMEOUT_MS = 10_000;
-	const event = useNostrEvent(() => pointer);
+	// Reads reactive module state: toggling the setting re-binds (or unbinds)
+	// the subscription and re-arms the timeout without a remount.
+	const renderEmbeds = $derived(getRenderNostrEmbeds());
+	const event = useNostrEvent(() => (renderEmbeds ? pointer : undefined));
 
 	let timedOut = $state(false);
 	$effect(() => {
+		if (!renderEmbeds) return;
 		timedOut = false;
 		const timer = setTimeout(() => (timedOut = true), NOT_FOUND_TIMEOUT_MS);
 		return () => clearTimeout(timer);
 	});
+
+	// nostr: URI → OS handoff. The native WebView fires an ACTION_VIEW intent
+	// for non-http schemes (installed Nostr apps catch it); browsers offer the
+	// registered protocol handler. No handler → silent no-op; the web viewers
+	// in the menu are the fallback.
+	function openInApp() {
+		window.location.href = `nostr:${entity}`;
+	}
 
 	const KIND_LABELS: Record<number, string> = {
 		[kinds.ShortTextNote]: 'Note',
@@ -111,6 +124,7 @@
 			{/snippet}
 		</DropdownMenuTrigger>
 		<DropdownMenuContent side="bottom" align="end" sideOffset={4} class="rounded-2xl p-1">
+			<DropdownMenuItem onclick={openInApp}>Open in app</DropdownMenuItem>
 			<DropdownMenuItem onclick={() => void copyToClipboard(entity)}>Copy entity</DropdownMenuItem>
 			<DropdownMenuItem onclick={() => void openMessageLink(externalHref)}>
 				Open in nostr.at
@@ -127,7 +141,14 @@
 	</DropdownMenuRoot>
 {/snippet}
 
-{#if event.current}
+{#if !renderEmbeds}
+	<!-- Setting off: plain reference, no card, no relay fetch. The ⋯ menu
+	     stays so the event can still be opened/copied externally. -->
+	<span class="inline-flex max-w-full min-w-0 items-baseline gap-0.5 align-baseline">
+		<span class={cn('min-w-0 truncate font-mono text-xs', metaClass)} title={entity}>{entity}</span>
+		{@render overflowMenu()}
+	</span>
+{:else if event.current}
 	<span class={cardClass}>
 		<span class={cn('flex min-w-0 items-center gap-2 text-xs', metaClass)}>
 			<span class={authorChipClass}>

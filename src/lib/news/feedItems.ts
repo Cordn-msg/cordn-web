@@ -102,7 +102,7 @@ const newsReleases: NewsRelease[] = [
 		createdAt: Date.UTC(2026, 9, 1),
 		version: 1,
 		title: 'Notes from the wider Nostr world, right inside the chat',
-		body: '- ✨ Pasting a nevent, naddr, or note link (with or without the nostr: prefix) now renders the note as an inline card in the chat — author, time, and content, loaded straight from the relays. A ⋯ menu on each card copies the entity or opens it in nostr.at, njump.me, or Jumble, and if an event can’t be found you still get a link out to it.\n- ✨ Markdown tables now render in messages, embedded notes, and news cards — pipe rows with a --- separator line, including column alignment.\n- 🔄 Very long messages and embedded notes clamp behind a “Show more” button to keep the timeline compact; you can turn that off in Settings → Chat behavior.'
+		body: '- ✨ Pasting a nevent, naddr, or note link (with or without the nostr: prefix) now renders the note as an inline card in the chat — author, time, and content, loaded straight from the relays. A ⋯ menu on each card copies the entity or opens it in nostr.at, njump.me, or Jumble, and if an event can’t be found you still get a link out to it.\n- ✨ Markdown tables now render in messages, embedded notes, and news cards — pipe rows with a --- separator line, including column alignment.\n- 🔄 Very long messages and embedded notes clamp behind a “Show more” button to keep the timeline compact; you can turn that off in Settings → Chat behavior.\n- 🔄 Prefer links to stay links? Turn note embeds off in Settings → Chat behavior — pasted references stay plain text and nothing is fetched from relays, and a new “Open in app” entry in the ⋯ menu hands the note to an installed Nostr app on your device.'
 	},
 	{
 		id: 'cordn-news-2026-10-01-reaction-timeline',

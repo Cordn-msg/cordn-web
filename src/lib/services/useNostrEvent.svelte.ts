@@ -8,17 +8,25 @@ import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
  * state, and load it from relays when missing. Same shape as `useProfile`:
  * bridges the RxJS `eventStore.event()` model to Svelte reactivity with an
  * isolated subscription; the model replays cached values synchronously so an
- * already-seen event renders without a skeleton frame. Must be called during
+ * already-seen event renders without a skeleton frame. A `undefined` pointer
+ * (embeds disabled) binds nothing and fetches nothing. Must be called during
  * component init; read `current` reactively.
  */
-export function useNostrEvent(getPointer: () => EventPointer | AddressPointer): {
+export function useNostrEvent(getPointer: () => EventPointer | AddressPointer | undefined): {
 	readonly current: NostrEvent | undefined;
 } {
 	let event = $state<NostrEvent | undefined>(undefined);
 	let boundKey = '';
 	let sub: { unsubscribe(): void } | undefined;
 
-	const bind = (pointer: EventPointer | AddressPointer) => {
+	const bind = (pointer: EventPointer | AddressPointer | undefined) => {
+		if (!pointer) {
+			sub?.unsubscribe();
+			sub = undefined;
+			boundKey = '';
+			event = undefined;
+			return;
+		}
 		const key =
 			'id' in pointer
 				? `id:${pointer.id}`

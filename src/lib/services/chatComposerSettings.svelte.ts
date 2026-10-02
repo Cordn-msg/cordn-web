@@ -103,3 +103,27 @@ export function setCollapseLongMessages(value: boolean): void {
 	collapseLongMessages = value;
 	if (browser) localStorage.setItem(COLLAPSE_LONG_MESSAGES_KEY, String(value));
 }
+
+/**
+ * Whether pasted nostr event links (nevent/naddr/note) render as inline
+ * embed cards that fetch the event from relays. Default on; turned off the
+ * link stays a plain reference with the ⋯ menu (open externally) and no
+ * relay fetch happens.
+ */
+const RENDER_NOSTR_EMBEDS_KEY = 'cordn.renderNostrEmbeds';
+
+function loadRenderNostrEmbeds(): boolean {
+	if (!browser) return true;
+	return localStorage.getItem(RENDER_NOSTR_EMBEDS_KEY) !== 'false';
+}
+
+let renderNostrEmbeds = $state(loadRenderNostrEmbeds());
+
+export function getRenderNostrEmbeds(): boolean {
+	return renderNostrEmbeds;
+}
+
+export function setRenderNostrEmbeds(value: boolean): void {
+	renderNostrEmbeds = value;
+	if (browser) localStorage.setItem(RENDER_NOSTR_EMBEDS_KEY, String(value));
+}
