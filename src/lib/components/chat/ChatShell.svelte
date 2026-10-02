@@ -295,7 +295,6 @@
 						...toChatMessage(message),
 						text: '',
 						systemKind: 'reaction',
-						systemCommitter: message.sender,
 						reactionTarget: target ? `${target.id}:${target.cursor}` : undefined,
 						reactionEmojis: [reference.reaction],
 						reactionSenders: [message.sender]
