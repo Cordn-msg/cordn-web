@@ -153,20 +153,24 @@
 	</span>
 {:else if event.current}
 	<span class={cardClass}>
-		<span class={cn('flex min-w-0 items-center gap-2 text-xs', metaClass)}>
-			<span class={authorChipClass}>
-				<ProfileCard
-					pubkey={event.current.pubkey}
-					mode="inline"
-					showInlineAvatar={true}
-					profileLink={false}
-				/>
+		<!-- Two lines on purpose: the author chip owns the first row (a sibling
+		     kind/time label capped it to per-character wrap on phones), the
+		     meta wraps below, and ⋯ stays top-right. -->
+		<span class={cn('flex min-w-0 items-start gap-2 text-xs', metaClass)}>
+			<span class="min-w-0 flex-1">
+				<span class={authorChipClass}>
+					<ProfileCard
+						pubkey={event.current.pubkey}
+						mode="inline"
+						showInlineAvatar={true}
+						profileLink={false}
+					/>
+				</span>
 			</span>
-			<span class="shrink-0">{kindLabel(event.current.kind)}</span>
-			<span class="shrink-0">{formatUnixTimestamp(event.current.created_at, true, false)}</span>
-			<span class="ml-auto flex shrink-0 items-center">
-				{@render overflowMenu()}
-			</span>
+			{@render overflowMenu()}
+		</span>
+		<span class={cn('mt-0.5 block text-xs', metaClass)}>
+			{kindLabel(event.current.kind)} · {formatUnixTimestamp(event.current.created_at, true, false)}
 		</span>
 		{#if articleTitle}
 			<span class="mt-1 block text-sm font-semibold">{articleTitle}</span>
