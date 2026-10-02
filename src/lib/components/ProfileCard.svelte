@@ -131,7 +131,7 @@
 	<!-- min-w-0 through the chain + truncate: without it a squeezed chip (narrow
 	     bubble, embed header row) wraps the name one character per line. -->
 	<span
-		class="inline-flex max-w-full min-w-0 items-center gap-1.5 align-baseline text-sm font-medium wrap-break-word text-current"
+		class="inline-flex max-w-full min-w-0 items-center gap-1.5 align-baseline text-sm font-medium text-current"
 	>
 		{#if showInlineAvatar}
 			{@render pfp(pubkey, profile?.picture, 'inline')}

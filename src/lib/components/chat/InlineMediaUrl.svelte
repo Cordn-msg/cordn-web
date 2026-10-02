@@ -45,7 +45,7 @@
 	{#if show}
 		<button
 			type="button"
-			class="mt-1 block max-h-64 w-full max-w-full overflow-hidden rounded-2xl sm:max-w-[min(100%,20rem)]"
+			class="mt-1 block max-h-64 w-full overflow-hidden rounded-2xl sm:max-w-[min(100%,20rem)]"
 			aria-label="Open image"
 			onclick={() => openMediaLightbox({ url: href, filename, mime: 'image/*' })}
 		>

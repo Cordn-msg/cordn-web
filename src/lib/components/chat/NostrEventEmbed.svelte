@@ -72,9 +72,14 @@
 	/** Prose kinds render content; everything else is a label-only card. */
 	const CONTENT_KINDS = new Set([kinds.ShortTextNote, kinds.LongFormArticle]);
 
+	// flex-col (not block): Svelte keeps single-space text nodes between the
+	// card sections, and in a block container each becomes an anonymous block
+	// with the bubble's inherited line height — a full phantom blank line
+	// (~28px) between name/meta/content. Flex containers drop whitespace-only
+	// children, so the sections stack at their margins instead.
 	const cardClass = $derived(
 		cn(
-			'my-1 block max-w-full min-w-0 rounded-2xl border px-3 py-2 text-left',
+			'my-1 flex max-w-full min-w-0 flex-col rounded-2xl border px-3 py-2 text-left',
 			isOwn ? 'border-primary-foreground/25 bg-primary-foreground/10' : 'border-border bg-muted/30'
 		)
 	);
@@ -153,13 +158,10 @@
 	</span>
 {:else if event.current}
 	<span class={cardClass}>
-		<!-- Two lines on purpose: the author chip owns the first row (a sibling
-		     kind/time label capped it to per-character wrap on phones), the
-		     meta wraps below, and ⋯ stays top-right. The chip wrapper is a FLEX
-		     box, not a block+inline line box: mixed text-xs/text-sm metrics with
-		     a baseline-shifted avatar made the line box much taller than the
-		     chip, which read as a big gap under the name. -->
-		<span class={cn('flex min-w-0 items-center gap-2 text-xs leading-none', metaClass)}>
+		<!-- Two lines on purpose: the author chip owns the first row (an inline
+		     kind/time label starved it to per-character wrap on phones), the
+		     meta wraps below, and ⋯ stays top-right. -->
+		<span class={cn('flex min-w-0 items-center gap-2', metaClass)}>
 			<span class="flex min-w-0 flex-1 items-center">
 				<span class={authorChipClass}>
 					<ProfileCard
@@ -179,7 +181,7 @@
 			<span class="mt-0.5 block text-sm font-semibold">{articleTitle}</span>
 		{/if}
 		{#if CONTENT_KINDS.has(event.current.kind) && event.current.content}
-			<span class="mt-0.5 block text-sm">
+			<span class="mt-1 block text-sm">
 				<CollapsibleText length={event.current.content.length} {isOwn}>
 					{#if markdownBlocks}
 						<ChatMarkdown blocks={markdownBlocks} messageId={event.current.id} {isOwn} />
