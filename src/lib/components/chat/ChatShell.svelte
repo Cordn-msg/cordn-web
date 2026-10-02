@@ -37,7 +37,7 @@
 		type MessageTarget
 	} from '$lib/chat/references';
 	import { ChatKinds, SYSTEM_MESSAGE_KIND, isAnnotationKind } from '$lib/chat/kinds';
-	import { mergeAdjacentReactionMarkers } from './reactionMarkers';
+	import { mergeAdjacentReactionMarkers, pruneAdjacentReactionTargets } from './reactionMarkers';
 	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
 	import { formatUnixTimestamp, normalizePubKey, samePubKey } from '$lib/utils';
@@ -377,10 +377,12 @@
 		const pending = getPendingMessages(groupId).filter(
 			(message) => !byEventId.has(message.eventId)
 		);
-		return mergeAdjacentReactionMarkers(
-			[...confirmedMessages, ...pending]
-				.filter((message): message is ChatMessage => message !== null)
-				.sort(compareChatMessages)
+		return pruneAdjacentReactionTargets(
+			mergeAdjacentReactionMarkers(
+				[...confirmedMessages, ...pending]
+					.filter((message): message is ChatMessage => message !== null)
+					.sort(compareChatMessages)
+			)
 		);
 	});
 

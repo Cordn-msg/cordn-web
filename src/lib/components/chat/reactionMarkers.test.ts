@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeAdjacentReactionMarkers } from './reactionMarkers';
+import { mergeAdjacentReactionMarkers, pruneAdjacentReactionTargets } from './reactionMarkers';
 import type { ChatMessage } from './chat.types';
 
 function row(partial: Partial<ChatMessage>): ChatMessage {
@@ -70,5 +70,43 @@ describe('mergeAdjacentReactionMarkers', () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].reactionEmojis).toEqual(['👍']);
 		expect(result[0].reactionSenders).toEqual(['pk-r1']);
+	});
+});
+
+describe('pruneAdjacentReactionTargets', () => {
+	const chat = (id: string) => row({ id, kind: 9, text: 'hello' });
+
+	it('drops a row whose target is the nearest preceding message', () => {
+		const result = pruneAdjacentReactionTargets([chat('t'), marker('r1', 't', 10)]);
+		expect(result.map((entry) => entry.id)).toEqual(['t']);
+	});
+
+	it('drops a merged run as a unit', () => {
+		const result = pruneAdjacentReactionTargets([
+			chat('x'),
+			chat('t'),
+			marker('r1', 't', 10),
+			marker('r2', 't', 11)
+		]);
+		expect(result.map((entry) => entry.id)).toEqual(['x', 't']);
+	});
+
+	it('keeps rows whose target is further back', () => {
+		const result = pruneAdjacentReactionTargets([chat('t'), chat('m'), marker('r1', 't', 10)]);
+		expect(result.map((entry) => entry.id)).toEqual(['t', 'm', 'r1']);
+	});
+
+	it('skips system rows when finding the nearest message', () => {
+		const result = pruneAdjacentReactionTargets([
+			chat('t'),
+			row({ id: 'sys', kind: -1, text: '', systemKind: 'member-added' }),
+			marker('r1', 't', 10)
+		]);
+		expect(result.map((entry) => entry.id)).toEqual(['t', 'sys']);
+	});
+
+	it('keeps rows with unresolvable targets', () => {
+		const result = pruneAdjacentReactionTargets([chat('t'), marker('r1', undefined, 10)]);
+		expect(result.map((entry) => entry.id)).toEqual(['t', 'r1']);
 	});
 });

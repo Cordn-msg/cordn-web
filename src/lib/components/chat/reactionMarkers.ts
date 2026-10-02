@@ -39,3 +39,32 @@ export function mergeAdjacentReactionMarkers(rows: ChatMessage[]): ChatMessage[]
 	}
 	return out;
 }
+
+/**
+ * Post-merge pass: drops a reaction row when its target is the nearest
+ * preceding MESSAGE in the list — the reaction chips on that message are
+ * right there, so the row only duplicates them. Runs must be evaluated as a
+ * unit, which is why this runs AFTER the merge. Non-system entries advance
+ * the tracker (pending `outbox:` ids can never match a reaction target, so
+ * they are harmless); other system rows are skipped — they can't be targets.
+ * Row fate depends only on its neighborhood: appending newer messages never
+ * resurrects dropped rows.
+ */
+export function pruneAdjacentReactionTargets(rows: ChatMessage[]): ChatMessage[] {
+	let lastMessageId: string | undefined;
+	const out: ChatMessage[] = [];
+	for (const row of rows) {
+		if (row.systemKind && row.systemKind !== 'reaction') {
+			out.push(row);
+			continue;
+		}
+		if (row.systemKind === 'reaction') {
+			if (row.reactionTarget && row.reactionTarget === lastMessageId) continue;
+			out.push(row);
+			continue;
+		}
+		lastMessageId = row.id;
+		out.push(row);
+	}
+	return out;
+}
