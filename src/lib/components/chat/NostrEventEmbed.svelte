@@ -58,12 +58,15 @@
 		window.location.href = `nostr:${entity}`;
 	}
 
+	// Short labels: on phone-width bubbles the label competes with the author
+	// chip in one row — "Long-form article" starved the chip to per-character
+	// wrap even after truncation landed.
 	const KIND_LABELS: Record<number, string> = {
 		[kinds.ShortTextNote]: 'Note',
-		[kinds.LongFormArticle]: 'Long-form article',
-		[kinds.Metadata]: 'Profile metadata',
-		[kinds.Contacts]: 'Contact list',
-		[kinds.RelayList]: 'Relay list'
+		[kinds.LongFormArticle]: 'Article',
+		[kinds.Metadata]: 'Metadata',
+		[kinds.Contacts]: 'Contacts',
+		[kinds.RelayList]: 'Relays'
 	};
 	const kindLabel = (kind: number) => KIND_LABELS[kind] ?? `Kind ${kind}`;
 	/** Prose kinds render content; everything else is a label-only card. */
@@ -150,26 +153,33 @@
 	</span>
 {:else if event.current}
 	<span class={cardClass}>
-		<span class={cn('flex min-w-0 items-center gap-2 text-xs', metaClass)}>
-			<span class={authorChipClass}>
-				<ProfileCard
-					pubkey={event.current.pubkey}
-					mode="inline"
-					showInlineAvatar={true}
-					profileLink={false}
-				/>
+		<!-- Two lines on purpose: the author chip owns the first row (a sibling
+		     kind/time label capped it to per-character wrap on phones), the
+		     meta wraps below, and ⋯ stays top-right. The chip wrapper is a FLEX
+		     box, not a block+inline line box: mixed text-xs/text-sm metrics with
+		     a baseline-shifted avatar made the line box much taller than the
+		     chip, which read as a big gap under the name. -->
+		<span class={cn('flex min-w-0 items-center gap-2 text-xs leading-none', metaClass)}>
+			<span class="flex min-w-0 flex-1 items-center">
+				<span class={authorChipClass}>
+					<ProfileCard
+						pubkey={event.current.pubkey}
+						mode="inline"
+						showInlineAvatar={true}
+						profileLink={false}
+					/>
+				</span>
 			</span>
-			<span class="shrink-0">{kindLabel(event.current.kind)}</span>
-			<span class="shrink-0">{formatUnixTimestamp(event.current.created_at, true, false)}</span>
-			<span class="ml-auto flex shrink-0 items-center">
-				{@render overflowMenu()}
-			</span>
+			{@render overflowMenu()}
+		</span>
+		<span class={cn('mt-0.5 block text-xs leading-4', metaClass)}>
+			{kindLabel(event.current.kind)} · {formatUnixTimestamp(event.current.created_at, true, false)}
 		</span>
 		{#if articleTitle}
-			<span class="mt-1 block text-sm font-semibold">{articleTitle}</span>
+			<span class="mt-0.5 block text-sm font-semibold">{articleTitle}</span>
 		{/if}
 		{#if CONTENT_KINDS.has(event.current.kind) && event.current.content}
-			<span class="mt-1 block text-sm">
+			<span class="mt-0.5 block text-sm">
 				<CollapsibleText length={event.current.content.length} {isOwn}>
 					{#if markdownBlocks}
 						<ChatMarkdown blocks={markdownBlocks} messageId={event.current.id} {isOwn} />
@@ -199,7 +209,10 @@
 {:else}
 	<!-- Fixed min width: the bubble sizes to its content, so without one the
 	     skeleton collapses to a sliver until the event resolves. -->
-	<span class={cn(cardClass, 'w-60 animate-pulse space-y-1.5')} aria-label="Loading nostr event">
+	<span
+		class={cn(cardClass, 'w-60 max-w-full animate-pulse space-y-1.5')}
+		aria-label="Loading nostr event"
+	>
 		<span class="block h-3 w-1/3 rounded-full bg-muted"></span>
 		<span class="block h-3 w-3/4 rounded-full bg-muted"></span>
 		<span class="block h-3 w-1/2 rounded-full bg-muted"></span>
