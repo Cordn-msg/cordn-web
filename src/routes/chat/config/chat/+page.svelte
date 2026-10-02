@@ -7,6 +7,8 @@
 		enterKeySends,
 		getShowReactionMarkers,
 		setShowReactionMarkers,
+		getCollapseLongMessages,
+		setCollapseLongMessages,
 		type EnterKeyMode
 	} from '$lib/services/chatComposerSettings.svelte';
 	import { Switch } from '$lib/components/ui/switch';
@@ -33,10 +35,16 @@
 
 	let mode = $state(getEnterKeyMode());
 	let reactionMarkers = $state(getShowReactionMarkers());
+	let collapseLongMessages = $state(getCollapseLongMessages());
 
 	function toggleReactionMarkers(next: boolean) {
 		reactionMarkers = next;
 		setShowReactionMarkers(next);
+	}
+
+	function toggleCollapseLongMessages(next: boolean) {
+		collapseLongMessages = next;
+		setCollapseLongMessages(next);
 	}
 
 	function pick(next: EnterKeyMode) {
@@ -115,6 +123,17 @@
 					</p>
 				</div>
 				<Switch bind:checked={reactionMarkers} onCheckedChange={toggleReactionMarkers} />
+			</div>
+
+			<div class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4">
+				<div class="min-w-0">
+					<p class="font-medium">Collapse long messages</p>
+					<p class="mt-0.5 text-sm text-muted-foreground">
+						Clamp very long messages and embedded nostr events behind a “Show more” button, keeping
+						the chat timeline compact.
+					</p>
+				</div>
+				<Switch bind:checked={collapseLongMessages} onCheckedChange={toggleCollapseLongMessages} />
 			</div>
 
 			<div class="text-center">

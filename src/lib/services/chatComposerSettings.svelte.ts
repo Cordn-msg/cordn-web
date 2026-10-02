@@ -80,3 +80,26 @@ export function setShowReactionMarkers(value: boolean): void {
 	showReactionMarkers = value;
 	if (browser) localStorage.setItem(SHOW_REACTION_MARKERS_KEY, String(value));
 }
+
+/**
+ * Whether long messages and embedded nostr events render clamped behind a
+ * "Show more" toggle (the inline-body boundedness contract). Default on;
+ * turning it off renders everything at full height.
+ */
+const COLLAPSE_LONG_MESSAGES_KEY = 'cordn.collapseLongMessages';
+
+function loadCollapseLongMessages(): boolean {
+	if (!browser) return true;
+	return localStorage.getItem(COLLAPSE_LONG_MESSAGES_KEY) !== 'false';
+}
+
+let collapseLongMessages = $state(loadCollapseLongMessages());
+
+export function getCollapseLongMessages(): boolean {
+	return collapseLongMessages;
+}
+
+export function setCollapseLongMessages(value: boolean): void {
+	collapseLongMessages = value;
+	if (browser) localStorage.setItem(COLLAPSE_LONG_MESSAGES_KEY, String(value));
+}
