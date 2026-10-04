@@ -30,6 +30,7 @@ import {
 } from '$lib/services/chatMlsUtils';
 import { assertCanAdministerGroup, listGroupMembers } from '$lib/services/chatAdminPolicy';
 import {
+	buildInboundSystemMessage,
 	createApplicationMessageBase64,
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
@@ -441,6 +442,32 @@ class GroupBehindSiblingError extends Error {
 }
 export { GroupBehindSiblingError };
 
+/** The Commit lost a race to another member's Commit from the same base (the
+ *  coordinator stored theirs first). Not adopted, rolled back, retryable. */
+class CommitRaceLostError extends Error {
+	constructor(groupId: string) {
+		super(
+			`Someone changed this group at the same moment and the coordinator stored their change first. This change was not applied — try again (${groupId})`
+		);
+		this.name = 'CommitRaceLostError';
+	}
+}
+export { CommitRaceLostError };
+
+/** An earlier own Commit is still unconfirmed and could not be settled (the
+ *  coordinator would not say whether it landed). One own Commit in flight at
+ *  a time (staircase `CommitUnconfirmedException(waiting)`): a second one
+ *  built on the first one's epoch could only race it. */
+class CommitUnconfirmedError extends Error {
+	constructor(groupId: string) {
+		super(
+			`A previous change to this group has not been confirmed yet; waiting for the coordinator before making another (${groupId})`
+		);
+		this.name = 'CommitUnconfirmedError';
+	}
+}
+export { CommitUnconfirmedError };
+
 /** How many consecutive unopenable payloads hold SENDS too (staircase
  *  `STALE_SEND_RUN`): one stray garbage message must not block chat, but two
  *  in a row mean this device's sends would be unreadable noise to everyone. */
@@ -632,13 +659,22 @@ async function assertGroupCanPerformOutboundOperation(
 	assertChatGroupIsActive(refreshed);
 	assertGroupNotBehind(refreshed, kind);
 
-	if (isChatGroupPoisoned(refreshed)) {
+	if (kind === 'commit') {
+		// One own Commit in flight at a time: settle the previous one (echo
+		// consumed above, or the confirm fetch proves it never landed) before
+		// staging another on its epoch.
+		const account = requireActiveAccount('You must be logged in');
+		await settleUnconfirmedOwnCommit(account, refreshed);
+	}
+	const settled = kind === 'commit' ? requireChatGroup(groupId) : refreshed;
+
+	if (isChatGroupPoisoned(settled)) {
 		throw new Error(
 			'This group is unhealthy and is read-only until recovered. Contact an admin for assistance.'
 		);
 	}
 
-	return refreshed;
+	return settled;
 }
 
 /**
@@ -772,7 +808,22 @@ async function postOwnGroupCommit<T>(params: {
 	post: () => Promise<T>;
 }): Promise<T> {
 	try {
-		return await params.post();
+		const result = await params.post();
+		// Stamp the Commit's cursor on its op: the settlement probe and the
+		// rollback need to know where the change landed (add-member already
+		// stamps its Welcome `after` hint — same value, idempotent).
+		const cursor = (result as { cursor?: number }).cursor;
+		if (typeof cursor === 'number') {
+			pendingEpochOperations.set(
+				params.group.id,
+				(pendingEpochOperations.get(params.group.id) ?? []).map((operation) =>
+					operation.commitMessageBase64 === params.commitMessageBase64
+						? { ...operation, postedCursor: cursor }
+						: operation
+				)
+			);
+		}
+		return result;
 	} catch (error) {
 		if (error instanceof CoordinatorRejectedError) {
 			rejectPendingEpochOperations(pendingEpochOperations, params.group.id, [
@@ -781,6 +832,99 @@ async function postOwnGroupCommit<T>(params: {
 			replaceGroup(params.group.id, params.group);
 		}
 		throw error;
+	}
+}
+
+/**
+ * Settle an own Commit as LOST (staircase RaceTest "the chat says the edit did
+ * not happen"): the pre-Commit view is restored, the rows of the change that
+ * did not happen are dropped, and a `commit-lost` system message takes their
+ * place. The op is kept but marked `lost`, so a late echo of the Commit is
+ * still recognised as ours (it must never look like a sibling Commit) while
+ * its Welcomes never go out ("no Welcome into a branch nobody is on").
+ */
+function markOwnCommitLost(
+	group: StoredChatGroup,
+	commitMessageBase64: string,
+	detail: string
+): void {
+	const operations = pendingEpochOperations.get(group.id) ?? [];
+	const operation = operations.find(
+		(candidate) => candidate.commitMessageBase64 === commitMessageBase64
+	);
+	const cursor = operation?.postedCursor ?? group.fetchCursor;
+	const preState = operation?.preStateBase64
+		? clientStateDecoder(base64ToBytes(operation.preStateBase64), 0)?.[0]
+		: undefined;
+	const restored: StoredChatGroup = {
+		...group,
+		stateBase64: operation?.preStateBase64 ?? group.stateBase64,
+		metadata: preState
+			? toPersistedGroupMetadata(getCordnGroupMetadataExtension(preState))
+			: group.metadata,
+		// No row for the change that did not happen (staircase RaceTest).
+		messages: group.messages.filter((message) => message.cursor !== cursor),
+		snapshots: preState
+			? group.snapshots.filter((snapshot) => BigInt(snapshot.epoch) <= preState.groupContext.epoch)
+			: group.snapshots,
+		branch: undefined,
+		commitPoint: undefined
+	};
+	restored.messages = [
+		...restored.messages,
+		buildInboundSystemMessage(cursor, Math.floor(Date.now() / 1000), undefined, 'commit-lost', {
+			detail
+		})
+	];
+	pendingEpochOperations.set(
+		group.id,
+		operations.map((existing) =>
+			existing.commitMessageBase64 === commitMessageBase64 ? { ...existing, lost: true } : existing
+		)
+	);
+	replaceGroup(group.id, restored);
+}
+
+/**
+ * Own-Commit settlement at the commit gate (staircase `epochOperation`'s
+ * one-in-flight rule + expiry, but evidence beats the clock): the pre-gate
+ * catch-up already ingested any echo the stream had, so an op still standing
+ * is settled by ONE confirm fetch. Its bytes in the stream → the echo is on
+ * its way (wait); bytes absent after a fetch that SUCCEEDED → the post never
+ * landed for good: settle lost and let the caller proceed; fetch failed →
+ * nothing was learned (wait). Never stages a second Commit on a first one's
+ * unconfirmed epoch.
+ */
+async function settleUnconfirmedOwnCommit(
+	account: ReturnType<typeof requireActiveAccount>,
+	group: StoredChatGroup
+): Promise<void> {
+	const outstanding = (pendingEpochOperations.get(group.id) ?? []).filter(
+		(operation) => !operation.lost
+	);
+	if (outstanding.length === 0) return;
+	const state = decodeStoredGroupState(group);
+	const gid = groupIdDecoder.decode(state.groupContext.groupId);
+	let messages: Array<{ msg_64: string }>;
+	try {
+		const result = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+			client.FetchManyGroupMessages({
+				groups: [{ gid, after: group.fetchCursor }]
+			})
+		);
+		messages = result.messages;
+	} catch {
+		throw new CommitUnconfirmedError(group.id);
+	}
+	for (const operation of outstanding) {
+		if (messages.some((message) => message.msg_64 === operation.commitMessageBase64)) {
+			throw new CommitUnconfirmedError(group.id);
+		}
+		markOwnCommitLost(
+			group,
+			operation.commitMessageBase64,
+			'A change did not go through (the coordinator never stored it)'
+		);
 	}
 }
 
@@ -911,8 +1055,10 @@ async function adoptOwnCommitEvidence(params: {
 	const sinceEpoch = (baseEpoch + 1n).toString();
 	const held = noteStateFingerprint(params.group.epochFingerprints, params.preState);
 	let lost: boolean | undefined;
+	let lostBy: 'sibling' | 'member' | undefined;
 	if (params.group.skippedSiblingCommit?.epoch === baseEpoch.toString()) {
 		lost = true;
+		lostBy = 'sibling';
 	} else {
 		try {
 			const result = await withCoordinatorClientRetry(
@@ -948,10 +1094,38 @@ async function adoptOwnCommitEvidence(params: {
 					siblingSkipped ||= probed.siblingSkipped;
 				}
 				lost = epochMoved || siblingSkipped;
+				lostBy = epochMoved ? 'member' : siblingSkipped ? 'sibling' : undefined;
 			}
 		} catch {
 			lost = undefined;
 		}
+	}
+	// A lost Commit is not adopted at all when ANOTHER MEMBER's Commit won the
+	// race (fork-MR revision note): no group document ever carries that state
+	// (the members applied it from the stream and publish nothing), so a dead
+	// branch here would strand the device for good — multi-device or not. The
+	// op settles as lost, the pre-Commit view is restored, and the operation
+	// fails so the caller can retry on the winner's state (staircase RaceTest
+	// "a lost commit race rolls back and applies the winner"). A SIBLING's
+	// winning Commit keeps the dead-branch wait: its document will carry it.
+	if (lost && lostBy === 'member') {
+		markOwnCommitLost(
+			params.group,
+			params.posted.msg64,
+			'Someone changed this group at the same moment and their change was stored first — this one did not go through'
+		);
+		// What the coordinator stored before our post is applied in stream order
+		// (the winner's Commit lands on the restored state). Best-effort: the
+		// next fetch applies it just the same.
+		try {
+			await catchUpGroupBeforeOutboundOperation(
+				requireChatGroup(params.group.id),
+				groupIdDecoder.decode(params.preState.groupContext.groupId)
+			);
+		} catch {
+			/* the next fetch applies it */
+		}
+		throw new CommitRaceLostError(params.group.id);
 	}
 	const branch =
 		lost === undefined
@@ -999,7 +1173,8 @@ export async function repairSharedLeafRatchetDivergence(
 				enqueuePendingEpochOperation(pendingEpochOperations, {
 					kind: 'self-update',
 					groupId: group.id,
-					commitMessageBase64: sealedCommit.msg_64
+					commitMessageBase64: sealedCommit.msg_64,
+					preStateBase64: group.stateBase64
 				});
 				await persistCommitIntent(group, commitResult.newState);
 
@@ -1393,7 +1568,8 @@ export async function inviteChatGroupMembers(input: {
 					commitMessageBase64: sealedAddCommit.msg_64,
 					targetStablePubkey: target.targetStablePubkey,
 					keyPackageReference: target.keyPackageReference,
-					welcomeBase64
+					welcomeBase64,
+					preStateBase64: group.stateBase64
 				};
 				enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
 				return addMemberOp;
@@ -1577,7 +1753,8 @@ export async function removeChatGroupMember(input: {
 			kind: 'remove-member',
 			groupId: group.id,
 			commitMessageBase64: sealedRemoveCommit.msg_64,
-			targetStablePubkey: normalizePubKey(input.targetStablePubkey)
+			targetStablePubkey: normalizePubKey(input.targetStablePubkey),
+			preStateBase64: group.stateBase64
 		});
 		// Prevent a stranded pre-reload Welcome for this target firing post-removal.
 		dropPendingAddMemberForTarget(
@@ -1692,7 +1869,8 @@ export async function updateChatGroupMetadata(input: {
 		enqueuePendingEpochOperation(pendingEpochOperations, {
 			kind: 'update-group-metadata',
 			groupId: group.id,
-			commitMessageBase64: sealedMetadataCommit.msg_64
+			commitMessageBase64: sealedMetadataCommit.msg_64,
+			preStateBase64: group.stateBase64
 		});
 		await persistCommitIntent(group, commitResult.newState);
 

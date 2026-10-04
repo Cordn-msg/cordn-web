@@ -85,6 +85,9 @@ function getSystemMessagePreviewText(content: string): string {
 	if (data.systemKind === 'metadata-changed') {
 		return `${committer} changed ${data.detail ?? 'group settings'}`;
 	}
+	if (data.systemKind === 'commit-lost') {
+		return data.detail ?? 'A change did not go through';
+	}
 	return '';
 }
 

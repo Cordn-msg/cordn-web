@@ -62,7 +62,7 @@ export interface StoredChatSyncIssue {
 }
 
 export interface StoredChatSystemMessageData {
-	systemKind: 'member-added' | 'member-removed' | 'metadata-changed';
+	systemKind: 'member-added' | 'member-removed' | 'metadata-changed' | 'commit-lost';
 	target?: string;
 	committer?: string;
 	detail?: string;
@@ -423,6 +423,8 @@ function buildSystemMessageId(
 function buildSystemMessageContent(data: StoredChatSystemMessageData): string {
 	return JSON.stringify(data);
 }
+
+export { buildInboundSystemMessage };
 
 /**
  * Build an inbound system message (presentation-only) from the varying parts.

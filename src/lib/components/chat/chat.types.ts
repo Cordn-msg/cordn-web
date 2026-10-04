@@ -35,7 +35,7 @@ export interface ChatMessage {
 	pinnedBy?: string;
 	unreadReference?: boolean;
 	unreadReferenceCursor?: number;
-	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed' | 'reaction';
+	systemKind?: 'member-added' | 'member-removed' | 'metadata-changed' | 'commit-lost' | 'reaction';
 	systemTarget?: string;
 	systemCommitter?: string;
 	systemDetail?: string;

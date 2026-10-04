@@ -735,3 +735,123 @@ describe('stale-epoch discipline (staircase StaleEpochTest)', () => {
 		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
 	});
 });
+
+describe('commit race and settlement (staircase RaceTest / OwnCommitTest)', () => {
+	async function carolJoinsAGroup(name: string) {
+		const group = await createChatGroup({ name, coordinatorKey: 'ef'.repeat(32) });
+		await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		await deliverEcho(group.id); // add commit confirmed → welcome stored
+		const welcome = storeWelcomeCalls.at(-1)!;
+		const carolState = await joinGroupFromWelcome({
+			welcomeBase64: welcome.welcome_64,
+			keyPackage: carolKeyPackage.publicPackage,
+			privateKeyPackage: carolKeyPackage.privatePackage
+		});
+		return { group, carolState };
+	}
+
+	test('bug 8: a lost commit race rolls back and fails with CommitRaceLostError', async () => {
+		const { group, carolState } = await carolJoinsAGroup('keep me');
+
+		// carol's Commit from the SAME base epoch lands on the stream before
+		// ours: the coordinator stored hers first and she won the race
+		const carolCommit = await createSelfUpdateCommit({ state: carolState });
+		const { encryptedBase64: carolSealed } = await encryptGroupPayloadBase64({
+			state: carolState,
+			opaqueMessageBase64: carolCommit.commitMessageBase64
+		});
+		// her Commit is stored BEFORE ours: postCursor moves so our post lands at
+		// cursor 3 and hers at 2 (the coordinator stored hers first — she won)
+		postCursor = 2;
+		captureAtPost = async () => {
+			const mine = stored[stored.length - 1];
+			stored.push({
+				cursor: 2,
+				gid: mine.gid,
+				msg_64: carolSealed,
+				at: Math.floor(Date.now() / 1000)
+			});
+			stored.sort((a, b) => a.cursor - b.cursor);
+		};
+
+		await expect(
+			updateChatGroupMetadata({ groupId: group.id, name: 'the rename' })
+		).rejects.toMatchObject({ name: 'CommitRaceLostError' });
+		captureAtPost = null;
+
+		// the change did not happen; the winner's did — and this device is on it
+		const settled = getChatGroup(group.id)!;
+		expect(settled.metadata?.name).toBe('keep me');
+		expect(decodeEpoch(settled.stateBase64)).toBe(2n); // carol's commit applied
+		expect(
+			listChatGroupMessages(group.id).some((m) => m.content.includes('"systemKind":"commit-lost"')),
+			'the chat says the edit did not happen'
+		).toBe(true);
+		expect(settled.skippedSiblingCommit).toBeUndefined(); // never a sibling's
+		const record = await (await getChatStorage()).getGroup(group.id);
+		expect(record?.pendingEpochOperations?.every((op) => op.lost)).toBe(true);
+
+		// ...and the operation is retryable on the winner's state
+		await updateChatGroupMetadata({ groupId: group.id, name: 'retried' });
+		expect(getChatGroup(group.id)!.metadata?.name).toBe('retried');
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(3n);
+	});
+
+	test('bug 9: a commit that never landed settles as lost and the next one proceeds', async () => {
+		const group = await createChatGroup({ name: 'keep me', coordinatorKey: 'ef'.repeat(32) });
+		const originalPost = fakeClient.PostGroupMessage;
+		fakeClient.PostGroupMessage = async () => {
+			throw new Error('network down'); // ambiguous: not a coordinator rejection
+		};
+		try {
+			await expect(updateChatGroupMetadata({ groupId: group.id, name: 'first' })).rejects.toThrow(
+				'network down'
+			);
+		} finally {
+			fakeClient.PostGroupMessage = originalPost;
+		}
+		// adopt-early kept the intent (its fate was unknown)
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
+
+		// the next commit settles it: the confirm fetch shows the bytes never
+		// landed → lost + rolled back → the second proceeds on the old epoch
+		await updateChatGroupMetadata({ groupId: group.id, name: 'second' });
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
+		expect(getChatGroup(group.id)!.metadata?.name).toBe('second');
+		expect(
+			listChatGroupMessages(group.id).some((m) => m.content.includes('"systemKind":"commit-lost"'))
+		).toBe(true);
+	});
+
+	test('bug 10: an unsettled commit blocks the next one (CommitUnconfirmedError)', async () => {
+		const group = await createChatGroup({ name: 'keep me', coordinatorKey: 'ef'.repeat(32) });
+		const originalPost = fakeClient.PostGroupMessage;
+		fakeClient.PostGroupMessage = async () => {
+			throw new Error('network down');
+		};
+		try {
+			await expect(updateChatGroupMetadata({ groupId: group.id, name: 'first' })).rejects.toThrow(
+				'network down'
+			);
+		} finally {
+			fakeClient.PostGroupMessage = originalPost;
+		}
+
+		// the settlement can learn nothing (the confirm fetch fails too) — wait
+		// instead of staging a second Commit on a phantom epoch
+		const originalFetch = fakeClient.FetchManyGroupMessages;
+		fakeClient.FetchManyGroupMessages = async () => {
+			throw new Error('coordinator unreachable');
+		};
+		try {
+			await expect(
+				updateChatGroupMetadata({ groupId: group.id, name: 'second' })
+			).rejects.toMatchObject({ name: 'CommitUnconfirmedError' });
+		} finally {
+			fakeClient.FetchManyGroupMessages = originalFetch;
+		}
+		// the intent survives for its echo
+		const record = await (await getChatStorage()).getGroup(group.id);
+		expect(record?.pendingEpochOperations?.some((op) => !op.lost)).toBe(true);
+	});
+});

@@ -1,33 +1,46 @@
 import type { cordnClient } from '$lib/services/coordinatorClient';
 
-export type PendingEpochOperation =
-	| {
-			kind: 'add-member';
-			groupId: string;
-			commitMessageBase64: string;
-			targetStablePubkey: string;
-			keyPackageReference: string;
-			welcomeBase64: string;
-			/** Coordinator cursor of the posted Commit, passed to the invitee as
-			 *  the Welcome `after` hint so they can skip pre-join traffic. */
-			postedCursor?: number;
-	  }
-	| {
-			kind: 'remove-member';
-			groupId: string;
-			commitMessageBase64: string;
-			targetStablePubkey: string;
-	  }
-	| {
-			kind: 'update-group-metadata';
-			groupId: string;
-			commitMessageBase64: string;
-	  }
-	| {
-			kind: 'self-update';
-			groupId: string;
-			commitMessageBase64: string;
-	  };
+/** Lifecycle fields shared by every pending own-commit op (staircase
+ *  `PendingOp`): the state before the Commit is the rollback target when the
+ *  Commit settles as lost or never-landed; `lost` ops stay recognised so their
+ *  echo can never look like a sibling Commit, but never send their Welcomes
+ *  ("no Welcome into a branch nobody is on"). */
+type PendingEpochOperationBase = {
+	/** State before the Commit (StoredChatGroup.stateBase64 format). */
+	preStateBase64?: string;
+	/** Coordinator cursor of the posted Commit, once posted. */
+	postedCursor?: number;
+	/** Settled as lost/never-landed: kept for echo recognition only. */
+	lost?: boolean;
+};
+
+export type PendingEpochOperation = PendingEpochOperationBase &
+	(
+		| {
+				kind: 'add-member';
+				groupId: string;
+				commitMessageBase64: string;
+				targetStablePubkey: string;
+				keyPackageReference: string;
+				welcomeBase64: string;
+		  }
+		| {
+				kind: 'remove-member';
+				groupId: string;
+				commitMessageBase64: string;
+				targetStablePubkey: string;
+		  }
+		| {
+				kind: 'update-group-metadata';
+				groupId: string;
+				commitMessageBase64: string;
+		  }
+		| {
+				kind: 'self-update';
+				groupId: string;
+				commitMessageBase64: string;
+		  }
+	);
 
 export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;
 
@@ -73,7 +86,9 @@ async function finalizePendingEpochOperations(
 	const welcomeStores: Promise<unknown>[] = [];
 
 	for (const operation of pending) {
-		if (!matched.has(operation.commitMessageBase64)) {
+		if (!matched.has(operation.commitMessageBase64) || operation.lost) {
+			// Lost ops stay recognised (their echo must never look like a sibling
+			// Commit) but send no Welcomes into a branch nobody is on.
 			remaining.push(operation);
 			continue;
 		}
