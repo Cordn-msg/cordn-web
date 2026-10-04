@@ -34,7 +34,7 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
-	isStaleGenerationIssue,
+	staleGenerationLeafIndex,
 	probeSealedMessage,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
@@ -1823,10 +1823,18 @@ async function applyIncomingChatGroupMessages(
 	// failure on the live delivery path means a sibling's ratchet is behind
 	// ours — its messages will keep failing here until it resyncs. Repair from
 	// THIS device (it holds the advanced ratchet) via an epoch-advancing
-	// self-update Commit. The §8.5 chained catch-up replay bypasses this
-	// function (it calls ingestChatGroupMessages directly on a working group),
-	// so expected catch-up noise never triggers repairs.
-	if (mdActive && sync.issues.some((issue) => isStaleGenerationIssue(issue.detail))) {
+	// self-update Commit. Only OUR OWN leaf's collision qualifies (fork-MR
+	// scenario I): another account's devices colliding is theirs to settle, and
+	// a repair from here would only add a commit for everyone. An unattributed
+	// failure is not evidence of our own leaf. The §8.5 chained catch-up replay
+	// bypasses this function (it calls ingestChatGroupMessages directly on a
+	// working group), so expected catch-up noise never triggers repairs.
+	const ownLeafIndex = state.privatePath?.leafIndex;
+	if (
+		mdActive &&
+		ownLeafIndex !== undefined &&
+		sync.issues.some((issue) => staleGenerationLeafIndex(issue.detail) === ownLeafIndex)
+	) {
 		scheduleSharedLeafRatchetRepair(group.id, state.groupContext.epoch.toString());
 	}
 

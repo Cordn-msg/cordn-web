@@ -18,7 +18,8 @@ import {
 	encode,
 	generateKeyPackage,
 	keyPackageEncoder,
-	privateKeyPackageEncoder
+	privateKeyPackageEncoder,
+	type ClientState
 } from 'ts-mls';
 import {
 	createCordnMetadataCapabilities,
@@ -51,6 +52,7 @@ let postCursor = 0;
 let stored: Array<{ cursor: number; gid: string; msg_64: string; at: number }> = [];
 // Test hook: inspect durable state at the moment a post is attempted.
 let captureAtPost: (() => Promise<void>) | null = null;
+const storeWelcomeCalls: Array<{ welcome_64: string; target_pk: string }> = [];
 
 const fakeClient = {
 	async PostGroupMessage(input: { gid: string; msg_64: string }) {
@@ -82,7 +84,8 @@ const fakeClient = {
 			}
 		};
 	},
-	async StoreWelcome() {
+	async StoreWelcome(input: { welcome_64: string; target_pk: string }) {
+		storeWelcomeCalls.push(input);
 		return { ok: true };
 	}
 };
@@ -163,6 +166,7 @@ vi.mock('$lib/services/multiDevice.svelte', async (importOriginal) => {
 			status: 'off',
 			counts: { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0, ignored: 0 }
 		})),
+		isMultiDeviceActive: vi.fn(() => false),
 		onGroupStateAdvance: vi.fn(),
 		onMetaStateChange: vi.fn()
 	};
@@ -238,6 +242,14 @@ import {
 	repairSharedLeafRatchetDivergence,
 	type StoredChatGroup
 } from './chatGroups.svelte';
+import {
+	createApplicationMessageBase64,
+	createUnsignedCordnMessageEvent,
+	encodeAuthenticatedSender,
+	staleGenerationLeafIndex
+} from './chatGroupMessages.svelte';
+import { joinGroupFromWelcome } from '$lib/services/chatMlsUtils';
+import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { getChatStorage } from '$lib/storage/chatStorage';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
@@ -263,7 +275,9 @@ beforeEach(async () => {
 	postCursor = 0;
 	stored = [];
 	putAttempts.length = 0;
+	storeWelcomeCalls.length = 0;
 	captureAtPost = null;
+	vi.mocked(isMultiDeviceActive).mockReturnValue(false);
 	carolKeyPackage = await makeKeyPackage(carolPubkey);
 });
 
@@ -540,5 +554,100 @@ describe('sibling-commit detector (spec §10, cross-device)', () => {
 		await expect(
 			updateChatGroupMetadata({ groupId: group.id, name: 'nope' })
 		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+	});
+});
+
+describe('ratchet-repair trigger discipline (fork-MR scenario I)', () => {
+	// A generation chain from one state: message N seals generation N. ts-mls
+	// retains the newest 10 generations (`retainKeysForGenerations`), so a
+	// re-sent generation only fails once the chain has moved past the window —
+	// the shape of a shared-leaf sibling whose ratchet replica is behind (own
+	// leaf) or an account's two devices colliding (their leaf).
+	async function craftGenerationChain(state: ClientState, pubkey: string, count: number) {
+		const out: string[] = [];
+		let current = state;
+		for (let i = 0; i < count; i++) {
+			const made = await createApplicationMessageBase64({
+				state: current,
+				event: createUnsignedCordnMessageEvent({
+					pubkey,
+					content: `gen-${i}`,
+					kind: 9,
+					tags: [],
+					createdAt: Math.floor(Date.now() / 1000)
+				}),
+				authenticatedData: encodeAuthenticatedSender(pubkey)
+			});
+			const { encryptedBase64 } = await encryptGroupPayloadBase64({
+				state,
+				opaqueMessageBase64: made.opaqueMessageBase64
+			});
+			out.push(encryptedBase64);
+			current = made.newState;
+		}
+		return out;
+	}
+
+	async function deliver(groupId: string, cursor: number, opaqueMessageBase64: string) {
+		await ingestIncomingChatGroupMessages(groupId, [
+			{ cursor, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64 }
+		]);
+	}
+
+	test('an own-leaf stale generation is attributed to our leaf and asks for the repair', async () => {
+		vi.mocked(isMultiDeviceActive).mockReturnValue(true);
+		const group = await createChatGroup({ name: 'repair', coordinatorKey: 'ef'.repeat(32) });
+		const state = clientStateDecoder(base64ToBytes(getChatGroup(group.id)!.stateBase64), 0)![0];
+		const chain = await craftGenerationChain(state, account.pubkey, 12);
+		for (let i = 0; i < chain.length; i++) await deliver(group.id, i + 1, chain[i]);
+		// the sibling's shape: generation 0 re-sent after the chain moved on
+		await deliver(group.id, chain.length + 1, chain[0]);
+
+		// the failure carries the sender leaf, and it is ours (creator = leaf 0)
+		const stale = issueDetails(group.id).find((detail) =>
+			detail.startsWith('Desired gen in the past')
+		);
+		expect(stale, 'the collision is recorded').toBeTruthy();
+		expect(staleGenerationLeafIndex(stale!)).toBe(0);
+
+		// the repair is scheduled: an epoch-advancing self-update commit lands
+		await vi.waitFor(() => expect(postCursor).toBeGreaterThan(0), { timeout: 3000 });
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
+	});
+
+	test("another member's stale generation is recorded but never repaired here", async () => {
+		vi.mocked(isMultiDeviceActive).mockReturnValue(true);
+		const group = await createChatGroup({ name: 'no-repair', coordinatorKey: 'ef'.repeat(32) });
+		await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		await deliverEcho(group.id); // add commit confirmed → welcome stored
+		const welcome = storeWelcomeCalls.at(-1)!;
+		const carolState = await joinGroupFromWelcome({
+			welcomeBase64: welcome.welcome_64,
+			keyPackage: carolKeyPackage.publicPackage,
+			privateKeyPackage: carolKeyPackage.privatePackage
+		});
+		const chain = await craftGenerationChain(carolState, carolPubkey, 12);
+		for (let i = 0; i < chain.length; i++) await deliver(group.id, i + 2, chain[i]);
+		const postsBefore = postCursor;
+		// carol's own generation 0 re-sent: HER account's devices collided
+		await deliver(group.id, chain.length + 2, chain[0]);
+
+		// the collision is recorded and attributed — to CAROL's leaf, not ours
+		const stale = issueDetails(group.id).find((detail) =>
+			detail.startsWith('Desired gen in the past')
+		);
+		expect(stale, 'the collision is recorded').toBeTruthy();
+		expect(staleGenerationLeafIndex(stale!)).toBeGreaterThan(0);
+
+		// ...and nothing is repaired here: her two devices colliding is their
+		// account's to settle (a repair from every member was 7 commits in 8
+		// minutes in the live incident this guards)
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(postCursor, 'no repair commit').toBe(postsBefore);
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n); // unchanged
+	});
+
+	test('an unattributed stale-generation failure never asks for a repair', () => {
+		expect(staleGenerationLeafIndex('Desired gen in the past')).toBeUndefined();
 	});
 });

@@ -340,10 +340,25 @@ function isFormerEpochIssue(detail: string): boolean {
  * ts-mls secret-tree failure for a message generation the local ratchet has
  * already consumed (and no longer retains). On a shared-leaf multi-device
  * group this is the sibling-divergence signal (spec multi-device §10): the
- * sender's ratchet replica is behind ours.
+ * sender's ratchet replica is behind ours. The ts-mls patch embeds the sender
+ * leaf and generation (`Desired gen in the past (leaf N, gen G)`).
  */
 export function isStaleGenerationIssue(detail: string): boolean {
-	return detail === 'Desired gen in the past';
+	return detail.startsWith('Desired gen in the past');
+}
+
+/**
+ * Sender leaf of a stale-generation failure, or undefined when unattributed.
+ * All ts-mls leaf indices share one numbering (treemath `toLeafIndex` is the
+ * identity), so this compares directly with `privatePath.leafIndex` and
+ * `listGroupMembers(...).leafIndex`. Attribution matters: only OUR OWN leaf's
+ * collision is ours to repair (spec §10) — another account's devices colliding
+ * is theirs to settle, and a repair from here would only add a commit for
+ * everyone (seen live: 7 repair commits in 8 minutes).
+ */
+export function staleGenerationLeafIndex(detail: string): number | undefined {
+	const match = /\(leaf (\d+), gen \d+\)/.exec(detail);
+	return match ? Number(match[1]) : undefined;
 }
 
 function isUndecryptableStaleMessageIssue(detail: string): boolean {

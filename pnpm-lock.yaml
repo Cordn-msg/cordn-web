@@ -28,7 +28,7 @@ patchedDependencies:
     hash: fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2
     path: patches/nostr-signer-capacitor-plugin@0.0.5.patch
   ts-mls@2.0.0-rc.13:
-    hash: 07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c
+    hash: 42686c9ca511f532bc8590f11dff7ecb60ea55a5420a373f2941ef910bbcbc55
     path: patches/ts-mls@2.0.0-rc.13.patch
 
 importers:
@@ -133,7 +133,7 @@ importers:
         version: 1.1.1(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       ts-mls:
         specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
+        version: 2.0.0-rc.13(patch_hash=42686c9ca511f532bc8590f11dff7ecb60ea55a5420a373f2941ef910bbcbc55)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
       zod:
         specifier: ^4.6.2
         version: 4.6.2
@@ -6458,7 +6458,7 @@ snapshots:
     optionalDependencies:
       '@noble/curves': 2.2.0
 
-  ts-mls@2.0.0-rc.13(patch_hash=07a1c4bd20c008c2b3379256b677266eecd194c90af1c48609b748d15b940c6c)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0):
+  ts-mls@2.0.0-rc.13(patch_hash=42686c9ca511f532bc8590f11dff7ecb60ea55a5420a373f2941ef910bbcbc55)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0):
     dependencies:
       '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
