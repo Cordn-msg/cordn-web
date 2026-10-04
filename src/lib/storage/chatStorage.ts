@@ -161,7 +161,6 @@ export interface ChatStorage {
 	deleteOutboxEntry(seq: number): Promise<void>;
 	listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]>;
 	getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined>;
-	putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void>;
 	replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void>;
 	deleteKeyPackage(keyPackageRef: string): Promise<void>;
 	deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void>;
@@ -365,10 +364,6 @@ class MemoryChatStorage implements ChatStorage {
 	async getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined> {
 		const record = this.keyPackages.get(keyPackageRef);
 		return record ? cloneKeyPackage(record) : undefined;
-	}
-
-	async putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void> {
-		this.keyPackages.set(record.keyPackageRef, cloneKeyPackage(record));
 	}
 
 	async replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void> {
@@ -695,17 +690,6 @@ class IndexedDbChatStorage implements ChatStorage {
 			(store) => store.get(keyPackageRef) as IDBRequest<StoredChatKeyPackageRecord | undefined>
 		);
 		return record ? cloneKeyPackage(record) : undefined;
-	}
-
-	async putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void> {
-		await this.runTransaction<void>(
-			KEY_PACKAGE_STORE,
-			'readwrite',
-			(store) => {
-				store.put(cloneKeyPackage(record));
-			},
-			() => undefined
-		);
 	}
 
 	async replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void> {
