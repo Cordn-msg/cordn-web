@@ -228,6 +228,7 @@ import {
 	updateChatGroupMetadata,
 	ingestIncomingChatGroupMessages,
 	listChatGroupSyncIssues,
+	listChatGroupMessages,
 	sendChatGroupMessage,
 	inviteChatGroupMembers,
 	persistGroup,
@@ -394,6 +395,38 @@ describe('own-commit adoption (report-05 regression)', () => {
 		const record = await storage.getGroup(group.id);
 		expect(record, 'the write must actually land').toBeTruthy();
 		expect(() => structuredClone(record)).not.toThrow();
+	});
+
+	test('bug 4: a failing StoreWelcome must not abort ingestion (wedge)', async () => {
+		const group = await createChatGroup({ name: 'welcome', coordinatorKey: 'ef'.repeat(32) });
+		const originalWelcome = fakeClient.StoreWelcome;
+		fakeClient.StoreWelcome = async () => {
+			throw new Error('key package expired'); // permanent rejection
+		};
+		let inviteResult: Awaited<ReturnType<typeof inviteChatGroupMembers>> | undefined;
+		try {
+			// Pre-fix the failing welcome aborts the whole sync and the invite
+			// throws — nothing persists and the group is wedged forever.
+			inviteResult = await inviteChatGroupMembers({
+				groupId: group.id,
+				identifiers: [carolPubkey]
+			});
+		} finally {
+			fakeClient.StoreWelcome = originalWelcome;
+		}
+		expect(inviteResult?.failures, 'the invite survives the welcome failure').toEqual([]);
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
+
+		// the op stays pending so a later sync can retry the welcome
+		const storage = await getChatStorage();
+		const record = await storage.getGroup(group.id);
+		expect(record?.pendingEpochOperations?.length ?? 0).toBeGreaterThanOrEqual(1);
+
+		// and the group is not wedged: a follow-up message still lands
+		await sendChatGroupMessage({ groupId: group.id, content: 'still alive' });
+		expect(
+			listChatGroupMessages(group.id).some((message) => message.content === 'still alive')
+		).toBe(true);
 	});
 
 	test('guard: a failed probe fetch in adoptOwnCommitEvidence does not break adoption', async () => {

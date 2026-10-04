@@ -87,12 +87,24 @@ export async function syncChatGroupMessages(params: {
 		mdActive: params.mdActive
 	});
 
-	await reconcilePendingEpochOperations({
-		store: params.pendingEpochOperations,
-		groupId: params.group.id,
-		client: params.coordinatorClient,
-		ingestion: sync
-	});
+	try {
+		await reconcilePendingEpochOperations({
+			store: params.pendingEpochOperations,
+			groupId: params.group.id,
+			client: params.coordinatorClient,
+			ingestion: sync
+		});
+	} catch (error) {
+		// Finalization is retry-on-next-sync: a failing StoreWelcome (stale key
+		// package, rate limit) must NOT abort the sync — the batch would never
+		// persist, fetchCursor would never advance, and one permanently-rejected
+		// welcome would wedge the group's entire ingestion. Ops stay pending by
+		// design (finalize drops them only on success).
+		console.error('[chat-groups] pending epoch op reconcile failed', {
+			groupId: params.group.id,
+			error
+		});
+	}
 
 	// Multi-device re-publish on an own-Commit is NOT fired here. It is fired
 	// unconditionally at the end of `runOutboundGroupOperation` (the chokepoint
