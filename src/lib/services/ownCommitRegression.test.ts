@@ -23,6 +23,7 @@ import {
 import {
 	createCordnMetadataCapabilities,
 	createCredential,
+	createSelfUpdateCommit,
 	getCordnCipherSuite
 } from '$lib/services/chatMlsUtils';
 
@@ -238,6 +239,7 @@ import {
 	type StoredChatGroup
 } from './chatGroups.svelte';
 import { getChatStorage } from '$lib/storage/chatStorage';
+import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
 
 function decodeEpoch(stateBase64: string): bigint {
@@ -500,5 +502,43 @@ describe('behind-group guard and rejection rollback (report-05 amplifiers)', () 
 		const storage = await getChatStorage();
 		const record = await storage.getGroup(group.id);
 		expect(record?.pendingEpochOperations?.length ?? 0, 'the op must be dropped').toBe(0);
+	});
+});
+
+describe('sibling-commit detector (spec §10, cross-device)', () => {
+	test('guard: a sibling commit is detected, recorded, and contains the damage', async () => {
+		const group = await createChatGroup({ name: 'sibling', coordinatorKey: 'ef'.repeat(32) });
+
+		// What a SECOND device of ours posts: a self-update Commit from the same
+		// identity sealed at the shared epoch — this device has no pending op for
+		// it, which is exactly the cross-device shape the skip detector keys on.
+		const decoded = clientStateDecoder(base64ToBytes(getChatGroup(group.id)!.stateBase64), 0);
+		const siblingState = decoded![0];
+		const siblingCommit = await createSelfUpdateCommit({ state: siblingState });
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state: siblingState,
+			opaqueMessageBase64: siblingCommit.commitMessageBase64
+		});
+		await ingestIncomingChatGroupMessages(group.id, [
+			{ cursor: 1, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64: encryptedBase64 }
+		]);
+
+		// detection: the skip is recorded as fork evidence + a sync issue,
+		// and the group neither self-removes nor poisons nor advances
+		expect(
+			issueDetails(group.id).some((detail) => detail.startsWith('Skipped sibling commit'))
+		).toBe(true);
+		expect(getChatGroup(group.id)?.skippedSiblingCommit).toBeTruthy();
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(0n);
+		expect(getChatGroup(group.id)!.removedAtCursor).toBeUndefined();
+		expect(getChatGroup(group.id)!.poisonedAtCursor).toBeUndefined();
+
+		// containment: the stale state stages nothing (spec §10)
+		await expect(
+			sendChatGroupMessage({ groupId: group.id, content: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+		await expect(
+			updateChatGroupMetadata({ groupId: group.id, name: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
 	});
 });
