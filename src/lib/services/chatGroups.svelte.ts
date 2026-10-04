@@ -128,6 +128,10 @@ export interface StoredChatGroup {
 	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
 	/** Last skipped sibling Commit (spec §10 step 1 evidence). */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Missed-update evidence (staircase StaleEpochTest): an unopenable sealed
+	 *  payload. Refuses commits while set, sends once the run reaches 2; cleared
+	 *  by any message that decrypts at the current epoch. */
+	staleMark?: { cursor: number; unopenableCount: number };
 	/** The epoch's commit point (spec §8.5 gen-0, §10.3 rank). */
 	commitPoint?: { epoch: string; cursor: number; clientState: string; published?: boolean };
 	/** Recorded fork winner for the fork epoch (spec §10). */
@@ -208,6 +212,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		epochFingerprints: group.epochFingerprints,
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
+		staleMark: group.staleMark,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision,
 		stateBytes: base64ToBytes(group.stateBase64),
@@ -268,6 +273,7 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		epochFingerprints: group.epochFingerprints,
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
+		staleMark: group.staleMark,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision
 	};
@@ -428,24 +434,56 @@ class RemovedFromGroupError extends Error {
 export { RemovedFromGroupError };
 
 class GroupBehindSiblingError extends Error {
-	constructor(groupId: string) {
-		super(
-			`This group is behind a commit from another of your devices and is read-only until it resyncs (enable multi-device, or rejoin the group): ${groupId}`
-		);
+	constructor(groupId: string, message: string) {
+		super(`${message} (${groupId})`);
 		this.name = 'GroupBehindSiblingError';
 	}
 }
 export { GroupBehindSiblingError };
 
+/** How many consecutive unopenable payloads hold SENDS too (staircase
+ *  `STALE_SEND_RUN`): one stray garbage message must not block chat, but two
+ *  in a row mean this device's sends would be unreadable noise to everyone. */
+const STALE_SEND_RUN = 2;
+
 /**
- * Spec §10: a group that skipped a sibling Commit is behind an epoch it cannot
- * derive. Staging sends/Commits from that stale state forks the fleet and
- * strands members (report-05 amplifier). Refuse outbound work until the group
- * document fast-forward (multi-device) or a rejoin advances it.
+ * Spec §10 / staircase StaleEpochTest / fork-MR scenario A: never stage
+ * outbound work from a view the fleet is not on.
+ *
+ * - A skipped sibling Commit (shared leaf) is an epoch this device cannot
+ *   derive. With multi-device the group document fast-forward resolves it;
+ *   without, nothing ever will — only a rejoin does.
+ * - An unopenable sealed payload (`staleMark`) is missed-update evidence: a
+ *   Commit staged from the stale view splits the group (seen live: a join
+ *   approved from 10 epochs back). Commits always refuse; sends hold once the
+ *   run proves the device is behind.
  */
-function assertGroupNotBehind(group: StoredChatGroup): void {
-	if (!group.skippedSiblingCommit) return;
-	throw new GroupBehindSiblingError(group.id);
+function assertGroupNotBehind(group: StoredChatGroup, kind: 'send' | 'commit'): void {
+	if (group.skippedSiblingCommit) {
+		const mdActive = isMultiDeviceActive(
+			normalizePubKey(requireActiveAccount('You must be logged in').pubkey)
+		);
+		throw new GroupBehindSiblingError(
+			group.id,
+			mdActive
+				? 'Another of your devices advanced this group; waiting for its group document to fast-forward. This device is read-only until then'
+				: 'Another holder of this account advanced this group and nothing here can apply it. Enable multi-device sync to follow it, or rejoin the group. This device is read-only until then'
+		);
+	}
+	if (group.staleMark) {
+		if (kind === 'commit') {
+			throw new GroupBehindSiblingError(
+				group.id,
+				'This device may have missed a group update (the newest messages would not open). Changes are refused until the group reads normally again'
+			);
+		}
+		if (group.staleMark.unopenableCount >= STALE_SEND_RUN) {
+			throw new GroupBehindSiblingError(
+				group.id,
+				'Held: this device may be behind this group (it cannot open the newest messages)'
+			);
+		}
+	}
 }
 
 export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean {
@@ -580,7 +618,10 @@ export async function confirmChatGroupDelivery(groupId: string): Promise<boolean
  * Performs catch-up with the coordinator and validates the group is healthy.
  * Must be called from within a runGroupOperation context.
  */
-async function assertGroupCanPerformOutboundOperation(groupId: string): Promise<StoredChatGroup> {
+async function assertGroupCanPerformOutboundOperation(
+	groupId: string,
+	kind: 'send' | 'commit'
+): Promise<StoredChatGroup> {
 	const group = requireChatGroup(groupId);
 	assertChatGroupIsActive(group);
 
@@ -589,7 +630,7 @@ async function assertGroupCanPerformOutboundOperation(groupId: string): Promise<
 
 	const refreshed = await catchUpGroupBeforeOutboundOperation(group, gid);
 	assertChatGroupIsActive(refreshed);
-	assertGroupNotBehind(refreshed);
+	assertGroupNotBehind(refreshed, kind);
 
 	if (isChatGroupPoisoned(refreshed)) {
 		throw new Error(
@@ -637,10 +678,10 @@ async function prepareGroupForApplicationMessage(groupId: string): Promise<Store
 	if (isGroupActivelyWatched(groupId) && (!mdActive || isGroupFeedLive(groupId))) {
 		const group = requireChatGroup(groupId);
 		assertChatGroupIsActive(group);
-		assertGroupNotBehind(group);
+		assertGroupNotBehind(group, 'send');
 		return group;
 	}
-	return assertGroupCanPerformOutboundOperation(groupId);
+	return assertGroupCanPerformOutboundOperation(groupId, 'send');
 }
 
 export function listChatGroups(): StoredChatGroup[] {
@@ -942,7 +983,7 @@ export async function repairSharedLeafRatchetDivergence(
 			ratchetRepairEpochByGroup.set(groupId, detectedAtEpoch);
 			try {
 				const account = requireActiveAccount('You must be logged in to repair group state');
-				const group = await assertGroupCanPerformOutboundOperation(groupId);
+				const group = await assertGroupCanPerformOutboundOperation(groupId, 'commit');
 				const state = decodeStoredGroupState(group);
 				// Spec §10.1 re-verify at the CURRENT epoch: a fresh epoch is itself a
 				// repair (the fast-forward resynced the ratchet), so a self-update on a
@@ -1235,7 +1276,7 @@ export async function inviteChatGroupMembers(input: {
 }): Promise<ChatGroupInviteResult> {
 	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
-		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId, 'commit');
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,
@@ -1505,7 +1546,7 @@ export async function removeChatGroupMember(input: {
 }): Promise<StoredChatGroup> {
 	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to remove a member');
-		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId, 'commit');
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,
@@ -1623,7 +1664,7 @@ export async function updateChatGroupMetadata(input: {
 }): Promise<StoredChatGroup> {
 	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to update group metadata');
-		const group = await assertGroupCanPerformOutboundOperation(input.groupId);
+		const group = await assertGroupCanPerformOutboundOperation(input.groupId, 'commit');
 		assertCanAdministerGroup({
 			groupId: group.id,
 			metadata: group.metadata,

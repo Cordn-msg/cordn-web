@@ -54,6 +54,10 @@ export interface StoredChatGroupRecord {
 	 *  skipped (a sibling's, spec §10), at the epoch it was skipped in. A
 	 *  Commit posted from that same epoch afterwards lost the race to it. */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Missed-update evidence: a sealed payload that would not open (count of
+	 *  unopenable payloads since the mark, cleared by a current-epoch decrypt).
+	 *  Commits are refused while set; sends once the run reaches 2. */
+	staleMark?: { cursor: number; unopenableCount: number };
 	/** The state right after this device's own Commit produced the current
 	 *  epoch, at that Commit's stream cursor — the epoch's commit point (spec
 	 *  §8.5 gen-0 state, §10.3 rank). Published ahead of the live document,

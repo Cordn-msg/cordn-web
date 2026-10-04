@@ -651,3 +651,87 @@ describe('ratchet-repair trigger discipline (fork-MR scenario I)', () => {
 		expect(staleGenerationLeafIndex('Desired gen in the past')).toBeUndefined();
 	});
 });
+
+describe('stale-epoch discipline (staircase StaleEpochTest)', () => {
+	const garbage = () => bytesToBase64(new Uint8Array(64).fill(7));
+
+	async function deliverPayload(groupId: string, cursor: number, opaqueMessageBase64: string) {
+		await ingestIncomingChatGroupMessages(groupId, [
+			{ cursor, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64 }
+		]);
+	}
+
+	async function craftReadableMessage(stateBase64: string, content: string) {
+		const state = clientStateDecoder(base64ToBytes(stateBase64), 0)![0];
+		const made = await createApplicationMessageBase64({
+			state,
+			event: createUnsignedCordnMessageEvent({
+				pubkey: account.pubkey,
+				content,
+				kind: 9,
+				tags: [],
+				createdAt: Math.floor(Date.now() / 1000)
+			}),
+			authenticatedData: encodeAuthenticatedSender(account.pubkey)
+		});
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state,
+			opaqueMessageBase64: made.opaqueMessageBase64
+		});
+		return encryptedBase64;
+	}
+
+	test('one unopenable payload refuses changes but not sends', async () => {
+		const group = await createChatGroup({ name: 'stale', coordinatorKey: 'ef'.repeat(32) });
+		await deliverPayload(group.id, 1, garbage());
+
+		// a Commit staged from this view could split the group (seen live: an
+		// approval from 10 epochs back) — refused
+		await expect(
+			updateChatGroupMetadata({ groupId: group.id, name: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+		// one stray message must not block chat
+		await sendChatGroupMessage({ groupId: group.id, content: 'still fine' });
+		expect(listChatGroupMessages(group.id).some((m) => m.content === 'still fine')).toBe(true);
+	});
+
+	test('a run of two holds sends too, and a readable message clears it', async () => {
+		const group = await createChatGroup({ name: 'stale2', coordinatorKey: 'ef'.repeat(32) });
+		await deliverPayload(group.id, 1, garbage());
+		await deliverPayload(group.id, 2, garbage());
+
+		// two in a row: this device's sends would be unreadable noise — held
+		await expect(
+			sendChatGroupMessage({ groupId: group.id, content: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+		expect(getChatGroup(group.id)!.staleMark?.unopenableCount).toBe(2);
+
+		// a message sealed for our epoch proves we are on the group's line
+		const readable = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'readable');
+		await deliverPayload(group.id, 3, readable);
+		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
+
+		// the mark is gone: commits work again
+		await updateChatGroupMetadata({ groupId: group.id, name: 'back to normal' });
+		expect(getChatGroup(group.id)!.metadata?.name).toBe('back to normal');
+	});
+
+	test('scenario E: a held payload keeps the cursor from passing it', async () => {
+		vi.mocked(isMultiDeviceActive).mockReturnValue(true);
+		const group = await createChatGroup({ name: 'floor', coordinatorKey: 'ef'.repeat(32) });
+		const readable = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'readable');
+		// one batch: an unopenable payload @1 then a readable message @2
+		await ingestIncomingChatGroupMessages(group.id, [
+			{ cursor: 1, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64: garbage() },
+			{ cursor: 2, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64: readable }
+		]);
+
+		// later messages may still be read in the same pass (and the readable one
+		// proves we are on the group's line — the mark goes), but NO message may
+		// carry fetchCursor past the held one: the coordinator never resends by
+		// cursor, so passing it would make it unrecoverable
+		expect(getChatGroup(group.id)!.fetchCursor).toBe(0);
+		expect(listChatGroupMessages(group.id).some((m) => m.content === 'readable')).toBe(true);
+		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
+	});
+});

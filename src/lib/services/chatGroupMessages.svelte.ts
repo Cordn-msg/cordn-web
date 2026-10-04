@@ -93,6 +93,9 @@ export interface GroupMessageIngestionTarget {
 	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
 	poisonedAtCursor?: number;
+	/** Missed-update evidence (see PersistedChatGroupLike): set on an unopenable
+	 *  sealed payload, cleared by a current-epoch decrypt. */
+	staleMark?: { cursor: number; unopenableCount: number };
 }
 
 export interface RawChatGroupMessage {
@@ -710,6 +713,10 @@ export async function ingestChatGroupMessages(params: {
 	const rejectedPendingCommitMessages = new Set<string>();
 	let removedLocalMember = false;
 	let poisoned = false;
+	// Fork-MR scenario E: the cursor floor at the first HELD message of this
+	// pass. Held messages stay re-fetchable (the coordinator never resends by
+	// cursor) — nothing may carry fetchCursor past one until the hold resolves.
+	let heldFloor: number | undefined;
 
 	for (const message of messages) {
 		const isPendingOperationMessage =
@@ -761,8 +768,18 @@ export async function ingestChatGroupMessages(params: {
 				detail: `Sealed payload decrypt failed: ${detail}`
 			});
 			noteUnsealFailure(group.id);
+			// Missed-update evidence (staircase StaleEpochTest): this device cannot
+			// open what the group sends — it may have missed a Commit. Recorded so
+			// the outbound gate refuses work staged from the stale view.
+			group.staleMark = {
+				cursor: group.staleMark?.cursor ?? message.cursor,
+				unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
+			};
 			if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
 				heldUnopenableByGroup.set(group.id, { rescued: false });
+				// Held (spec §10.6): later messages may still be readable in this
+				// pass, but the floor keeps this one re-fetchable.
+				heldFloor ??= message.cursor;
 				continue;
 			}
 			group.fetchCursor = message.cursor;
@@ -904,8 +921,15 @@ export async function ingestChatGroupMessages(params: {
 					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
 				});
 				noteUnsealFailure(group.id);
+				// Same missed-update evidence as an unopenable seal (above).
+				group.staleMark = {
+					cursor: group.staleMark?.cursor ?? message.cursor,
+					unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
+				};
 				if (!advancePastUnopenablePayload(group.id)) {
 					heldUnopenableByGroup.set(group.id, { rescued: false });
+					// Held: same cursor floor as an unopenable seal (above).
+					heldFloor ??= message.cursor;
 					continue;
 				}
 				group.fetchCursor = message.cursor;
@@ -949,6 +973,10 @@ export async function ingestChatGroupMessages(params: {
 		}
 
 		noteUnsealSuccess(group.id);
+		// A message that decrypts at the current epoch proves this device is on the
+		// group's line (staircase StaleEpochTest: "back to normal"): the
+		// missed-update mark goes and commits work again.
+		group.staleMark = undefined;
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;
@@ -1047,6 +1075,12 @@ export async function ingestChatGroupMessages(params: {
 				}
 			}
 		}
+	}
+
+	// Scenario E: the cursor floor. clamp after the loop so no late-processed
+	// message in this pass moved the cursor past a held one.
+	if (heldFloor !== undefined) {
+		group.fetchCursor = Math.min(group.fetchCursor, heldFloor - 1);
 	}
 
 	return {

@@ -27,6 +27,11 @@ export interface PersistedChatGroupLike {
 	poisonedAtCursor?: number;
 	/** Last skipped sibling Commit (spec §10 step 1 fork evidence). */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Missed-update evidence (staircase StaleEpochTest): a sealed payload that
+	 *  would not open. Commits staged from that view split the group; sends are
+	 *  held once the run proves the device is behind. Cleared by any message
+	 *  that decrypts at the current epoch. */
+	staleMark?: { cursor: number; unopenableCount: number };
 }
 
 export interface WorkingChatGroupSession {
@@ -41,6 +46,9 @@ export interface WorkingChatGroupSession {
 	poisonedAtCursor?: number;
 	/** Written by ingestion's sibling-skip hook (spec §10 step 1). */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Updated by ingestion's unseal-failure hook; cleared on a current-epoch
+	 *  decrypt (see PersistedChatGroupLike). */
+	staleMark?: { cursor: number; unopenableCount: number };
 }
 
 export function createWorkingChatGroupSession(
@@ -56,7 +64,8 @@ export function createWorkingChatGroupSession(
 		syncIssues: [...group.syncIssues],
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
-		poisonedAtCursor: group.poisonedAtCursor
+		poisonedAtCursor: group.poisonedAtCursor,
+		staleMark: group.staleMark
 	};
 }
 
@@ -139,6 +148,10 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		status: params.workingGroup.status,
 		removedAtCursor: params.workingGroup.removedAtCursor,
 		poisonedAtCursor: params.workingGroup.poisonedAtCursor,
+		// Carried straight (unlike skippedSiblingCommit's no-skip-keeps rule): a
+		// current-epoch decrypt CLEARS the mark by writing undefined, and that
+		// clear must survive the persist.
+		staleMark: params.workingGroup.staleMark,
 		// Fork evidence written by ingestion's sibling-skip hook (spec §10 step
 		// 1) — a fresh skip replaces, no skip keeps the previous one (cleared on
 		// document adoption).
