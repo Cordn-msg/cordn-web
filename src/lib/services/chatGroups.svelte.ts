@@ -185,7 +185,12 @@ export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 });
 
 function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
-	return {
+	// $state.snapshot at the storage boundary: the reactive store hands over
+	// proxies nested in these fields (branch, skippedSiblingCommit, ...), and a
+	// proxy reaching IDB's structured clone aborts the whole putGroup
+	// transaction (DataCloneError) — record, MLS state and snapshots together.
+	// See ownCommitRegression.test.ts ("bug 3").
+	return $state.snapshot({
 		id: group.id,
 		ownerPubkey: group.ownerPubkey,
 		coordinatorKey: group.coordinatorKey,
@@ -226,7 +231,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		pendingEpochOperations: (pendingEpochOperations.get(group.id) ?? []).map((op) => ({
 			...op
 		}))
-	};
+	});
 }
 
 function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
@@ -366,7 +371,12 @@ function persistSingleGroup(group: StoredChatGroup) {
 			const storage = await getChatStorage();
 			await storage.putGroup(toStoredGroupData(group));
 		})
-		.catch(() => undefined);
+		.catch((error) => {
+			// Surface, never throw: persistence failure must not crash a flow, but
+			// silent loss here is what turned a transient race into permanent
+			// divergence (report 05: frozen history + reload rollback).
+			console.error('[chat-storage] failed to persist group', { groupId: group.id, error });
+		});
 	return persistGroupsPromise;
 }
 
@@ -660,7 +670,27 @@ export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
 	chatGroupsStore.groups = chatGroupsStore.groups.map((group) =>
 		group.id === groupId ? nextGroup : group
 	);
-	void persistSingleGroup(nextGroup);
+	return persistSingleGroup(nextGroup);
+}
+
+/**
+ * Durable-epoch invariant: persist the post-Commit state (pending op already
+ * enqueued) BEFORE the Commit goes on the wire. An ambiguous PostGroupMessage
+ * failure plus a reload must never strand the device at the pre-Commit epoch
+ * with its pending op lost — that is the deaf-device bug (ownCommitRegression
+ * "bug 1"). Post-commit refinement (evidence, tentative snapshot) still
+ * happens in the callers after the post.
+ */
+async function persistCommitIntent(group: StoredChatGroup, newState: ClientState): Promise<void> {
+	await replaceGroup(
+		group.id,
+		buildPersistedChatGroup({
+			group,
+			workingGroup: createWorkingChatGroupSession(group, newState),
+			encodeState,
+			metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(newState)) ?? group.metadata
+		})
+	);
 }
 
 export async function runGroupOperation<T>(
@@ -880,15 +910,30 @@ export async function repairSharedLeafRatchetDivergence(
 					groupId: group.id,
 					commitMessageBase64: sealedCommit.msg_64
 				});
+				await persistCommitIntent(group, commitResult.newState);
 
 				const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 					client.PostGroupMessage(sealedCommit)
 				);
 
-				// A self-update changes no membership or metadata, so there are no
-				// system messages to synthesize; persist the new epoch like any
-				// other outbound Commit.
+				// A self-update changes no membership or metadata, but the epoch
+				// advance must still land as a system message at the Commit's cursor:
+				// that record is what dedupes a re-delivered self-echo via seenCursors
+				// instead of failing decryption (ownCommitRegression "bug 2").
 				const workingGroup = createWorkingChatGroupSession(group, commitResult.newState);
+				for (const systemMessage of createSystemMessagesFromStateChange({
+					cursor: posted.cursor,
+					createdAt: posted.at,
+					oldState: state,
+					newState: commitResult.newState,
+					oldMetadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(state)),
+					newMetadata: toPersistedGroupMetadata(
+						getCordnGroupMetadataExtension(commitResult.newState)
+					),
+					committerPubkey: normalizePubKey(account.pubkey)
+				})) {
+					workingGroup.messages.push(systemMessage);
+				}
 				const nextGroup = buildPersistedChatGroup({
 					group,
 					workingGroup,
@@ -1257,6 +1302,7 @@ export async function inviteChatGroupMembers(input: {
 				enqueuePendingEpochOperation(pendingEpochOperations, addMemberOp);
 				return addMemberOp;
 			});
+		await persistCommitIntent(group, commitResult.newState);
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedAddCommit)
@@ -1438,6 +1484,7 @@ export async function removeChatGroupMember(input: {
 			group.id,
 			normalizePubKey(input.targetStablePubkey)
 		);
+		await persistCommitIntent(group, commitResult.newState);
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedRemoveCommit)
@@ -1541,6 +1588,7 @@ export async function updateChatGroupMetadata(input: {
 			groupId: group.id,
 			commitMessageBase64: sealedMetadataCommit.msg_64
 		});
+		await persistCommitIntent(group, commitResult.newState);
 
 		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.PostGroupMessage(sealedMetadataCommit)

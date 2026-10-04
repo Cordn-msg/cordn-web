@@ -509,6 +509,21 @@ export function createSystemMessagesFromStateChange(input: {
 		);
 	}
 
+	// A Commit with no membership/metadata change is still an epoch advance
+	// (keys rotation / rekey). Record it at the Commit's cursor: that record is
+	// what makes a re-delivered self-echo dedupe via seenCursors instead of
+	// re-processing and failing decryption (ownCommitRegression "bug 2").
+	if (
+		messages.length === 0 &&
+		input.oldState.groupContext.epoch !== input.newState.groupContext.epoch
+	) {
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
+				detail: 'the group keys'
+			})
+		);
+	}
+
 	return messages;
 }
 
