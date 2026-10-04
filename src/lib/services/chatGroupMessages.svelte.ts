@@ -16,7 +16,11 @@ import {
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
-import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
+import {
+	decryptGroupPayloadBase64,
+	decryptGroupPayloadWithKeyBase64,
+	deriveGroupPayloadKeyBase64
+} from '$lib/services/chatGroupPayloadCrypto';
 import {
 	isGroupDocumentPullUnresolved,
 	reconcileMultiDeviceNow
@@ -96,6 +100,9 @@ export interface GroupMessageIngestionTarget {
 	/** Missed-update evidence (see PersistedChatGroupLike): set on an unopenable
 	 *  sealed payload, cleared by a current-epoch decrypt. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (newest-4 epochs, epoch → base64 key):
+	 *  a lagging sender seals under an epoch we already left. */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export interface RawChatGroupMessage {
@@ -636,11 +643,60 @@ const unsealStreakByGroup = new Map<string | undefined, number>();
 const rescueCooldownByGroup = new Map<string | undefined, number>();
 const heldUnopenableByGroup = new Map<string | undefined, { rescued: boolean }>();
 
-function noteUnsealSuccess(groupId: string | undefined): void {
+/** How many former-epoch payload keys to retain (mirrors ts-mls's own
+ *  `retainKeysForEpochs: 4` — beyond that the INNER layer rejects the message
+ *  anyway, so keeping outer keys longer buys nothing). */
+const RETAINED_PAYLOAD_KEYS = 4;
+
+/** Open with a retained former-epoch key (newest first). Null when no retained
+ *  key verifies the payload. */
+function decryptWithFormerPayloadKeys(
+	group: GroupMessageIngestionTarget,
+	encryptedBase64: string
+): string | null {
+	const held = group.formerPayloadKeys;
+	if (!held) return null;
+	for (const epoch of Object.keys(held)
+		.map(Number)
+		.sort((a, b) => b - a)) {
+		const opened = decryptGroupPayloadWithKeyBase64(held[epoch.toString()], encryptedBase64);
+		if (opened !== null) return opened;
+	}
+	return null;
+}
+
+/** Remember a state's payload key under its epoch (pure copy-on-write, capped).
+ *  Called at EVERY point the group leaves an epoch — the ingest ladder AND the
+ *  own-commit flows AND document adoption — or a message sealed at the left
+ *  epoch is lost the moment the state moves (report-05). */
+export async function noteFormerPayloadKey(
+	held: Record<string, string> | undefined,
+	state: ClientState
+): Promise<Record<string, string>> {
+	// Bare ingestion test targets carry neither group context nor key schedule;
+	// a real ClientState always does. Retention is skipped, never throws, for
+	// the former.
+	const epochNumber = state?.groupContext?.epoch;
+	if (epochNumber === undefined || !state.keySchedule?.exporterSecret) return held ?? {};
+	const epoch = epochNumber.toString();
+	if (held && epoch in held) return held;
+	const keyBase64 = await deriveGroupPayloadKeyBase64(state);
+	const next: Record<string, string> = { ...(held ?? {}), [epoch]: keyBase64 };
+	const epochs = Object.keys(next)
+		.map(Number)
+		.sort((a, b) => a - b);
+	for (const old of epochs.slice(0, Math.max(0, epochs.length - RETAINED_PAYLOAD_KEYS))) {
+		delete next[old.toString()];
+	}
+	return next;
+}
+
+function noteUnsealSuccess(groupId: string | undefined, formerEpoch = false): void {
 	unsealStreakByGroup.delete(groupId);
 	// Any successful decrypt invalidates a convergence proof — the next
-	// unopenable payload deserves a fresh hold window.
-	heldUnopenableByGroup.delete(groupId);
+	// unopenable payload deserves a fresh hold window. A FORMER-epoch decrypt
+	// (a lagging sender's) proves no such thing and keeps the hold.
+	if (!formerEpoch) heldUnopenableByGroup.delete(groupId);
 }
 
 function noteUnsealFailure(groupId: string | undefined): void {
@@ -720,6 +776,9 @@ export async function ingestChatGroupMessages(params: {
 	// cursor) — nothing may carry fetchCursor past one until the hold resolves.
 	let heldFloor: number | undefined;
 
+	// The epoch we start from is one a lagging sender may still seal under.
+	group.formerPayloadKeys = await noteFormerPayloadKey(group.formerPayloadKeys, group.state);
+
 	for (const message of messages) {
 		const isPendingOperationMessage =
 			params.hasPendingEpochOperation?.(message.opaqueMessageBase64) ?? false;
@@ -744,6 +803,7 @@ export async function ingestChatGroupMessages(params: {
 		// (wrong epoch / pre-join traffic / corruption) advances the cursor and
 		// records an issue rather than poisoning.
 		let processableBase64: string;
+		let formerEpoch = false;
 		try {
 			processableBase64 = (
 				await decryptGroupPayloadBase64({
@@ -752,41 +812,50 @@ export async function ingestChatGroupMessages(params: {
 				})
 			).opaqueMessageBase64;
 		} catch (error) {
-			const detail = errorMessage(error);
-			// Multi-device (§10.6): the seal hides the epoch, so a device behind a
-			// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
-			// at this layer — the epochAhead gate below never gets to see these.
-			// Mirror it: do NOT advance the cursor (leave it at the decrypt
-			// frontier so a post-fast-forward re-fetch retries the message once
-			// the document state arrives) and dedup the advisory issue per cursor.
-			// The hold is BOUNDED though (§10.6): once a rescue proved convergence
-			// (no new state) and no fetch is still failing, the payload is
-			// permanently unopenable — advance past it so the stream and the native
-			// notification watermark cannot stall on it forever. Single-device
-			// keeps fail-and-advance: no document rescues it.
-			recordSyncIssue(group, issues, {
-				cursor: message.cursor,
-				createdAt: message.createdAt,
-				detail: `Sealed payload decrypt failed: ${detail}`
-			});
-			noteUnsealFailure(group.id);
-			// Missed-update evidence (staircase StaleEpochTest): this device cannot
-			// open what the group sends — it may have missed a Commit. Recorded so
-			// the outbound gate refuses work staged from the stale view.
-			group.staleMark = {
-				cursor: group.staleMark?.cursor ?? message.cursor,
-				unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
-			};
-			if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
-				heldUnopenableByGroup.set(group.id, { rescued: false });
-				// Held (spec §10.6): later messages may still be readable in this
-				// pass, but the floor keeps this one re-fetchable.
-				heldFloor ??= message.cursor;
+			// A sender that has not seen our latest Commit seals under an epoch we
+			// already left — OUR OWN adopt-early window and lagging members both
+			// look like this (report-05 "disappearing messages"). Open with a
+			// retained former-epoch key before calling it unopenable.
+			const former = decryptWithFormerPayloadKeys(group, message.opaqueMessageBase64);
+			if (former === null) {
+				const detail = errorMessage(error);
+				// Multi-device (§10.6): the seal hides the epoch, so a device behind a
+				// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
+				// at this layer — the epochAhead gate below never gets to see these.
+				// Mirror it: do NOT advance the cursor (leave it at the decrypt
+				// frontier so a post-fast-forward re-fetch retries the message once
+				// the document state arrives) and dedup the advisory issue per cursor.
+				// The hold is BOUNDED though (§10.6): once a rescue proved convergence
+				// (no new state) and no fetch is still failing, the payload is
+				// permanently unopenable — advance past it so the stream and the native
+				// notification watermark cannot stall on it forever. Single-device
+				// keeps fail-and-advance: no document rescues it.
+				recordSyncIssue(group, issues, {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `Sealed payload decrypt failed: ${detail}`
+				});
+				noteUnsealFailure(group.id);
+				// Missed-update evidence (staircase StaleEpochTest): this device cannot
+				// open what the group sends — it may have missed a Commit. Recorded so
+				// the outbound gate refuses work staged from the stale view.
+				group.staleMark = {
+					cursor: group.staleMark?.cursor ?? message.cursor,
+					unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
+				};
+				if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
+					heldUnopenableByGroup.set(group.id, { rescued: false });
+					// Held (spec §10.6): later messages may still be readable in this
+					// pass, but the floor keeps this one re-fetchable.
+					heldFloor ??= message.cursor;
+					continue;
+				}
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				continue;
 			}
-			group.fetchCursor = message.cursor;
-			group.lastCursor = Math.max(group.lastCursor, message.cursor);
-			continue;
+			processableBase64 = former;
+			formerEpoch = true;
 		}
 
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
@@ -974,11 +1043,12 @@ export async function ingestChatGroupMessages(params: {
 			throw error;
 		}
 
-		noteUnsealSuccess(group.id);
-		// A message that decrypts at the current epoch proves this device is on the
+		noteUnsealSuccess(group.id, formerEpoch);
+		// A message that decrypts AT THE CURRENT EPOCH proves this device is on the
 		// group's line (staircase StaleEpochTest: "back to normal"): the
-		// missed-update mark goes and commits work again.
-		group.staleMark = undefined;
+		// missed-update mark goes and commits work again. A former-epoch decrypt
+		// (a lagging sender) proves no such thing and keeps the mark.
+		if (!formerEpoch) group.staleMark = undefined;
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;
@@ -1045,6 +1115,8 @@ export async function ingestChatGroupMessages(params: {
 
 		if (processed.kind === 'newState') {
 			const oldState = group.state;
+			// The epoch we leave is one a lagging sender may still seal under.
+			group.formerPayloadKeys = await noteFormerPayloadKey(group.formerPayloadKeys, oldState);
 			const oldMetadata = getCordnGroupMetadataExtension(oldState);
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);

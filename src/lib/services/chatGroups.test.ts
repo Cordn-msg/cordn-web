@@ -61,7 +61,11 @@ vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
 	createApplicationMessageBase64: vi.fn(),
 	createSystemMessagesFromStateChange: vi.fn(() => []),
 	createUnsignedCordnMessageEvent: vi.fn(),
-	encodeAuthenticatedSender: vi.fn()
+	encodeAuthenticatedSender: vi.fn(),
+	buildInboundSystemMessage: vi.fn(() => ({ id: 'sys', content: '{}' })),
+	noteFormerPayloadKey: vi.fn(async (held: Record<string, string> | undefined) => held ?? {}),
+	probeSealedMessage: vi.fn(),
+	staleGenerationLeafIndex: vi.fn(() => undefined)
 }));
 
 vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({

@@ -49,6 +49,7 @@ import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import {
 	ingestChatGroupMessages,
+	noteFormerPayloadKey,
 	probeSealedMessage
 } from '$lib/services/chatGroupMessages.svelte';
 import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
@@ -2411,6 +2412,16 @@ async function fastForwardGroup(
 			branch: undefined,
 			skippedSiblingCommit: undefined,
 			commitPoint: undefined,
+			// The adopted state moved on: whatever would not open may now (or is
+			// gone for good) — the missed-update mark is re-earned, not kept.
+			staleMark: undefined,
+			// The epoch this adoption leaves is one a lagging sender may still seal
+			// under (report-05): keep its payload key. The spread carries the rest
+			// of the retained keys across (staircase retainedExporterSecrets).
+			formerPayloadKeys: await noteFormerPayloadKey(
+				existing.formerPayloadKeys,
+				clientStateDecoder(base64ToBytes(existing.stateBase64), 0)![0]
+			),
 			// §10 conflict signal: a resolved fork MUST be surfaced, not silent.
 			...(opts?.forkDecision
 				? {

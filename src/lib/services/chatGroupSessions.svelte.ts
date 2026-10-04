@@ -32,6 +32,9 @@ export interface PersistedChatGroupLike {
 	 *  held once the run proves the device is behind. Cleared by any message
 	 *  that decrypts at the current epoch. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
+	 *  seals under an epoch we already left. */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export interface WorkingChatGroupSession {
@@ -49,6 +52,8 @@ export interface WorkingChatGroupSession {
 	/** Updated by ingestion's unseal-failure hook; cleared on a current-epoch
 	 *  decrypt (see PersistedChatGroupLike). */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (see PersistedChatGroupLike). */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export function createWorkingChatGroupSession(
@@ -65,7 +70,8 @@ export function createWorkingChatGroupSession(
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
 		poisonedAtCursor: group.poisonedAtCursor,
-		staleMark: group.staleMark
+		staleMark: group.staleMark,
+		formerPayloadKeys: group.formerPayloadKeys
 	};
 }
 
@@ -152,6 +158,7 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		// current-epoch decrypt CLEARS the mark by writing undefined, and that
 		// clear must survive the persist.
 		staleMark: params.workingGroup.staleMark,
+		formerPayloadKeys: params.workingGroup.formerPayloadKeys ?? params.group.formerPayloadKeys,
 		// Fork evidence written by ingestion's sibling-skip hook (spec §10 step
 		// 1) — a fresh skip replaces, no skip keeps the previous one (cleared on
 		// document adoption).

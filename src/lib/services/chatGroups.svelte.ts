@@ -35,6 +35,7 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	noteFormerPayloadKey,
 	staleGenerationLeafIndex,
 	probeSealedMessage,
 	type StoredChatMessage,
@@ -133,6 +134,9 @@ export interface StoredChatGroup {
 	 *  payload. Refuses commits while set, sends once the run reaches 2; cleared
 	 *  by any message that decrypts at the current epoch. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
+	 *  seals under an epoch we already left (report-05 disappearing messages). */
+	formerPayloadKeys?: Record<string, string>;
 	/** The epoch's commit point (spec §8.5 gen-0, §10.3 rank). */
 	commitPoint?: { epoch: string; cursor: number; clientState: string; published?: boolean };
 	/** Recorded fork winner for the fork epoch (spec §10). */
@@ -214,6 +218,7 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
 		staleMark: group.staleMark,
+		formerPayloadKeys: group.formerPayloadKeys,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision,
 		stateBytes: base64ToBytes(group.stateBase64),
@@ -275,6 +280,7 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
 		staleMark: group.staleMark,
+		formerPayloadKeys: group.formerPayloadKeys,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision
 	};
@@ -784,11 +790,18 @@ export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
  * happens in the callers after the post.
  */
 async function persistCommitIntent(group: StoredChatGroup, newState: ClientState): Promise<void> {
+	const workingGroup = createWorkingChatGroupSession(group, newState);
+	// The epoch this Commit leaves is one a lagging sender may still seal under
+	// (report-05 disappearing messages): keep its payload key.
+	workingGroup.formerPayloadKeys = await noteFormerPayloadKey(
+		group.formerPayloadKeys,
+		decodeStoredGroupState(group)
+	);
 	await replaceGroup(
 		group.id,
 		buildPersistedChatGroup({
 			group,
-			workingGroup: createWorkingChatGroupSession(group, newState),
+			workingGroup,
 			encodeState,
 			metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(newState)) ?? group.metadata
 		})
@@ -829,7 +842,12 @@ async function postOwnGroupCommit<T>(params: {
 			rejectPendingEpochOperations(pendingEpochOperations, params.group.id, [
 				params.commitMessageBase64
 			]);
-			replaceGroup(params.group.id, params.group);
+			replaceGroup(params.group.id, {
+				...params.group,
+				// Cumulative retained keys live on the post-intent record.
+				formerPayloadKeys:
+					getChatGroup(params.group.id)?.formerPayloadKeys ?? params.group.formerPayloadKeys
+			});
 		}
 		throw error;
 	}
@@ -859,6 +877,9 @@ function markOwnCommitLost(
 	const restored: StoredChatGroup = {
 		...group,
 		stateBase64: operation?.preStateBase64 ?? group.stateBase64,
+		// Cumulative (see adoptOwnCommitEvidence): the post-intent record holds
+		// the retained payload keys this rollback must not drop.
+		formerPayloadKeys: getChatGroup(group.id)?.formerPayloadKeys ?? group.formerPayloadKeys,
 		metadata: preState
 			? toPersistedGroupMetadata(getCordnGroupMetadataExtension(preState))
 			: group.metadata,
@@ -1049,6 +1070,7 @@ async function adoptOwnCommitEvidence(params: {
 }): Promise<{
 	epochFingerprints: Record<string, string>;
 	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
+	formerPayloadKeys?: Record<string, string>;
 	commitPoint: NonNullable<StoredChatGroup['commitPoint']>;
 }> {
 	const baseEpoch = params.preState.groupContext.epoch;
@@ -1138,6 +1160,11 @@ async function adoptOwnCommitEvidence(params: {
 	return {
 		epochFingerprints: noteStateFingerprint(held, params.newState),
 		branch,
+		// The flows rebuild the record from the PRE-Commit group, but the
+		// retained payload keys are cumulative and live on the post-intent record
+		// (persistCommitIntent kept the epoch this Commit left). Carry them over.
+		formerPayloadKeys:
+			getChatGroup(params.group.id)?.formerPayloadKeys ?? params.group.formerPayloadKeys,
 		commitPoint: {
 			epoch: params.newState.groupContext.epoch.toString(),
 			cursor: params.posted.cursor,

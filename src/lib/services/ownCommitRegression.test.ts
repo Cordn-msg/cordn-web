@@ -855,3 +855,67 @@ describe('commit race and settlement (staircase RaceTest / OwnCommitTest)', () =
 		expect(record?.pendingEpochOperations?.some((op) => !op.lost)).toBe(true);
 	});
 });
+
+describe('former-epoch keys (report-05 disappearing messages)', () => {
+	const garbage = () => bytesToBase64(new Uint8Array(64).fill(7));
+
+	async function deliverPayload(groupId: string, cursor: number, opaqueMessageBase64: string) {
+		await ingestIncomingChatGroupMessages(groupId, [
+			{ cursor, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64 }
+		]);
+	}
+
+	async function craftReadableMessage(stateBase64: string, content: string) {
+		const state = clientStateDecoder(base64ToBytes(stateBase64), 0)![0];
+		const made = await createApplicationMessageBase64({
+			state,
+			event: createUnsignedCordnMessageEvent({
+				pubkey: account.pubkey,
+				content,
+				kind: 9,
+				tags: [],
+				createdAt: Math.floor(Date.now() / 1000)
+			}),
+			authenticatedData: encodeAuthenticatedSender(account.pubkey)
+		});
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state,
+			opaqueMessageBase64: made.opaqueMessageBase64
+		});
+		return encryptedBase64;
+	}
+
+	test('bug 11: a message sealed at the pre-commit epoch is not lost', async () => {
+		const group = await createChatGroup({ name: 'formers', coordinatorKey: 'ef'.repeat(32) });
+		// sealed at epoch 0 by a sender who had not seen our rename yet
+		const lagging = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'lagging');
+		await updateChatGroupMetadata({ groupId: group.id, name: 'renamed' });
+		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
+
+		// it slips in on the stream BEFORE our commit's echo — report-05's
+		// "disappearing messages": pre-fix the outer seal fails at the new epoch
+		// and the message is gone for good
+		await deliverPayload(group.id, 2, lagging);
+		expect(listChatGroupMessages(group.id).some((m) => m.content === 'lagging')).toBe(true);
+		expect(getChatGroup(group.id)!.staleMark).toBeUndefined(); // it opened
+	});
+
+	test('bug 11b: a former-epoch decrypt is not liveness and keeps the mark', async () => {
+		const group = await createChatGroup({ name: 'formers2', coordinatorKey: 'ef'.repeat(32) });
+		const lagging = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'lagging');
+		await updateChatGroupMetadata({ groupId: group.id, name: 'renamed' });
+
+		await deliverPayload(group.id, 2, garbage());
+		expect(getChatGroup(group.id)!.staleMark).toBeTruthy();
+
+		// the lagging message opens with a retained former-epoch key — but a
+		// message sealed for OUR epoch is the only thing that proves this device
+		// is on the group's line (staircase: formerEpoch is not liveness)
+		await deliverPayload(group.id, 3, lagging);
+		expect(getChatGroup(group.id)!.staleMark).toBeTruthy();
+
+		const current = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'current');
+		await deliverPayload(group.id, 4, current);
+		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
+	});
+});
