@@ -52,8 +52,10 @@ import {
 	createGroupPendingEpochStore,
 	dropPendingAddMemberForTarget,
 	enqueuePendingEpochOperation,
+	rejectPendingEpochOperations,
 	type PendingEpochOperation
 } from '$lib/services/chatGroupProtocol';
+import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
 import {
 	buildPersistedChatGroup,
 	createWorkingChatGroupSession,
@@ -425,6 +427,27 @@ class RemovedFromGroupError extends Error {
 }
 export { RemovedFromGroupError };
 
+class GroupBehindSiblingError extends Error {
+	constructor(groupId: string) {
+		super(
+			`This group is behind a commit from another of your devices and is read-only until it resyncs (enable multi-device, or rejoin the group): ${groupId}`
+		);
+		this.name = 'GroupBehindSiblingError';
+	}
+}
+export { GroupBehindSiblingError };
+
+/**
+ * Spec §10: a group that skipped a sibling Commit is behind an epoch it cannot
+ * derive. Staging sends/Commits from that stale state forks the fleet and
+ * strands members (report-05 amplifier). Refuse outbound work until the group
+ * document fast-forward (multi-device) or a rejoin advances it.
+ */
+function assertGroupNotBehind(group: StoredChatGroup): void {
+	if (!group.skippedSiblingCommit) return;
+	throw new GroupBehindSiblingError(group.id);
+}
+
 export function isChatGroupRemoved(group: StoredChatGroup | undefined): boolean {
 	if (!group) return false;
 	if (group.status === 'removed') return true;
@@ -566,6 +589,7 @@ async function assertGroupCanPerformOutboundOperation(groupId: string): Promise<
 
 	const refreshed = await catchUpGroupBeforeOutboundOperation(group, gid);
 	assertChatGroupIsActive(refreshed);
+	assertGroupNotBehind(refreshed);
 
 	if (isChatGroupPoisoned(refreshed)) {
 		throw new Error(
@@ -613,6 +637,7 @@ async function prepareGroupForApplicationMessage(groupId: string): Promise<Store
 	if (isGroupActivelyWatched(groupId) && (!mdActive || isGroupFeedLive(groupId))) {
 		const group = requireChatGroup(groupId);
 		assertChatGroupIsActive(group);
+		assertGroupNotBehind(group);
 		return group;
 	}
 	return assertGroupCanPerformOutboundOperation(groupId);
@@ -691,6 +716,31 @@ async function persistCommitIntent(group: StoredChatGroup, newState: ClientState
 			metadata: toPersistedGroupMetadata(getCordnGroupMetadataExtension(newState)) ?? group.metadata
 		})
 	);
+}
+
+/**
+ * Post our own Commit with rollback-on-rejection. A definitively rejected post
+ * (coordinator error result) means the Commit never landed: the pre-post intent
+ * must roll back or the group runs ahead of the stream and every future Commit
+ * breaks. Ambiguous failures (timeout, transport) KEEP the intent — the
+ * self-echo confirms the landing (ownCommitRegression "bug 1" / "bug 6").
+ */
+async function postOwnGroupCommit<T>(params: {
+	group: StoredChatGroup;
+	commitMessageBase64: string;
+	post: () => Promise<T>;
+}): Promise<T> {
+	try {
+		return await params.post();
+	} catch (error) {
+		if (error instanceof CoordinatorRejectedError) {
+			rejectPendingEpochOperations(pendingEpochOperations, params.group.id, [
+				params.commitMessageBase64
+			]);
+			replaceGroup(params.group.id, params.group);
+		}
+		throw error;
+	}
 }
 
 export async function runGroupOperation<T>(
@@ -912,9 +962,14 @@ export async function repairSharedLeafRatchetDivergence(
 				});
 				await persistCommitIntent(group, commitResult.newState);
 
-				const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
-					client.PostGroupMessage(sealedCommit)
-				);
+				const posted = await postOwnGroupCommit({
+					group,
+					commitMessageBase64: sealedCommit.msg_64,
+					post: () =>
+						withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+							client.PostGroupMessage(sealedCommit)
+						)
+				});
 
 				// A self-update changes no membership or metadata, but the epoch
 				// advance must still land as a system message at the Commit's cursor:
@@ -1304,9 +1359,14 @@ export async function inviteChatGroupMembers(input: {
 			});
 		await persistCommitIntent(group, commitResult.newState);
 
-		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage(sealedAddCommit)
-		);
+		const posted = await postOwnGroupCommit({
+			group,
+			commitMessageBase64: sealedAddCommit.msg_64,
+			post: () =>
+				withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+					client.PostGroupMessage(sealedAddCommit)
+				)
+		});
 
 		// Stamp the Commit cursor on every pending op so each stored Welcome
 		// carries an `after` hint; invitees use it to skip pre-join traffic.
@@ -1486,9 +1546,14 @@ export async function removeChatGroupMember(input: {
 		);
 		await persistCommitIntent(group, commitResult.newState);
 
-		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage(sealedRemoveCommit)
-		);
+		const posted = await postOwnGroupCommit({
+			group,
+			commitMessageBase64: sealedRemoveCommit.msg_64,
+			post: () =>
+				withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+					client.PostGroupMessage(sealedRemoveCommit)
+				)
+		});
 
 		const removeWorkingGroup = createWorkingChatGroupSession(
 			{
@@ -1590,9 +1655,14 @@ export async function updateChatGroupMetadata(input: {
 		});
 		await persistCommitIntent(group, commitResult.newState);
 
-		const posted = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
-			client.PostGroupMessage(sealedMetadataCommit)
-		);
+		const posted = await postOwnGroupCommit({
+			group,
+			commitMessageBase64: sealedMetadataCommit.msg_64,
+			post: () =>
+				withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+					client.PostGroupMessage(sealedMetadataCommit)
+				)
+		});
 
 		const metadataWorkingGroup = createWorkingChatGroupSession(
 			{

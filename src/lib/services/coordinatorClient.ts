@@ -71,6 +71,18 @@ export type CoordinatorServerInfo = {
 	picture?: string;
 };
 
+/**
+ * The coordinator answered with an error result: the request was NOT applied.
+ * Contrast transport/timeout failures, which are ambiguous (the operation may
+ * have landed) — callers use this class to decide safe rollback vs keep.
+ */
+export class CoordinatorRejectedError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'CoordinatorRejectedError';
+	}
+}
+
 export type coordinatorClient = {
 	PublishKeyPackage: (input: PublishKeyPackageInput) => Promise<PublishKeyPackageOutput>;
 	ListAvailableKeyPackages: (
@@ -438,7 +450,7 @@ export class cordnClient implements coordinatorClient {
 						?.filter((c) => c.type === 'text')
 						.map((c) => c.text ?? '')
 						.join('\n') || 'Unknown coordinator error';
-				throw new Error(errorMessage);
+				throw new CoordinatorRejectedError(errorMessage);
 			}
 
 			const parsed = schema

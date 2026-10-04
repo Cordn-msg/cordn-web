@@ -104,7 +104,7 @@ async function finalizePendingEpochOperations(
 	store.set(groupId, remaining);
 }
 
-function rejectPendingEpochOperations(
+export function rejectPendingEpochOperations(
 	store: GroupPendingEpochStore,
 	groupId: string,
 	opaqueMessageBase64s: Iterable<string>

@@ -232,11 +232,13 @@ import {
 	sendChatGroupMessage,
 	inviteChatGroupMembers,
 	persistGroup,
+	replaceGroup,
 	reloadChatGroupsForOwner,
 	repairSharedLeafRatchetDivergence,
 	type StoredChatGroup
 } from './chatGroups.svelte';
 import { getChatStorage } from '$lib/storage/chatStorage';
+import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
 
 function decodeEpoch(stateBase64: string): bigint {
 	const decoded = clientStateDecoder(base64ToBytes(stateBase64), 0);
@@ -452,5 +454,51 @@ describe('own-commit adoption (report-05 regression)', () => {
 		const storage = await getChatStorage();
 		const record = await storage.getGroup(group.id);
 		expect(record?.pendingEpochOperations?.length ?? 0).toBe(1);
+	});
+});
+
+describe('behind-group guard and rejection rollback (report-05 amplifiers)', () => {
+	test('bug 5: a group behind a skipped sibling commit must refuse sends and commits', async () => {
+		const group = await createChatGroup({ name: 'behind', coordinatorKey: 'ef'.repeat(32) });
+		// The skip path leaves this evidence on the record; without multi-device
+		// there is no fast-forward that can heal it — staging from the stale
+		// state is how forks and "kicked" members happen (spec §10).
+		replaceGroup(group.id, {
+			...getChatGroup(group.id)!,
+			skippedSiblingCommit: { epoch: '0', cursor: 5 }
+		});
+
+		await expect(
+			sendChatGroupMessage({ groupId: group.id, content: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+		await expect(
+			updateChatGroupMetadata({ groupId: group.id, name: 'nope' })
+		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+	});
+
+	test('bug 6: a definitively rejected commit must roll the intent back', async () => {
+		const group = await createChatGroup({ name: 'keep me', coordinatorKey: 'ef'.repeat(32) });
+		const originalPost = fakeClient.PostGroupMessage;
+		fakeClient.PostGroupMessage = async () => {
+			// The coordinator answered with an error: the commit was NOT applied.
+			throw new CoordinatorRejectedError('rate limited');
+		};
+		let flowError: unknown;
+		try {
+			await updateChatGroupMetadata({ groupId: group.id, name: 'renamed' });
+		} catch (error) {
+			flowError = error;
+		} finally {
+			fakeClient.PostGroupMessage = originalPost;
+		}
+		expect(String(flowError)).toContain('rate limited');
+
+		// the intent rolls back: no ahead-of-stream state, no stranded op
+		const after = getChatGroup(group.id)!;
+		expect(decodeEpoch(after.stateBase64), 'state must roll back').toBe(0n);
+		expect(after.metadata?.name, 'metadata must roll back').toBe('keep me');
+		const storage = await getChatStorage();
+		const record = await storage.getGroup(group.id);
+		expect(record?.pendingEpochOperations?.length ?? 0, 'the op must be dropped').toBe(0);
 	});
 });
