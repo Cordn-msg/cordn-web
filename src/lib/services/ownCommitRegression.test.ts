@@ -919,3 +919,32 @@ describe('former-epoch keys (report-05 disappearing messages)', () => {
 		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
 	});
 });
+
+test('bug 12 (fork-MR scenario K): a key package for another identity is refused', async () => {
+	const group = await createChatGroup({ name: 'readd', coordinatorKey: 'ef'.repeat(32) });
+	const kpQueries = await import('$lib/queries/chatKeyPackageQueries');
+	// the listing names carol's slot…
+	vi.mocked(kpQueries.fetchCoordinatorAvailableKeyPackages).mockResolvedValueOnce([
+		{ pk: carolPubkey, kp_ref: 'kp-carol', last_resort: false, at: 1 }
+	] as never);
+	const original = fakeClient.ConsumeKeyPackage;
+	// …but the coordinator hands out ANOTHER identity's package for it (the
+	// re-add case: a stale/orphaned package from before a reinstall)
+	fakeClient.ConsumeKeyPackage = async () => ({
+		keyPackage: {
+			pk: 'ee'.repeat(32),
+			kp_ref: 'kp-stranger',
+			event: { id: 'ev', sig: 'sig' } as never
+		}
+	});
+	let result: Awaited<ReturnType<typeof inviteChatGroupMembers>> | undefined;
+	try {
+		result = await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+	} finally {
+		fakeClient.ConsumeKeyPackage = original;
+	}
+	// refused — never added under the requested name
+	expect(result?.failures).toHaveLength(1);
+	expect(result?.failures[0].error).toContain('different identity');
+	expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(0n); // nothing committed
+});

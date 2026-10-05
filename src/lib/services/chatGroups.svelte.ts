@@ -1525,6 +1525,20 @@ export async function inviteChatGroupMembers(input: {
 							entry.keyPackageRef === identifier ||
 							normalizePubKey(entry.stablePubkey) === normalizedIdentifier
 					);
+					// Fork-MR scenario K: the coordinator may hand out another DEVICE's
+					// package for this slot (fine — same identity, the welcome is per
+					// identity) but never another IDENTITY's. The request names either a
+					// kp_ref (whose owner is in the listing) or an identity; a package
+					// for anyone else is refused, never added under the requested name.
+					const consumedPk = normalizePubKey(consumeResult.keyPackage.pk);
+					if (
+						matchedAvailableKeyPackage &&
+						normalizePubKey(matchedAvailableKeyPackage.stablePubkey) !== consumedPk
+					) {
+						throw new Error(
+							'The coordinator returned a key package for a different identity. Refresh their packages and try again.'
+						);
+					}
 					const targetStablePubkey = normalizePubKey(
 						matchedAvailableKeyPackage?.stablePubkey ?? consumeResult.keyPackage.pk
 					);
