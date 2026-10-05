@@ -597,6 +597,29 @@ describe('inviteChatGroupMembers()', () => {
 		expect(fetchManyGroupMessages).toHaveBeenCalledTimes(1);
 	});
 
+	test('catches up welcome-adopted groups even when pristine', async () => {
+		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
+		const consumeKeyPackage = vi.fn().mockResolvedValue({
+			keyPackage: { pk: carolPk, kp_ref: 'ref-1', event: {} }
+		});
+		const fetchManyGroupMessages = vi.fn().mockResolvedValue({ messages: [] });
+		getCoordinatorClientMock.mockReturnValue({
+			ConsumeKeyPackage: consumeKeyPackage,
+			FetchManyGroupMessages: fetchManyGroupMessages
+		});
+		// Pristine like a new conversation, but born from a Welcome at epoch 1n:
+		// the coordinator can already hold post-join traffic, so the pre-op
+		// catch-up must run. joinEpoch 0n is the creator marker, not "no data".
+		chatGroupsStore.groups = [demoGroup({ joinEpoch: 1n })];
+
+		await inviteChatGroupMembers({
+			groupId: 'demo',
+			targets: [{ identifier: 'ref-1', expectedStablePubkey: 'aa'.repeat(32) }]
+		});
+
+		expect(fetchManyGroupMessages).toHaveBeenCalledTimes(1);
+	});
+
 	test('settles a new conversation with one fetch and no listing', async () => {
 		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
 		const mls = await import('$lib/services/chatMlsUtils');

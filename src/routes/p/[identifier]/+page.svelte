@@ -385,14 +385,9 @@
 			return;
 		}
 
-		if (keyPackagesQuery.isPending) {
-			return;
-		}
-
 		if (!profileKeyPackage) {
-			startChatError = availableKeyPackagesError
-				? availableKeyPackagesError
-				: 'This person has no key package on this coordinator yet.';
+			startChatError =
+				availableKeyPackagesError || 'This person has no key package on this coordinator yet.';
 			return;
 		}
 

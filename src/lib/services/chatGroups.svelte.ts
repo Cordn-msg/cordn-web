@@ -560,21 +560,17 @@ function assertChatGroupIsActive(group: StoredChatGroup): void {
 }
 
 /**
- * Catch up with coordinator messages before performing an outbound operation.
- * This runs inline (not through runGroupOperation) since it is called from
- * within an already-serialized group operation context.
- * Returns the refreshed group after catch-up.
- */
-/**
- * A freshly created group: nothing posted, nothing observed, no epoch op ever
- * staged. Its gid is private and its state has a single member, so there is
- * nothing on the coordinator the pre-outbound catch-up could find — the fetch
- * would be a pure round trip on the new-conversation path. Anything more
- * established (including a retried invite with an outstanding op) keeps the
- * full catch-up discipline.
+ * A freshly created group: born on this device (creator epoch 0n — welcome
+ * adopters carry their join epoch ≥ 1n), nothing posted, nothing observed, no
+ * epoch op ever staged. Its gid is private and its state has a single member,
+ * so there is nothing on the coordinator the pre-outbound catch-up could find —
+ * the fetch would be a pure round trip on the new-conversation path. Anything
+ * more established (including a retried invite with an outstanding op) keeps
+ * the full catch-up discipline.
  */
 function isProvablyFreshChatGroup(group: StoredChatGroup): boolean {
 	return (
+		group.joinEpoch === 0n &&
 		group.fetchCursor === 0 &&
 		group.lastCursor === 0 &&
 		group.messages.length === 0 &&
@@ -582,6 +578,12 @@ function isProvablyFreshChatGroup(group: StoredChatGroup): boolean {
 	);
 }
 
+/**
+ * Catch up with coordinator messages before performing an outbound operation.
+ * This runs inline (not through runGroupOperation) since it is called from
+ * within an already-serialized group operation context.
+ * Returns the refreshed group after catch-up.
+ */
 async function catchUpGroupBeforeOutboundOperation(
 	group: StoredChatGroup,
 	gid: string
