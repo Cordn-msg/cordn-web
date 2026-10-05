@@ -247,7 +247,8 @@ import {
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
 	staleGenerationLeafIndex,
-	isSiblingCommitMessage
+	isSiblingCommitMessage,
+	unrecoveredDropHorizon
 } from './chatGroupMessages.svelte';
 import { joinGroupFromWelcome } from '$lib/services/chatMlsUtils';
 import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
@@ -983,5 +984,117 @@ describe('sibling-commit rule (spec multi-device §10, named predicate)', () => 
 				localStablePubkey: undefined
 			})
 		).toBe(false);
+	});
+});
+
+describe('dropped-message recovery (the disappearing-messages class)', () => {
+	async function deliverPayload(groupId: string, cursor: number, opaqueMessageBase64: string) {
+		await ingestIncomingChatGroupMessages(groupId, [
+			{ cursor, createdAt: Math.floor(Date.now() / 1000), opaqueMessageBase64 }
+		]);
+	}
+
+	async function craftReadableMessage(stateBase64: string, content: string) {
+		const state = clientStateDecoder(base64ToBytes(stateBase64), 0)![0];
+		const made = await createApplicationMessageBase64({
+			state,
+			event: createUnsignedCordnMessageEvent({
+				pubkey: account.pubkey,
+				content,
+				kind: 9,
+				tags: [],
+				createdAt: Math.floor(Date.now() / 1000)
+			}),
+			authenticatedData: encodeAuthenticatedSender(account.pubkey)
+		});
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state,
+			opaqueMessageBase64: made.opaqueMessageBase64
+		});
+		return encryptedBase64;
+	}
+
+	test('the horizon is the oldest unrecovered decrypt-failure issue without a row', () => {
+		expect(
+			unrecoveredDropHorizon({
+				messages: [{ cursor: 7 }],
+				syncIssues: [
+					{ cursor: 5, createdAt: 1, detail: 'Sealed payload decrypt failed: invalid tag' },
+					{
+						cursor: 6,
+						createdAt: 1,
+						detail: 'Sealed payload decrypt failed: invalid tag',
+						recovered: true
+					},
+					// a row exists at 7 — it is not lost
+					{ cursor: 7, createdAt: 1, detail: 'Sealed payload decrypt failed: invalid tag' },
+					// a different issue class (sibling-skip converges via documents)
+					{ cursor: 3, createdAt: 1, detail: 'Skipped sibling commit (own shared leaf)' }
+				]
+			})
+		).toBe(5);
+		expect(unrecoveredDropHorizon({ messages: [], syncIssues: [] })).toBeUndefined();
+	});
+
+	test('a message dropped by the old pipeline comes back as a row', async () => {
+		const group = await createChatGroup({ name: 'recover', coordinatorKey: 'ef'.repeat(32) });
+		const dropped = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'came back');
+		await ingestIncomingChatGroupMessages(group.id, []); // hydrate the store first
+		// the old pipeline: the message failed to open at its time, the fetch
+		// cursor advanced past it, and the drop was recorded — no row survives
+		const record = getChatGroup(group.id)!;
+		record.syncIssues = [
+			...record.syncIssues,
+			{ cursor: 5, createdAt: 1, detail: 'Sealed payload decrypt failed: invalid tag' }
+		];
+		record.fetchCursor = 9; // past the drop — the normal path can never see it
+		// the coordinator still has it: it resends when asked by cursor
+		const originalFetch = fakeClient.FetchManyGroupMessages;
+		fakeClient.FetchManyGroupMessages = async (input) => {
+			const request = input.groups[0];
+			if (request.after !== undefined && request.after < 5) {
+				return {
+					messages: [{ gid: request.gid, cursor: 5, at: 1, msg_64: dropped }]
+				};
+			}
+			return { messages: [] };
+		};
+		try {
+			// any later delivery runs the recovery pass
+			const later = await craftReadableMessage(record.stateBase64, 'later');
+			await deliverPayload(group.id, 10, later);
+		} finally {
+			fakeClient.FetchManyGroupMessages = originalFetch;
+		}
+		expect(listChatGroupMessages(group.id).some((m) => m.content === 'came back')).toBe(true);
+		// and the drop is recorded so the fetch never repeats
+		expect(getChatGroup(group.id)!.syncIssues.find((issue) => issue.cursor === 5)?.recovered).toBe(
+			true
+		);
+	});
+
+	test('a failed recovery fetch leaves the drops unrecovered for the next pass', async () => {
+		const group = await createChatGroup({ name: 'recover2', coordinatorKey: 'ef'.repeat(32) });
+		await ingestIncomingChatGroupMessages(group.id, []); // hydrate the store first
+		const record = getChatGroup(group.id)!;
+		record.syncIssues = [
+			...record.syncIssues,
+			{ cursor: 5, createdAt: 1, detail: 'Sealed payload decrypt failed: invalid tag' }
+		];
+		record.fetchCursor = 9;
+		const originalFetch = fakeClient.FetchManyGroupMessages;
+		fakeClient.FetchManyGroupMessages = async () => {
+			throw new Error('coordinator unreachable');
+		};
+		try {
+			const later = await craftReadableMessage(record.stateBase64, 'later');
+			await deliverPayload(group.id, 10, later);
+		} finally {
+			fakeClient.FetchManyGroupMessages = originalFetch;
+		}
+		// nothing recovered — the pass must run again later
+		expect(
+			getChatGroup(group.id)!.syncIssues.find((issue) => issue.cursor === 5)?.recovered
+		).toBeUndefined();
 	});
 });

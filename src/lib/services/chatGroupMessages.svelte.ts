@@ -63,6 +63,9 @@ export interface StoredChatSyncIssue {
 	cursor: number;
 	createdAt: number;
 	detail: string;
+	/** A recovery pass has run over this issue's window — the fetch must not
+	 *  repeat (dropped-message recovery, the "disappearing messages" class). */
+	recovered?: boolean;
 }
 
 export interface StoredChatSystemMessageData {
@@ -651,6 +654,37 @@ function recordSyncIssue(
 	const passIndex = issues.findIndex((existing) => existing.cursor === issue.cursor);
 	if (passIndex === -1) issues.push(issue);
 	else issues[passIndex] = issue;
+}
+
+/** Dropped-message recovery horizon (the "disappearing messages" class): the
+ *  pre-fix pipeline advanced the fetch cursor past messages it could not open
+ *  and recorded each as a decrypt-failure issue. Those issues carry the lost
+ *  cursors — and with the former-epoch payload keys most of the messages open
+ *  now. The horizon is the oldest such issue with no row at its cursor and no
+ *  recovery pass recorded over it. */
+export function unrecoveredDropHorizon(group: {
+	syncIssues: StoredChatSyncIssue[];
+	messages: Array<{ cursor: number }>;
+}): number | undefined {
+	const rows = new Set(group.messages.map((message) => message.cursor));
+	let horizon: number | undefined;
+	for (const issue of group.syncIssues) {
+		if (issue.recovered || !issue.detail.startsWith('Sealed payload decrypt failed')) continue;
+		if (rows.has(issue.cursor)) continue;
+		if (horizon === undefined || issue.cursor < horizon) horizon = issue.cursor;
+	}
+	return horizon;
+}
+
+/** Mark the drop-class issues as recovered: a successful pass ran over their
+ *  window — the messages arrived and either opened or were proven unopenable;
+ *  either way the recovery fetch must not repeat. */
+export function markDropIssuesRecovered(issues: StoredChatSyncIssue[]): StoredChatSyncIssue[] {
+	return issues.map((issue) =>
+		!issue.recovered && issue.detail.startsWith('Sealed payload decrypt failed')
+			? { ...issue, recovered: true }
+			: issue
+	);
 }
 
 // ── Spec §10.6: unseal-failure rescue + bounded hold ────────────────────────

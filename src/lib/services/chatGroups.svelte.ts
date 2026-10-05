@@ -35,9 +35,11 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	markDropIssuesRecovered,
 	noteFormerPayloadKey,
 	staleGenerationLeafIndex,
 	probeSealedMessage,
+	unrecoveredDropHorizon,
 	type StoredChatMessage,
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
@@ -2028,16 +2030,58 @@ async function applyIncomingChatGroupMessages(
 	const workingGroup = createWorkingChatGroupSession(group, state);
 	const mdActive = isMultiDeviceActive(normalizePubKey(account.pubkey));
 
+	// Dropped-message recovery (the "disappearing messages" class): the pre-fix
+	// pipeline advanced the fetch cursor past messages it could not open — the
+	// coordinator never resends past a cursor, so they were gone. The drop
+	// records carry the lost cursors and the former-epoch keys open most of
+	// them now: fetch once from the oldest such cursor and fold into this pass
+	// (seen-cursor dedupe makes the overlap free). ponytail: the fetch is
+	// unbounded between horizon and now — the issues are capped at 50 recent,
+	// so the window is bounded in practice.
+	let ingestMessages = messages;
+	const recoveryAfter = unrecoveredDropHorizon(group);
+	let recoveryFetched = false;
+	if (recoveryAfter !== undefined) {
+		const gid = groupIdDecoder.decode(state.groupContext.groupId);
+		try {
+			const result = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
+				client.FetchManyGroupMessages({
+					groups: [{ gid, after: recoveryAfter - 1 }]
+				})
+			);
+			const cursors = new Set(ingestMessages.map((message) => message.cursor));
+			ingestMessages = [
+				...ingestMessages,
+				...result.messages
+					.filter((message) => message.gid === gid && !cursors.has(message.cursor))
+					.map((message) => ({
+						cursor: message.cursor,
+						createdAt: message.at,
+						opaqueMessageBase64: message.msg_64
+					}))
+			].sort((a, b) => a.cursor - b.cursor);
+			recoveryFetched = true;
+		} catch {
+			// Best-effort: the issues stay unrecovered and the next pass retries.
+		}
+	}
+
 	const sync = await syncChatGroupMessages({
 		group,
 		workingGroup,
-		messages,
+		messages: ingestMessages,
 		pendingEpochOperations,
 		coordinatorClient,
 		localStablePubkey: normalizePubKey(account.pubkey),
 		mdActive
 	});
 	assertCoordinatorOperationActive(account);
+	if (recoveryFetched) {
+		// The pass ran over the window: the messages arrived and either opened or
+		// were proven unopenable — record it so the fetch never repeats. Only on
+		// a SUCCESSFUL fetch: an unreachable coordinator must retry next pass.
+		workingGroup.syncIssues = markDropIssuesRecovered(workingGroup.syncIssues);
+	}
 
 	const nextGroup = buildPersistedChatGroup({
 		group,
@@ -2062,7 +2106,7 @@ async function applyIncomingChatGroupMessages(
 			cursor: workingGroup.fetchCursor,
 			createdAt: Date.now(),
 			stateBase64: nextGroup.stateBase64,
-			triggerCursor: messages[messages.length - 1]?.cursor
+			triggerCursor: ingestMessages[ingestMessages.length - 1]?.cursor
 		};
 		updatedSnapshots = replaceTentativeSnapshot(updatedSnapshots, newSnapshot);
 	} else if (sync.received.length > 0) {
