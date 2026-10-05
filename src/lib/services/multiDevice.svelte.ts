@@ -56,6 +56,7 @@ import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.s
 import { errorMessage, normalizePubKey } from '$lib/utils';
 import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
+	DocumentUnsealError,
 	MultiDeviceError,
 	publishGroupDocument,
 	publishMetaDocument,
@@ -977,6 +978,13 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryDelayMs = 2_000;
 const RETRY_MAX_MS = 300_000;
 
+// Fork-MR scenario G: addresses whose documents were fetched and verified but
+// will not unseal (stale DEK / corrupt content). A re-fetch returns the same
+// bytes — content-addressed — so the only heal is a reseal from local state,
+// and no publish may chain `prev` to them (that re-pins a chain nobody can
+// walk).
+const unsealableDocumentAddresses = new Set<string>();
+
 function queuePublishRetry(plan: PublishPlan): void {
 	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
 	if (retryTimer !== null) return;
@@ -1319,15 +1327,25 @@ async function applyTip(
 				// dedup gates keep retrying (beyond backoff) instead of stranding this
 				// gid behind the fleet forever. Attempts reset when the tip moves.
 				const previous = config.unresolvedDocumentPulls?.[group.gid];
+				const previousAttempts = previous?.address === group.address ? previous.attempts : 0;
 				config.unresolvedDocumentPulls = {
 					...(config.unresolvedDocumentPulls ?? {}),
 					[group.gid]: {
 						address: group.address,
-						attempts: (previous?.address === group.address ? previous.attempts : 0) + 1,
+						attempts: previousAttempts + 1,
 						lastAttemptAt: Date.now()
 					}
 				};
 				saveConfig(config);
+				// Scenario G: a document that exists but will not unseal is not a fetch
+				// failure — retrying returns the same bytes. Heal once per address by
+				// resealing this group's document from local state (which replaces the
+				// address in the tip and unpins the garbage). Once per address so a
+				// persistent sealing fault cannot turn reads into a publish loop.
+				if (error instanceof DocumentUnsealError && previousAttempts === 0) {
+					unsealableDocumentAddresses.add(group.address);
+					scheduleRepublish({ resealGroups: [group.gid], resealMeta: false });
+				}
 				scheduleUnresolvedRetry();
 				dbg('applyTip group reconcile failed', { gid: group.gid, error });
 			}
@@ -1478,7 +1496,10 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 				const group = liveGroups.find((g) => g.id === gid);
 				if (!group) return null; // gone (tombstoned/deleted) since the trigger fired
 				const snapshot = toGroupSnapshot(group);
-				const prev = pointer.groups.find((g) => g.gid === gid)?.address;
+				const tipPrev = pointer.groups.find((g) => g.gid === gid)?.address;
+				// Scenario G: never re-pin an unopenable document — start a fresh
+				// chain head from local state instead.
+				const prev = tipPrev && !unsealableDocumentAddresses.has(tipPrev) ? tipPrev : undefined;
 				const result = await publishGroupDocument({
 					group: snapshot,
 					seal: dekSeal,

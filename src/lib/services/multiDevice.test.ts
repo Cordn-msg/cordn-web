@@ -61,7 +61,9 @@ import {
 	type ReconcileTarget,
 	type Tombstone,
 	type TipGroupPointer,
-	type TipPointer
+	type TipPointer,
+	DocumentUnsealError,
+	MultiDeviceError
 } from './multiDevice';
 import { nip44 } from 'applesauce-core/helpers/encryption';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
@@ -1450,5 +1452,34 @@ describe('metaViewHash (fork-MR scenario H: no ping-pong over the hint)', () => 
 				lastResortKeyPackage: { ...mine, privateKeyPackage: 'rotated' } as never
 			})
 		);
+	});
+});
+
+describe('DocumentUnsealError (fork-MR scenario G: unopenable documents)', () => {
+	const failingSeal = {
+		decrypt: async () => {
+			throw new Error('invalid tag');
+		},
+		encrypt: async () => ''
+	} as never;
+
+	test('a document that will not unseal raises DocumentUnsealError (not a fetch failure)', async () => {
+		await expect(openDocument('sealed-garbage', failingSeal, 'dek')).rejects.toBeInstanceOf(
+			DocumentUnsealError
+		);
+	});
+
+	test('unsealable content shapes (non-JSON, wrong type) raise it too', async () => {
+		for (const plaintext of ['not json', '{"type":"alien"}', '{"type":"group"}']) {
+			const seal = {
+				decrypt: async () => plaintext,
+				encrypt: async () => ''
+			} as never;
+			await expect(openDocument('x', seal, 'dek')).rejects.toBeInstanceOf(DocumentUnsealError);
+		}
+	});
+
+	test('it refines MultiDeviceError, so existing callers keep their semantics', () => {
+		expect(new DocumentUnsealError('x')).toBeInstanceOf(MultiDeviceError);
 	});
 });

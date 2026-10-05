@@ -29,6 +29,7 @@ import {
 	getCordnGroupMetadataExtension,
 	type CordnGroupMetadata
 } from '$lib/services/chatMlsUtils';
+import { errorMessage } from '$lib/utils';
 
 export const MULTI_DEVICE_SCHEMA_VERSION = 1;
 
@@ -60,6 +61,18 @@ export class MultiDeviceError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'MultiDeviceError';
+	}
+}
+
+/** A document that was fetched and address-verified but will not unseal with
+ *  the current DEK (stale after a rotation, or corrupt content). Distinct from
+ *  a fetch failure: content-addressing means a re-fetch returns the same bytes,
+ *  so the only heal is to reseal from local state and replace the tip's
+ *  address (fork-MR scenario G). */
+export class DocumentUnsealError extends MultiDeviceError {
+	constructor(message: string) {
+		super(message);
+		this.name = 'DocumentUnsealError';
 	}
 }
 
@@ -451,15 +464,27 @@ export async function openDocument(
 	seal: Nip44Seal,
 	dekPubkey: string
 ): Promise<MultiDeviceDocument> {
-	const plaintext = await seal.decrypt(dekPubkey, sealedPayload);
-	const doc = JSON.parse(plaintext) as MultiDeviceDocument;
+	let plaintext: string;
+	try {
+		plaintext = await seal.decrypt(dekPubkey, sealedPayload);
+	} catch (error) {
+		throw new DocumentUnsealError(`Document did not unseal: ${errorMessage(error)}`);
+	}
+	let doc: MultiDeviceDocument;
+	try {
+		doc = JSON.parse(plaintext) as MultiDeviceDocument;
+	} catch (error) {
+		throw new DocumentUnsealError(`Document did not parse: ${errorMessage(error)}`);
+	}
 	if (doc.schemaVersion !== MULTI_DEVICE_SCHEMA_VERSION) {
-		throw new MultiDeviceError(`Unsupported multi-device schema version: ${doc.schemaVersion}`);
+		throw new DocumentUnsealError(`Unsupported multi-device schema version: ${doc.schemaVersion}`);
 	}
 	// Authenticity lives in the tip (a sealed owner-signed inner event, spec
 	// §6), not in the document: the seal is confidentiality-only (spec §7).
 	if (doc.type !== 'group' && doc.type !== 'meta') {
-		throw new MultiDeviceError(`Unknown document type: ${String((doc as { type?: string }).type)}`);
+		throw new DocumentUnsealError(
+			`Unknown document type: ${String((doc as { type?: string }).type)}`
+		);
 	}
 	return doc;
 }
