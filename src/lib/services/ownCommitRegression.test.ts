@@ -289,7 +289,10 @@ describe('own-commit adoption (report-05 regression)', () => {
 		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(0n);
 
 		// rig: "Bob creates a group with Carol in it" — real add-member commit.
-		const invite = await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		const invite = await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
 		expect(invite.failures, 'the invite must succeed').toEqual([]);
 		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
 
@@ -429,7 +432,7 @@ describe('own-commit adoption (report-05 regression)', () => {
 			// throws — nothing persists and the group is wedged forever.
 			inviteResult = await inviteChatGroupMembers({
 				groupId: group.id,
-				identifiers: [carolPubkey]
+				targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
 			});
 		} finally {
 			fakeClient.StoreWelcome = originalWelcome;
@@ -451,7 +454,10 @@ describe('own-commit adoption (report-05 regression)', () => {
 
 	test('guard: a failed probe fetch in adoptOwnCommitEvidence does not break adoption', async () => {
 		const group = await createChatGroup({ name: 'probe', coordinatorKey: 'ef'.repeat(32) });
-		await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
 		await sendChatGroupMessage({ groupId: group.id, content: 'hello' });
 
 		const originalFetch = fakeClient.FetchManyGroupMessages;
@@ -620,7 +626,10 @@ describe('ratchet-repair trigger discipline (fork-MR scenario I)', () => {
 	test("another member's stale generation is recorded but never repaired here", async () => {
 		vi.mocked(isMultiDeviceActive).mockReturnValue(true);
 		const group = await createChatGroup({ name: 'no-repair', coordinatorKey: 'ef'.repeat(32) });
-		await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
 		await deliverEcho(group.id); // add commit confirmed → welcome stored
 		const welcome = storeWelcomeCalls.at(-1)!;
 		const carolState = await joinGroupFromWelcome({
@@ -741,7 +750,10 @@ describe('stale-epoch discipline (staircase StaleEpochTest)', () => {
 describe('commit race and settlement (staircase RaceTest / OwnCommitTest)', () => {
 	async function carolJoinsAGroup(name: string) {
 		const group = await createChatGroup({ name, coordinatorKey: 'ef'.repeat(32) });
-		await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
 		await deliverEcho(group.id); // add commit confirmed → welcome stored
 		const welcome = storeWelcomeCalls.at(-1)!;
 		const carolState = await joinGroupFromWelcome({
@@ -941,7 +953,10 @@ test('bug 12 (fork-MR scenario K): a key package for another identity is refused
 	});
 	let result: Awaited<ReturnType<typeof inviteChatGroupMembers>> | undefined;
 	try {
-		result = await inviteChatGroupMembers({ groupId: group.id, identifiers: [carolPubkey] });
+		result = await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
 	} finally {
 		fakeClient.ConsumeKeyPackage = original;
 	}

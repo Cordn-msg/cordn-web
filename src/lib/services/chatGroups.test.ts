@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { StoredChatGroup } from './chatGroups.svelte';
 
 const clientStateDecoderMock = vi.fn();
+const encodeMock = vi.fn(() => new Uint8Array([1]));
 const requireActiveAccountMock = vi.fn();
 const createWorkingChatGroupSessionMock = vi.fn();
 const buildPersistedChatGroupMock = vi.fn();
@@ -16,7 +17,9 @@ vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
 	return {
 		...actual,
-		clientStateDecoder: clientStateDecoderMock
+		clientStateDecoder: clientStateDecoderMock,
+		encode: encodeMock,
+		clientStateEncoder: {}
 	};
 });
 
@@ -427,7 +430,7 @@ describe('inviteChatGroupMember()', () => {
 		] as StoredChatGroup[];
 
 		await expect(
-			inviteChatGroupMember({ groupId: 'demo', identifier: 'carol' })
+			inviteChatGroupMember({ groupId: 'demo', identifier: 'carol', expectedStablePubkey: 'carol' })
 		).rejects.toMatchObject({
 			name: 'UnauthorizedGroupAdminActionError'
 		});
@@ -490,6 +493,166 @@ describe('inviteChatGroupMember()', () => {
 			expect.anything(),
 			expect.objectContaining({ kind: 'remove-member', targetStablePubkey: 'aa'.repeat(32) })
 		);
+	});
+});
+
+describe('inviteChatGroupMembers()', () => {
+	const carolPk = 'cc'.repeat(32);
+	const myPk = 'bb'.repeat(32);
+
+	function demoGroup(overrides: Partial<StoredChatGroup> = {}): StoredChatGroup {
+		return {
+			id: 'demo',
+			coordinatorKey: 'ee'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n,
+			metadata: { name: 'demo' },
+			...overrides
+		} as StoredChatGroup;
+	}
+
+	beforeEach(() => {
+		clientStateDecoderMock.mockReset();
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+		requireActiveAccountMock.mockReset();
+		requireActiveAccountMock.mockReturnValue({ pubkey: myPk });
+		createWorkingChatGroupSessionMock.mockReset();
+		buildPersistedChatGroupMock.mockReset();
+		enqueuePendingEpochOperationMock.mockReset();
+		getCoordinatorClientMock.mockReset();
+	});
+
+	test('refuses a consumed key package for another identity (fork-MR scenario K)', async () => {
+		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
+		const consumeKeyPackage = vi.fn().mockResolvedValue({
+			keyPackage: { pk: carolPk, kp_ref: 'ref-1', event: {} }
+		});
+		const fetchManyGroupMessages = vi.fn();
+		const listAvailableKeyPackages = vi.fn();
+		getCoordinatorClientMock.mockReturnValue({
+			ConsumeKeyPackage: consumeKeyPackage,
+			FetchManyGroupMessages: fetchManyGroupMessages,
+			ListAvailableKeyPackages: listAvailableKeyPackages
+		});
+		chatGroupsStore.groups = [demoGroup()];
+
+		// Consumed package is carol's, but the slot's expected owner is alice →
+		// refused, strictly.
+		const result = await inviteChatGroupMembers({
+			groupId: 'demo',
+			targets: [{ identifier: 'ref-1', expectedStablePubkey: 'aa'.repeat(32) }]
+		});
+
+		expect(result.failures).toEqual([
+			{
+				identifier: 'ref-1',
+				error:
+					'The coordinator returned a key package for a different identity. Refresh their packages and try again.'
+			}
+		]);
+		// Fresh group: nothing to catch up, and the slot's owner comes from the
+		// caller — the invite must not read the coordinator's listing at all.
+		expect(fetchManyGroupMessages).not.toHaveBeenCalled();
+		expect(listAvailableKeyPackages).not.toHaveBeenCalled();
+	});
+
+	test('still catches up established groups before inviting', async () => {
+		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
+		const consumeKeyPackage = vi.fn().mockResolvedValue({
+			keyPackage: { pk: carolPk, kp_ref: 'ref-1', event: {} }
+		});
+		const fetchManyGroupMessages = vi.fn().mockResolvedValue({ messages: [] });
+		getCoordinatorClientMock.mockReturnValue({
+			ConsumeKeyPackage: consumeKeyPackage,
+			FetchManyGroupMessages: fetchManyGroupMessages
+		});
+		chatGroupsStore.groups = [
+			demoGroup({
+				messages: [{ id: 'm1', cursor: 1, createdAt: 1 }] as StoredChatGroup['messages']
+			})
+		];
+
+		await inviteChatGroupMembers({
+			groupId: 'demo',
+			targets: [{ identifier: 'ref-1', expectedStablePubkey: 'aa'.repeat(32) }]
+		});
+
+		expect(fetchManyGroupMessages).toHaveBeenCalledTimes(1);
+	});
+
+	test('settles a new conversation with one fetch and no listing', async () => {
+		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
+		const mls = await import('$lib/services/chatMlsUtils');
+		const sessions = await import('$lib/services/chatGroupSessions.svelte');
+
+		vi.mocked(mls.findMemberLeafIndexByStablePubkey).mockReturnValue(-1);
+		vi.mocked(mls.parseConsumedPublishedKeyPackage).mockResolvedValue({} as never);
+		vi.mocked(mls.addMembersToGroup).mockResolvedValue({
+			newState: {
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 3n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				}
+			},
+			commitMessageBase64: 'commit-1',
+			welcome: {}
+		} as never);
+		vi.mocked(mls.encodeWelcomeBase64).mockReturnValue('welcome-1');
+		createWorkingChatGroupSessionMock.mockReturnValue({ messages: [] });
+		buildPersistedChatGroupMock.mockReturnValue(demoGroup());
+		vi.mocked(sessions.syncChatGroupMessages).mockResolvedValue({
+			workingGroup: { messages: [] }
+		} as never);
+
+		const consumeKeyPackage = vi.fn().mockResolvedValue({
+			keyPackage: { pk: carolPk, kp_ref: 'ref-1', event: {} }
+		});
+		const postGroupMessage = vi.fn().mockResolvedValue({ cursor: 5, at: 1000 });
+		const fetchManyGroupMessages = vi.fn().mockResolvedValue({ messages: [] });
+		const listAvailableKeyPackages = vi.fn();
+		getCoordinatorClientMock.mockReturnValue({
+			ConsumeKeyPackage: consumeKeyPackage,
+			PostGroupMessage: postGroupMessage,
+			FetchManyGroupMessages: fetchManyGroupMessages,
+			ListAvailableKeyPackages: listAvailableKeyPackages
+		});
+		chatGroupsStore.groups = [demoGroup()];
+
+		const result = await inviteChatGroupMembers({
+			groupId: 'demo',
+			targets: [{ identifier: 'ref-1', expectedStablePubkey: carolPk }]
+		});
+
+		expect(result.failures).toEqual([]);
+		expect(consumeKeyPackage).toHaveBeenCalledWith({ id: 'ref-1' });
+		expect(postGroupMessage).toHaveBeenCalledTimes(1);
+		// One settlement fetch for the whole invite: the post-commit sync pass —
+		// the adopt probe reuses its bytes (no duplicate fetch), and the fresh
+		// group skips the pre-op catch-up. No `after: 0` on the wire, ever.
+		expect(fetchManyGroupMessages).toHaveBeenCalledTimes(1);
+		expect(fetchManyGroupMessages).toHaveBeenCalledWith({
+			groups: [{ gid: 'd', after: undefined }]
+		});
+		expect(listAvailableKeyPackages).not.toHaveBeenCalled();
 	});
 });
 

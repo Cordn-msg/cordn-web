@@ -8,6 +8,7 @@
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
+	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { resolve } from '$app/paths';
@@ -48,10 +49,13 @@
 
 	let invitingRef = $state('');
 
-	async function inviteMember(keyPackageRef: string) {
+	async function inviteMember(entry: AvailableKeyPackageWithCoordinator) {
 		try {
-			invitingRef = keyPackageRef;
-			await inviteGroupMemberAction(groupId, keyPackageRef);
+			invitingRef = entry.kp_ref;
+			await inviteGroupMemberAction(groupId, {
+				identifier: entry.kp_ref,
+				expectedStablePubkey: entry.pk
+			});
 		} finally {
 			invitingRef = '';
 		}
@@ -184,7 +188,7 @@
 
 						<div class="space-y-3">
 							<AvailableKeyPackageDirectory
-								onStartChat={(entry) => inviteMember(entry.kp_ref)}
+								onStartChat={(entry) => inviteMember(entry)}
 								startingRef={invitingRef}
 								coordinatorKey={group?.coordinatorKey}
 								excludePubkeys={existingMemberPubkeys}

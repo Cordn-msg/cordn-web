@@ -5,12 +5,14 @@ import {
 	acceptChatWelcome,
 	createChatGroup,
 	deleteChatGroup,
+	ensureGroupsLoaded,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
 	recoverPoisonedChatGroup,
 	removeChatGroupMember,
 	sendChatGroupMessage,
 	updateChatGroupMetadata,
+	type ChatGroupInviteTarget,
 	type CoordinatorAvailableKeyPackage
 } from '$lib/services/chatGroups.svelte';
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
@@ -89,12 +91,15 @@ export async function refreshInviteKeyPackagesAction(groupId?: string) {
 	}
 }
 
-export async function inviteGroupMemberAction(groupId: string | undefined, identifier: string) {
+export async function inviteGroupMemberAction(
+	groupId: string | undefined,
+	target: ChatGroupInviteTarget
+) {
 	if (!groupId || chatHeaderActionsStore.inviteSubmitting) return false;
 	chatHeaderActionsStore.inviteSubmitting = true;
 	chatHeaderActionsStore.error = '';
 	try {
-		await inviteChatGroupMember({ groupId, identifier });
+		await inviteChatGroupMember({ groupId, ...target });
 		await refreshInviteKeyPackagesAction(groupId);
 		chatHeaderActionsStore.inviteOpen = false;
 		return true;
@@ -254,9 +259,24 @@ export async function sendGroupMessageAction(
 export async function startChatWithKeyPackageAction(keyPackage: {
 	kp_ref: string;
 	coordinatorKey: string;
+	pk: string;
 }): Promise<string> {
+	await ensureGroupsLoaded();
 	const group = await createChatGroup({ name: '', coordinatorKey: keyPackage.coordinatorKey });
-	await inviteChatGroupMember({ groupId: group.id, identifier: keyPackage.kp_ref });
+	try {
+		await inviteChatGroupMember({
+			groupId: group.id,
+			identifier: keyPackage.kp_ref,
+			expectedStablePubkey: keyPackage.pk
+		});
+	} catch (error) {
+		// The group is an implementation detail of this flow: a failed start must
+		// not leave an empty junk group behind. (An ambiguous msg_post timeout may
+		// still have landed at the coordinator — orphan bytes for a gid only this
+		// dead group knew; the invite's own retry semantics own that case.)
+		deleteChatGroup(group.id);
+		throw error;
+	}
 	return group.id;
 }
 
