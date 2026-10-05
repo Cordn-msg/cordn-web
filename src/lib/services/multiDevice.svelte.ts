@@ -220,6 +220,8 @@ export interface MultiDeviceOwnerConfig {
 	 * Persisted BEFORE the relay publish so loopback short-circuits.
 	 */
 	lastSeenTipEventId?: string;
+	/** created_at of the last-seen tip event: relay rules ignore anything older. */
+	lastSeenTipCreatedAt?: number;
 	/**
 	 * Per-gid failed group-document fetches awaiting retry (spec §8 fetch
 	 * liveness). A gid listed here is NOT reconciled: the dedup gates must keep
@@ -884,6 +886,12 @@ async function buildTipEvent(
 async function publishOuterTip(outer: NostrEvent, relays: string[]): Promise<void> {
 	const responses = await relayPool.publish(relays, outer);
 	dbg('tip outer published', { relays, accepted: responses.length });
+	// Relay rules: a tip no relay accepted is a FAILED publish. Without this the
+	// caller records the seal as landed while the fleet's tip never moved — and
+	// the retry ladder never gets a chance to land it.
+	if (responses.length === 0) {
+		throw new MultiDeviceError('No relay accepted the tip; the publish did not land');
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,6 +1143,20 @@ async function fetchTipForPublish(
 	// peer change since our last write/read. Reuse the local pointer and skip the
 	// owner-signer decrypt. Mirrors handleTipEvent's dedup; falls through to decrypt
 	// whenever a peer moved the tip (or the relay returned a stale event).
+	// Relay rules: a tip OLDER than the last-seen one is a stale relay response,
+	// not the fleet's state — never reconcile or push from it.
+	if (
+		config.lastSeenTip &&
+		config.lastSeenTipCreatedAt &&
+		tipEvent.created_at < config.lastSeenTipCreatedAt
+	) {
+		dbg('ignoring stale tip', { eventId: tipEvent.id.slice(0, 12) });
+		return {
+			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
+			deferred: false,
+			tipEventId: config.lastSeenTipEventId
+		};
+	}
 	if (tipEvent.id === config.lastSeenTipEventId && config.lastSeenTip) {
 		dbg('republish tip unchanged', { eventId: tipEvent.id.slice(0, 12) });
 		return {
@@ -1181,7 +1203,7 @@ function setLastSeenTip(
 	config: MultiDeviceOwnerConfig,
 	pointer: TipPointer,
 	eventId: string,
-	meta: { source: 'read' | 'write'; counts?: ReconcileCounts }
+	meta: { source: 'read' | 'write'; counts?: ReconcileCounts; createdAt: number }
 ): void {
 	const prev = config.lastSeenTip;
 	const diff = diffTipGroups(prev?.groups ?? [], pointer.groups);
@@ -1202,6 +1224,7 @@ function setLastSeenTip(
 	}
 	config.lastSeenTip = { groups: pointer.groups, metaAddress: pointer.metaAddress };
 	config.lastSeenTipEventId = eventId;
+	config.lastSeenTipCreatedAt = meta.createdAt;
 	saveConfig(config);
 }
 
@@ -1654,7 +1677,11 @@ async function finalizeTipPublish(
 	// loops the event back through our own subscription, and this ordering makes
 	// that self-echo short-circuit in `handleTipEvent` (§10.5 tip-address check)
 	// instead of re-fetching our own just-published documents.
-	setLastSeenTip(config, pointer, outer.id, { source: 'write', counts });
+	setLastSeenTip(config, pointer, outer.id, {
+		source: 'write',
+		counts,
+		createdAt: outer.created_at
+	});
 	await publishOuterTip(outer, config.relays);
 }
 
@@ -2197,7 +2224,11 @@ async function handleTipEvent(
 			dekPubkey: dek.dekPubkey,
 			config
 		});
-		setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
+		setLastSeenTip(config, pointer, outer.id, {
+			source: 'read',
+			counts,
+			createdAt: outer.created_at
+		});
 
 		// §8 / §10.5 "local ahead of tip" trigger: if reconciling this peer tip left
 		// local state newer than what the tip carries, schedule a push so siblings
@@ -3104,7 +3135,19 @@ async function fetchLatestTipEvent(
 			)
 			.subscribe({
 				next: (event) => {
-					if (!latest || event.created_at > latest.created_at) latest = event;
+					// Relay rules: the direct fetch verifies the outer signature and the
+					// expected author — a hostile relay must not be able to hand us a
+					// forged or foreign tip. NIP-01 replaceable tie-break: greater
+					// created_at wins, equal created_at → the lowest id (deterministic
+					// across relays).
+					if (event.pubkey !== config.ephemeralPubkey || !verifyEvent(event)) return;
+					if (
+						!latest ||
+						event.created_at > latest.created_at ||
+						(event.created_at === latest.created_at && event.id < latest.id)
+					) {
+						latest = event;
+					}
 				},
 				complete: () => resolve(),
 				error: () => resolve()
