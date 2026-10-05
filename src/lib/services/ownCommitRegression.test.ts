@@ -15,6 +15,7 @@ import {
 	base64ToBytes,
 	bytesToBase64,
 	clientStateDecoder,
+	clientStateEncoder,
 	encode,
 	generateKeyPackage,
 	keyPackageEncoder,
@@ -50,6 +51,7 @@ let carolKeyPackage: Awaited<ReturnType<typeof makeKeyPackage>>;
 // ---- fake coordinator: stores msg_64 verbatim like the real server ----------
 let postCursor = 0;
 let stored: Array<{ cursor: number; gid: string; msg_64: string; at: number }> = [];
+const fetchCalls: Array<{ gid: string; after?: number }> = [];
 // Test hook: inspect durable state at the moment a post is attempted.
 let captureAtPost: (() => Promise<void>) | null = null;
 const storeWelcomeCalls: Array<{ welcome_64: string; target_pk: string }> = [];
@@ -67,6 +69,7 @@ const fakeClient = {
 	async FetchManyGroupMessages(input: { groups: Array<{ gid: string; after?: number }> }) {
 		const out: typeof stored = [];
 		for (const req of input.groups) {
+			fetchCalls.push({ gid: req.gid, after: req.after });
 			for (const m of stored) {
 				if (m.gid !== req.gid) continue;
 				if (req.after !== undefined && m.cursor <= req.after) continue;
@@ -251,6 +254,8 @@ import {
 	unrecoveredDropHorizon
 } from './chatGroupMessages.svelte';
 import { joinGroupFromWelcome } from '$lib/services/chatMlsUtils';
+import { acceptWelcomeToGroup } from '$lib/services/chatGroupLifecycle.svelte';
+import { decodeStoredKeyPackage, getChatKeyPackage } from '$lib/services/chatKeyPackages.svelte';
 import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { getChatStorage } from '$lib/storage/chatStorage';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
@@ -276,6 +281,7 @@ function issueDetails(groupId: string) {
 beforeEach(async () => {
 	postCursor = 0;
 	stored = [];
+	fetchCalls.length = 0;
 	putAttempts.length = 0;
 	storeWelcomeCalls.length = 0;
 	captureAtPost = null;
@@ -1111,5 +1117,74 @@ describe('dropped-message recovery (the disappearing-messages class)', () => {
 		expect(
 			getChatGroup(group.id)!.syncIssues.find((issue) => issue.cursor === 5)?.recovered
 		).toBeUndefined();
+	});
+});
+
+describe('fresh-group catch-up skip (start-conversation trim)', () => {
+	test('creator-born groups start at epoch 0n and skip the pre-op fetch', async () => {
+		const group = await createChatGroup({ name: 'fresh-skip', coordinatorKey: 'ef'.repeat(32) });
+		expect(group.joinEpoch).toBe(0n);
+
+		// Mismatched expected identity stops the invite right after the
+		// catch-up boundary — the fetch either happened by then or it did not.
+		fetchCalls.length = 0;
+		await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: 'kp-dave', expectedStablePubkey: 'de'.repeat(32) }]
+		});
+		expect(fetchCalls, 'nothing to catch up on a creator-born fresh group').toEqual([]);
+	});
+
+	test('a welcome-adopted group without a cursor hint is pristine yet must catch up', async () => {
+		const aliceGroup = await createChatGroup({
+			name: 'adopted-skip',
+			coordinatorKey: 'ef'.repeat(32)
+		});
+		await inviteChatGroupMembers({
+			groupId: aliceGroup.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
+		const welcome = storeWelcomeCalls.at(-1)!;
+		// Post-join traffic exists by the time the joiner acts (the inviter's
+		// group is live): the newest message opens at carol's epoch and proves
+		// the group is on its line — the same self-heal production relies on.
+		await sendChatGroupMessage({ groupId: aliceGroup.id, content: 'hi' });
+
+		// carol adopts the group through the REAL birth path: real welcome
+		// bytes, and no cursor hint (an inviter that never recorded one).
+		vi.mocked(getChatKeyPackage).mockReturnValueOnce({ id: 'kp-carol' } as never);
+		vi.mocked(decodeStoredKeyPackage).mockReturnValueOnce({
+			keyPackage: carolKeyPackage.publicPackage,
+			privateKeyPackage: carolKeyPackage.privatePackage
+		} as never);
+		const carolGroup = await acceptWelcomeToGroup({
+			welcome: {
+				id: 'w1',
+				coordinatorKey: aliceGroup.coordinatorKey,
+				kpRef: 'kp-carol',
+				at: 1,
+				fetchedAt: 1,
+				welcomeBase64: welcome.welcome_64
+			},
+			encodeState: (state) => bytesToBase64(encode(clientStateEncoder, state))
+		});
+
+		// The real birth path produces exactly the shape a wrong predicate
+		// would call "fresh": pristine cursors, no messages — but born at a
+		// welcome epoch, where the coordinator can already hold post-join
+		// traffic the joiner has never seen.
+		expect(carolGroup.joinEpoch).toBeGreaterThanOrEqual(1n);
+		expect(carolGroup.fetchCursor).toBe(0);
+		expect(carolGroup.lastCursor).toBe(0);
+		expect(carolGroup.messages).toEqual([]);
+
+		replaceGroup(aliceGroup.id, carolGroup);
+		fetchCalls.length = 0;
+		await inviteChatGroupMembers({
+			groupId: carolGroup.id,
+			targets: [{ identifier: 'kp-dave', expectedStablePubkey: 'de'.repeat(32) }]
+		});
+		expect(fetchCalls, 'welcome-adopted groups always catch up first').toHaveLength(1);
+		expect(fetchCalls[0].gid).toBe(carolGroup.id);
 	});
 });
