@@ -58,6 +58,7 @@ import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
 	DocumentUnsealError,
 	MultiDeviceError,
+	documentAddress,
 	publishGroupDocument,
 	publishMetaDocument,
 	pullDocument,
@@ -580,8 +581,19 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			// the same address regardless of which server wins the race.
 			const config = getMultiDeviceConfig();
 			const servers = config?.blossomServers ?? BLOSSOM_SERVERS;
+			// Content addressing is local (spec §6 MUST): the address is the hash of
+			// OUR sealed bytes — the same helper the read path re-verifies with —
+			// never a server's claim. A host whose response disagrees (lying or
+			// buggy) is a failed replica, not an address source.
+			const address = documentAddress(new TextDecoder().decode(blob));
 			const results = await Promise.allSettled(
-				servers.map((server) => uploadBlob({ serverUrl: server, blob, signer }))
+				servers.map(async (server) => {
+					const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
+					if (uploaded.sha256 !== address) {
+						throw new Error(`Blossom host ${server} returned a foreign content hash`);
+					}
+					return uploaded;
+				})
 			);
 			const firstOk = results.find(
 				(r): r is PromiseFulfilledResult<UploadedBlob> => r.status === 'fulfilled'
@@ -604,10 +616,10 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			dbg('blossom upload ok', {
 				ok: results.filter((r) => r.status === 'fulfilled').length,
 				of: servers.length,
-				sha256: firstOk.value.sha256.slice(0, 12),
+				sha256: address.slice(0, 12),
 				bytes: blob.byteLength
 			});
-			return { address: firstOk.value.sha256, url: firstOk.value.url };
+			return { address, url: firstOk.value.url };
 		},
 		async fetch(url) {
 			return fetchBlob(url);
