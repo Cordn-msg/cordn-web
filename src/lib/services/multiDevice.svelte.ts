@@ -1560,6 +1560,8 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
 	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
+	// The push landed: the next failure starts the backoff ladder fresh.
+	retryDelayMs = 2_000;
 	// Record sealed epochs ONLY now — after the tip rewrite landed on relays. A
 	// crash between upload and tip-rewrite must leave the record stale so the
 	// next heal republishes (the tip never moved). finalizeTipPublish already
