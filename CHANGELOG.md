@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.3 — 2026-10-05
+
+### Features
+
+- **news:** announce the disappearing-messages fix release
+- **chat:** recover messages dropped by the pre-fix pipeline
+
+### Fixes
+
+- **md:** final-pass consistency fixes from the pre-release review
+- **md:** content addresses are computed locally, never taken from a host
+- **md:** tip acceptance rules at the relay layer
+- **md:** unopenable documents are resealed, never re-pinned (fork-MR scenario G)
+- **md:** reset the publish backoff after a successful push
+- **chat:** refuse a key package for another identity (fork-MR scenario K)
+- **md:** publish retry ladder, tip re-read before push, no meta hint ping-pong
+- **chat:** retain former-epoch payload keys (report-05 disappearing messages)
+- **chat:** settle lost own-commits and stage one commit at a time
+- **chat:** stale-epoch discipline and the parked-cursor floor
+- **chat:** repair ratchet divergence only on our own leaf's collision
+- **chat:** gate behind groups and roll back definitively rejected commits
+- **chat:** keep ingestion alive when a StoreWelcome fails
+- **chat:** make own-commit adoption durable and IDB writes clone-clean
+
+### Refactor
+
+- **chat:** own-commit op machine and named sibling rule
+- **storage:** drop unused putKeyPackage API
+
+### Other
+
+- **chat:** cover the sibling-commit detector end to end
+- **chat:** cover the persistence boundary in the browser lane
+- **chat:** reproduce own-commit adoption and IDB persistence bugs
+- add drtodd pubkey
+
 ## 0.5.2 — 2026-10-05
 
 ### Features
