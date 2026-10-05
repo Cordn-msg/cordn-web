@@ -54,7 +54,11 @@ import {
 	createGroupPendingEpochStore,
 	dropPendingAddMemberForTarget,
 	enqueuePendingEpochOperation,
+	findOperation,
+	markOperationLost,
+	outstandingOperations,
 	rejectPendingEpochOperations,
+	stampOperationPosted,
 	type PendingEpochOperation
 } from '$lib/services/chatGroupProtocol';
 import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
@@ -340,7 +344,13 @@ async function loadGroups(ownerPubkey?: string) {
 		if (record.pendingEpochOperations?.length) {
 			pendingEpochOperations.set(
 				record.id,
-				record.pendingEpochOperations.map((op) => ({ ...op }))
+				record.pendingEpochOperations.map((op) => {
+					// Boundary migration: records written before the status field carry
+					// `lost` directly. The settlement would re-derive it anyway (and
+					// duplicate the commit-lost row on the way), so migrate here.
+					const legacyLost = (op as { lost?: boolean }).lost === true;
+					return { ...op, status: op.status ?? (legacyLost ? 'lost' : 'pending') };
+				})
 			);
 		}
 	}
@@ -827,13 +837,11 @@ async function postOwnGroupCommit<T>(params: {
 		// stamps its Welcome `after` hint — same value, idempotent).
 		const cursor = (result as { cursor?: number }).cursor;
 		if (typeof cursor === 'number') {
-			pendingEpochOperations.set(
+			stampOperationPosted(
+				pendingEpochOperations,
 				params.group.id,
-				(pendingEpochOperations.get(params.group.id) ?? []).map((operation) =>
-					operation.commitMessageBase64 === params.commitMessageBase64
-						? { ...operation, postedCursor: cursor }
-						: operation
-				)
+				params.commitMessageBase64,
+				cursor
 			);
 		}
 		return result;
@@ -866,10 +874,7 @@ function markOwnCommitLost(
 	commitMessageBase64: string,
 	detail: string
 ): void {
-	const operations = pendingEpochOperations.get(group.id) ?? [];
-	const operation = operations.find(
-		(candidate) => candidate.commitMessageBase64 === commitMessageBase64
-	);
+	const operation = findOperation(pendingEpochOperations, group.id, commitMessageBase64);
 	const cursor = operation?.postedCursor ?? group.fetchCursor;
 	const preState = operation?.preStateBase64
 		? clientStateDecoder(base64ToBytes(operation.preStateBase64), 0)?.[0]
@@ -897,12 +902,7 @@ function markOwnCommitLost(
 			detail
 		})
 	];
-	pendingEpochOperations.set(
-		group.id,
-		operations.map((existing) =>
-			existing.commitMessageBase64 === commitMessageBase64 ? { ...existing, lost: true } : existing
-		)
-	);
+	markOperationLost(pendingEpochOperations, group.id, commitMessageBase64);
 	replaceGroup(group.id, restored);
 }
 
@@ -920,9 +920,7 @@ async function settleUnconfirmedOwnCommit(
 	account: ReturnType<typeof requireActiveAccount>,
 	group: StoredChatGroup
 ): Promise<void> {
-	const outstanding = (pendingEpochOperations.get(group.id) ?? []).filter(
-		(operation) => !operation.lost
-	);
+	const outstanding = outstandingOperations(pendingEpochOperations, group.id);
 	if (outstanding.length === 0) return;
 	const state = decodeStoredGroupState(group);
 	const gid = groupIdDecoder.decode(state.groupContext.groupId);

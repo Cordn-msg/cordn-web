@@ -246,7 +246,8 @@ import {
 	createApplicationMessageBase64,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
-	staleGenerationLeafIndex
+	staleGenerationLeafIndex,
+	isSiblingCommitMessage
 } from './chatGroupMessages.svelte';
 import { joinGroupFromWelcome } from '$lib/services/chatMlsUtils';
 import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
@@ -789,7 +790,7 @@ describe('commit race and settlement (staircase RaceTest / OwnCommitTest)', () =
 		).toBe(true);
 		expect(settled.skippedSiblingCommit).toBeUndefined(); // never a sibling's
 		const record = await (await getChatStorage()).getGroup(group.id);
-		expect(record?.pendingEpochOperations?.every((op) => op.lost)).toBe(true);
+		expect(record?.pendingEpochOperations?.every((op) => op.status === 'lost')).toBe(true);
 
 		// ...and the operation is retryable on the winner's state
 		await updateChatGroupMetadata({ groupId: group.id, name: 'retried' });
@@ -852,7 +853,7 @@ describe('commit race and settlement (staircase RaceTest / OwnCommitTest)', () =
 		}
 		// the intent survives for its echo
 		const record = await (await getChatStorage()).getGroup(group.id);
-		expect(record?.pendingEpochOperations?.some((op) => !op.lost)).toBe(true);
+		expect(record?.pendingEpochOperations?.some((op) => op.status !== 'lost')).toBe(true);
 	});
 });
 
@@ -947,4 +948,40 @@ test('bug 12 (fork-MR scenario K): a key package for another identity is refused
 	expect(result?.failures).toHaveLength(1);
 	expect(result?.failures[0].error).toContain('different identity');
 	expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(0n); // nothing committed
+});
+
+describe('sibling-commit rule (spec multi-device §10, named predicate)', () => {
+	test('a Commit from our own shared leaf is the sibling; everything else is not', () => {
+		expect(
+			isSiblingCommitMessage({
+				kind: 'commit',
+				senderStablePubkey: 'a'.repeat(64),
+				localStablePubkey: 'A'.repeat(64)
+			})
+		).toBe(true);
+		// another member's commit
+		expect(
+			isSiblingCommitMessage({
+				kind: 'commit',
+				senderStablePubkey: 'b'.repeat(64),
+				localStablePubkey: 'a'.repeat(64)
+			})
+		).toBe(false);
+		// an application message is never a sibling commit
+		expect(
+			isSiblingCommitMessage({
+				kind: 'application',
+				senderStablePubkey: 'a'.repeat(64),
+				localStablePubkey: 'a'.repeat(64)
+			})
+		).toBe(false);
+		// unattributed (no local identity): never skipped
+		expect(
+			isSiblingCommitMessage({
+				kind: 'commit',
+				senderStablePubkey: 'a'.repeat(64),
+				localStablePubkey: undefined
+			})
+		).toBe(false);
+	});
 });

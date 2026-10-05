@@ -410,6 +410,23 @@ class SiblingCommitSkippedError extends Error {
 	}
 }
 
+/** Spec multi-device §10 sibling rule: a Commit authored by our own shared
+ *  leaf is a sibling device's — the UpdatePath private keys live only on the
+ *  committer, so ingesting it would self-remove. Detection is exact in the
+ *  shared-leaf model: only our identity occupies our leaf index. Thrown from
+ *  the authorization callback (which fires BEFORE the UpdatePath applies) to
+ *  skip the Commit instead. */
+export function isSiblingCommitMessage(params: {
+	kind: string;
+	senderStablePubkey: string | undefined;
+	localStablePubkey: string | undefined;
+}): boolean {
+	// safeNormalizePubKey (peer-controlled values): empty never equals empty.
+	const sender = safeNormalizePubKey(params.senderStablePubkey ?? '');
+	const local = safeNormalizePubKey(params.localStablePubkey ?? '');
+	return params.kind === 'commit' && !!sender && !!local && sender === local;
+}
+
 function isRemovedFromGroupState(state: ClientState): boolean {
 	return state.groupActiveState?.kind === 'removedFromGroup';
 }
@@ -877,16 +894,14 @@ export async function ingestChatGroupMessages(params: {
 						);
 						commitSenderPubkey = sender?.stablePubkey;
 						commitProposals = incoming.proposals ?? [];
-						// Sibling-skip (spec multi-device §10): a Commit from our own
-						// shared leaf cannot be ingested (UpdatePath private keys live
-						// only on the committer). The authorization callback fires
-						// before the UpdatePath is applied, so throwing here skips the
-						// Commit instead of self-removing. Detection is exact in the
-						// shared-leaf model: only our identity occupies our leaf index.
+						// Sibling-skip (spec multi-device §10): skips the Commit instead of
+						// ingesting (self-remove). See isSiblingCommitMessage.
 						if (
-							params.localStablePubkey &&
-							sender &&
-							normalizePubKey(sender.stablePubkey) === params.localStablePubkey
+							isSiblingCommitMessage({
+								kind: incoming.kind,
+								senderStablePubkey: sender?.stablePubkey,
+								localStablePubkey: params.localStablePubkey
+							})
 						) {
 							throw new SiblingCommitSkippedError();
 						}
