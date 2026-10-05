@@ -1428,3 +1428,27 @@ describe('diffStaleGroupEpochs (spec §10.5 owed-push record: strictly-ahead loc
 		).toEqual(['g']);
 	});
 });
+
+describe('metaViewHash (fork-MR scenario H: no ping-pong over the hint)', () => {
+	test('the per-device coordinators hint does not change the hash', () => {
+		const mine = {
+			keyPackage: 'kp',
+			privateKeyPackage: 'priv',
+			coordinators: ['relay-a']
+		};
+		const theirs = {
+			keyPackage: 'kp',
+			privateKeyPackage: 'priv',
+			coordinators: ['relay-b', 'relay-c']
+		};
+		expect(metaViewHash({ lastResortKeyPackage: mine as never })).toBe(
+			metaViewHash({ lastResortKeyPackage: theirs as never })
+		);
+		// the private material still hashes: a rotation must still register
+		expect(metaViewHash({ lastResortKeyPackage: mine as never })).not.toBe(
+			metaViewHash({
+				lastResortKeyPackage: { ...mine, privateKeyPackage: 'rotated' } as never
+			})
+		);
+	});
+});

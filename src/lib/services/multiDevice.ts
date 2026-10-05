@@ -935,6 +935,9 @@ export function diffStaleGroupEpochs(params: {
  * Pure + local-only: the hash never leaves the device. It carries the
  * `privateKeyPackage` because that field IS part of the published meta doc and
  * so affects its content-addressed address — excluding it would miss a rotation.
+ * The `coordinators` hint is NOT hashed (fork-MR scenario H): it is a
+ * per-device advisory that differs between devices, and hashing it made every
+ * device see the others' meta as diverged — a meta reseal ping-pong.
  */
 export function metaViewHash(params: {
 	lastResortKeyPackage?: LastResortKeyPackageEntry;
@@ -946,8 +949,7 @@ export function metaViewHash(params: {
 	const kp = params.lastResortKeyPackage
 		? {
 				keyPackage: params.lastResortKeyPackage.keyPackage,
-				privateKeyPackage: params.lastResortKeyPackage.privateKeyPackage,
-				coordinators: [...(params.lastResortKeyPackage.coordinators ?? [])].sort()
+				privateKeyPackage: params.lastResortKeyPackage.privateKeyPackage
 			}
 		: undefined;
 	return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify({ kp, removed }))));

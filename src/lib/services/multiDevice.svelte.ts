@@ -969,6 +969,49 @@ function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
 let pendingPlan: PublishPlan | null = null;
 let flushScheduled = false;
 
+// Fork-MR scenario D: a failed or deferred publish used to be DROPPED —
+// stranding every change it carried until some later trigger happened to
+// publish. A dropped plan is retried on a 2s → 5min ladder; a peer tip event
+// (proof the network is up) kicks the retry early.
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelayMs = 2_000;
+const RETRY_MAX_MS = 300_000;
+
+function queuePublishRetry(plan: PublishPlan): void {
+	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
+	if (retryTimer !== null) return;
+	retryTimer = setTimeout(() => {
+		retryTimer = null;
+		drainPendingPlan();
+	}, retryDelayMs);
+	retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS);
+}
+
+function kickPublishRetry(): void {
+	if (retryTimer === null) return;
+	clearTimeout(retryTimer);
+	retryTimer = null;
+	retryDelayMs = 2_000;
+	drainPendingPlan();
+}
+
+function drainPendingPlan(): void {
+	const batch = pendingPlan;
+	pendingPlan = null;
+	if (batch) publishPlan(batch);
+}
+
+function publishPlan(batch: PublishPlan): void {
+	runSerialized(async () => {
+		try {
+			await publish(batch);
+		} catch (error) {
+			console.warn('[multi-device] re-publish failed; will retry', error);
+			queuePublishRetry(batch);
+		}
+	});
+}
+
 /**
  * Queue a plan-only republish, merged with any plan queued in the same tick.
  * Hooks that fire back-to-back (e.g. two `onMetaStateChange` during enable)
@@ -984,7 +1027,7 @@ function scheduleRepublish(plan: PublishPlan): void {
 		flushScheduled = false;
 		const batch = pendingPlan;
 		pendingPlan = null;
-		if (batch) runSerialized(() => publish(batch));
+		if (batch) publishPlan(batch);
 	});
 }
 
@@ -1071,7 +1114,7 @@ function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
 async function fetchTipForPublish(
 	config: MultiDeviceOwnerConfig,
 	ownerPubkey: string
-): Promise<{ pointer: TipPointer; deferred: boolean }> {
+): Promise<{ pointer: TipPointer; deferred: boolean; tipEventId?: string }> {
 	const tipEvent = await fetchLatestTipEvent(config);
 	if (!tipEvent) {
 		if (config.lastSeenTip) {
@@ -1086,10 +1129,18 @@ async function fetchTipForPublish(
 	// whenever a peer moved the tip (or the relay returned a stale event).
 	if (tipEvent.id === config.lastSeenTipEventId && config.lastSeenTip) {
 		dbg('republish tip unchanged', { eventId: tipEvent.id.slice(0, 12) });
-		return { pointer: { ...config.lastSeenTip, servers: config.blossomServers }, deferred: false };
+		return {
+			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
+			deferred: false,
+			tipEventId: tipEvent.id
+		};
 	}
 	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
-	return { pointer: parsed?.pointer ?? emptyTipPointer(config), deferred: false };
+	return {
+		pointer: parsed?.pointer ?? emptyTipPointer(config),
+		deferred: false,
+		tipEventId: tipEvent.id
+	};
 }
 
 /**
@@ -1350,7 +1401,7 @@ async function applyTip(
  * (group change → that group; meta change → meta; enable/server → all). §4.3
  * is enforced once in `buildInventory`.
  */
-async function publish(plan: PublishPlan): Promise<void> {
+async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 	const config = getMultiDeviceConfig();
 	if (!config) return;
 	// The owner-NIP-44 capability gates the flow: publish decrypts the current
@@ -1363,8 +1414,13 @@ async function publish(plan: PublishPlan): Promise<void> {
 	const dek = getDekSeal(config);
 	if (!dek) return;
 	const { seal: dekSeal, dekPubkey } = dek;
-	const { pointer, deferred } = await fetchTipForPublish(config, ownerPubkey);
-	if (deferred) return;
+	const { pointer, deferred, tipEventId } = await fetchTipForPublish(config, ownerPubkey);
+	if (deferred) {
+		// Scenario D: an unreadable tip DEFERS the push — the plan is kept and
+		// retried (the stale-epoch sweep makes a later publish self-healing too).
+		queuePublishRetry(plan);
+		return;
+	}
 
 	// §12 GC: drain addresses queued for deletion last publish (one-publish grace
 	// window for in-flight peer fetches). Fire-and-forget — never block the push.
@@ -1482,6 +1538,23 @@ async function publish(plan: PublishPlan): Promise<void> {
 		});
 		metaAddress = result.address;
 		dbg('publish meta doc', { address: result.address.slice(0, 12), removed: removed.length });
+	}
+
+	// Fork-MR scenario F: the tip is last-writer-wins. Re-read it right before
+	// the push — if a peer moved it since our reconcile, our inventory would
+	// silently overwrite their change. Restart on the fresh tip instead
+	// (bounded; then the retry ladder).
+	{
+		const latest = await fetchLatestTipEvent(config);
+		if ((latest?.id ?? undefined) !== tipEventId) {
+			if (attempt >= 3) {
+				dbg('tip keeps moving mid-publish; deferring to the retry ladder');
+				queuePublishRetry(plan);
+				return;
+			}
+			dbg('tip moved mid-publish; restarting on the fresh tip', { attempt });
+			return publish(plan, attempt + 1);
+		}
 	}
 
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
@@ -2083,6 +2156,9 @@ async function handleTipEvent(
 			meta: !!pointer.metaAddress,
 			cold: !config.lastSeenTip
 		});
+		// Scenario D: a peer tip proves the network is up — kick a stranded
+		// publish early instead of waiting out its backoff.
+		kickPublishRetry();
 
 		// Populate the group-loading total for an active user-initiated flow (link).
 		// Background subscription cycles leave phase null → no-op there, so
