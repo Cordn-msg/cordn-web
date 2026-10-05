@@ -656,6 +656,15 @@ function recordSyncIssue(
 	else issues[passIndex] = issue;
 }
 
+/** Detail prefix of the drop class — the one discriminator dropped-message
+ *  recovery keys on. Shared by the writer and the matchers so rewording the
+ *  message can't silently disable recovery. */
+const DECRYPT_FAILED_DETAIL = 'Sealed payload decrypt failed';
+
+function isUnrecoveredDropIssue(issue: StoredChatSyncIssue): boolean {
+	return !issue.recovered && issue.detail.startsWith(DECRYPT_FAILED_DETAIL);
+}
+
 /** Dropped-message recovery horizon (the "disappearing messages" class): the
  *  pre-fix pipeline advanced the fetch cursor past messages it could not open
  *  and recorded each as a decrypt-failure issue. Those issues carry the lost
@@ -669,7 +678,7 @@ export function unrecoveredDropHorizon(group: {
 	const rows = new Set(group.messages.map((message) => message.cursor));
 	let horizon: number | undefined;
 	for (const issue of group.syncIssues) {
-		if (issue.recovered || !issue.detail.startsWith('Sealed payload decrypt failed')) continue;
+		if (!isUnrecoveredDropIssue(issue)) continue;
 		if (rows.has(issue.cursor)) continue;
 		if (horizon === undefined || issue.cursor < horizon) horizon = issue.cursor;
 	}
@@ -681,9 +690,7 @@ export function unrecoveredDropHorizon(group: {
  *  either way the recovery fetch must not repeat. */
 export function markDropIssuesRecovered(issues: StoredChatSyncIssue[]): StoredChatSyncIssue[] {
 	return issues.map((issue) =>
-		!issue.recovered && issue.detail.startsWith('Sealed payload decrypt failed')
-			? { ...issue, recovered: true }
-			: issue
+		isUnrecoveredDropIssue(issue) ? { ...issue, recovered: true } : issue
 	);
 }
 
@@ -884,7 +891,7 @@ export async function ingestChatGroupMessages(params: {
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
 					createdAt: message.createdAt,
-					detail: `Sealed payload decrypt failed: ${detail}`
+					detail: `${DECRYPT_FAILED_DETAIL}: ${detail}`
 				});
 				noteUnsealFailure(group.id);
 				// Missed-update evidence (staircase StaleEpochTest): this device cannot

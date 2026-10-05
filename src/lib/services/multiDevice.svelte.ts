@@ -589,7 +589,9 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			const results = await Promise.allSettled(
 				servers.map(async (server) => {
 					const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
-					if (uploaded.sha256 !== address) {
+					// Case-insensitive: the descriptor's hex is the host's claim and
+					// its casing is not ours to police — only the value is.
+					if (uploaded.sha256.toLowerCase() !== address) {
 						throw new Error(`Blossom host ${server} returned a foreign content hash`);
 					}
 					return uploaded;
@@ -1685,16 +1687,19 @@ async function finalizeTipPublish(
 	counts?: ReconcileCounts
 ): Promise<void> {
 	const outer = await buildTipEvent(pointer, config);
-	// Persist the new addresses + event id BEFORE the relay publish: the publish
-	// loops the event back through our own subscription, and this ordering makes
-	// that self-echo short-circuit in `handleTipEvent` (§10.5 tip-address check)
-	// instead of re-fetching our own just-published documents.
+	// Persist AFTER the relay publish succeeds. Recording before it (for the
+	// self-echo short-circuit) inflates `lastSeenTipCreatedAt` past tips that
+	// never landed when the publish fails — and the stale-tip rule would then
+	// reject the fleet's real (lower-created_at) tips as stale relay responses,
+	// silently overwriting a peer's newest state. The self-echo cost of
+	// recording late is one redundant reconcile of our own tip; the in-flight
+	// window is covered by the event-id dedup below it.
+	await publishOuterTip(outer, config.relays);
 	setLastSeenTip(config, pointer, outer.id, {
 		source: 'write',
 		counts,
 		createdAt: outer.created_at
 	});
-	await publishOuterTip(outer, config.relays);
 }
 
 /** Active local groups, undecoded (spec §4 — the live inventory). `group.id` IS
@@ -1872,6 +1877,16 @@ function scheduleOwedPublish(): void {
 export function resetMultiDeviceSession(): void {
 	mdReconcilePromise = null;
 	stopTipSubscription();
+	// Kill the retry ladder with the session: a pending plan is this account's,
+	// and a timer that fires after an account switch would publish it under the
+	// NEW account's config.
+	pendingPlan = null;
+	flushScheduled = false;
+	if (retryTimer !== null) {
+		clearTimeout(retryTimer);
+		retryTimer = null;
+	}
+	retryDelayMs = 2_000;
 }
 
 /** Outcome of a manual `reconcileMultiDeviceNow()`. The non-ok statuses keep
