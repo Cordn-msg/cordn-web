@@ -534,6 +534,8 @@
 				{:else if message.systemKind === 'metadata-changed'}
 					{@render systemName(systemCommitterName)}
 					changed {message.systemDetail ?? 'group settings'}
+				{:else if message.systemKind === 'commit-lost'}
+					{message.systemDetail ?? 'A change did not go through'}
 				{:else if message.systemKind === 'reaction'}
 					{@const senders = message.reactionSenders ?? []}
 					{@const emojis = message.reactionEmojis ?? []}

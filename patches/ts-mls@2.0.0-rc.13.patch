@@ -11,3 +11,15 @@ index b78da7c9e866bde0b8b123fa1ff1fbc2cb2871fd..2f676a18be6145bcc7ad11d04bd87b6a
      if (res.additionalResult.kind === "externalCommit")
          throw new UsageError("Cannot create externalCommit as a member");
      const suspendedPendingReinit = res.additionalResult.kind === "reinit" ? res.additionalResult.reinit : undefined;
+diff --git a/dist/src/secretTree.js b/dist/src/secretTree.js
+--- a/dist/src/secretTree.js
++++ b/dist/src/secretTree.js
+@@ -166,7 +166,7 @@ export async function ratchetToGeneration(tree, senderData, contentType, config,
+             const consumed = consumedValue ? [...consumedSecrets, consumedValue] : consumedSecrets;
+             return await createRatchetResultWithSecret(node, nodeIndex, desired, senderData.generation, senderData.reuseGuard, updatedTree, contentType, consumed, cs, ratchetState);
+         }
+-        throw new ValidationError("Desired gen in the past");
++        throw new ValidationError(`Desired gen in the past (leaf ${senderData.leafIndex}, gen ${senderData.generation})`);
+     }
+     const [currentSecret, consumed] = await ratchetUntil(ratchetForContentType(node, contentType), senderData.generation, config, cs.kdf);
+     return createRatchetResult(node, index, currentSecret, senderData.reuseGuard, updatedTree, contentType, [...consumed, ...consumedSecrets], cs);

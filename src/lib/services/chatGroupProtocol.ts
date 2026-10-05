@@ -1,33 +1,49 @@
 import type { cordnClient } from '$lib/services/coordinatorClient';
 
-export type PendingEpochOperation =
-	| {
-			kind: 'add-member';
-			groupId: string;
-			commitMessageBase64: string;
-			targetStablePubkey: string;
-			keyPackageReference: string;
-			welcomeBase64: string;
-			/** Coordinator cursor of the posted Commit, passed to the invitee as
-			 *  the Welcome `after` hint so they can skip pre-join traffic. */
-			postedCursor?: number;
-	  }
-	| {
-			kind: 'remove-member';
-			groupId: string;
-			commitMessageBase64: string;
-			targetStablePubkey: string;
-	  }
-	| {
-			kind: 'update-group-metadata';
-			groupId: string;
-			commitMessageBase64: string;
-	  }
-	| {
-			kind: 'self-update';
-			groupId: string;
-			commitMessageBase64: string;
-	  };
+/** Lifecycle fields shared by every pending own-commit op (staircase
+ *  `PendingOp`): the state before the Commit is the rollback target when the
+ *  Commit settles as lost or never-landed. `status` is the machine state —
+ *  `pending` (absent counts: records written before the field) is awaiting the
+ *  echo; `lost` ops stay recognised so their echo can never look like a
+ *  sibling Commit, but never send their Welcomes ("no Welcome into a branch
+ *  nobody is on"). Every transition goes through this module: the op is the
+ *  single source of truth for the fate of an own Commit. */
+type PendingEpochOperationBase = {
+	/** Machine state: 'pending' (default) | 'lost' (rolled back, echo-skip only). */
+	status?: 'pending' | 'lost';
+	/** State before the Commit (StoredChatGroup.stateBase64 format). */
+	preStateBase64?: string;
+	/** Coordinator cursor of the posted Commit, once posted. */
+	postedCursor?: number;
+};
+
+export type PendingEpochOperation = PendingEpochOperationBase &
+	(
+		| {
+				kind: 'add-member';
+				groupId: string;
+				commitMessageBase64: string;
+				targetStablePubkey: string;
+				keyPackageReference: string;
+				welcomeBase64: string;
+		  }
+		| {
+				kind: 'remove-member';
+				groupId: string;
+				commitMessageBase64: string;
+				targetStablePubkey: string;
+		  }
+		| {
+				kind: 'update-group-metadata';
+				groupId: string;
+				commitMessageBase64: string;
+		  }
+		| {
+				kind: 'self-update';
+				groupId: string;
+				commitMessageBase64: string;
+		  }
+	);
 
 export type GroupPendingEpochStore = Map<string, PendingEpochOperation[]>;
 
@@ -55,8 +71,66 @@ export function hasPendingEpochOperation(
 	groupId: string,
 	opaqueMessageBase64: string
 ): boolean {
-	const pending = store.get(groupId) ?? [];
-	return pending.some((operation) => operation.commitMessageBase64 === opaqueMessageBase64);
+	return !!findOperation(store, groupId, opaqueMessageBase64);
+}
+
+/** The op staged for this Commit's exact bytes, if any (the echo matcher). */
+export function findOperation(
+	store: GroupPendingEpochStore,
+	groupId: string,
+	commitMessageBase64: string
+): PendingEpochOperation | undefined {
+	return (store.get(groupId) ?? []).find(
+		(operation) => operation.commitMessageBase64 === commitMessageBase64
+	);
+}
+
+/** Ops still awaiting their echo (`pending`; `lost` ops are done, kept only
+ *  for echo recognition). */
+export function outstandingOperations(
+	store: GroupPendingEpochStore,
+	groupId: string
+): PendingEpochOperation[] {
+	return (store.get(groupId) ?? []).filter((operation) => operation.status !== 'lost');
+}
+
+/** Stamp the post's coordinator cursor on its op: settlement and rollback
+ *  need to know where the change landed. Idempotent (add-member already
+ *  stamps its Welcome `after` hint — same value). */
+export function stampOperationPosted(
+	store: GroupPendingEpochStore,
+	groupId: string,
+	commitMessageBase64: string,
+	postedCursor: number
+): void {
+	const pending = store.get(groupId);
+	if (!pending) return;
+	store.set(
+		groupId,
+		pending.map((operation) =>
+			operation.commitMessageBase64 === commitMessageBase64
+				? { ...operation, postedCursor }
+				: operation
+		)
+	);
+}
+
+/** Terminal transition to `lost`: rolled back, echo-recognition only. */
+export function markOperationLost(
+	store: GroupPendingEpochStore,
+	groupId: string,
+	commitMessageBase64: string
+): void {
+	const pending = store.get(groupId);
+	if (!pending) return;
+	store.set(
+		groupId,
+		pending.map((operation) =>
+			operation.commitMessageBase64 === commitMessageBase64
+				? { ...operation, status: 'lost' as const }
+				: operation
+		)
+	);
 }
 
 async function finalizePendingEpochOperations(
@@ -73,7 +147,9 @@ async function finalizePendingEpochOperations(
 	const welcomeStores: Promise<unknown>[] = [];
 
 	for (const operation of pending) {
-		if (!matched.has(operation.commitMessageBase64)) {
+		if (!matched.has(operation.commitMessageBase64) || operation.status === 'lost') {
+			// Lost ops stay recognised (their echo must never look like a sibling
+			// Commit) but send no Welcomes into a branch nobody is on.
 			remaining.push(operation);
 			continue;
 		}
@@ -104,7 +180,7 @@ async function finalizePendingEpochOperations(
 	store.set(groupId, remaining);
 }
 
-function rejectPendingEpochOperations(
+export function rejectPendingEpochOperations(
 	store: GroupPendingEpochStore,
 	groupId: string,
 	opaqueMessageBase64s: Iterable<string>

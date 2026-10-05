@@ -49,13 +49,16 @@ import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
 import {
 	ingestChatGroupMessages,
+	noteFormerPayloadKey,
 	probeSealedMessage
 } from '$lib/services/chatGroupMessages.svelte';
 import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
 import { errorMessage, normalizePubKey } from '$lib/utils';
 import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
+	DocumentUnsealError,
 	MultiDeviceError,
+	documentAddress,
 	publishGroupDocument,
 	publishMetaDocument,
 	pullDocument,
@@ -218,6 +221,8 @@ export interface MultiDeviceOwnerConfig {
 	 * Persisted BEFORE the relay publish so loopback short-circuits.
 	 */
 	lastSeenTipEventId?: string;
+	/** created_at of the last-seen tip event: relay rules ignore anything older. */
+	lastSeenTipCreatedAt?: number;
 	/**
 	 * Per-gid failed group-document fetches awaiting retry (spec §8 fetch
 	 * liveness). A gid listed here is NOT reconciled: the dedup gates must keep
@@ -576,8 +581,21 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			// the same address regardless of which server wins the race.
 			const config = getMultiDeviceConfig();
 			const servers = config?.blossomServers ?? BLOSSOM_SERVERS;
+			// Content addressing is local (spec §6 MUST): the address is the hash of
+			// OUR sealed bytes — the same helper the read path re-verifies with —
+			// never a server's claim. A host whose response disagrees (lying or
+			// buggy) is a failed replica, not an address source.
+			const address = documentAddress(new TextDecoder().decode(blob));
 			const results = await Promise.allSettled(
-				servers.map((server) => uploadBlob({ serverUrl: server, blob, signer }))
+				servers.map(async (server) => {
+					const uploaded = await uploadBlob({ serverUrl: server, blob, signer });
+					// Case-insensitive: the descriptor's hex is the host's claim and
+					// its casing is not ours to police — only the value is.
+					if (uploaded.sha256.toLowerCase() !== address) {
+						throw new Error(`Blossom host ${server} returned a foreign content hash`);
+					}
+					return uploaded;
+				})
 			);
 			const firstOk = results.find(
 				(r): r is PromiseFulfilledResult<UploadedBlob> => r.status === 'fulfilled'
@@ -600,10 +618,10 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			dbg('blossom upload ok', {
 				ok: results.filter((r) => r.status === 'fulfilled').length,
 				of: servers.length,
-				sha256: firstOk.value.sha256.slice(0, 12),
+				sha256: address.slice(0, 12),
 				bytes: blob.byteLength
 			});
-			return { address: firstOk.value.sha256, url: firstOk.value.url };
+			return { address, url: firstOk.value.url };
 		},
 		async fetch(url) {
 			return fetchBlob(url);
@@ -882,6 +900,12 @@ async function buildTipEvent(
 async function publishOuterTip(outer: NostrEvent, relays: string[]): Promise<void> {
 	const responses = await relayPool.publish(relays, outer);
 	dbg('tip outer published', { relays, accepted: responses.length });
+	// Relay rules: a tip no relay accepted is a FAILED publish. Without this the
+	// caller records the seal as landed while the fleet's tip never moved — and
+	// the retry ladder never gets a chance to land it.
+	if (responses.length === 0) {
+		throw new MultiDeviceError('No relay accepted the tip; the publish did not land');
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +992,56 @@ function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
 let pendingPlan: PublishPlan | null = null;
 let flushScheduled = false;
 
+// Fork-MR scenario D: a failed or deferred publish used to be DROPPED —
+// stranding every change it carried until some later trigger happened to
+// publish. A dropped plan is retried on a 2s → 5min ladder; a peer tip event
+// (proof the network is up) kicks the retry early.
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelayMs = 2_000;
+const RETRY_MAX_MS = 300_000;
+
+// Fork-MR scenario G: addresses whose documents were fetched and verified but
+// will not unseal (stale DEK / corrupt content). A re-fetch returns the same
+// bytes — content-addressed — so the only heal is a reseal from local state,
+// and no publish may chain `prev` to them (that re-pins a chain nobody can
+// walk).
+const unsealableDocumentAddresses = new Set<string>();
+
+function queuePublishRetry(plan: PublishPlan): void {
+	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
+	if (retryTimer !== null) return;
+	retryTimer = setTimeout(() => {
+		retryTimer = null;
+		drainPendingPlan();
+	}, retryDelayMs);
+	retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS);
+}
+
+function kickPublishRetry(): void {
+	if (retryTimer === null) return;
+	clearTimeout(retryTimer);
+	retryTimer = null;
+	retryDelayMs = 2_000;
+	drainPendingPlan();
+}
+
+function drainPendingPlan(): void {
+	const batch = pendingPlan;
+	pendingPlan = null;
+	if (batch) publishPlan(batch);
+}
+
+function publishPlan(batch: PublishPlan): void {
+	runSerialized(async () => {
+		try {
+			await publish(batch);
+		} catch (error) {
+			console.warn('[multi-device] re-publish failed; will retry', error);
+			queuePublishRetry(batch);
+		}
+	});
+}
+
 /**
  * Queue a plan-only republish, merged with any plan queued in the same tick.
  * Hooks that fire back-to-back (e.g. two `onMetaStateChange` during enable)
@@ -983,7 +1057,7 @@ function scheduleRepublish(plan: PublishPlan): void {
 		flushScheduled = false;
 		const batch = pendingPlan;
 		pendingPlan = null;
-		if (batch) runSerialized(() => publish(batch));
+		if (batch) publishPlan(batch);
 	});
 }
 
@@ -1070,7 +1144,7 @@ function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
 async function fetchTipForPublish(
 	config: MultiDeviceOwnerConfig,
 	ownerPubkey: string
-): Promise<{ pointer: TipPointer; deferred: boolean }> {
+): Promise<{ pointer: TipPointer; deferred: boolean; tipEventId?: string }> {
 	const tipEvent = await fetchLatestTipEvent(config);
 	if (!tipEvent) {
 		if (config.lastSeenTip) {
@@ -1083,12 +1157,34 @@ async function fetchTipForPublish(
 	// peer change since our last write/read. Reuse the local pointer and skip the
 	// owner-signer decrypt. Mirrors handleTipEvent's dedup; falls through to decrypt
 	// whenever a peer moved the tip (or the relay returned a stale event).
+	// Relay rules: a tip OLDER than the last-seen one is a stale relay response,
+	// not the fleet's state — never reconcile or push from it.
+	if (
+		config.lastSeenTip &&
+		config.lastSeenTipCreatedAt &&
+		tipEvent.created_at < config.lastSeenTipCreatedAt
+	) {
+		dbg('ignoring stale tip', { eventId: tipEvent.id.slice(0, 12) });
+		return {
+			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
+			deferred: false,
+			tipEventId: config.lastSeenTipEventId
+		};
+	}
 	if (tipEvent.id === config.lastSeenTipEventId && config.lastSeenTip) {
 		dbg('republish tip unchanged', { eventId: tipEvent.id.slice(0, 12) });
-		return { pointer: { ...config.lastSeenTip, servers: config.blossomServers }, deferred: false };
+		return {
+			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
+			deferred: false,
+			tipEventId: tipEvent.id
+		};
 	}
 	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
-	return { pointer: parsed?.pointer ?? emptyTipPointer(config), deferred: false };
+	return {
+		pointer: parsed?.pointer ?? emptyTipPointer(config),
+		deferred: false,
+		tipEventId: tipEvent.id
+	};
 }
 
 /**
@@ -1121,7 +1217,7 @@ function setLastSeenTip(
 	config: MultiDeviceOwnerConfig,
 	pointer: TipPointer,
 	eventId: string,
-	meta: { source: 'read' | 'write'; counts?: ReconcileCounts }
+	meta: { source: 'read' | 'write'; counts?: ReconcileCounts; createdAt: number }
 ): void {
 	const prev = config.lastSeenTip;
 	const diff = diffTipGroups(prev?.groups ?? [], pointer.groups);
@@ -1142,6 +1238,7 @@ function setLastSeenTip(
 	}
 	config.lastSeenTip = { groups: pointer.groups, metaAddress: pointer.metaAddress };
 	config.lastSeenTipEventId = eventId;
+	config.lastSeenTipCreatedAt = meta.createdAt;
 	saveConfig(config);
 }
 
@@ -1267,15 +1364,25 @@ async function applyTip(
 				// dedup gates keep retrying (beyond backoff) instead of stranding this
 				// gid behind the fleet forever. Attempts reset when the tip moves.
 				const previous = config.unresolvedDocumentPulls?.[group.gid];
+				const previousAttempts = previous?.address === group.address ? previous.attempts : 0;
 				config.unresolvedDocumentPulls = {
 					...(config.unresolvedDocumentPulls ?? {}),
 					[group.gid]: {
 						address: group.address,
-						attempts: (previous?.address === group.address ? previous.attempts : 0) + 1,
+						attempts: previousAttempts + 1,
 						lastAttemptAt: Date.now()
 					}
 				};
 				saveConfig(config);
+				// Scenario G: a document that exists but will not unseal is not a fetch
+				// failure — retrying returns the same bytes. Heal once per address by
+				// resealing this group's document from local state (which replaces the
+				// address in the tip and unpins the garbage). Once per address so a
+				// persistent sealing fault cannot turn reads into a publish loop.
+				if (error instanceof DocumentUnsealError && previousAttempts === 0) {
+					unsealableDocumentAddresses.add(group.address);
+					scheduleRepublish({ resealGroups: [group.gid], resealMeta: false });
+				}
 				scheduleUnresolvedRetry();
 				dbg('applyTip group reconcile failed', { gid: group.gid, error });
 			}
@@ -1349,7 +1456,7 @@ async function applyTip(
  * (group change → that group; meta change → meta; enable/server → all). §4.3
  * is enforced once in `buildInventory`.
  */
-async function publish(plan: PublishPlan): Promise<void> {
+async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 	const config = getMultiDeviceConfig();
 	if (!config) return;
 	// The owner-NIP-44 capability gates the flow: publish decrypts the current
@@ -1362,8 +1469,13 @@ async function publish(plan: PublishPlan): Promise<void> {
 	const dek = getDekSeal(config);
 	if (!dek) return;
 	const { seal: dekSeal, dekPubkey } = dek;
-	const { pointer, deferred } = await fetchTipForPublish(config, ownerPubkey);
-	if (deferred) return;
+	const { pointer, deferred, tipEventId } = await fetchTipForPublish(config, ownerPubkey);
+	if (deferred) {
+		// Scenario D: an unreadable tip DEFERS the push — the plan is kept and
+		// retried (the stale-epoch sweep makes a later publish self-healing too).
+		queuePublishRetry(plan);
+		return;
+	}
 
 	// §12 GC: drain addresses queued for deletion last publish (one-publish grace
 	// window for in-flight peer fetches). Fire-and-forget — never block the push.
@@ -1421,7 +1533,10 @@ async function publish(plan: PublishPlan): Promise<void> {
 				const group = liveGroups.find((g) => g.id === gid);
 				if (!group) return null; // gone (tombstoned/deleted) since the trigger fired
 				const snapshot = toGroupSnapshot(group);
-				const prev = pointer.groups.find((g) => g.gid === gid)?.address;
+				const tipPrev = pointer.groups.find((g) => g.gid === gid)?.address;
+				// Scenario G: never re-pin an unopenable document — start a fresh
+				// chain head from local state instead.
+				const prev = tipPrev && !unsealableDocumentAddresses.has(tipPrev) ? tipPrev : undefined;
 				const result = await publishGroupDocument({
 					group: snapshot,
 					seal: dekSeal,
@@ -1483,9 +1598,28 @@ async function publish(plan: PublishPlan): Promise<void> {
 		dbg('publish meta doc', { address: result.address.slice(0, 12), removed: removed.length });
 	}
 
+	// Fork-MR scenario F: the tip is last-writer-wins. Re-read it right before
+	// the push — if a peer moved it since our reconcile, our inventory would
+	// silently overwrite their change. Restart on the fresh tip instead
+	// (bounded; then the retry ladder).
+	{
+		const latest = await fetchLatestTipEvent(config);
+		if ((latest?.id ?? undefined) !== tipEventId) {
+			if (attempt >= 3) {
+				dbg('tip keeps moving mid-publish; deferring to the retry ladder');
+				queuePublishRetry(plan);
+				return;
+			}
+			dbg('tip moved mid-publish; restarting on the fresh tip', { attempt });
+			return publish(plan, attempt + 1);
+		}
+	}
+
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
 	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
+	// The push landed: the next failure starts the backoff ladder fresh.
+	retryDelayMs = 2_000;
 	// Record sealed epochs ONLY now — after the tip rewrite landed on relays. A
 	// crash between upload and tip-rewrite must leave the record stale so the
 	// next heal republishes (the tip never moved). finalizeTipPublish already
@@ -1553,12 +1687,19 @@ async function finalizeTipPublish(
 	counts?: ReconcileCounts
 ): Promise<void> {
 	const outer = await buildTipEvent(pointer, config);
-	// Persist the new addresses + event id BEFORE the relay publish: the publish
-	// loops the event back through our own subscription, and this ordering makes
-	// that self-echo short-circuit in `handleTipEvent` (§10.5 tip-address check)
-	// instead of re-fetching our own just-published documents.
-	setLastSeenTip(config, pointer, outer.id, { source: 'write', counts });
+	// Persist AFTER the relay publish succeeds. Recording before it (for the
+	// self-echo short-circuit) inflates `lastSeenTipCreatedAt` past tips that
+	// never landed when the publish fails — and the stale-tip rule would then
+	// reject the fleet's real (lower-created_at) tips as stale relay responses,
+	// silently overwriting a peer's newest state. The self-echo cost of
+	// recording late is one redundant reconcile of our own tip; the in-flight
+	// window is covered by the event-id dedup below it.
 	await publishOuterTip(outer, config.relays);
+	setLastSeenTip(config, pointer, outer.id, {
+		source: 'write',
+		counts,
+		createdAt: outer.created_at
+	});
 }
 
 /** Active local groups, undecoded (spec §4 — the live inventory). `group.id` IS
@@ -1736,6 +1877,16 @@ function scheduleOwedPublish(): void {
 export function resetMultiDeviceSession(): void {
 	mdReconcilePromise = null;
 	stopTipSubscription();
+	// Kill the retry ladder with the session: a pending plan is this account's,
+	// and a timer that fires after an account switch would publish it under the
+	// NEW account's config.
+	pendingPlan = null;
+	flushScheduled = false;
+	if (retryTimer !== null) {
+		clearTimeout(retryTimer);
+		retryTimer = null;
+	}
+	retryDelayMs = 2_000;
 }
 
 /** Outcome of a manual `reconcileMultiDeviceNow()`. The non-ok statuses keep
@@ -2082,6 +2233,9 @@ async function handleTipEvent(
 			meta: !!pointer.metaAddress,
 			cold: !config.lastSeenTip
 		});
+		// Scenario D: a peer tip proves the network is up — kick a stranded
+		// publish early instead of waiting out its backoff.
+		kickPublishRetry();
 
 		// Populate the group-loading total for an active user-initiated flow (link).
 		// Background subscription cycles leave phase null → no-op there, so
@@ -2097,7 +2251,11 @@ async function handleTipEvent(
 			dekPubkey: dek.dekPubkey,
 			config
 		});
-		setLastSeenTip(config, pointer, outer.id, { source: 'read', counts });
+		setLastSeenTip(config, pointer, outer.id, {
+			source: 'read',
+			counts,
+			createdAt: outer.created_at
+		});
 
 		// §8 / §10.5 "local ahead of tip" trigger: if reconciling this peer tip left
 		// local state newer than what the tip carries, schedule a push so siblings
@@ -2411,6 +2569,16 @@ async function fastForwardGroup(
 			branch: undefined,
 			skippedSiblingCommit: undefined,
 			commitPoint: undefined,
+			// The adopted state moved on: whatever would not open may now (or is
+			// gone for good) — the missed-update mark is re-earned, not kept.
+			staleMark: undefined,
+			// The epoch this adoption leaves is one a lagging sender may still seal
+			// under (report-05): keep its payload key. The spread carries the rest
+			// of the retained keys across (staircase retainedExporterSecrets).
+			formerPayloadKeys: await noteFormerPayloadKey(
+				existing.formerPayloadKeys,
+				clientStateDecoder(base64ToBytes(existing.stateBase64), 0)![0]
+			),
 			// §10 conflict signal: a resolved fork MUST be surfaced, not silent.
 			...(opts?.forkDecision
 				? {
@@ -2994,7 +3162,19 @@ async function fetchLatestTipEvent(
 			)
 			.subscribe({
 				next: (event) => {
-					if (!latest || event.created_at > latest.created_at) latest = event;
+					// Relay rules: the direct fetch verifies the outer signature and the
+					// expected author — a hostile relay must not be able to hand us a
+					// forged or foreign tip. NIP-01 replaceable tie-break: greater
+					// created_at wins, equal created_at → the lowest id (deterministic
+					// across relays).
+					if (event.pubkey !== config.ephemeralPubkey || !verifyEvent(event)) return;
+					if (
+						!latest ||
+						event.created_at > latest.created_at ||
+						(event.created_at === latest.created_at && event.id < latest.id)
+					) {
+						latest = event;
+					}
 				},
 				complete: () => resolve(),
 				error: () => resolve()

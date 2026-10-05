@@ -16,7 +16,11 @@ import {
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
 import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
-import { decryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
+import {
+	decryptGroupPayloadBase64,
+	decryptGroupPayloadWithKeyBase64,
+	deriveGroupPayloadKeyBase64
+} from '$lib/services/chatGroupPayloadCrypto';
 import {
 	isGroupDocumentPullUnresolved,
 	reconcileMultiDeviceNow
@@ -59,10 +63,13 @@ export interface StoredChatSyncIssue {
 	cursor: number;
 	createdAt: number;
 	detail: string;
+	/** A recovery pass has run over this issue's window — the fetch must not
+	 *  repeat (dropped-message recovery, the "disappearing messages" class). */
+	recovered?: boolean;
 }
 
 export interface StoredChatSystemMessageData {
-	systemKind: 'member-added' | 'member-removed' | 'metadata-changed';
+	systemKind: 'member-added' | 'member-removed' | 'metadata-changed' | 'commit-lost';
 	target?: string;
 	committer?: string;
 	detail?: string;
@@ -93,6 +100,12 @@ export interface GroupMessageIngestionTarget {
 	status?: 'active' | 'removed' | 'poisoned';
 	removedAtCursor?: number;
 	poisonedAtCursor?: number;
+	/** Missed-update evidence (see PersistedChatGroupLike): set on an unopenable
+	 *  sealed payload, cleared by a current-epoch decrypt. */
+	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (newest-4 epochs, epoch → base64 key):
+	 *  a lagging sender seals under an epoch we already left. */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export interface RawChatGroupMessage {
@@ -340,10 +353,25 @@ function isFormerEpochIssue(detail: string): boolean {
  * ts-mls secret-tree failure for a message generation the local ratchet has
  * already consumed (and no longer retains). On a shared-leaf multi-device
  * group this is the sibling-divergence signal (spec multi-device §10): the
- * sender's ratchet replica is behind ours.
+ * sender's ratchet replica is behind ours. The ts-mls patch embeds the sender
+ * leaf and generation (`Desired gen in the past (leaf N, gen G)`).
  */
 export function isStaleGenerationIssue(detail: string): boolean {
-	return detail === 'Desired gen in the past';
+	return detail.startsWith('Desired gen in the past');
+}
+
+/**
+ * Sender leaf of a stale-generation failure, or undefined when unattributed.
+ * All ts-mls leaf indices share one numbering (treemath `toLeafIndex` is the
+ * identity), so this compares directly with `privatePath.leafIndex` and
+ * `listGroupMembers(...).leafIndex`. Attribution matters: only OUR OWN leaf's
+ * collision is ours to repair (spec §10) — another account's devices colliding
+ * is theirs to settle, and a repair from here would only add a commit for
+ * everyone (seen live: 7 repair commits in 8 minutes).
+ */
+export function staleGenerationLeafIndex(detail: string): number | undefined {
+	const match = /\(leaf (\d+), gen \d+\)/.exec(detail);
+	return match ? Number(match[1]) : undefined;
 }
 
 function isUndecryptableStaleMessageIssue(detail: string): boolean {
@@ -385,6 +413,23 @@ class SiblingCommitSkippedError extends Error {
 	}
 }
 
+/** Spec multi-device §10 sibling rule: a Commit authored by our own shared
+ *  leaf is a sibling device's — the UpdatePath private keys live only on the
+ *  committer, so ingesting it would self-remove. Detection is exact in the
+ *  shared-leaf model: only our identity occupies our leaf index. Thrown from
+ *  the authorization callback (which fires BEFORE the UpdatePath applies) to
+ *  skip the Commit instead. */
+export function isSiblingCommitMessage(params: {
+	kind: string;
+	senderStablePubkey: string | undefined;
+	localStablePubkey: string | undefined;
+}): boolean {
+	// safeNormalizePubKey (peer-controlled values): empty never equals empty.
+	const sender = safeNormalizePubKey(params.senderStablePubkey ?? '');
+	const local = safeNormalizePubKey(params.localStablePubkey ?? '');
+	return params.kind === 'commit' && !!sender && !!local && sender === local;
+}
+
 function isRemovedFromGroupState(state: ClientState): boolean {
 	return state.groupActiveState?.kind === 'removedFromGroup';
 }
@@ -405,6 +450,8 @@ function buildSystemMessageId(
 function buildSystemMessageContent(data: StoredChatSystemMessageData): string {
 	return JSON.stringify(data);
 }
+
+export { buildInboundSystemMessage };
 
 /**
  * Build an inbound system message (presentation-only) from the varying parts.
@@ -509,6 +556,21 @@ export function createSystemMessagesFromStateChange(input: {
 		);
 	}
 
+	// A Commit with no membership/metadata change is still an epoch advance
+	// (keys rotation / rekey). Record it at the Commit's cursor: that record is
+	// what makes a re-delivered self-echo dedupe via seenCursors instead of
+	// re-processing and failing decryption (ownCommitRegression "bug 2").
+	if (
+		messages.length === 0 &&
+		input.oldState.groupContext.epoch !== input.newState.groupContext.epoch
+	) {
+		messages.push(
+			buildInboundSystemMessage(input.cursor, input.createdAt, committer, 'metadata-changed', {
+				detail: 'the group keys'
+			})
+		);
+	}
+
 	return messages;
 }
 
@@ -594,6 +656,44 @@ function recordSyncIssue(
 	else issues[passIndex] = issue;
 }
 
+/** Detail prefix of the drop class — the one discriminator dropped-message
+ *  recovery keys on. Shared by the writer and the matchers so rewording the
+ *  message can't silently disable recovery. */
+const DECRYPT_FAILED_DETAIL = 'Sealed payload decrypt failed';
+
+function isUnrecoveredDropIssue(issue: StoredChatSyncIssue): boolean {
+	return !issue.recovered && issue.detail.startsWith(DECRYPT_FAILED_DETAIL);
+}
+
+/** Dropped-message recovery horizon (the "disappearing messages" class): the
+ *  pre-fix pipeline advanced the fetch cursor past messages it could not open
+ *  and recorded each as a decrypt-failure issue. Those issues carry the lost
+ *  cursors — and with the former-epoch payload keys most of the messages open
+ *  now. The horizon is the oldest such issue with no row at its cursor and no
+ *  recovery pass recorded over it. */
+export function unrecoveredDropHorizon(group: {
+	syncIssues: StoredChatSyncIssue[];
+	messages: Array<{ cursor: number }>;
+}): number | undefined {
+	const rows = new Set(group.messages.map((message) => message.cursor));
+	let horizon: number | undefined;
+	for (const issue of group.syncIssues) {
+		if (!isUnrecoveredDropIssue(issue)) continue;
+		if (rows.has(issue.cursor)) continue;
+		if (horizon === undefined || issue.cursor < horizon) horizon = issue.cursor;
+	}
+	return horizon;
+}
+
+/** Mark the drop-class issues as recovered: a successful pass ran over their
+ *  window — the messages arrived and either opened or were proven unopenable;
+ *  either way the recovery fetch must not repeat. */
+export function markDropIssuesRecovered(issues: StoredChatSyncIssue[]): StoredChatSyncIssue[] {
+	return issues.map((issue) =>
+		isUnrecoveredDropIssue(issue) ? { ...issue, recovered: true } : issue
+	);
+}
+
 // ── Spec §10.6: unseal-failure rescue + bounded hold ────────────────────────
 const UNSEAL_STREAK_RESCUE_THRESHOLD = 3;
 const RESCUE_COOLDOWN_MS = 30_000;
@@ -601,11 +701,60 @@ const unsealStreakByGroup = new Map<string | undefined, number>();
 const rescueCooldownByGroup = new Map<string | undefined, number>();
 const heldUnopenableByGroup = new Map<string | undefined, { rescued: boolean }>();
 
-function noteUnsealSuccess(groupId: string | undefined): void {
+/** How many former-epoch payload keys to retain (mirrors ts-mls's own
+ *  `retainKeysForEpochs: 4` — beyond that the INNER layer rejects the message
+ *  anyway, so keeping outer keys longer buys nothing). */
+const RETAINED_PAYLOAD_KEYS = 4;
+
+/** Open with a retained former-epoch key (newest first). Null when no retained
+ *  key verifies the payload. */
+function decryptWithFormerPayloadKeys(
+	group: GroupMessageIngestionTarget,
+	encryptedBase64: string
+): string | null {
+	const held = group.formerPayloadKeys;
+	if (!held) return null;
+	for (const epoch of Object.keys(held)
+		.map(Number)
+		.sort((a, b) => b - a)) {
+		const opened = decryptGroupPayloadWithKeyBase64(held[epoch.toString()], encryptedBase64);
+		if (opened !== null) return opened;
+	}
+	return null;
+}
+
+/** Remember a state's payload key under its epoch (pure copy-on-write, capped).
+ *  Called at EVERY point the group leaves an epoch — the ingest ladder AND the
+ *  own-commit flows AND document adoption — or a message sealed at the left
+ *  epoch is lost the moment the state moves (report-05). */
+export async function noteFormerPayloadKey(
+	held: Record<string, string> | undefined,
+	state: ClientState
+): Promise<Record<string, string>> {
+	// Bare ingestion test targets carry neither group context nor key schedule;
+	// a real ClientState always does. Retention is skipped, never throws, for
+	// the former.
+	const epochNumber = state?.groupContext?.epoch;
+	if (epochNumber === undefined || !state.keySchedule?.exporterSecret) return held ?? {};
+	const epoch = epochNumber.toString();
+	if (held && epoch in held) return held;
+	const keyBase64 = await deriveGroupPayloadKeyBase64(state);
+	const next: Record<string, string> = { ...(held ?? {}), [epoch]: keyBase64 };
+	const epochs = Object.keys(next)
+		.map(Number)
+		.sort((a, b) => a - b);
+	for (const old of epochs.slice(0, Math.max(0, epochs.length - RETAINED_PAYLOAD_KEYS))) {
+		delete next[old.toString()];
+	}
+	return next;
+}
+
+function noteUnsealSuccess(groupId: string | undefined, formerEpoch = false): void {
 	unsealStreakByGroup.delete(groupId);
 	// Any successful decrypt invalidates a convergence proof — the next
-	// unopenable payload deserves a fresh hold window.
-	heldUnopenableByGroup.delete(groupId);
+	// unopenable payload deserves a fresh hold window. A FORMER-epoch decrypt
+	// (a lagging sender's) proves no such thing and keeps the hold.
+	if (!formerEpoch) heldUnopenableByGroup.delete(groupId);
 }
 
 function noteUnsealFailure(groupId: string | undefined): void {
@@ -680,6 +829,13 @@ export async function ingestChatGroupMessages(params: {
 	const rejectedPendingCommitMessages = new Set<string>();
 	let removedLocalMember = false;
 	let poisoned = false;
+	// Fork-MR scenario E: the cursor floor at the first HELD message of this
+	// pass. Held messages stay re-fetchable (the coordinator never resends by
+	// cursor) — nothing may carry fetchCursor past one until the hold resolves.
+	let heldFloor: number | undefined;
+
+	// The epoch we start from is one a lagging sender may still seal under.
+	group.formerPayloadKeys = await noteFormerPayloadKey(group.formerPayloadKeys, group.state);
 
 	for (const message of messages) {
 		const isPendingOperationMessage =
@@ -705,6 +861,7 @@ export async function ingestChatGroupMessages(params: {
 		// (wrong epoch / pre-join traffic / corruption) advances the cursor and
 		// records an issue rather than poisoning.
 		let processableBase64: string;
+		let formerEpoch = false;
 		try {
 			processableBase64 = (
 				await decryptGroupPayloadBase64({
@@ -713,31 +870,50 @@ export async function ingestChatGroupMessages(params: {
 				})
 			).opaqueMessageBase64;
 		} catch (error) {
-			const detail = errorMessage(error);
-			// Multi-device (§10.6): the seal hides the epoch, so a device behind a
-			// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
-			// at this layer — the epochAhead gate below never gets to see these.
-			// Mirror it: do NOT advance the cursor (leave it at the decrypt
-			// frontier so a post-fast-forward re-fetch retries the message once
-			// the document state arrives) and dedup the advisory issue per cursor.
-			// The hold is BOUNDED though (§10.6): once a rescue proved convergence
-			// (no new state) and no fetch is still failing, the payload is
-			// permanently unopenable — advance past it so the stream and the native
-			// notification watermark cannot stall on it forever. Single-device
-			// keeps fail-and-advance: no document rescues it.
-			recordSyncIssue(group, issues, {
-				cursor: message.cursor,
-				createdAt: message.createdAt,
-				detail: `Sealed payload decrypt failed: ${detail}`
-			});
-			noteUnsealFailure(group.id);
-			if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
-				heldUnopenableByGroup.set(group.id, { rescued: false });
+			// A sender that has not seen our latest Commit seals under an epoch we
+			// already left — OUR OWN adopt-early window and lagging members both
+			// look like this (report-05 "disappearing messages"). Open with a
+			// retained former-epoch key before calling it unopenable.
+			const former = decryptWithFormerPayloadKeys(group, message.opaqueMessageBase64);
+			if (former === null) {
+				const detail = errorMessage(error);
+				// Multi-device (§10.6): the seal hides the epoch, so a device behind a
+				// sibling Commit cannot distinguish "ahead of my epoch" from "corrupt"
+				// at this layer — the epochAhead gate below never gets to see these.
+				// Mirror it: do NOT advance the cursor (leave it at the decrypt
+				// frontier so a post-fast-forward re-fetch retries the message once
+				// the document state arrives) and dedup the advisory issue per cursor.
+				// The hold is BOUNDED though (§10.6): once a rescue proved convergence
+				// (no new state) and no fetch is still failing, the payload is
+				// permanently unopenable — advance past it so the stream and the native
+				// notification watermark cannot stall on it forever. Single-device
+				// keeps fail-and-advance: no document rescues it.
+				recordSyncIssue(group, issues, {
+					cursor: message.cursor,
+					createdAt: message.createdAt,
+					detail: `${DECRYPT_FAILED_DETAIL}: ${detail}`
+				});
+				noteUnsealFailure(group.id);
+				// Missed-update evidence (staircase StaleEpochTest): this device cannot
+				// open what the group sends — it may have missed a Commit. Recorded so
+				// the outbound gate refuses work staged from the stale view.
+				group.staleMark = {
+					cursor: group.staleMark?.cursor ?? message.cursor,
+					unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
+				};
+				if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
+					heldUnopenableByGroup.set(group.id, { rescued: false });
+					// Held (spec §10.6): later messages may still be readable in this
+					// pass, but the floor keeps this one re-fetchable.
+					heldFloor ??= message.cursor;
+					continue;
+				}
+				group.fetchCursor = message.cursor;
+				group.lastCursor = Math.max(group.lastCursor, message.cursor);
 				continue;
 			}
-			group.fetchCursor = message.cursor;
-			group.lastCursor = Math.max(group.lastCursor, message.cursor);
-			continue;
+			processableBase64 = former;
+			formerEpoch = true;
 		}
 
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
@@ -759,16 +935,14 @@ export async function ingestChatGroupMessages(params: {
 						);
 						commitSenderPubkey = sender?.stablePubkey;
 						commitProposals = incoming.proposals ?? [];
-						// Sibling-skip (spec multi-device §10): a Commit from our own
-						// shared leaf cannot be ingested (UpdatePath private keys live
-						// only on the committer). The authorization callback fires
-						// before the UpdatePath is applied, so throwing here skips the
-						// Commit instead of self-removing. Detection is exact in the
-						// shared-leaf model: only our identity occupies our leaf index.
+						// Sibling-skip (spec multi-device §10): skips the Commit instead of
+						// ingesting (self-remove). See isSiblingCommitMessage.
 						if (
-							params.localStablePubkey &&
-							sender &&
-							normalizePubKey(sender.stablePubkey) === params.localStablePubkey
+							isSiblingCommitMessage({
+								kind: incoming.kind,
+								senderStablePubkey: sender?.stablePubkey,
+								localStablePubkey: params.localStablePubkey
+							})
 						) {
 							throw new SiblingCommitSkippedError();
 						}
@@ -874,8 +1048,15 @@ export async function ingestChatGroupMessages(params: {
 					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
 				});
 				noteUnsealFailure(group.id);
+				// Same missed-update evidence as an unopenable seal (above).
+				group.staleMark = {
+					cursor: group.staleMark?.cursor ?? message.cursor,
+					unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
+				};
 				if (!advancePastUnopenablePayload(group.id)) {
 					heldUnopenableByGroup.set(group.id, { rescued: false });
+					// Held: same cursor floor as an unopenable seal (above).
+					heldFloor ??= message.cursor;
 					continue;
 				}
 				group.fetchCursor = message.cursor;
@@ -918,7 +1099,12 @@ export async function ingestChatGroupMessages(params: {
 			throw error;
 		}
 
-		noteUnsealSuccess(group.id);
+		noteUnsealSuccess(group.id, formerEpoch);
+		// A message that decrypts AT THE CURRENT EPOCH proves this device is on the
+		// group's line (staircase StaleEpochTest: "back to normal"): the
+		// missed-update mark goes and commits work again. A former-epoch decrypt
+		// (a lagging sender) proves no such thing and keeps the mark.
+		if (!formerEpoch) group.staleMark = undefined;
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;
@@ -985,6 +1171,8 @@ export async function ingestChatGroupMessages(params: {
 
 		if (processed.kind === 'newState') {
 			const oldState = group.state;
+			// The epoch we leave is one a lagging sender may still seal under.
+			group.formerPayloadKeys = await noteFormerPayloadKey(group.formerPayloadKeys, oldState);
 			const oldMetadata = getCordnGroupMetadataExtension(oldState);
 			group.state = processed.newState;
 			group.metadata = getCordnGroupMetadataExtension(processed.newState);
@@ -1017,6 +1205,12 @@ export async function ingestChatGroupMessages(params: {
 				}
 			}
 		}
+	}
+
+	// Scenario E: the cursor floor. clamp after the loop so no late-processed
+	// message in this pass moved the cursor past a held one.
+	if (heldFloor !== undefined) {
+		group.fetchCursor = Math.min(group.fetchCursor, heldFloor - 1);
 	}
 
 	return {

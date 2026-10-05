@@ -27,6 +27,14 @@ export interface PersistedChatGroupLike {
 	poisonedAtCursor?: number;
 	/** Last skipped sibling Commit (spec §10 step 1 fork evidence). */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Missed-update evidence (staircase StaleEpochTest): a sealed payload that
+	 *  would not open. Commits staged from that view split the group; sends are
+	 *  held once the run proves the device is behind. Cleared by any message
+	 *  that decrypts at the current epoch. */
+	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
+	 *  seals under an epoch we already left. */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export interface WorkingChatGroupSession {
@@ -41,6 +49,11 @@ export interface WorkingChatGroupSession {
 	poisonedAtCursor?: number;
 	/** Written by ingestion's sibling-skip hook (spec §10 step 1). */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Updated by ingestion's unseal-failure hook; cleared on a current-epoch
+	 *  decrypt (see PersistedChatGroupLike). */
+	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (see PersistedChatGroupLike). */
+	formerPayloadKeys?: Record<string, string>;
 }
 
 export function createWorkingChatGroupSession(
@@ -56,7 +69,9 @@ export function createWorkingChatGroupSession(
 		syncIssues: [...group.syncIssues],
 		status: group.status,
 		removedAtCursor: group.removedAtCursor,
-		poisonedAtCursor: group.poisonedAtCursor
+		poisonedAtCursor: group.poisonedAtCursor,
+		staleMark: group.staleMark,
+		formerPayloadKeys: group.formerPayloadKeys
 	};
 }
 
@@ -87,12 +102,24 @@ export async function syncChatGroupMessages(params: {
 		mdActive: params.mdActive
 	});
 
-	await reconcilePendingEpochOperations({
-		store: params.pendingEpochOperations,
-		groupId: params.group.id,
-		client: params.coordinatorClient,
-		ingestion: sync
-	});
+	try {
+		await reconcilePendingEpochOperations({
+			store: params.pendingEpochOperations,
+			groupId: params.group.id,
+			client: params.coordinatorClient,
+			ingestion: sync
+		});
+	} catch (error) {
+		// Finalization is retry-on-next-sync: a failing StoreWelcome (stale key
+		// package, rate limit) must NOT abort the sync — the batch would never
+		// persist, fetchCursor would never advance, and one permanently-rejected
+		// welcome would wedge the group's entire ingestion. Ops stay pending by
+		// design (finalize drops them only on success).
+		console.error('[chat-groups] pending epoch op reconcile failed', {
+			groupId: params.group.id,
+			error
+		});
+	}
 
 	// Multi-device re-publish on an own-Commit is NOT fired here. It is fired
 	// unconditionally at the end of `runOutboundGroupOperation` (the chokepoint
@@ -127,6 +154,11 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		status: params.workingGroup.status,
 		removedAtCursor: params.workingGroup.removedAtCursor,
 		poisonedAtCursor: params.workingGroup.poisonedAtCursor,
+		// Carried straight (unlike skippedSiblingCommit's no-skip-keeps rule): a
+		// current-epoch decrypt CLEARS the mark by writing undefined, and that
+		// clear must survive the persist.
+		staleMark: params.workingGroup.staleMark,
+		formerPayloadKeys: params.workingGroup.formerPayloadKeys ?? params.group.formerPayloadKeys,
 		// Fork evidence written by ingestion's sibling-skip hook (spec §10 step
 		// 1) — a fresh skip replaces, no skip keeps the previous one (cleared on
 		// document adoption).

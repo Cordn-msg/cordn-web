@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-05-message-recovery',
+		createdAt: Date.UTC(2026, 9, 5),
+		version: 1,
+		title: 'Disappearing messages — fixed, and the lost ones are back',
+		body: '- 🐛 Messages could vanish for good: a message sealed moments before one of your linked devices changed the group — a rename, an invite — arrived while the app could not yet open it, and was skipped instead of waited for. The app now keeps the keys that open exactly those in-between messages, so what arrives late still opens.\n- 🐛 If messages already disappeared for you on an earlier version, they are not gone: after this update, the first sync re-fetches what was skipped and puts it back in the conversation where it belongs — once, quietly, in the background.\n- 🐛 Two devices changing a group at the same moment no longer ends in a wedge or a ghost list of kicked members: the device whose change lost the race now undoes it cleanly, catches up, and carries on. And inviting someone whose identity keys are stale is refused with a clear message instead of quietly corrupting the group.\n- 🐛 Your groups and history now survive the app being thrown out of memory: some sessions could silently fail to save to the device database, losing that session’s messages and changes on restart. Saving is hardened and no longer fails silently.\n- 🔄 Linked devices hold steady on flaky connections: retries and re-checks around multi-device syncing mean a dropped connection no longer means a lost change — and the encrypted documents your devices share are now checked against their own fingerprint at every step, never taken on a host’s word.'
+	},
+	{
 		id: 'cordn-news-2026-10-02-composer-paste',
 		createdAt: Date.UTC(2026, 9, 2),
 		version: 1,

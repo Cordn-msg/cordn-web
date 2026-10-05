@@ -54,6 +54,14 @@ export interface StoredChatGroupRecord {
 	 *  skipped (a sibling's, spec §10), at the epoch it was skipped in. A
 	 *  Commit posted from that same epoch afterwards lost the race to it. */
 	skippedSiblingCommit?: { epoch: string; cursor: number };
+	/** Missed-update evidence: a sealed payload that would not open (count of
+	 *  unopenable payloads since the mark, cleared by a current-epoch decrypt).
+	 *  Commits are refused while set; sends once the run reaches 2. */
+	staleMark?: { cursor: number; unopenableCount: number };
+	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
+	 *  seals under an epoch we already left; ts-mls keeps the matching inner
+	 *  receiver material for 4 epochs. */
+	formerPayloadKeys?: Record<string, string>;
 	/** The state right after this device's own Commit produced the current
 	 *  epoch, at that Commit's stream cursor — the epoch's commit point (spec
 	 *  §8.5 gen-0 state, §10.3 rank). Published ahead of the live document,
@@ -161,7 +169,6 @@ export interface ChatStorage {
 	deleteOutboxEntry(seq: number): Promise<void>;
 	listKeyPackages(ownerPubkey?: string): Promise<StoredChatKeyPackageRecord[]>;
 	getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined>;
-	putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void>;
 	replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void>;
 	deleteKeyPackage(keyPackageRef: string): Promise<void>;
 	deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void>;
@@ -365,10 +372,6 @@ class MemoryChatStorage implements ChatStorage {
 	async getKeyPackage(keyPackageRef: string): Promise<StoredChatKeyPackageRecord | undefined> {
 		const record = this.keyPackages.get(keyPackageRef);
 		return record ? cloneKeyPackage(record) : undefined;
-	}
-
-	async putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void> {
-		this.keyPackages.set(record.keyPackageRef, cloneKeyPackage(record));
 	}
 
 	async replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void> {
@@ -695,17 +698,6 @@ class IndexedDbChatStorage implements ChatStorage {
 			(store) => store.get(keyPackageRef) as IDBRequest<StoredChatKeyPackageRecord | undefined>
 		);
 		return record ? cloneKeyPackage(record) : undefined;
-	}
-
-	async putKeyPackage(record: StoredChatKeyPackageRecord): Promise<void> {
-		await this.runTransaction<void>(
-			KEY_PACKAGE_STORE,
-			'readwrite',
-			(store) => {
-				store.put(cloneKeyPackage(record));
-			},
-			() => undefined
-		);
 	}
 
 	async replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void> {
