@@ -136,7 +136,10 @@
 		</div>
 	</div>
 	{#if showLink}
-		<code class="mt-2 block rounded bg-black/10 px-1.5 py-1 text-[11px] break-all">
+		<!-- w-0 min-w-full: zero max-content contribution so an unbroken URL
+			can't stretch the shrink-to-fit bubble wide (the empty side margin on
+			desktop); min-w-full stretches it to the card's real width at layout. -->
+		<code class="mt-2 block w-0 min-w-full rounded bg-black/10 px-1.5 py-1 text-[11px] break-all">
 			{invite.href}
 		</code>
 	{/if}

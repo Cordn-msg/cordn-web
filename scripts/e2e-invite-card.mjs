@@ -198,12 +198,31 @@ async function main() {
 		if (cardCount < 2) throw new Error(`expected 2 invite cards, found ${cardCount}`);
 		log(`bare cordn1 code card rendered too (${cardCount} cards)`);
 
-		// Show link reveals the raw form.
+		// Show link reveals the raw form WITHOUT stretching the shrink-to-fit
+		// bubble: the unbroken URL must contribute zero max-content width
+		// (w-0 min-w-full), or the bubble grows a wide empty side margin on
+		// desktop. Compare the bubble column's width before/after the reveal.
+		const bubbleWidth = () =>
+			page.evaluate(() => {
+				for (const row of document.querySelectorAll('[data-message-id]')) {
+					if (!row.textContent?.includes('come to the garden')) continue;
+					const bubble = row.querySelector('div.flex.max-w-full.min-w-0.flex-col');
+					return bubble ? bubble.getBoundingClientRect().width : -1;
+				}
+				return -1;
+			});
+		const before = await bubbleWidth();
 		await page.locator('button:has-text("Show link")').first().click();
 		await sleep(200);
 		const shown = await page.evaluate(() => document.body.innerText);
 		if (!shown.includes(inviteUrl)) throw new Error('Show link did not reveal the raw URL');
 		log('Show link reveals the raw URL');
+		const after = await bubbleWidth();
+		log(`bubble width: before=${before.toFixed(0)} after=${after.toFixed(0)}`);
+		if (before < 0 || after < 0) throw new Error('bubble column not found');
+		if (after > before + 2) {
+			throw new Error(`bubble stretched on Show link (${before.toFixed(0)} -> ${after.toFixed(0)})`);
+		}
 
 		log('PASS: group links render as invite cards');
 	} catch (e) {
