@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.4 — 2026-10-06
+
+### Features
+
+- **chat:** render cordn invite links as cards
+- **news:** announce the profile start-chat fix
+
+### Fixes
+
+- **chat:** label the group delete action plainly "Delete group"
+- **chat:** drop the generic filler line from unknown-group invite cards
+- **chat:** render invite-card icons as emoji text with the Cordn logo fallback
+- **chat:** invite card's Show link must not stretch the bubble
+- **chat:** heal wedged held sends and let users discard stuck outbox bubbles
+- **chat:** guard mention candidates against transient group-store gaps
+- **chat:** mark only visible messages read when opening a group
+- **chat:** keep playing media mounted across message-list rebuilds
+- **news:** unstick a bullet glued to the previous line
+- **chat:** restrict the fresh-group catch-up skip to creator-born groups
+- **chat:** trim the start-conversation flow to the protocol minimum
+
+### Docs
+
+- **news:** publish the ui-ux-fixes highlights to the in-app feed
+
+### Refactor
+
+- **chat:** final review pass — a11y parity and dead narrowing
+
+### Chore
+
+- **debug:** add profile start-chat repro script
+
+### Other
+
+- **chat:** prove the fresh-group skip discriminator through real birth paths
+
 ## 0.5.3 — 2026-10-05
 
 ### Features
