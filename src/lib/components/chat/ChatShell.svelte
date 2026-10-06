@@ -122,10 +122,17 @@
 	const group = $derived.by(() => getChatGroup(groupId));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
+	// Guarded like displayTitle: during a transient groups-store gap (boot
+	// load, account switch) requireChatGroup would throw INSIDE this derived,
+	// destroying the whole shell render — and with it every ephemeral composer
+	// state (in-progress reply/edit target, focus). Empty candidates ride out
+	// the gap instead; the shell survives and the reply is still there on send.
 	const mentionCandidates = $derived.by<ChatMentionCandidate[]>(() =>
-		listChatGroupMembers(groupId).map((member) => ({
-			pubkey: member.stablePubkey
-		}))
+		group
+			? listChatGroupMembers(groupId).map((member) => ({
+					pubkey: member.stablePubkey
+				}))
+			: []
 	);
 	const displayTitle = $derived.by(() =>
 		group
