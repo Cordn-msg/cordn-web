@@ -111,7 +111,7 @@
 				class="gap-2 text-destructive data-[highlighted]:text-destructive"
 			>
 				<Trash2 class="size-4" />
-				<span>Delete local group</span>
+				<span>Delete group</span>
 			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
@@ -120,7 +120,7 @@
 <Dialog.Root bind:open={showDeleteDialog}>
 	<Dialog.Content class="sm:max-w-[425px]">
 		<Dialog.Header>
-			<Dialog.Title>Delete local group?</Dialog.Title>
+			<Dialog.Title>Delete group?</Dialog.Title>
 			<Dialog.Description>
 				“{resolvedTitle}” will be removed from this browser. Messages and membership on other
 				devices or coordinators are not affected.
@@ -132,7 +132,7 @@
 			</Button>
 			<Button variant="destructive" onclick={handleDelete} disabled={submitting}>
 				{#if submitting}<Spinner class="mr-2 size-4" />{/if}
-				{submitting ? 'Deleting…' : 'Delete local group'}
+				{submitting ? 'Deleting…' : 'Delete group'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
