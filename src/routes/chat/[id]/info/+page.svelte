@@ -734,9 +734,7 @@
 										{:else}
 											<Trash2 class="mr-2 size-4" />
 										{/if}
-										{chatGroupInfoActionsStore.deleteSubmitting
-											? 'Deleting…'
-											: 'Delete local group'}
+										{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete group'}
 									</Button>
 								</Card.Content>
 							</Card.Root>
@@ -749,7 +747,7 @@
 		<Dialog.Root bind:open={showDeleteGroupDialog}>
 			<Dialog.Content class="sm:max-w-[425px]">
 				<Dialog.Header>
-					<Dialog.Title>Delete local group?</Dialog.Title>
+					<Dialog.Title>Delete group?</Dialog.Title>
 					<Dialog.Description>
 						This only removes the saved copy of this group from this browser. Messages and group
 						membership on other devices or coordinators are not affected.
@@ -771,7 +769,7 @@
 						{#if chatGroupInfoActionsStore.deleteSubmitting}
 							<Spinner class="mr-2 size-4" />
 						{/if}
-						{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete local group'}
+						{chatGroupInfoActionsStore.deleteSubmitting ? 'Deleting…' : 'Delete group'}
 					</Button>
 				</Dialog.Footer>
 			</Dialog.Content>

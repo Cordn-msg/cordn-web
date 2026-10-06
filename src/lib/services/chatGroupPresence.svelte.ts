@@ -92,10 +92,13 @@ function getChatGroupStoredHighWater(group: StoredChatGroup | undefined): number
 
 export function markChatGroupRead(groupId: string, cursor?: number) {
 	const group = getChatGroup(groupId);
-	// Every caller means "mark everything currently visible" (partial marks
-	// live in markChatGroupMentionsRead), so an explicit cursor is corrected
-	// upward against what is stored instead of trusted blindly.
-	const nextCursor = Math.max(cursor ?? 0, getChatGroupStoredHighWater(group));
+	// Omitted cursor = "mark everything stored" (the sidebar action, and the
+	// at-bottom visibility report where the whole history has been scrolled
+	// past). An explicit cursor is an exact visibility mark — the highest
+	// message row currently on screen — trusted, not clamped upward: rows are
+	// the source of truth, so a partial mark can't strand the stale-counter
+	// records the old blanket clamp existed to cover.
+	const nextCursor = cursor ?? getChatGroupStoredHighWater(group);
 	const previous = getChatGroupLastReadCursor(groupId);
 	if (nextCursor <= previous) return;
 

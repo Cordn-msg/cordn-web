@@ -119,19 +119,32 @@ describe('chat group presence unread scans', () => {
 		expect(listUnreadChatGroupReferenceTargets('presence-all-2', MENTIONED)).toEqual([]);
 	});
 
-	test('read marks cover stored messages above the ingest counter', () => {
+	test('omitted read marks cover stored messages above the ingest counter', () => {
 		// Records can carry stored messages whose cursors exceed group.lastCursor
 		// (legacy/never-refetched history). Marking only the counter used to leave
 		// the open-at-first-unread scan re-finding the same "unread" on every open
 		// while the badge fast-path (group.lastCursor <= lastReadCursor) said zero.
+		// Omitted-cursor marks (sidebar action, at-bottom visibility) keep covering
+		// the full high-water; explicit visibility marks can't regress this because
+		// they only ever mark cursors of rows that actually rendered.
 		const id = 'presence-stale-counter';
 		seedGroup(id, [1, 2, 3]);
 		const group = groups.get(id)!;
 		group.lastCursor = 2;
-		markChatGroupRead(id, group.lastCursor);
+		markChatGroupRead(id);
 		expect(getUnreadChatGroupMessageCount(id)).toBe(0);
 		expect(
 			group.messages.find((message) => message.cursor > getChatGroupLastReadCursor(id))
 		).toBeUndefined();
+	});
+
+	test('explicit read cursors are exact visibility marks, not clamped upward', () => {
+		// Opening a chat mid-backlog must only read what's on screen: stopping
+		// partway keeps the rest unread so the marker resumes where reading
+		// stopped. The old blanket clamp would have read everything here.
+		const id = 'presence-partial';
+		seedGroup(id, [10, 20, 30]);
+		markChatGroupRead(id, 20);
+		expect(getUnreadChatGroupMessageCount(id)).toBe(1);
 	});
 });

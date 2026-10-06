@@ -712,25 +712,46 @@ describe('stale-epoch discipline (staircase StaleEpochTest)', () => {
 		expect(listChatGroupMessages(group.id).some((m) => m.content === 'still fine')).toBe(true);
 	});
 
-	test('a run of two holds sends too, and a readable message clears it', async () => {
+	test('a run of two holds sends while unproven; a converged catch-up or a readable message clears it', async () => {
 		const group = await createChatGroup({ name: 'stale2', coordinatorKey: 'ef'.repeat(32) });
 		await deliverPayload(group.id, 1, garbage());
 		await deliverPayload(group.id, 2, garbage());
+		expect(getChatGroup(group.id)!.staleMark?.unopenableCount).toBe(2);
 
-		// two in a row: this device's sends would be unreadable noise — held
+		// two in a row: the device MAY be behind — holds sends while the
+		// catch-up cannot prove otherwise (here: the coordinator unreachable).
+		const originalFetch = fakeClient.FetchManyGroupMessages;
+		fakeClient.FetchManyGroupMessages = async () => {
+			throw new Error('Network error');
+		};
 		await expect(
 			sendChatGroupMessage({ groupId: group.id, content: 'nope' })
 		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+		fakeClient.FetchManyGroupMessages = originalFetch;
+
+		// The wedged-send heal: a SUCCESSFUL catch-up fetch that returns
+		// nothing beyond our cursor (plus a drained drop-recovery window)
+		// proves convergence — the unopenables are lagging/garbage traffic,
+		// not missed updates. The hold lifts and the send goes through.
+		await sendChatGroupMessage({ groupId: group.id, content: 'proven fine' });
+		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
+		expect(listChatGroupMessages(group.id).some((m) => m.content === 'proven fine')).toBe(true);
+
+		// the mark is gone: commits work again
+		await updateChatGroupMetadata({ groupId: group.id, name: 'back to normal' });
+		expect(getChatGroup(group.id)!.metadata?.name).toBe('back to normal');
+	});
+
+	test('a readable message clears the mark on the live path without any send', async () => {
+		const group = await createChatGroup({ name: 'stale3', coordinatorKey: 'ef'.repeat(32) });
+		await deliverPayload(group.id, 1, garbage());
+		await deliverPayload(group.id, 2, garbage());
 		expect(getChatGroup(group.id)!.staleMark?.unopenableCount).toBe(2);
 
 		// a message sealed for our epoch proves we are on the group's line
 		const readable = await craftReadableMessage(getChatGroup(group.id)!.stateBase64, 'readable');
 		await deliverPayload(group.id, 3, readable);
 		expect(getChatGroup(group.id)!.staleMark).toBeUndefined();
-
-		// the mark is gone: commits work again
-		await updateChatGroupMetadata({ groupId: group.id, name: 'back to normal' });
-		expect(getChatGroup(group.id)!.metadata?.name).toBe('back to normal');
 	});
 
 	test('scenario E: a held payload keeps the cursor from passing it', async () => {

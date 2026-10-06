@@ -20,6 +20,7 @@
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onVisibleUnreadReference = () => {},
+		onVisibleRead = () => {},
 		onOpenRich = () => {},
 		onPin = () => {},
 		unreadReferenceCount = 0,
@@ -30,8 +31,8 @@
 		 *  stacked above scroll-to-bottom (moved out of the composer). */
 		unreadReferenceCount?: number;
 		onNavigateToReference?: () => void | Promise<void>;
-		/** Open-at-first-unread target ("<eventId>:<cursor>"), set once per group by
-		 *  ChatShell before the group is marked read. Empty → open at the bottom. */
+		/** Open-at-first-unread target ("<eventId>:<cursor>"), set once per group
+		 *  by ChatShell on open. Empty → open at the bottom. */
 		initialFocusMessageId?: string;
 		onReply?: (message: ChatMessage) => void;
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
@@ -40,6 +41,11 @@
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		onVisibleUnreadReference?: (message: ChatMessage) => void;
+		/** Visibility-based read marking: reports the highest message cursor
+		 *  actually on screen (plus whether the viewport sits at the bottom, where
+		 *  folded annotations without rows mean "mark everything stored"). Called
+		 *  only from settled positions — never mid programmatic-scroll flight. */
+		onVisibleRead?: (report: { cursor: number; atBottom: boolean }) => void;
 		onOpenRich?: (eventId: string) => void;
 		onPin?: (message: ChatMessage) => void;
 	} = $props();
@@ -55,6 +61,11 @@
 	// ones (mount → focus and group-switch → focus can overlap mid-await).
 	let consumedFocusId = '';
 	let scrollRun = 0;
+	// The scrollRun value of the last COMPLETED programmatic flight. While
+	// scrollRun !== settledRun a flight is mid-air and the visible window is
+	// transient (focus jumps pass over the tail) — visibility-based read
+	// marking must wait for the final position. Equal values = user scroll only.
+	let settledRun = 0;
 
 	const ESTIMATED_MESSAGE_HEIGHT = 128;
 	const VIRTUAL_OVERSCAN = 8;
@@ -108,6 +119,7 @@
 			top: container.scrollHeight,
 			behavior: 'instant'
 		});
+		settledRun = run;
 	}
 
 	export async function scrollToBottom() {
@@ -175,6 +187,7 @@
 		if (run !== scrollRun) return true;
 		positionMessage(row, 'top');
 		updateBottomState();
+		settledRun = run;
 		markVisibleUnreadReferences();
 		return true;
 	}
@@ -184,25 +197,35 @@
 		return container.scrollHeight - container.scrollTop - container.clientHeight < 80;
 	}
 
+	// Visible-content pass: marks visible unread references (mentions) AND
+	// advances the group read cursor to the highest message row actually on
+	// screen — the atBottom flag lets the owner mark-everything instead, since
+	// rows can't see annotations folded into other rows. Skipped while a
+	// programmatic scroll flight is mid-air (see settledRun): the transient
+	// window may briefly cover the tail during a focus jump.
 	function markVisibleUnreadReferences() {
 		if (!browser || !container) return;
+		if (scrollRun !== settledRun) return;
 		const containerRect = container.getBoundingClientRect();
+		let maxVisibleCursor = 0;
 
 		for (const virtualItem of virtualItems) {
 			const message = messages[virtualItem.index];
 			if (!message) continue;
-			if (message.systemKind) continue;
-			if (!message.unreadReference) continue;
 			const element = container.querySelector<HTMLElement>(`[data-index="${virtualItem.index}"]`);
 			if (!element) continue;
 
 			const elementRect = element.getBoundingClientRect();
 			const isVisible =
 				elementRect.top < containerRect.bottom && elementRect.bottom > containerRect.top;
-			if (isVisible) {
-				onVisibleUnreadReference(message);
-			}
+			if (!isVisible) continue;
+			const cursor = message.cursor ?? 0;
+			if (cursor > maxVisibleCursor) maxVisibleCursor = cursor;
+			if (message.systemKind || !message.unreadReference) continue;
+			onVisibleUnreadReference(message);
 		}
+
+		if (maxVisibleCursor > 0) onVisibleRead({ cursor: maxVisibleCursor, atBottom: wasAtBottom });
 	}
 
 	function scheduleVisibleUnreadReferenceCheck() {
@@ -308,7 +331,7 @@
 				// otherwise keep the classic bottom-pin for new arrivals.
 				const focused =
 					Boolean(focusId) && focusId !== consumedFocusId && (await scrollToFocusMessage(focusId));
-				if (!focused && shouldScroll) void scrollToLatestMessage();
+				if (!focused && shouldScroll) await scrollToLatestMessage();
 			}
 			updateBottomState();
 			markVisibleUnreadReferences();
@@ -355,6 +378,7 @@
 		if (run !== scrollRun) return;
 		positionMessage(element, 'center');
 		updateBottomState();
+		settledRun = run;
 		markVisibleUnreadReferences();
 	}
 

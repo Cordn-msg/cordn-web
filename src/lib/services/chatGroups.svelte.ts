@@ -586,7 +586,8 @@ function isProvablyFreshChatGroup(group: StoredChatGroup): boolean {
  */
 async function catchUpGroupBeforeOutboundOperation(
 	group: StoredChatGroup,
-	gid: string
+	gid: string,
+	kind: 'send' | 'commit'
 ): Promise<StoredChatGroup> {
 	assertChatGroupIsActive(group);
 
@@ -629,9 +630,32 @@ async function catchUpGroupBeforeOutboundOperation(
 				opaqueMessageBase64: message.msg_64
 			}))
 		);
+		return requireChatGroup(group.id);
 	}
 
-	return requireChatGroup(group.id);
+	// The fetch SUCCEEDED and the coordinator has nothing beyond our cursor.
+	// That is the wedged-send heal's evidence: run the drop-recovery window (if
+	// any) through the normal ingest pass, then — with every drop either
+	// recovered or proven unopenable — the staleMark is permanently unopenable
+	// traffic (lagging senders, losing branches), NOT missed updates. Clearing
+	// it un-holds sends that would otherwise wait for exogenous traffic to
+	// prove the same thing (report: wedged clock until someone else talked).
+	// A FAILED fetch returns above without proof — the hold stays.
+	if (unrecoveredDropHorizon(group) !== undefined) {
+		await applyIncomingChatGroupMessages(group, []);
+	}
+	let refreshed = requireChatGroup(group.id);
+	if (kind === 'send' && refreshed.staleMark && unrecoveredDropHorizon(refreshed) === undefined) {
+		// ponytail: an empty successful fetch proves nothing exists beyond our
+		// cursor — if the fleet were ahead of us, its commit would be out there.
+		// Residual corner: a below-cursor skip whose drop issues were evicted by
+		// the 50-issue cap can clear a justified hold — cost is one unreadable
+		// send vs. today's indefinite silent wedge. skippedSiblingCommit is a
+		// different (permanent, multi-device) hold and is untouched here.
+		replaceGroup(refreshed.id, { ...refreshed, staleMark: undefined });
+		refreshed = requireChatGroup(group.id);
+	}
+	return refreshed;
 }
 
 /**
@@ -695,7 +719,7 @@ async function assertGroupCanPerformOutboundOperation(
 	const state = decodeStoredGroupState(group);
 	const gid = groupIdDecoder.decode(state.groupContext.groupId);
 
-	const refreshed = await catchUpGroupBeforeOutboundOperation(group, gid);
+	const refreshed = await catchUpGroupBeforeOutboundOperation(group, gid, kind);
 	assertChatGroupIsActive(refreshed);
 	assertGroupNotBehind(refreshed, kind);
 
@@ -751,11 +775,19 @@ async function assertGroupCanPerformOutboundOperation(
 async function prepareGroupForApplicationMessage(groupId: string): Promise<StoredChatGroup> {
 	const account = requireActiveAccount('You must be logged in to send a message');
 	const mdActive = isMultiDeviceActive(normalizePubKey(account.pubkey));
-	if (isGroupActivelyWatched(groupId) && (!mdActive || isGroupFeedLive(groupId))) {
-		const group = requireChatGroup(groupId);
-		assertChatGroupIsActive(group);
-		assertGroupNotBehind(group, 'send');
-		return group;
+	const watched = requireChatGroup(groupId);
+	assertChatGroupIsActive(watched);
+	// Missed-update evidence doubts the feed the fast path trusts — with a
+	// staleMark the full catch-up runs instead, so a held send gets its
+	// convergence proof (see catchUpGroupBeforeOutboundOperation) instead of
+	// throwing on the mark forever while the group is quiet.
+	if (
+		!watched.staleMark &&
+		isGroupActivelyWatched(groupId) &&
+		(!mdActive || isGroupFeedLive(groupId))
+	) {
+		assertGroupNotBehind(watched, 'send');
+		return watched;
 	}
 	return assertGroupCanPerformOutboundOperation(groupId, 'send');
 }
@@ -1168,7 +1200,8 @@ async function adoptOwnCommitEvidence(params: {
 		try {
 			await catchUpGroupBeforeOutboundOperation(
 				requireChatGroup(params.group.id),
-				groupIdDecoder.decode(params.preState.groupContext.groupId)
+				groupIdDecoder.decode(params.preState.groupContext.groupId),
+				'commit'
 			);
 		} catch {
 			/* the next fetch applies it */

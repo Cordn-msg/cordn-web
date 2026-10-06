@@ -60,7 +60,12 @@
 		removePendingMessage,
 		updatePendingMessage
 	} from '$lib/services/chatOutbox.svelte';
-	import { enqueueTextMessage, retryOutboxEntry } from '$lib/services/chatOutboxQueue';
+	import {
+		discardOutboxEntry,
+		enqueueTextMessage,
+		OUTBOX_ID_PREFIX,
+		retryOutboxEntry
+	} from '$lib/services/chatOutboxQueue';
 
 	let {
 		groupId = 'general',
@@ -122,10 +127,17 @@
 	const group = $derived.by(() => getChatGroup(groupId));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
+	// Guarded like displayTitle: during a transient groups-store gap (boot
+	// load, account switch) requireChatGroup would throw INSIDE this derived,
+	// destroying the whole shell render — and with it every ephemeral composer
+	// state (in-progress reply/edit target, focus). Empty candidates ride out
+	// the gap instead; the shell survives and the reply is still there on send.
 	const mentionCandidates = $derived.by<ChatMentionCandidate[]>(() =>
-		listChatGroupMembers(groupId).map((member) => ({
-			pubkey: member.stablePubkey
-		}))
+		group
+			? listChatGroupMembers(groupId).map((member) => ({
+					pubkey: member.stablePubkey
+				}))
+			: []
 	);
 	const displayTitle = $derived.by(() =>
 		group
@@ -844,6 +856,14 @@
 	async function handleDelete(message: ChatMessage) {
 		if (message.deleted) return;
 
+		// Pending outbox bubbles have no stored message to send a kind-5 for —
+		// "delete" on a wedged/failed bubble discards the send intent instead
+		// (safe for ambiguous entries: a landed copy still arrives via ingest).
+		if (message.id.startsWith(OUTBOX_ID_PREFIX)) {
+			discardOutboxEntry(message.id);
+			return;
+		}
+
 		const storedMessage = messageMaps.byEventId.get(message.eventId);
 		if (!storedMessage || !samePubKey(storedMessage.sender, activePubkey)) return;
 
@@ -934,8 +954,10 @@
 	// list mounts with the focus id already in hand — an effect-set prop arrives
 	// one flush late, the list bottom-pins first, and that in-flight pin keeps
 	// the virtual window at the tail so the focus row never renders. Snapshotted
-	// once per group before markChatGroupRead clears the unread gap; live
-	// arrivals while the chat is open never re-focus. A ?message= deep link wins
+	// once per group; the read cursor only advances with visibility, so the
+	// unread gap persists until actually read and a mid-backlog exit resumes
+	// here next open. Live arrivals while the chat is open never re-focus. A
+	// ?message= deep link wins
 	// (its own effect scrolls to the target).
 	let snapshotGroupId = '';
 	let snapshotFocusId = '';
@@ -955,10 +977,17 @@
 		return snapshotFocusId;
 	});
 
-	$effect(() => {
-		if (!groupId || !group) return;
-		markChatGroupRead(groupId, group.lastCursor);
-	});
+	// Read-marking follows visibility (Signal-Desktop-style): the message list
+	// reports the highest cursor actually on screen, so a backlog survives a
+	// partial read — close mid-scroll and the unread marker resumes where you
+	// left it. At the bottom the report means mark-everything instead: rows
+	// can't see annotations folded into other rows, and everything above has
+	// been scrolled past anyway.
+	function handleVisibleRead({ cursor, atBottom }: { cursor: number; atBottom: boolean }) {
+		if (!groupId) return;
+		if (atBottom) markChatGroupRead(groupId);
+		else markChatGroupRead(groupId, cursor);
+	}
 
 	$effect(() => {
 		const targetMessage = page.url.searchParams.get('message') ?? '';
@@ -1027,6 +1056,7 @@
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
 					onVisibleUnreadReference={handleVisibleUnreadReference}
+					onVisibleRead={handleVisibleRead}
 					onOpenRich={handleOpenRich}
 					onPin={handlePin}
 				/>

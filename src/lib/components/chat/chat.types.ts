@@ -10,6 +10,9 @@ export interface ChatMessage {
 	dayLabel: string;
 	isOwn?: boolean;
 	deliveryState?: 'sending' | 'sent' | 'error' | 'queued';
+	/** Why a pending bubble is stuck (held send, coordinator error) — the
+	 *  clock icon's tooltip. Absent for the plain offline-queued case. */
+	deliveryDetail?: string;
 	edited?: boolean;
 	deleted?: boolean;
 	reactions?: Array<{
