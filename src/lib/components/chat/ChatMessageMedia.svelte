@@ -84,6 +84,13 @@
 			loading = false;
 			return;
 		}
+		// Churn guard (playing media): the messages array rebuilds with fresh
+		// ChatMessage objects on every groups-store write — same tags refs, but the
+		// new identities re-run this effect, and flipping `loading` unmounts a
+		// playing <video>/<VoiceNotePlayer> (playback resets to 0:00). The cache is
+		// keyed by plaintext hash, so an unchanged hash means `resolved` is still
+		// current: keep it mounted and skip the no-op re-resolve.
+		if (resolved && resolved.plaintextHashHex === currentRef.plaintextHashHex) return;
 		loading = true;
 		failed = false;
 		let cancelled = false;
