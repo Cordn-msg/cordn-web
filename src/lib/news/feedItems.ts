@@ -91,6 +91,20 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-06-invite-cards',
+		createdAt: Date.UTC(2026, 9, 6),
+		version: 1,
+		title: 'Invite links now open as cards inside chats',
+		body: '- ✨ Paste a Cordn link — a group, a coordinator, or a profile — into a message and it arrives as a card instead of a wall of letters: the group’s name and its icon, whether you’re already in it, and one button to join or open the chat. The long link itself leaves the message text; Copy link and Show link are on the card for the raw form.\n- 🔄 The icon a link carries is shown as-is (usually an emoji), and when a link carries none, the Cordn logo stands in — never a broken image. A card with no room for a description skips the filler line, and revealing the raw link no longer stretches the message bubble sideways.'
+	},
+	{
+		id: 'cordn-news-2026-10-06-chat-reliability',
+		createdAt: Date.UTC(2026, 9, 6),
+		version: 1,
+		title: 'A steadier chat: videos, replies, unread marks, and stuck messages',
+		body: '- 🐛 Videos no longer stop and restart whenever a message lands in any conversation — playback keeps going through new arrivals.\n- 🐛 Opening a group used to mark its whole history as read, even the parts you never scrolled to. Now only what you actually see counts as read, so the unread marker is still where you left it when you come back.\n- 🐛 A reply you were writing could silently disappear when messages arrived mid-sentence — and then send as a plain message with no reply attached. That window is closed.\n- 🐛 A message could sit behind the clock icon forever after a coordinator hiccup, surviving restarts, with no way to remove it. The app now re-checks on its own and recovers as soon as the coordinator answers — and while a message waits, the clock says why. If you ever want out, deleting a waiting message now simply works.\n- 🔄 The group menu’s delete option reads plainly “Delete group” — the confirmation dialog explains what stays untouched elsewhere.'
+	},
+	{
 		id: 'cordn-news-2026-10-05-message-recovery',
 		createdAt: Date.UTC(2026, 9, 5),
 		version: 1,
