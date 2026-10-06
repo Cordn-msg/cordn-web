@@ -200,6 +200,7 @@ async function main() {
 		await card.waitFor({ timeout: 10_000 });
 		const body = await page.evaluate(() => document.body.innerText);
 		if (!body.includes('Garden')) throw new Error('card title from ?m= metadata missing');
+		if (body.includes('A Cordn group')) throw new Error('generic filler line still rendered');
 		if (!body.includes('Join')) throw new Error('Join action missing for unknown group');
 		// The raw link left the bubble: the cordn1 code must not appear as body text.
 		const inviteUrl = await page.evaluate(() => window.__inviteUrl());

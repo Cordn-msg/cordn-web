@@ -68,7 +68,9 @@
 			const coordinator = invite.coordinatorPubkey
 				? `on ${getCoordinatorLabel(normalizePubKey(invite.coordinatorPubkey))}`
 				: 'on your default coordinator';
-			return `${joinedGroup ? "You're in this group" : 'A Cordn group'} · ${coordinator}`;
+			// The kind label above already says what this is — an unknown group
+			// shows just its coordinator, no generic filler line.
+			return `${joinedGroup ? "You're in this group · " : ''}${coordinator}`;
 		}
 		if (invite.kind === 'coordinator') {
 			return knownCoordinator
