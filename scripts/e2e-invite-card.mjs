@@ -63,6 +63,10 @@ const HARNESS_SVELTE = `<script lang="ts">
 			coordinatorPubkey: 'bb'.repeat(32)
 		});
 		const INVITE_URL = 'https://cordn.net/chat/' + INVITE_CODE + '?m=eyJuYW1lIjoiR2FyZGVuIn0';
+		// Real-world share link (icon is an EMOJI, not an image URL): a card must
+		// render it as text, never as a broken <img src="🐦">.
+		const EMOJI_URL =
+			'https://cordn.net/chat/cordn1qgvhwumn8ghj7un9d3shjtnrdah8getcw3mx6tn0wfnsyxnhwden5te0wfjkcctexghxxmmww3jhsarkd5hx7un8qgt8wumn8ghj7un9d3shjtnswf5k6ctv9ehx2aqpyzf82097v05585xy5rrp6az5x7yj4ahf3uteecz202rr4t2wqzc62qpyvvenzvrrxenryttyxc6rqtf5vvurwtfcvvun2ttrxpnrgdee8qukvvfcvcjtlxkp?m=eyJuYW1lIjoiQ29yZG4gRGV2IE9HcyIsImljb24iOiLwn6qiIn0';
 		const mkMessage = (i: number) => ({
 			cursor: i,
 			createdAt: 1000 + i,
@@ -76,7 +80,9 @@ const HARNESS_SVELTE = `<script lang="ts">
 					? 'come to the garden ' + INVITE_URL
 					: i === 4
 						? 'or scan ' + INVITE_CODE
-						: 'peer message ' + i
+						: i === 6
+							? 'bird group ' + EMOJI_URL
+							: 'peer message ' + i
 		});
 
 		// Real MLS state: listChatGroupMembers decodes it unguarded at render.
@@ -99,9 +105,16 @@ const HARNESS_SVELTE = `<script lang="ts">
 			coordinatorKey: 'aa'.repeat(32),
 			createdAt: 1,
 			stateBase64: mls.bytesToBase64(mls.encode(mls.clientStateEncoder, state)),
-			lastCursor: 5,
-			fetchCursor: 5,
-			messages: [mkMessage(1), mkMessage(2), mkMessage(3), mkMessage(4), mkMessage(5)],
+			lastCursor: 6,
+			fetchCursor: 6,
+			messages: [
+					mkMessage(1),
+					mkMessage(2),
+					mkMessage(3),
+					mkMessage(4),
+					mkMessage(5),
+					mkMessage(6)
+				],
 			syncIssues: [],
 			snapshots: [],
 			joinEpoch: 0n,
@@ -193,10 +206,29 @@ async function main() {
 		if (body.includes(inviteUrl)) throw new Error('raw invite URL still rendered in the body');
 		log('invite card rendered: label + Garden title + Join, URL stripped from body');
 
-		// The bare code message gets its own card.
+		// The bare code message gets its own card; the emoji-icon link a third.
 		const cardCount = await page.locator('text=Cordn invite · group').count();
-		if (cardCount < 2) throw new Error(`expected 2 invite cards, found ${cardCount}`);
-		log(`bare cordn1 code card rendered too (${cardCount} cards)`);
+		if (cardCount < 3) throw new Error(`expected 3 invite cards, found ${cardCount}`);
+		log(`bare cordn1 + emoji-icon cards rendered too (${cardCount} cards)`);
+
+		// The share metadata's icon is an emoji: rendered as text, never a
+		// broken <img src="🐦">; an icon-less card falls back to the Cordn logo.
+		const avatarState = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll('[data-message-id]'));
+			const emojiRow = rows.find((row) => row.textContent?.includes('bird group'));
+			const gardenRow = rows.find((row) => row.textContent?.includes('come to the garden'));
+			return {
+				emojiText: emojiRow?.textContent?.includes('🪢') ?? false,
+				emojiImg: Boolean(emojiRow?.querySelector('img[src="🐦"]')),
+				logoFallback: Boolean(
+					gardenRow?.querySelector('img[src^="/cordn-logo"], img[src^="cordn-logo"]')
+				)
+			};
+		});
+		log('card avatars:', JSON.stringify(avatarState));
+		if (avatarState.emojiImg) throw new Error('emoji icon rendered as a broken <img>');
+		if (!avatarState.emojiText) throw new Error('emoji icon not rendered as text');
+		if (!avatarState.logoFallback) throw new Error('icon-less card missing the Cordn logo fallback');
 
 		// Show link reveals the raw form WITHOUT stretching the shrink-to-fit
 		// bubble: the unbroken URL must contribute zero max-content width

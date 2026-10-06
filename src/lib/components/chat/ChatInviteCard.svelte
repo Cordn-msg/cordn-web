@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import Users from '@lucide/svelte/icons/users';
 	import Server from '@lucide/svelte/icons/server';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
 	import { getChatCoordinator, getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
@@ -10,6 +9,7 @@
 	import { cn, copyToClipboard, normalizePubKey, pubkeyToHexColor } from '$lib/utils';
 	import { Button } from '$lib/components/ui/button';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
+	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 	import type { ChatInvite } from '$lib/chat/chatInvites';
 
 	/**
@@ -104,24 +104,23 @@
 	<div class="flex items-center gap-2.5">
 		{#if joinedGroup && localGroup}
 			<ChatGroupAvatar group={localGroup} class="h-10 w-10 shrink-0" fallbackClass="text-sm" />
-		{:else if invite.kind === 'group' && invite.icon}
-			<img
-				src={invite.icon}
-				alt=""
-				loading="lazy"
-				class="h-10 w-10 shrink-0 rounded-lg object-cover"
-			/>
+		{:else if invite.kind === 'group'}
+			<!-- The share metadata's icon is an emoji (not an image URL) — the same
+				GroupAvatarFallback every other group avatar uses renders it, with
+				the Cordn logo when the link carries none. Never an <img> with a
+				non-URL src (the broken-link look). -->
+			<span
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-lg"
+			>
+				<GroupAvatarFallback icon={invite.icon} />
+			</span>
 		{:else}
 			<span
 				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-white"
-				style={`background-color: ${pubkeyToHexColor(
-					invite.kind === 'group' ? invite.gid : invite.pubkey
-				)}`}
+				style={`background-color: ${pubkeyToHexColor(invite.pubkey)}`}
 			>
 				{#if invite.kind === 'coordinator'}
 					<Server class="size-5" />
-				{:else if invite.kind === 'group'}
-					<Users class="size-5" />
 				{:else}
 					{title.slice(0, 1).toUpperCase()}
 				{/if}
