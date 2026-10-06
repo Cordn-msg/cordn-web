@@ -24,6 +24,8 @@ import type { ChatMessageReplyTarget } from '$lib/chat/references';
 import type { ChatMessage as UiChatMessage } from '$lib/components/chat/chat.types';
 import { errorMessage, formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 
+export { OUTBOX_ID_PREFIX };
+
 /**
  * Offline outbox — durable queue of plaintext send INTENTS.
  *
@@ -103,6 +105,7 @@ function outboxEntryToChatMessage(entry: StoredChatOutboxRecord): UiChatMessage 
 		dayLabel: formatUnixTimestamp(entry.createdAt, false, true),
 		isOwn: true,
 		deliveryState: entry.state === 'failed' ? 'error' : 'queued',
+		deliveryDetail: entry.lastError,
 		reactions: [],
 		tags: entry.tags,
 		replyTo: entry.replyTo
@@ -200,11 +203,24 @@ export function retryOutboxEntry(id: string): void {
 	entry.state = 'queued';
 	entry.attempts = 0;
 	entry.lastAttemptAt = undefined;
+	entry.lastError = undefined;
 	updatePendingMessage(entry.groupId, bubbleId(entry), (message) => ({
 		...message,
-		deliveryState: 'queued'
+		deliveryState: 'queued',
+		deliveryDetail: undefined
 	}));
 	void persistEntry(entry).then(() => requestDrain());
+}
+
+/** User discarded a wedged or failed pending bubble: the intent is abandoned
+ *  (the "could not delete a wedged message" escape hatch). Safe for ambiguous
+ *  entries too — a copy that already landed still arrives via ingestion;
+ *  dropping only gives up on re-posting. */
+export function discardOutboxEntry(id: string): void {
+	if (!id.startsWith(OUTBOX_ID_PREFIX)) return;
+	const entry = entriesBySeq.get(Number(id.slice(OUTBOX_ID_PREFIX.length)));
+	if (!entry) return;
+	void dropEntry(entry);
 }
 
 type AttemptOutcome = 'sent' | 'transient' | 'definitive' | 'abort';
@@ -261,10 +277,12 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 		entry.attempts += 1;
 		entry.lastAttemptAt = Date.now();
 		entry.state = isAmbiguousTimeout(error) ? 'ambiguous' : 'queued';
+		entry.lastError = errorMessage(error);
 		await persistEntry(entry);
 		updatePendingMessage(entry.groupId, bubbleId(entry), (message) => ({
 			...message,
-			deliveryState: 'queued'
+			deliveryState: 'queued',
+			deliveryDetail: entry.lastError
 		}));
 		return 'transient';
 	}

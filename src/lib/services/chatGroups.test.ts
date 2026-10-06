@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { StoredChatGroup } from './chatGroups.svelte';
 
 const clientStateDecoderMock = vi.fn();
@@ -12,6 +12,12 @@ const getCoordinatorClientMock = vi.fn();
 const pruneZombieKeyPackagesMock = vi.fn().mockResolvedValue(undefined);
 const createSelfUpdateCommitMock = vi.fn();
 const reconcileTipForOutboundMock = vi.fn();
+const unrecoveredDropHorizonMock = vi
+	.fn<(group: unknown) => number | undefined>()
+	.mockReturnValue(undefined);
+const markDropIssuesRecoveredMock = vi
+	.fn<(issues: Array<Record<string, unknown>>) => Array<Record<string, unknown>>>()
+	.mockImplementation((issues) => issues.map((issue) => ({ ...issue, recovered: true })));
 
 vi.mock('ts-mls', async () => {
 	const actual = await vi.importActual<typeof import('ts-mls')>('ts-mls');
@@ -68,7 +74,10 @@ vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
 	buildInboundSystemMessage: vi.fn(() => ({ id: 'sys', content: '{}' })),
 	noteFormerPayloadKey: vi.fn(async (held: Record<string, string> | undefined) => held ?? {}),
 	probeSealedMessage: vi.fn(),
-	staleGenerationLeafIndex: vi.fn(() => undefined)
+	staleGenerationLeafIndex: vi.fn(() => undefined),
+	unrecoveredDropHorizon: (group: unknown) => unrecoveredDropHorizonMock(group),
+	markDropIssuesRecovered: (issues: Array<Record<string, unknown>>) =>
+		markDropIssuesRecoveredMock(issues)
 }));
 
 vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
@@ -1145,5 +1154,168 @@ describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', ()
 		await repairSharedLeafRatchetDivergence('gid-repair-commit', '5');
 		expect(createSelfUpdateCommitMock).toHaveBeenCalledTimes(1);
 		expect(postGroupMessageMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('wedged-send convergence heal (staleMark + empty catch-up fetch)', () => {
+	// The reported bug: two unopenable payloads set staleMark (>= STALE_SEND_RUN)
+	// and every send is held with "this device may be behind". The heal: a
+	// SUCCESSFUL catch-up fetch that returns nothing beyond our cursor proves
+	// convergence (nothing exists out there that could change our view), so the
+	// staleMark is permanently-unopenable traffic, not missed updates — clear it
+	// and send. A FAILED fetch proves nothing; the hold stays.
+	const sendInput = { groupId: 'held', content: 'hello' };
+
+	function seedHeldGroup() {
+		return {
+			id: 'held',
+			status: 'active' as const,
+			coordinatorKey: 'cc'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 3,
+			fetchCursor: 3,
+			messages: [],
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n,
+			staleMark: { cursor: 2, unopenableCount: 2 }
+		};
+	}
+
+	beforeEach(() => {
+		clientStateDecoderMock.mockReset();
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+		requireActiveAccountMock.mockReset();
+		requireActiveAccountMock.mockReturnValue({ pubkey: 'bb'.repeat(32) });
+		createWorkingChatGroupSessionMock.mockReset();
+		createWorkingChatGroupSessionMock.mockImplementation((_group: unknown, state: unknown) => ({
+			state,
+			lastCursor: 3,
+			fetchCursor: 3,
+			messages: [],
+			syncIssues: [],
+			metadata: undefined,
+			snapshots: []
+		}));
+		buildPersistedChatGroupMock.mockReset();
+		buildPersistedChatGroupMock.mockImplementation(
+			({ group }: { group: Record<string, unknown> }) => ({ ...group })
+		);
+		getCoordinatorClientMock.mockReset();
+		unrecoveredDropHorizonMock.mockReset();
+		unrecoveredDropHorizonMock.mockReturnValue(undefined);
+		markDropIssuesRecoveredMock.mockClear();
+	});
+
+	// This suite arms shared factory mocks with send-path shapes; a later
+	// suite appended below must not inherit them.
+	afterEach(async () => {
+		const chatGroupMessages = await import('./chatGroupMessages.svelte');
+		vi.mocked(chatGroupMessages.createUnsignedCordnMessageEvent).mockReset();
+		vi.mocked(chatGroupMessages.encodeAuthenticatedSender).mockReset();
+		vi.mocked(chatGroupMessages.createApplicationMessageBase64).mockReset();
+		const chatGroupSessions = await import('./chatGroupSessions.svelte');
+		vi.mocked(chatGroupSessions.syncChatGroupMessages).mockReset();
+	});
+
+	async function armSendMocks(input: {
+		fetch: ReturnType<typeof vi.fn>;
+		post?: ReturnType<typeof vi.fn>;
+	}) {
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: input.fetch,
+			PostGroupMessage: input.post ?? vi.fn().mockResolvedValue({ cursor: 4, at: 123 })
+		});
+		const chatGroupMessages = await import('./chatGroupMessages.svelte');
+		vi.mocked(chatGroupMessages.createUnsignedCordnMessageEvent).mockReturnValue({
+			id: 'evt-1',
+			kind: 9,
+			tags: [],
+			content: 'hello',
+			pubkey: 'bb'.repeat(32),
+			createdAt: 1
+		} as never);
+		vi.mocked(chatGroupMessages.encodeAuthenticatedSender).mockReturnValue('ad' as never);
+		vi.mocked(chatGroupMessages.createApplicationMessageBase64).mockResolvedValue({
+			opaqueMessageBase64: 'opaque',
+			event: { id: 'evt-1', kind: 9, tags: [], content: 'hello' },
+			newState: {}
+		} as never);
+		const chatGroupSessions = await import('./chatGroupSessions.svelte');
+		vi.mocked(chatGroupSessions.syncChatGroupMessages).mockResolvedValue({
+			received: [],
+			issues: [],
+			ingestion: { poisoned: false }
+		} as never);
+	}
+
+	test('a successful empty fetch clears the hold and the send goes through', async () => {
+		const { chatGroupsStore, sendChatGroupMessage } = await import('./chatGroups.svelte');
+		chatGroupsStore.groups = [seedHeldGroup()] as never;
+		await armSendMocks({ fetch: vi.fn().mockResolvedValue({ messages: [] }) });
+
+		const stored = await sendChatGroupMessage(sendInput);
+		expect(stored.id).toBe('evt-1');
+		expect(chatGroupsStore.groups.find((g) => g.id === 'held')?.staleMark).toBeUndefined();
+	});
+
+	test('a failed fetch proves nothing: the hold stays and the send is refused', async () => {
+		const { chatGroupsStore, sendChatGroupMessage } = await import('./chatGroups.svelte');
+		chatGroupsStore.groups = [seedHeldGroup()] as never;
+		await armSendMocks({
+			fetch: vi.fn().mockRejectedValue(new Error('Network error'))
+		});
+
+		await expect(sendChatGroupMessage(sendInput)).rejects.toThrow(/behind/i);
+		expect(chatGroupsStore.groups.find((g) => g.id === 'held')?.staleMark).toEqual({
+			cursor: 2,
+			unopenableCount: 2
+		});
+	});
+
+	test('unrecovered drop issues run their recovery pass before the clear', async () => {
+		const { chatGroupsStore, sendChatGroupMessage } = await import('./chatGroups.svelte');
+		chatGroupsStore.groups = [seedHeldGroup()] as never;
+		// Horizon present on the pre-pass group; the recovery fetch inside the
+		// ingest pass finds nothing new, marks the drops recovered, and the
+		// post-pass group has no horizon left -> clear + send. The mock mirrors
+		// that: the horizon exists until markDropIssuesRecovered records the pass.
+		unrecoveredDropHorizonMock.mockImplementation(() =>
+			markDropIssuesRecoveredMock.mock.calls.length > 0 ? undefined : 1
+		);
+		const fetch = vi.fn().mockResolvedValue({ messages: [] });
+		await armSendMocks({ fetch });
+
+		await sendChatGroupMessage(sendInput);
+		expect(fetch).toHaveBeenCalledTimes(2); // catch-up + recovery window
+		expect(markDropIssuesRecoveredMock).toHaveBeenCalled();
+		expect(chatGroupsStore.groups.find((g) => g.id === 'held')?.staleMark).toBeUndefined();
+	});
+
+	test('a recovery fetch that fails keeps the hold (no proof, no clear)', async () => {
+		const { chatGroupsStore, sendChatGroupMessage } = await import('./chatGroups.svelte');
+		chatGroupsStore.groups = [seedHeldGroup()] as never;
+		unrecoveredDropHorizonMock.mockReturnValue(1);
+		await armSendMocks({
+			fetch: vi.fn().mockRejectedValue(new Error('Network error'))
+		});
+
+		await expect(sendChatGroupMessage(sendInput)).rejects.toThrow(/behind|Network/i);
+		expect(chatGroupsStore.groups.find((g) => g.id === 'held')?.staleMark).toEqual({
+			cursor: 2,
+			unopenableCount: 2
+		});
 	});
 });

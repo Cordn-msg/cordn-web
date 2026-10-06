@@ -60,7 +60,12 @@
 		removePendingMessage,
 		updatePendingMessage
 	} from '$lib/services/chatOutbox.svelte';
-	import { enqueueTextMessage, retryOutboxEntry } from '$lib/services/chatOutboxQueue';
+	import {
+		discardOutboxEntry,
+		enqueueTextMessage,
+		OUTBOX_ID_PREFIX,
+		retryOutboxEntry
+	} from '$lib/services/chatOutboxQueue';
 
 	let {
 		groupId = 'general',
@@ -850,6 +855,14 @@
 
 	async function handleDelete(message: ChatMessage) {
 		if (message.deleted) return;
+
+		// Pending outbox bubbles have no stored message to send a kind-5 for —
+		// "delete" on a wedged/failed bubble discards the send intent instead
+		// (safe for ambiguous entries: a landed copy still arrives via ingest).
+		if (message.id.startsWith(OUTBOX_ID_PREFIX)) {
+			discardOutboxEntry(message.id);
+			return;
+		}
 
 		const storedMessage = messageMaps.byEventId.get(message.eventId);
 		if (!storedMessage || !samePubKey(storedMessage.sender, activePubkey)) return;

@@ -146,6 +146,9 @@ export interface StoredChatOutboxRecord {
 	attemptedEventId?: string;
 	/** Transient-failure count; drives retry backoff only (no auto-fail). */
 	attempts: number;
+	/** Last transient-failure reason (held sends, coordinator errors) — shown
+	 *  as the pending bubble's tooltip so a wedged clock explains itself. */
+	lastError?: string;
 	lastAttemptAt?: number;
 }
 

@@ -411,6 +411,66 @@ describe('offline outbox queue', () => {
 		expect(await listEntries(storage)).toHaveLength(0);
 	});
 
+	test('a held (transient) failure records lastError on the entry and the bubble', async () => {
+		const { queue, storage, projection } = await freshModules();
+		mocks.sendMock.mockRejectedValue(
+			new Error('Held: this device may be behind this group (it cannot open the newest messages)')
+		);
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'wedged' });
+		await settleDrain(queue);
+
+		const [entry] = await listEntries(storage);
+		expect(entry.state).toBe('queued');
+		expect(entry.lastError).toContain('Held: this device may be behind');
+		// The clock icon's tooltip comes from this — a wedged bubble must say
+		// why instead of the misleading offline line.
+		expect(projection.getPendingMessages('g1')[0]?.deliveryDetail).toBe(entry.lastError);
+	});
+
+	test('retryOutboxEntry clears the stale lastError off the bubble', async () => {
+		const { queue, storage, projection } = await freshModules();
+		mocks.sendMock.mockRejectedValueOnce(new Error('Held: this device may be behind'));
+		// Hang the second attempt so the retried entry is observably in flight.
+		let release: () => void = () => {};
+		const hung = new Promise<void>((resolve) => (release = resolve));
+		mocks.sendMock.mockImplementationOnce(async () => {
+			await hung;
+			return { cursor: 1, at: Date.now() };
+		});
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'wedge' });
+		await settleDrain(queue);
+		expect(projection.getPendingMessages('g1')[0]?.deliveryDetail).toContain('Held');
+
+		const [entry] = await listEntries(storage);
+		queue.retryOutboxEntry(`outbox:${entry.seq}`);
+		// The attempt is hung, so settleDrain would wait on its lane — tick
+		// past the drain kick instead, assert, then release.
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(mocks.sendMock).toHaveBeenCalledTimes(2);
+		expect(projection.getPendingMessages('g1')[0]?.deliveryDetail).toBeUndefined();
+		release();
+		await settleDrain(queue);
+	});
+
+	test('discardOutboxEntry drops a wedged bubble from storage and the projection', async () => {
+		const { queue, storage, projection } = await freshModules();
+		// Keep the entry wedged-queued: every attempt fails transiently.
+		mocks.sendMock.mockRejectedValue(new Error('Held: this device may be behind'));
+
+		queue.enqueueTextMessage({ groupId: 'g1', content: 'let me go' });
+		await settleDrain(queue);
+		const [entry] = await listEntries(storage);
+		expect(entry.state).toBe('queued');
+
+		queue.discardOutboxEntry(`outbox:${entry.seq}`);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(await listEntries(storage)).toHaveLength(0);
+		expect(projection.getPendingMessages('g1')).toHaveLength(0);
+	});
+
 	test('hydrateOutbox rebuilds the projection from durable storage', async () => {
 		const { queue, projection } = await freshModules();
 		mocks.sendMock.mockRejectedValue(new TypeError('fetch failed'));

@@ -1006,7 +1006,7 @@
 						<span
 							class="inline-flex items-center"
 							aria-label={getDeliveryStateLabel()}
-							title={getDeliveryStateLabel()}
+							title={message.deliveryDetail ?? getDeliveryStateLabel()}
 						>
 							<Clock class="size-3" />
 						</span>
