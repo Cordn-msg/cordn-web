@@ -318,7 +318,8 @@ export async function acceptJoinRequest(entry: JoinRequestEntry): Promise<string
 		// the entry for display only.
 		const group = await inviteChatGroupMember({
 			groupId: entry.groupId,
-			identifier: requesterPubkey
+			identifier: requesterPubkey,
+			expectedStablePubkey: requesterPubkey
 		});
 
 		markJoinRequestAccepted(entry.id, group.id);

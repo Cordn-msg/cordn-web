@@ -12,9 +12,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
+	import { queryClient } from '$lib/query-client';
+	import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 	import {
-		fetchPublicCoordinatorAvailableKeyPackages,
-		type AvailableKeyPackageWithCoordinator
+		availableKeyPackagesQueryOptions,
+		fetchCoordinatorAvailableKeyPackages
 	} from '$lib/queries/chatKeyPackageQueries';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
@@ -29,13 +31,8 @@
 		markCoordinatorUsed,
 		upsertChatCoordinator
 	} from '$lib/services/chatCoordinators.svelte';
-	import {
-		createChatGroup,
-		ensureGroupsLoaded,
-		inviteChatGroupMember,
-		listChatGroupMembers,
-		listChatGroups
-	} from '$lib/services/chatGroups.svelte';
+	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { startChatWithKeyPackageAction } from '$lib/services/chatUiActions.svelte';
 	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import { eventStore } from '$lib/services/eventStore';
 	import { getUserRelayListFromStore } from '$lib/services/loaders.svelte';
@@ -132,6 +129,40 @@
 		() =>
 			$profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16) || 'Profile'
 	);
+	// Key-package availability is a remote read → Svelte Query (AGENTS.md): the
+	// same cached/deduped path the chat routes use, served by a registry client
+	// that participates in the coordinator keepalive/health/probe lifecycle.
+	// Disabled when logged out — the button only opens the login dialog then,
+	// and the listing fetches the moment an account exists. This replaces the
+	// old per-visit throwaway client that sat outside all of that machinery.
+	const keyPackagesQuery = createQuery(() => ({
+		...availableKeyPackagesQueryOptions($activeAccount?.pubkey ?? '', selectedCoordinatorKey),
+		enabled: Boolean($activeAccount) && Boolean(selectedCoordinatorKey) && !isSelf
+	}));
+	const availableKeyPackages = $derived(keyPackagesQuery.data ?? []);
+	const loadingAvailableKeyPackages = $derived(keyPackagesQuery.isPending);
+	const availableKeyPackagesError = $derived.by(() => {
+		if (!keyPackagesQuery.isError) return '';
+		return keyPackagesQuery.error instanceof Error
+			? keyPackagesQuery.error.message
+			: 'Failed to load coordinator key packages.';
+	});
+
+	// Explicit user intent probes now, bypassing the passive read backoff —
+	// the same force seam as refreshWelcomeNotificationsAction. The forced
+	// result lands under the same query key, so the card re-renders from it.
+	async function retryKeyPackages() {
+		const account = $activeAccount;
+		if (!account || !selectedCoordinatorKey) return;
+		await queryClient
+			.fetchQuery({
+				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, selectedCoordinatorKey),
+				queryFn: () =>
+					fetchCoordinatorAvailableKeyPackages(selectedCoordinatorKey, { force: true }),
+				staleTime: 0
+			})
+			.catch(() => undefined);
+	}
 	const profileKeyPackage = $derived.by(() =>
 		availableKeyPackages.find((entry) => normalizePubKey(entry.pk) === profilePubkey)
 	);
@@ -151,9 +182,6 @@
 		return profileIdentifierQuery.data?.relayHints ?? [];
 	});
 	const profilePublishRelays = $derived.by(() => loadedProfileRelays);
-	let availableKeyPackages = $state<AvailableKeyPackageWithCoordinator[]>([]);
-	let loadingAvailableKeyPackages = $state(false);
-	let availableKeyPackagesError = $state('');
 	const sharedGroupPubkeys = $derived.by(() => {
 		if (!profilePubkey) return [] as string[];
 		return [
@@ -186,52 +214,6 @@
 	let startChatAfterLogin = $state(false);
 	let initializedEditorForPubkey = $state('');
 
-	$effect(() => {
-		if (!profilePubkey) {
-			availableKeyPackages = [];
-			loadingAvailableKeyPackages = false;
-			availableKeyPackagesError = '';
-			return;
-		}
-
-		if (isSelf) {
-			availableKeyPackages = [];
-			loadingAvailableKeyPackages = false;
-			availableKeyPackagesError = '';
-			return;
-		}
-
-		if (!selectedCoordinatorKey) {
-			availableKeyPackages = [];
-			loadingAvailableKeyPackages = false;
-			return;
-		}
-
-		let cancelled = false;
-		loadingAvailableKeyPackages = true;
-		availableKeyPackagesError = '';
-
-		void fetchPublicCoordinatorAvailableKeyPackages(selectedCoordinatorKey)
-			.then((entries) => {
-				if (cancelled) return;
-				availableKeyPackages = entries;
-			})
-			.catch((error) => {
-				if (cancelled) return;
-				availableKeyPackages = [];
-				availableKeyPackagesError =
-					error instanceof Error ? error.message : 'Failed to load coordinator key packages.';
-			})
-			.finally(() => {
-				if (cancelled) return;
-				loadingAvailableKeyPackages = false;
-			});
-
-		return () => {
-			cancelled = true;
-		};
-	});
-
 	// Deduped via Svelte Query: a repeat visit within the stale window does no
 	// network work and paints straight from the eventStore cache.
 	$effect(() => {
@@ -259,6 +241,12 @@
 
 	$effect(() => {
 		if (!startChatAfterLogin || !$activeAccount || isSelf || startingChat) {
+			return;
+		}
+		// Wait for the key-package listing instead of consuming the flag into a
+		// silent no-op: handleStartChat only runs once it can start (or report why
+		// it can't).
+		if (keyPackagesQuery.isPending) {
 			return;
 		}
 
@@ -397,15 +385,15 @@
 			return;
 		}
 
-		if (!profileKeyPackage || loadingAvailableKeyPackages) {
+		if (!profileKeyPackage) {
+			startChatError =
+				availableKeyPackagesError || 'This person has no key package on this coordinator yet.';
 			return;
 		}
 
 		try {
 			startingChat = true;
 			startChatError = '';
-
-			await ensureGroupsLoaded();
 
 			const coordinatorKey = profileKeyPackage.coordinatorKey;
 
@@ -419,15 +407,12 @@
 				});
 			}
 
-			const group = await createChatGroup({
-				name: '',
-				coordinatorKey
+			const groupId = await startChatWithKeyPackageAction({
+				kp_ref: profileKeyPackage.kp_ref,
+				coordinatorKey,
+				pk: profileKeyPackage.pk
 			});
-			await inviteChatGroupMember({
-				groupId: group.id,
-				identifier: profileKeyPackage.kp_ref
-			});
-			await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
+			await goto(resolve('/chat/[id]', { id: groupRouteId(groupId) }));
 		} catch (error) {
 			startChatError = error instanceof Error ? error.message : 'Failed to start chat';
 		} finally {
@@ -660,6 +645,11 @@
 										<p class="text-sm text-destructive">{startChatError}</p>
 									{:else if availableKeyPackagesError}
 										<p class="text-sm text-destructive">{availableKeyPackagesError}</p>
+										<Button variant="outline" onclick={retryKeyPackages}>Retry</Button>
+									{:else if $activeAccount && !loadingAvailableKeyPackages && !profileKeyPackage}
+										<p class="text-sm text-muted-foreground">
+											This person has no key package on this coordinator yet.
+										</p>
 									{/if}
 								</div>
 							</div>

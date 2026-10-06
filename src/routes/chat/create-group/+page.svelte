@@ -157,7 +157,10 @@
 			// group is still created, same UX as the per-member loop this replaced.
 			const { failures } = await inviteChatGroupMembers({
 				groupId: group.id,
-				identifiers: selectedMemberPubkeys
+				targets: selectedMemberPubkeys.map((pubkey) => ({
+					identifier: pubkey,
+					expectedStablePubkey: pubkey
+				}))
 			});
 			if (failures.length) {
 				toast.error(

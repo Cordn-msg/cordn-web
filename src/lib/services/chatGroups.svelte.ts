@@ -560,6 +560,25 @@ function assertChatGroupIsActive(group: StoredChatGroup): void {
 }
 
 /**
+ * A freshly created group: born on this device (creator epoch 0n — welcome
+ * adopters carry their join epoch ≥ 1n), nothing posted, nothing observed, no
+ * epoch op ever staged. Its gid is private and its state has a single member,
+ * so there is nothing on the coordinator the pre-outbound catch-up could find —
+ * the fetch would be a pure round trip on the new-conversation path. Anything
+ * more established (including a retried invite with an outstanding op) keeps
+ * the full catch-up discipline.
+ */
+function isProvablyFreshChatGroup(group: StoredChatGroup): boolean {
+	return (
+		group.joinEpoch === 0n &&
+		group.fetchCursor === 0 &&
+		group.lastCursor === 0 &&
+		group.messages.length === 0 &&
+		(pendingEpochOperations.get(group.id)?.length ?? 0) === 0
+	);
+}
+
+/**
  * Catch up with coordinator messages before performing an outbound operation.
  * This runs inline (not through runGroupOperation) since it is called from
  * within an already-serialized group operation context.
@@ -572,6 +591,9 @@ async function catchUpGroupBeforeOutboundOperation(
 	assertChatGroupIsActive(group);
 
 	const account = requireActiveAccount('You must be logged in to catch up group messages');
+	if (isProvablyFreshChatGroup(group)) {
+		return requireChatGroup(group.id);
+	}
 	const hasCursor = group.fetchCursor > 0;
 
 	let result: {
@@ -930,7 +952,7 @@ async function settleUnconfirmedOwnCommit(
 	try {
 		const result = await withCoordinatorClientRetry(account, group.coordinatorKey, (client) =>
 			client.FetchManyGroupMessages({
-				groups: [{ gid, after: group.fetchCursor }]
+				groups: [{ gid, after: group.fetchCursor || undefined }]
 			})
 		);
 		messages = result.messages;
@@ -1067,6 +1089,9 @@ async function adoptOwnCommitEvidence(params: {
 	/** The gen-0 state's stored encoding — the commit-point document's body. */
 	newStateBase64: string;
 	posted: { cursor: number; msg64: string };
+	/** Post-window messages the caller already fetched (the invite's sync pass
+	 *  covers the identical window) — reused instead of a duplicate fetch. */
+	fetchedMessages?: Array<{ cursor: number; msg_64: string }>;
 }): Promise<{
 	epochFingerprints: Record<string, string>;
 	branch?: { kind: 'live' | 'dead'; sinceEpoch: string };
@@ -1083,20 +1108,21 @@ async function adoptOwnCommitEvidence(params: {
 		lostBy = 'sibling';
 	} else {
 		try {
-			const result = await withCoordinatorClientRetry(
-				params.account,
-				params.group.coordinatorKey,
-				(client) =>
-					client.FetchManyGroupMessages({
-						groups: [
-							{
-								gid: groupIdDecoder.decode(params.preState.groupContext.groupId),
-								after: params.group.fetchCursor
-							}
-						]
-					})
-			);
-			const earlier = result.messages
+			const windowMessages =
+				params.fetchedMessages ??
+				(
+					await withCoordinatorClientRetry(params.account, params.group.coordinatorKey, (client) =>
+						client.FetchManyGroupMessages({
+							groups: [
+								{
+									gid: groupIdDecoder.decode(params.preState.groupContext.groupId),
+									after: params.group.fetchCursor || undefined
+								}
+							]
+						})
+					)
+				).messages;
+			const earlier = windowMessages
 				.filter((m) => m.cursor < params.posted.cursor && m.msg_64 !== params.posted.msg64)
 				.sort((a, b) => a.cursor - b.cursor);
 			if (earlier.length === 0) {
@@ -1472,9 +1498,18 @@ export interface ChatGroupInviteResult {
 	failures: ChatGroupInviteFailure[];
 }
 
+export interface ChatGroupInviteTarget {
+	/** What kp_take consumes: a key package ref or a stable pubkey. */
+	identifier: string;
+	/** The identity the consumed package MUST belong to (fork-MR scenario K).
+	 *  Callers know it — it is the owner shown alongside the ref in the listing
+	 *  or join request they picked it from. */
+	expectedStablePubkey: string;
+}
+
 export async function inviteChatGroupMembers(input: {
 	groupId: string;
-	identifiers: string[];
+	targets: ChatGroupInviteTarget[];
 }): Promise<ChatGroupInviteResult> {
 	return runOutboundGroupOperation(input.groupId, async () => {
 		const account = requireActiveAccount('You must be logged in to invite a member');
@@ -1486,7 +1521,6 @@ export async function inviteChatGroupMembers(input: {
 		});
 
 		const state = decodeStoredGroupState(group);
-		const availableKeyPackages = await listCoordinatorAvailableKeyPackages(group.id);
 		const failures: ChatGroupInviteFailure[] = [];
 		const targets: Array<{
 			targetStablePubkey: string;
@@ -1498,11 +1532,11 @@ export async function inviteChatGroupMembers(input: {
 		// no contention. Failures are collected per identifier so one unreachable
 		// member can't abort the batch.
 		await Promise.all(
-			input.identifiers.map(async (rawIdentifier) => {
-				const identifier = rawIdentifier.trim();
+			input.targets.map(async (target) => {
+				const identifier = target.identifier.trim();
 				if (!identifier) {
 					failures.push({
-						identifier: rawIdentifier,
+						identifier: target.identifier,
 						error:
 							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
 					});
@@ -1519,36 +1553,26 @@ export async function inviteChatGroupMembers(input: {
 							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
 						);
 					}
-					const normalizedIdentifier = normalizePubKey(identifier);
-					const matchedAvailableKeyPackage = availableKeyPackages.find(
-						(entry) =>
-							entry.keyPackageRef === identifier ||
-							normalizePubKey(entry.stablePubkey) === normalizedIdentifier
-					);
 					// Fork-MR scenario K: the coordinator may hand out another DEVICE's
 					// package for this slot (fine — same identity, the welcome is per
-					// identity) but never another IDENTITY's. The request names either a
-					// kp_ref (whose owner is in the listing) or an identity; a package
+					// identity) but never another IDENTITY's. The caller knows the slot's
+					// owner (the listing/join request they picked the ref from), so the
+					// consumed package is cross-checked against it strictly — a package
 					// for anyone else is refused, never added under the requested name.
 					const consumedPk = normalizePubKey(consumeResult.keyPackage.pk);
-					if (
-						matchedAvailableKeyPackage &&
-						normalizePubKey(matchedAvailableKeyPackage.stablePubkey) !== consumedPk
-					) {
+					if (consumedPk !== normalizePubKey(target.expectedStablePubkey)) {
 						throw new Error(
 							'The coordinator returned a key package for a different identity. Refresh their packages and try again.'
 						);
 					}
-					const targetStablePubkey = normalizePubKey(
-						matchedAvailableKeyPackage?.stablePubkey ?? consumeResult.keyPackage.pk
-					);
+					const targetStablePubkey = consumedPk;
 					if (findMemberLeafIndexByStablePubkey(state, targetStablePubkey) >= 0) {
 						throw new Error(
 							'This identity is already a group member. Reinvites are not supported.'
 						);
 					}
 					const memberKeyPackage = await parseConsumedPublishedKeyPackage({
-						stablePubkey: normalizePubKey(consumeResult.keyPackage.pk),
+						stablePubkey: consumedPk,
 						publicationEvent: consumeResult.keyPackage.event
 					});
 					targets.push({
@@ -1693,7 +1717,9 @@ export async function inviteChatGroupMembers(input: {
 				preState: state,
 				newState: commitResult.newState,
 				newStateBase64: syncBaseGroup.stateBase64,
-				posted: { cursor: posted.cursor, msg64: sealedAddCommit.msg_64 }
+				posted: { cursor: posted.cursor, msg64: sealedAddCommit.msg_64 },
+				// The sync pass above already fetched this exact post window.
+				fetchedMessages: result.messages
 			})
 		);
 
@@ -1718,10 +1744,11 @@ export async function inviteChatGroupMembers(input: {
 export async function inviteChatGroupMember(input: {
 	groupId: string;
 	identifier: string;
+	expectedStablePubkey: string;
 }): Promise<StoredChatGroup> {
 	const result = await inviteChatGroupMembers({
 		groupId: input.groupId,
-		identifiers: [input.identifier]
+		targets: [{ identifier: input.identifier, expectedStablePubkey: input.expectedStablePubkey }]
 	});
 	if (result.failures.length > 0) {
 		throw new Error(result.failures[0].error);
