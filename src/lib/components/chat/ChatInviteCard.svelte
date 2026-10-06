@@ -30,25 +30,16 @@
 		invite.kind === 'coordinator' ? Boolean(getChatCoordinator(invite.pubkey)) : false
 	);
 
-	const isProfile = $derived(invite.kind === 'profile');
-	const profileHints = useProfileHints(
-		() => (isProfile ? [invite.kind === 'profile' ? invite.pubkey : ''] : []),
-		{
-			relays: metadataRelays
-		}
-	);
+	const profileHints = useProfileHints(() => (invite.kind === 'profile' ? [invite.pubkey] : []), {
+		relays: metadataRelays
+	});
 
 	const kindLabel = $derived(
 		invite.kind === 'group' ? 'group' : invite.kind === 'coordinator' ? 'coordinator' : 'profile'
 	);
 
 	const shortKey = $derived.by(() => {
-		const key =
-			invite.kind === 'group'
-				? invite.gid
-				: invite.kind === 'coordinator' || isProfile
-					? invite.pubkey
-					: '';
+		const key = invite.kind === 'group' ? invite.gid : invite.pubkey;
 		return key.length > 16 ? `${key.slice(0, 8)}…` : key;
 	});
 

@@ -587,7 +587,7 @@ function isProvablyFreshChatGroup(group: StoredChatGroup): boolean {
 async function catchUpGroupBeforeOutboundOperation(
 	group: StoredChatGroup,
 	gid: string,
-	kind: 'send' | 'commit' = 'send'
+	kind: 'send' | 'commit'
 ): Promise<StoredChatGroup> {
 	assertChatGroupIsActive(group);
 

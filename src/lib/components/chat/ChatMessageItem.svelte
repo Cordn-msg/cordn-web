@@ -1005,7 +1005,7 @@
 					{:else if message.isOwn && message.deliveryState === 'queued'}
 						<span
 							class="inline-flex items-center"
-							aria-label={getDeliveryStateLabel()}
+							aria-label={message.deliveryDetail ?? getDeliveryStateLabel()}
 							title={message.deliveryDetail ?? getDeliveryStateLabel()}
 						>
 							<Clock class="size-3" />

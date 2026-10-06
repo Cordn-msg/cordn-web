@@ -184,7 +184,11 @@ async function main() {
 				const rows = document.querySelectorAll('[data-message-id]');
 				for (const row of rows) {
 					if (!row.textContent?.includes('wedged hello')) continue;
-					const clock = row.querySelector('[aria-label^="Queued"]');
+					// The delivery clock is the row's only icon-bearing span
+					// carrying both a title and an aria-label (the transient
+					// "…" state has no icon; the reason lives in the title since
+					// the a11y fix) — never selected by label wording.
+					const clock = row.querySelector('span[title][aria-label]:has(svg)');
 					return clock?.getAttribute('title') ?? '';
 				}
 				return '';
