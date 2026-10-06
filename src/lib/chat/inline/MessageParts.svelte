@@ -4,6 +4,7 @@
 	import NostrEventEmbed from '$lib/components/chat/NostrEventEmbed.svelte';
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
+	import type { ChatMentionTextPart } from '$lib/services/chatMentions';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import {
 		MESSAGE_LINK_WRAP_CLASS,
@@ -15,14 +16,19 @@
 	 * inline fragment — no wrapping element. Shared by the chat bubble (TextInline)
 	 * and the message-info sidebar (DefaultRich) so link + media rendering can't
 	 * drift between them. Callers wrap this in their own <p>.
+	 *
+	 * `parts` overrides the cached parse: the bubble passes the invite-stripped
+	 * body parts (its cards stand in for the removed links); the sidebar omits it
+	 * and keeps the verbatim text.
 	 */
 	let {
 		messageId,
 		text,
-		isOwn = false
-	}: { messageId: string; text: string; isOwn?: boolean } = $props();
+		isOwn = false,
+		parts: partsProp
+	}: { messageId: string; text: string; isOwn?: boolean; parts?: ChatMentionTextPart[] } = $props();
 
-	const parts = $derived(getCachedChatMessageParts(messageId, text));
+	const parts = $derived(partsProp ?? getCachedChatMessageParts(messageId, text));
 </script>
 
 {#each parts as part, index (`${messageId}:part:${index}`)}
