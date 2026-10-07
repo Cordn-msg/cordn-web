@@ -36,5 +36,10 @@ export const chatQueryKeys = {
 	 * reads above (AGENTS.md).
 	 */
 	profileIdentifier: (identifier: string) =>
-		[...chatQueryKeys.all, 'profile-identifier', identifier.trim().toLowerCase()] as const
+		[...chatQueryKeys.all, 'profile-identifier', identifier.trim().toLowerCase()] as const,
+	/**
+	 * GIF search (gifs.nostr.build public API). Account-independent like
+	 * profileIdentifier: one shared query space, keyed by the trimmed query.
+	 */
+	gifSearch: (query: string) => [...chatQueryKeys.all, 'gif-search', query] as const
 } as const;

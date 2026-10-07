@@ -29,6 +29,7 @@
 	import Trash from '@lucide/svelte/icons/trash-2';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChatComposerActions from './ChatComposerActions.svelte';
+	import GifPicker from './GifPicker.svelte';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { isHeicMime } from '$lib/services/mediaSniff';
 	import { Metadata } from 'nostr-tools/kinds';
@@ -549,6 +550,28 @@
 		documentInputRef?.click();
 	}
 
+	let gifPickerOpen = $state(false);
+
+	/** Insert a picked GIF's URL at the caret (a leading space unless already separated). */
+	function insertGifUrl(url: string) {
+		const textarea = textareaRef;
+		if (!textarea) {
+			value = value.trim() ? `${value.trimEnd()} ${url}` : url;
+			return;
+		}
+		const start = textarea.selectionStart ?? value.length;
+		const end = textarea.selectionEnd ?? start;
+		const before = value.slice(0, start);
+		const inserted = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${url}`;
+		value = `${before}${inserted}${value.slice(end)}`;
+		const nextCaret = start + inserted.length;
+		queueMicrotask(() => {
+			textareaRef?.focus();
+			textareaRef?.setSelectionRange(nextCaret, nextCaret);
+			resizeTextarea();
+		});
+	}
+
 	function handleFileSelected(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		// Snapshot the File objects BEFORE clearing the input: `input.files` is a
@@ -851,7 +874,9 @@
 					onTakeVideo={takeVideo}
 					onPickImage={pickImage}
 					onPickDocument={pickDocument}
+					onPickGif={() => (gifPickerOpen = true)}
 				/>
+				<GifPicker bind:open={gifPickerOpen} onPick={insertGifUrl} />
 				<div class="flex min-w-0 flex-1 flex-col gap-2">
 					{#if activeMention && mentionMatches.length > 0}
 						<div class="rounded-xl border border-border bg-popover p-1 shadow-lg">

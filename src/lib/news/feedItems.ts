@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-07-gif-picker',
+		createdAt: Date.UTC(2026, 9, 7),
+		version: 1,
+		title: 'Say it with a GIF',
+		body: '- ✨ A GIF is one tap away: press the + next to the message box, choose GIF, and search the gallery — words in any language or an emoji like 😂 both work. Tap a GIF and it drops into your message, ready to send on its own or with a caption, and plays right in the chat. (GIFs come from nostr.build — the credit line in the gallery links to them.)\n- 🔄 GIFs follow your media auto-load setting: if you keep images behind a “Load media” tap for privacy or data, GIFs wait for it too.'
+	},
+	{
 		id: 'cordn-news-2026-10-07-notification-first-unread',
 		createdAt: Date.UTC(2026, 9, 7),
 		version: 1,

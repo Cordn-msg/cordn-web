@@ -17,6 +17,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SaveAsPlugin.class);
         // Same deal: local HEIC/metadata-strip image re-encoder (see SanitizeImagePlugin).
         registerPlugin(SanitizeImagePlugin.class);
+        // Same deal: gifs.nostr.build key handoff for the native GIF-search transport.
+        registerPlugin(GifsApiKeyPlugin.class);
         super.onCreate(savedInstanceState);
         // Capacitor's default onRenderProcessGone returns false, which makes the whole app exit
         // when the WebView renderer is killed — typically an OOM (large backup export, long chat

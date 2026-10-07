@@ -37,6 +37,15 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+// gifs.nostr.build API key for native GIF search. gifs.properties is gitignored like
+// keystore.properties; CI generates it from the CORDN_GIFS_API_KEY secret. Absent →
+// empty key → the native GIF picker shows its "unavailable" state instead of searching.
+def gifsProperties = new Properties()
+def gifsPropertiesFile = rootProject.file('gifs.properties')
+if (gifsPropertiesFile.exists()) {
+    gifsProperties.load(new FileInputStream(gifsPropertiesFile))
+}
+
 android {
     namespace = "org.cordn.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -46,6 +55,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode
         versionName appVersionName
+        resValue "string", "cordn_gifs_api_key", gifsProperties.getProperty('key', '')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
