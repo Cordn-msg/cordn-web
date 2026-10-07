@@ -8,5 +8,15 @@
         "A6:62:6C:FC:A5:51:C5:60:5F:0A:F4:50:C6:BF:6D:83:1F:C7:0E:B2:DC:D1:7F:02:7E:B3:58:C5:68:52:75:8F"
       ]
     }
+  },
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "tools.relay.staircase",
+      "sha256_cert_fingerprints": [
+        "A1:8C:AA:E3:7F:28:D7:CB:0B:B4:1B:4B:76:BE:05:08:FC:F1:6C:65:36:AD:C6:9F:32:F1:2E:A2:A7:64:B3:7F"
+      ]
+    }
   }
 ]
