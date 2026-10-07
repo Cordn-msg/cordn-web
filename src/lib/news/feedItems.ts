@@ -112,6 +112,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- 🐛 Some phones felt sluggish after the last update: typing could stutter and long chats scrolled unevenly — the more history a chat had behind it, the worse it got. That is fixed: typing and scrolling stay smooth no matter how far back a chat goes.\n- 🔄 Opening a chat with a long history is quicker now, and the app handles its message history far more efficiently behind the scenes — same messages, same unread counts, same search, just lighter on your phone.'
 	},
 	{
+		id: 'cordn-news-2026-10-07-mentions-and-video',
+		createdAt: Date.UTC(2026, 9, 7),
+		version: 1,
+		title: 'Mentions in captions and calmer video playback',
+		body: '- 🐛 Mentioning someone in the caption of a photo, video, or voice note finally works like a mention anywhere else: it shows as a proper @name chip and notifies the person you mentioned — before, it silently arrived as plain text and never pinged them.\n- 🐛 On Android, tapping play or pause on a video no longer pops the keyboard up over it — the composer stays quiet while you watch. Scrubbing or long-pressing a video no longer drags the message around or opens its actions by accident, either.\n- 🐛 The reply and edit previews in the composer now show @name for mentions instead of raw Nostr codes.'
+	},
+	{
 		id: 'cordn-news-2026-10-06-invite-cards',
 		createdAt: Date.UTC(2026, 9, 6),
 		version: 1,

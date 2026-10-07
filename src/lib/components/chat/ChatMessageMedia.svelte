@@ -12,7 +12,13 @@
 		type ResolvedMedia
 	} from '$lib/services/chatMediaStorage.svelte';
 	import { openMediaLightbox } from '$lib/services/chatMediaLightbox.svelte';
-	import { cn, downloadObjectUrl, formatBytes, mediaExtLabel } from '$lib/utils';
+	import {
+		blurFocusedEditable,
+		cn,
+		downloadObjectUrl,
+		formatBytes,
+		mediaExtLabel
+	} from '$lib/utils';
 	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 	import Download from '@lucide/svelte/icons/download';
 	import FileText from '@lucide/svelte/icons/file-text';
@@ -210,7 +216,12 @@
 		{:else if resolved && resolved.mime.startsWith('video/')}
 			<!-- ponytail: mirrors InlineMediaUrl's video branch; captions aren't synthesized for arbitrary media. -->
 			<!-- svelte-ignore a11y_media_has_caption -->
-			<video src={resolved.url} controls preload="metadata" class="max-h-64 w-full rounded-2xl"
+			<video
+				src={resolved.url}
+				controls
+				preload="metadata"
+				onpointerdown={blurFocusedEditable}
+				class="max-h-64 w-full rounded-2xl"
 			></video>
 		{:else if resolved && resolved.mime.startsWith('audio/')}
 			<div class="rounded-2xl border border-border/60 bg-background/50 px-3 py-2.5">

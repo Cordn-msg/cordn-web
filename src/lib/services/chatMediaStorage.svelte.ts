@@ -293,6 +293,8 @@ export async function sendChatMediaMessage(params: {
 	groupId: string;
 	file: File;
 	text: string;
+	/** Extra event tags (mention `p` tags) merged with the imeta tag. */
+	tags?: string[][];
 	replyTo?: ChatMessageReplyTarget;
 	/** Upload-progress reporter: a `number` (0–100) drives a determinate bar;
 	 *  `null` + a `phase` caption ("Connecting…", "Finalizing…", "Retrying…")
@@ -305,7 +307,7 @@ export async function sendChatMediaMessage(params: {
 	 *  (`duration` + `waveform`). Omitted for non-voice media. */
 	voice?: { durationMs: number; waveform: number[] };
 }): Promise<void> {
-	const { groupId, file, text, replyTo, onProgress, signal, voice } = params;
+	const { groupId, file, text, tags, replyTo, onProgress, signal, voice } = params;
 	// Fail fast before the upload: the final MLS send needs an account, and
 	// surfacing it here beats encrypting + uploading first.
 	requireActiveAccount('You must be logged in to send media');
@@ -366,7 +368,7 @@ export async function sendChatMediaMessage(params: {
 	await sendChatGroupMessage({
 		groupId,
 		content: text,
-		tags: [imeta],
+		tags: [imeta, ...(tags ?? [])],
 		replyTo,
 		mediaKeyBase64: bytesToBase64(key)
 	});
