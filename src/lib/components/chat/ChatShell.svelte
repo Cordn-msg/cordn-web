@@ -8,7 +8,7 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { page } from '$app/state';
-	import { getChatGroupDisplayTitle } from './chatGroupDisplay';
+	import { formatChatMessagePreviewText, getChatGroupDisplayTitle } from './chatGroupDisplay';
 	import type { ChatMentionCandidate, ChatMentionReference, ChatMessage } from './chat.types';
 	import {
 		listUnreadChatGroupReferenceTargets,
@@ -445,7 +445,9 @@
 			? {
 					author: replyTarget.pubkey,
 					authorLabel: replyTargetAuthor || replyTarget.pubkey,
-					text: replyTarget.content
+					// No raw `nostr:npub…` wire tokens in the chip — resolve to @Name like
+					// the sidebar previews do.
+					text: formatChatMessagePreviewText(replyTarget.content, groupProfileHints)
 				}
 			: null
 	);
@@ -1106,7 +1108,9 @@
 			onSendVoice={handleSendVoice}
 			disabled={isRemoved || isPoisoned}
 			replyTo={composerReplyPreview}
-			editTo={editTarget ? { text: editPreview } : null}
+			editTo={editTarget
+				? { text: formatChatMessagePreviewText(editPreview, groupProfileHints) }
+				: null}
 			onCancelReply={clearReplyTarget}
 			onCancelEdit={clearEditTarget}
 			focusKey={composerFocusKey}
