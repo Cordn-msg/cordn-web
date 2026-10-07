@@ -180,6 +180,34 @@ describe('chat group presence unread scans', () => {
 		expect(getChatGroupSummary(id).preview).toBe('message 2');
 	});
 
+	test('preview follows description changes even when the history array is carried', () => {
+		// Carried-ref spreads (e.g. group adoption) can change metadata without
+		// replacing messages — the summary cache must not serve the old fallback.
+		const id = 'presence-preview-meta';
+		groups.set(id, {
+			id,
+			coordinatorKey: 'aa'.repeat(32),
+			createdAt: 1,
+			stateBase64: '',
+			lastCursor: 0,
+			fetchCursor: 0,
+			messages: [],
+			metadata: { name: 'presence-preview-meta', description: 'first' },
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n,
+			status: 'active'
+		} as StoredChatGroup);
+		expect(getChatGroupSummary(id).preview).toBe('first');
+
+		const group = groups.get(id)!;
+		groups.set(id, {
+			...group,
+			metadata: { name: 'presence-preview-meta', description: 'second' }
+		} as StoredChatGroup);
+		expect(getChatGroupSummary(id).preview).toBe('second');
+	});
+
 	test('unread reference targets resolve annotation targets through the id map', () => {
 		// Annotations (reactions/edits/deletes) resolve their target via byEventId;
 		// plain mentions take the lazy no-map path covered by the tests above.
