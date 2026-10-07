@@ -506,7 +506,11 @@
 
 	function handleSendMedia(files: File[], caption: string) {
 		if (!group || files.length === 0) return;
-		const trimmed = caption.trim();
+		// Mentions serialize on every send path (same as the text path): the
+		// caption keeps `nostr:npub…` + p tags, so the chip renders and the
+		// mentioned person gets their ping — a raw `@Label` would arrive as plain
+		// text with no p tag and notify nobody.
+		const serialized = serializeChatProfileMentions(caption.trim(), selectedMentions);
 		const currentReplyTarget = replyTarget;
 		const optimisticReplyTarget = buildOptimisticReplyView();
 		// Fan out one optimistic message per file: one `imeta` per MLS message is
@@ -519,7 +523,8 @@
 		files.forEach((file, index) =>
 			sendOneMedia(
 				file,
-				index === 0 ? trimmed : '',
+				index === 0 ? serialized.content : '',
+				index === 0 ? serialized.tags : [],
 				index === 0 ? (currentReplyTarget ?? undefined) : undefined,
 				index === 0 ? optimisticReplyTarget : undefined
 			)
@@ -535,6 +540,7 @@
 	function sendOneMedia(
 		file: File,
 		text: string,
+		tags: string[][],
 		replyTo?: ChatMessageReplyTarget,
 		optimisticReplyTo?: ChatMessage['replyTo']
 	) {
@@ -579,6 +585,7 @@
 			groupId,
 			file,
 			text,
+			tags,
 			replyTo,
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
@@ -610,7 +617,7 @@
 			});
 	}
 
-	function sendVoiceMessage(result: RecordingResult, text: string) {
+	function sendVoiceMessage(result: RecordingResult, text: string, tags: string[][]) {
 		const createdAt = Date.now();
 		const optimisticId = `optimistic:${crypto.randomUUID()}`;
 		// Audio needs a local URL too (not just images) so the optimistic player can
@@ -650,6 +657,7 @@
 			groupId,
 			file: result.file,
 			text,
+			tags,
 			replyTo: currentReplyTarget ?? undefined,
 			voice: { durationMs: result.durationMs, waveform: result.peaks },
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
@@ -681,7 +689,10 @@
 
 	function handleSendVoice(result: RecordingResult) {
 		if (!group) return;
-		sendVoiceMessage(result, draft.trim());
+		// Same mention serialization as the media caption (rides as the voice
+		// note's text).
+		const serialized = serializeChatProfileMentions(draft.trim(), selectedMentions);
+		sendVoiceMessage(result, serialized.content, serialized.tags);
 		draft = '';
 		selectedMentions = [];
 		// Consume the reply like the text/media sends do — the voice note carries
