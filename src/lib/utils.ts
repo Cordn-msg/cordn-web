@@ -225,3 +225,16 @@ export function formatBytes(bytes: number): string {
 	}
 	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
+
+/** Blur a focused editable on touch/pen interaction with non-form controls
+ *  (e.g. a <video>'s native media controls). On Android WebView, dismissing the
+ *  soft keyboard does NOT blur the textarea, and media-control taps then make
+ *  Chromium re-assert the focused editable: the IME re-opens and the composer
+ *  scrolls into view mid-playback. Blurring on pointerdown is the documented
+ *  remedy. Mouse is excluded so clicking a video to pause it while typing on
+ *  desktop keeps the caret in the composer. */
+export function blurFocusedEditable(event: PointerEvent): void {
+	if (event.pointerType === 'mouse') return;
+	const active = document.activeElement;
+	if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) active.blur();
+}

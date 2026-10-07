@@ -5,7 +5,7 @@
 		revealMediaUrl
 	} from '$lib/services/chatMediaStorage.svelte';
 	import { openMediaLightbox } from '$lib/services/chatMediaLightbox.svelte';
-	import { mediaUrlKind, mediaExtLabel, cn } from '$lib/utils';
+	import { blurFocusedEditable, cn, mediaUrlKind, mediaExtLabel } from '$lib/utils';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import VideoIcon from '@lucide/svelte/icons/video';
 
@@ -68,6 +68,7 @@
 			src={href}
 			controls
 			preload="metadata"
+			onpointerdown={blurFocusedEditable}
 			class="mt-1 max-h-72 max-w-full rounded-2xl sm:max-w-[min(100%,20rem)]"
 		></video>
 	{:else}
