@@ -340,10 +340,14 @@
 				// `!deleted && reactions : []` semantics preserved).
 				// Pending removals hide my membership optimistically (count drops, chip
 				// disappears at zero); the confirmed kind-5 fold takes over on ingest.
-				const removingMine = new Set(optimisticReactionRemovals[message.id] ?? []);
+				// Direct array lookup — the fold runs for every stored message on every
+				// rebuild, so no per-message Set allocation (removal lists are 0-2 entries).
+				const removingMine = optimisticReactionRemovals[message.id];
 				const reactionEntries = (deleted ? [] : [...(reactions ?? []).values()])
 					.map((entry) => {
-						const mine = entry.reactors.has(activePubkey) && removingMine.has(entry.emoji);
+						const mine = Boolean(
+							removingMine?.includes(entry.emoji) && entry.reactors.has(activePubkey)
+						);
 						const count = entry.reactors.size - (mine ? 1 : 0);
 						if (count === 0) return null;
 						return {

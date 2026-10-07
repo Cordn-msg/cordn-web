@@ -34,12 +34,35 @@ export const chatGroupPresenceStore = $state<{
 
 let activePresenceStorageKey = getPresenceStorageKey();
 
-function savePresence() {
+function writePresence() {
 	if (!browser) return;
 	const payload: PersistedGroupPresence = {
 		groups: chatGroupPresenceStore.groups
 	};
 	localStorage.setItem(activePresenceStorageKey, JSON.stringify(payload));
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function flushPresence() {
+	if (saveTimer === undefined) return;
+	clearTimeout(saveTimer);
+	saveTimer = undefined;
+	writePresence();
+}
+
+// Trailing debounce: visibility-driven read marking fires in bursts (every
+// frame while scrolling), and a synchronous JSON.stringify + localStorage.setItem
+// per mark was the 0.5.4 scroll regression. Coalesce to one write per pause.
+function savePresence() {
+	if (!browser) return;
+	clearTimeout(saveTimer);
+	saveTimer = setTimeout(flushPresence, 300);
+}
+
+if (browser) {
+	// A pending write must not lose read marks to an abrupt tab close.
+	addEventListener('pagehide', flushPresence);
 }
 
 function getPresenceStorageKey(ownerPubkey?: string) {
@@ -48,6 +71,8 @@ function getPresenceStorageKey(ownerPubkey?: string) {
 
 export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 	if (!browser) return;
+	// Flush any pending write to the outgoing owner's key before switching.
+	flushPresence();
 	activePresenceStorageKey = getPresenceStorageKey(ownerPubkey);
 	try {
 		const raw =
@@ -66,6 +91,7 @@ export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 
 export function deleteChatGroupPresenceForOwner(ownerPubkey: string) {
 	if (!browser) return;
+	flushPresence();
 	const storageKey = getPresenceStorageKey(ownerPubkey);
 	localStorage.removeItem(storageKey);
 	if (activePresenceStorageKey === storageKey) {
@@ -178,24 +204,28 @@ export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: str
 	// cursor: no message exists past lastCursor, so no unread reference either.
 	if (!group || group.lastCursor <= lastReadMentionCursor) return [];
 	const messages = listChatGroupMessages(groupId);
+	const references = messages.filter(
+		(message) =>
+			message.cursor > lastReadMentionCursor &&
+			message.sender !== pubkey &&
+			chatMessageReferencesPubkey(message.tags, pubkey)
+	);
+	// Resolving reply/reaction targets needs the byEventId map (a full-history
+	// allocation); plain mentions don't, and they are the common case.
+	if (!references.some((message) => isAnnotationKind(message.kind))) {
+		return references.map((message) => ({ reference: message, target: message }));
+	}
 	const byEventId = new Map(messages.map((message) => [message.id, message]));
 
-	return messages
-		.filter(
-			(message) =>
-				message.cursor > lastReadMentionCursor &&
-				message.sender !== pubkey &&
-				chatMessageReferencesPubkey(message.tags, pubkey)
-		)
-		.map((message) => {
-			if (!isAnnotationKind(message.kind)) {
-				return { reference: message, target: message };
-			}
+	return references.map((message) => {
+		if (!isAnnotationKind(message.kind)) {
+			return { reference: message, target: message };
+		}
 
-			const targetId = message.tags.find((tag) => tag[0] === 'e')?.[1];
-			const target = targetId ? byEventId.get(targetId) : undefined;
-			return { reference: message, target: target ?? message };
-		});
+		const targetId = message.tags.find((tag) => tag[0] === 'e')?.[1];
+		const target = targetId ? byEventId.get(targetId) : undefined;
+		return { reference: message, target: target ?? message };
+	});
 }
 
 export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
@@ -216,6 +246,13 @@ export function getChatGroupSummary(groupId: string, activePubkey?: string): Cha
 	};
 }
 
+// Memoized per group on the messages array identity: every store write is
+// copy-on-write (the array is replaced, never mutated in place), so the ref
+// changes exactly when history changed. Typing, scrolling, and presence writes
+// leave it stable and skip the full-history latest-message scan. Holds one
+// stale array per group — bounded by the group count.
+const previewCache = new Map<string, { messages: StoredChatMessage[]; preview: string }>();
+
 function getLatestChatGroupMessagePreview(groupId: string): string {
 	const draftPreview = getChatDraftPreview(groupId);
 	if (draftPreview) {
@@ -223,9 +260,13 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 	}
 
 	const group = getChatGroup(groupId);
+	const messages = group?.messages;
+	const cached = messages ? previewCache.get(groupId) : undefined;
+	if (cached && cached.messages === messages) return cached.preview;
+
 	let latestMessage: StoredChatMessage | undefined;
-	if (group) {
-		for (const message of group.messages) {
+	if (messages) {
+		for (const message of messages) {
 			if (!latestMessage || message.cursor > latestMessage.cursor) {
 				latestMessage = message;
 			}
@@ -236,9 +277,9 @@ function getLatestChatGroupMessagePreview(groupId: string): string {
 	// mention tokens before names replace them — an 80-char cap ate the entire
 	// text of any mention-first message.
 	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
-	if (preview) return preview;
-
-	return group?.metadata?.description || 'Group chat';
+	const result = preview || group?.metadata?.description || 'Group chat';
+	if (messages) previewCache.set(groupId, { messages, preview: result });
+	return result;
 }
 
 export function pruneChatGroupPresence() {

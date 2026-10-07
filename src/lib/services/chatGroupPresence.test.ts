@@ -27,6 +27,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 
 import {
 	getChatGroupLastReadCursor,
+	getChatGroupSummary,
 	getUnreadChatGroupMessageCount,
 	listUnreadChatGroupReferenceTargets,
 	markAllChatGroupsRead,
@@ -146,5 +147,83 @@ describe('chat group presence unread scans', () => {
 		seedGroup(id, [10, 20, 30]);
 		markChatGroupRead(id, 20);
 		expect(getUnreadChatGroupMessageCount(id)).toBe(1);
+	});
+
+	test('preview follows copy-on-write history updates', () => {
+		// The preview memo keys on the messages array identity; store writes
+		// replace the array (never mutate it), so a new ref must recompute.
+		const id = 'presence-preview';
+		seedGroup(id, [10, 20]);
+		expect(getChatGroupSummary(id).preview).toBe('message 1');
+		// Stable across repeated reads (the memo hit path).
+		expect(getChatGroupSummary(id).preview).toBe('message 1');
+
+		const group = groups.get(id)!;
+		groups.set(id, {
+			...group,
+			lastCursor: 30,
+			fetchCursor: 30,
+			messages: [
+				...group.messages,
+				{
+					cursor: 30,
+					createdAt: 30,
+					direction: 'inbound' as const,
+					sender: MEMBER,
+					id: `${id}-2`,
+					kind: 9,
+					tags: [],
+					content: 'message 2'
+				}
+			]
+		});
+		expect(getChatGroupSummary(id).preview).toBe('message 2');
+	});
+
+	test('unread reference targets resolve annotation targets through the id map', () => {
+		// Annotations (reactions/edits/deletes) resolve their target via byEventId;
+		// plain mentions take the lazy no-map path covered by the tests above.
+		const id = 'presence-annot';
+		groups.set(id, {
+			id,
+			coordinatorKey: 'aa'.repeat(32),
+			createdAt: 1,
+			stateBase64: '',
+			lastCursor: 20,
+			fetchCursor: 20,
+			messages: [
+				{
+					cursor: 10,
+					createdAt: 10,
+					direction: 'inbound' as const,
+					sender: MEMBER,
+					id: `${id}-target`,
+					kind: 9,
+					tags: [],
+					content: 'original'
+				},
+				{
+					cursor: 20,
+					createdAt: 20,
+					direction: 'inbound' as const,
+					sender: MEMBER,
+					id: `${id}-reaction`,
+					kind: 7,
+					tags: [
+						['e', `${id}-target`],
+						['p', MENTIONED]
+					],
+					content: '❤️'
+				}
+			],
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n,
+			status: 'active'
+		});
+		const targets = listUnreadChatGroupReferenceTargets(id, MENTIONED);
+		expect(targets).toHaveLength(1);
+		expect(targets[0]?.reference.id).toBe(`${id}-reaction`);
+		expect(targets[0]?.target.id).toBe(`${id}-target`);
 	});
 });
