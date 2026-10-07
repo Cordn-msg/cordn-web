@@ -173,35 +173,12 @@ export function markAllChatGroupsRead() {
 	}
 }
 
-export function getUnreadChatGroupMessageCount(groupId: string): number {
-	const group = getChatGroup(groupId);
-	if (!group) return 0;
-	const lastReadCursor = getChatGroupLastReadCursor(groupId);
-	// O(1) common case: lastCursor is the high-water mark of every stored
-	// message (ingest advances it via Math.max), so nothing can be unread at or
-	// below the read cursor. Keeps per-message sidebar/title recomputes from
-	// rescanning every group's full history.
-	if (group.lastCursor <= lastReadCursor) return 0;
-	// Own messages never count as unread: the coordinator assigns their cursor at
-	// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
-	// filter a send would badge its own group as unread. Same rule as the mention
-	// scan (`message.sender !== pubkey`); with no active identity there is nothing to
-	// attribute, so keep counting rather than hide real unread.
-	const activePubkey = manager.active?.pubkey;
-	let count = 0;
-	for (const message of group.messages) {
-		if (message.cursor <= lastReadCursor || message.kind === SYSTEM_MESSAGE_KIND) continue;
-		if (activePubkey && samePubKey(message.sender, activePubkey)) continue;
-		count++;
-	}
-	return count;
-}
-
 export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
 	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
 	const group = getChatGroup(groupId);
-	// Same O(1) guard as getUnreadChatGroupMessageCount, against the mention
-	// cursor: no message exists past lastCursor, so no unread reference either.
+	// Same O(1) guard as getUnreadChatGroupMessageCount (via the summary's
+	// countReferences), against the mention cursor: no message exists past
+	// lastCursor, so no unread reference either.
 	if (!group || group.lastCursor <= lastReadMentionCursor) return [];
 	const messages = listChatGroupMessages(groupId);
 	const references = messages.filter(
@@ -228,58 +205,119 @@ export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: str
 	});
 }
 
-export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
-	return listUnreadChatGroupReferenceTargets(groupId, pubkey).length;
-}
-
 export interface ChatGroupSummary {
 	preview: string;
 	unreadCount: number;
 	unreadReferenceCount: number;
 }
 
-export function getChatGroupSummary(groupId: string, activePubkey?: string): ChatGroupSummary {
-	return {
-		preview: getLatestChatGroupMessagePreview(groupId),
-		unreadCount: getUnreadChatGroupMessageCount(groupId),
-		unreadReferenceCount: activePubkey ? getUnreadChatGroupReferenceCount(groupId, activePubkey) : 0
-	};
-}
+// One pass over history per event (ingest batch, read mark, account change),
+// cached — the staircase `recomputeUnread` frequency, without their SQL:
+// copy-on-write store writes replace the messages array, so the ref changes
+// exactly when history changed. Typing and scrolling leave the cache hot and
+// skip the full-history scans that sidebar/attention deriveds used to trigger
+// per keystroke. Entries are keyed by the pubkeys the two count rules use and
+// invalidated on the read cursors; bounded by groups × pubkeys seen.
+type MessageSummary = {
+	messages: StoredChatMessage[] | undefined;
+	lastReadCursor: number;
+	lastReadMentionCursor: number;
+	messagePreview: string;
+	unreadCount: number;
+	unreadReferenceCount: number;
+};
 
-// Memoized per group on the messages array identity: every store write is
-// copy-on-write (the array is replaced, never mutated in place), so the ref
-// changes exactly when history changed. Typing, scrolling, and presence writes
-// leave it stable and skip the full-history latest-message scan. Holds one
-// stale array per group — bounded by the group count.
-const previewCache = new Map<string, { messages: StoredChatMessage[]; preview: string }>();
+const summaryCache = new Map<string, MessageSummary>();
 
-function getLatestChatGroupMessagePreview(groupId: string): string {
-	const draftPreview = getChatDraftPreview(groupId);
-	if (draftPreview) {
-		return draftPreview;
-	}
-
+function getChatGroupMessageSummary(
+	groupId: string,
+	senderPubkey: string | undefined,
+	refPubkey: string | undefined
+): MessageSummary {
 	const group = getChatGroup(groupId);
 	const messages = group?.messages;
-	const cached = messages ? previewCache.get(groupId) : undefined;
-	if (cached && cached.messages === messages) return cached.preview;
+	const lastReadCursor = getChatGroupLastReadCursor(groupId);
+	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
+	const key = `${groupId}\u0000${senderPubkey ?? ''}\u0000${refPubkey ?? ''}`;
+	const cached = summaryCache.get(key);
+	if (
+		cached &&
+		cached.messages === messages &&
+		cached.lastReadCursor === lastReadCursor &&
+		cached.lastReadMentionCursor === lastReadMentionCursor
+	) {
+		return cached;
+	}
 
+	// Same O(1) guards as before: no message exists past lastCursor, so nothing
+	// can be unread either (legacy records carrying stored messages above the
+	// counter stay deliberately not badge-counted — see
+	// getChatGroupStoredHighWater's comment).
+	const countUnread = Boolean(group && group.lastCursor > lastReadCursor);
+	const countReferences = Boolean(refPubkey && group && group.lastCursor > lastReadMentionCursor);
 	let latestMessage: StoredChatMessage | undefined;
-	if (messages) {
-		for (const message of messages) {
-			if (!latestMessage || message.cursor > latestMessage.cursor) {
-				latestMessage = message;
-			}
+	let unreadCount = 0;
+	let unreadReferenceCount = 0;
+	for (const message of messages ?? []) {
+		if (!latestMessage || message.cursor > latestMessage.cursor) {
+			latestMessage = message;
+		}
+		if (countUnread && message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) {
+			// Own messages never count as unread: the coordinator assigns their cursor at
+			// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
+			// filter a send would badge its own group as unread. Same rule as the mention
+			// scan (`message.sender !== pubkey`); with no active identity there is nothing to
+			// attribute, so keep counting rather than hide real unread.
+			if (!(senderPubkey && samePubKey(message.sender, senderPubkey))) unreadCount++;
+		}
+		if (
+			countReferences &&
+			refPubkey &&
+			message.cursor > lastReadMentionCursor &&
+			message.sender !== refPubkey &&
+			chatMessageReferencesPubkey(message.tags, refPubkey)
+		) {
+			unreadReferenceCount++;
 		}
 	}
-	// Media and system messages render as labels/sentences (getChatMessagePreviewText);
-	// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
-	// mention tokens before names replace them — an 80-char cap ate the entire
-	// text of any mention-first message.
+
 	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
-	const result = preview || group?.metadata?.description || 'Group chat';
-	if (messages) previewCache.set(groupId, { messages, preview: result });
-	return result;
+	const summary: MessageSummary = {
+		messages,
+		lastReadCursor,
+		lastReadMentionCursor,
+		// Media and system messages render as labels/sentences (getChatMessagePreviewText);
+		// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
+		// mention tokens before names replace them — an 80-char cap ate the entire
+		// text of any mention-first message.
+		messagePreview: preview || group?.metadata?.description || 'Group chat',
+		unreadCount,
+		unreadReferenceCount
+	};
+	summaryCache.set(key, summary);
+	return summary;
+}
+
+export function getUnreadChatGroupMessageCount(groupId: string): number {
+	const activePubkey = manager.active?.pubkey;
+	return getChatGroupMessageSummary(groupId, activePubkey, activePubkey).unreadCount;
+}
+
+export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
+	// Count of matched messages — same as listUnreadChatGroupReferenceTargets().length;
+	// that path resolves targets for display, this one only counts.
+	return getChatGroupMessageSummary(groupId, manager.active?.pubkey, pubkey).unreadReferenceCount;
+}
+
+export function getChatGroupSummary(groupId: string, activePubkey?: string): ChatGroupSummary {
+	const summary = getChatGroupMessageSummary(groupId, manager.active?.pubkey, activePubkey);
+	return {
+		// Draft previews replace the message preview while composing and change
+		// per keystroke — merged outside the cache so it never goes stale.
+		preview: getChatDraftPreview(groupId) || summary.messagePreview,
+		unreadCount: summary.unreadCount,
+		unreadReferenceCount: activePubkey ? summary.unreadReferenceCount : 0
+	};
 }
 
 export function pruneChatGroupPresence() {
