@@ -675,11 +675,15 @@ export function unrecoveredDropHorizon(group: {
 	syncIssues: StoredChatSyncIssue[];
 	messages: Array<{ cursor: number }>;
 }): number | undefined {
-	const rows = new Set(group.messages.map((message) => message.cursor));
+	// Drop-class issues are rare (the common call has none), so the cursor set
+	// builds lazily on the first one instead of on every call over the full
+	// history.
+	let cursors: Set<number> | undefined;
 	let horizon: number | undefined;
 	for (const issue of group.syncIssues) {
 		if (!isUnrecoveredDropIssue(issue)) continue;
-		if (rows.has(issue.cursor)) continue;
+		cursors ??= new Set(group.messages.map((message) => message.cursor));
+		if (cursors.has(issue.cursor)) continue;
 		if (horizon === undefined || issue.cursor < horizon) horizon = issue.cursor;
 	}
 	return horizon;
