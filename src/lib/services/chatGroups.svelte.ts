@@ -201,6 +201,25 @@ export const chatGroupsStore = $state<{ groups: StoredChatGroup[] }>({
 	groups: []
 });
 
+/** Svelte 5's `$state` deep proxy only wraps plain objects and arrays (see
+ *  svelte/internal/client/proxy.js — any other prototype is returned
+ *  untouched). Message history lives in this Array subclass so the thousands
+ *  of stored message objects never become proxies: no per-property reactive
+ *  sources, no proxy-trap constant factor on every scan — while still reading
+ *  as a normal array everywhere (type stays StoredChatMessage[]).
+ *  Invariant: store arrays are copy-on-write — every mutation path produces a
+ *  new array (ingestion works on createWorkingChatGroupSession copies); never
+ *  mutate a store array or message in place or its readers go stale. */
+export class StoredChatMessageList extends Array<StoredChatMessage> {}
+
+/** Wrap a group's history for the reactive store — see StoredChatMessageList. */
+function asStoredGroup(group: StoredChatGroup): StoredChatGroup {
+	if (group.messages instanceof StoredChatMessageList) return group;
+	const messages = new StoredChatMessageList();
+	for (const message of group.messages) messages.push(message);
+	return { ...group, messages };
+}
+
 function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 	// $state.snapshot at the storage boundary: the reactive store hands over
 	// proxies nested in these fields (branch, skippedSiblingCommit, ...), and a
@@ -360,7 +379,7 @@ async function loadGroups(ownerPubkey?: string) {
 		records.map((record) => loadAndNormalizeChatGroup(storage, record.id))
 	);
 
-	chatGroupsStore.groups = loaded.map((entry) => entry.group);
+	chatGroupsStore.groups = loaded.map((entry) => asStoredGroup(entry.group));
 	if (loaded.some((entry) => entry.changed)) {
 		void persistGroups(chatGroupsStore.groups);
 	}
@@ -833,18 +852,20 @@ function requireChatGroup(groupId: string): StoredChatGroup {
  * branch only fires under a race, where replace is the lesser evil.
  */
 export function persistGroup(group: StoredChatGroup) {
-	const exists = chatGroupsStore.groups.some((g) => g.id === group.id);
+	const stored = asStoredGroup(group);
+	const exists = chatGroupsStore.groups.some((g) => g.id === stored.id);
 	chatGroupsStore.groups = exists
-		? chatGroupsStore.groups.map((g) => (g.id === group.id ? group : g))
-		: [...chatGroupsStore.groups, group];
-	void persistSingleGroup(group);
+		? chatGroupsStore.groups.map((g) => (g.id === stored.id ? stored : g))
+		: [...chatGroupsStore.groups, stored];
+	void persistSingleGroup(stored);
 }
 
 export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
+	const stored = asStoredGroup(nextGroup);
 	chatGroupsStore.groups = chatGroupsStore.groups.map((group) =>
-		group.id === groupId ? nextGroup : group
+		group.id === groupId ? stored : group
 	);
-	return persistSingleGroup(nextGroup);
+	return persistSingleGroup(stored);
 }
 
 /**
