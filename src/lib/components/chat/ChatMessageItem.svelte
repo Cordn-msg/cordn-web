@@ -105,6 +105,7 @@
 	let isHolding = $state(false);
 	let holdTimer: ReturnType<typeof setTimeout> | null = null;
 	let coarsePointerActive = false;
+	let gestureActive = false;
 	let touchStartX = 0;
 	let touchStartY = 0;
 	let swipeOffset = $state(0);
@@ -340,6 +341,7 @@
 
 	function resetGesture() {
 		cancelHoldTimer();
+		gestureActive = false;
 		isDragging = false;
 		swipeOffset = 0;
 	}
@@ -374,16 +376,21 @@
 		coarsePointerActive = event.pointerType !== 'mouse';
 		if (!isCoarsePointer(event)) return;
 		if (event.button !== 0) return;
+		// Media controls own their gestures: Chromium delivers video-control
+		// taps/drags (play/pause, scrubbing) as pointer events on the <video>,
+		// and they must not start the long-press sheet or the swipe-to-reply.
+		if (event.target instanceof Element && event.target.closest('video, audio')) return;
 
 		touchStartX = event.clientX;
 		touchStartY = event.clientY;
 		swipeOffset = 0;
 		isDragging = false;
+		gestureActive = true;
 		startHoldTimer();
 	}
 
 	function handleBubblePointerMove(event: PointerEvent) {
-		if (!isCoarsePointer(event)) return;
+		if (!isCoarsePointer(event) || !gestureActive) return;
 		const deltaX = event.clientX - touchStartX;
 		const deltaY = event.clientY - touchStartY;
 		const horizontalDistance = Math.abs(deltaX);
@@ -404,7 +411,7 @@
 	}
 
 	function handleBubblePointerUp(event: PointerEvent) {
-		if (!isCoarsePointer(event)) return;
+		if (!isCoarsePointer(event) || !gestureActive) return;
 
 		if (!message.deleted && Math.abs(swipeOffset) >= SWIPE_REPLY_THRESHOLD) {
 			onReply(message);
