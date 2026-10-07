@@ -82,6 +82,16 @@ jobs:
             "$CORDN_KEYSTORE_PASSWORD" "$CORDN_KEY_ALIAS" "$CORDN_KEY_PASSWORD" \
             > android/keystore.properties
 
+      - name: Provision GIF search API key (no-op without secret → native GIF search disabled)
+        env:
+          CORDN_GIFS_API_KEY: ${{ secrets.CORDN_GIFS_API_KEY }}
+        run: |
+          if [ -z "$CORDN_GIFS_API_KEY" ]; then
+            echo "No GIF API key secret found; native GIF search will be disabled in this build."
+            exit 0
+          fi
+          printf 'key=%s\n' "$CORDN_GIFS_API_KEY" > android/gifs.properties
+
       - run: pnpm android:release
 
       - name: Detect lane (tag has a hyphen → internal/prerelease, else release)
