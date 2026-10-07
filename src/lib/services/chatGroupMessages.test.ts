@@ -66,7 +66,7 @@ vi.mock('$lib/services/multiDevice.svelte', async (importOriginal) => {
 	};
 });
 
-import { ingestChatGroupMessages } from './chatGroupMessages.svelte';
+import { ingestChatGroupMessages, unrecoveredDropHorizon } from './chatGroupMessages.svelte';
 
 describe('ingestChatGroupMessages()', () => {
 	beforeEach(() => {
@@ -601,5 +601,41 @@ describe('spec §10.6 unseal-failure rescue + bounded hold', () => {
 
 		await ingestChatGroupMessages({ group, messages: messages.slice(0, 1), mdActive: true });
 		expect(group.fetchCursor).toBe(0); // still holding — a fetch is failing
+	});
+});
+
+describe('unrecoveredDropHorizon', () => {
+	// The drop class keys on this detail prefix (shared by writer and matchers).
+	const DROP_DETAIL = 'Sealed payload decrypt failed: test';
+
+	function issue(cursor: number, detail = DROP_DETAIL, recovered = false) {
+		return { cursor, createdAt: cursor, detail, recovered };
+	}
+
+	test('no drop-class issues means no horizon', () => {
+		expect(
+			unrecoveredDropHorizon({
+				syncIssues: [issue(5, 'some other problem')],
+				messages: [{ cursor: 1 }]
+			})
+		).toBeUndefined();
+	});
+
+	test('an unrecovered drop issue with no row is the horizon', () => {
+		expect(
+			unrecoveredDropHorizon({
+				syncIssues: [issue(7), issue(3)],
+				messages: [{ cursor: 1 }]
+			})
+		).toBe(3);
+	});
+
+	test('issues whose row arrived, and recovered issues, are skipped', () => {
+		expect(
+			unrecoveredDropHorizon({
+				syncIssues: [issue(7), issue(3, DROP_DETAIL, true)],
+				messages: [{ cursor: 7 }]
+			})
+		).toBeUndefined();
 	});
 });

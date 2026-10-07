@@ -98,6 +98,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Staircase, an independent Android app for Cordn, can now open cordn.net group and profile links. If you have both apps installed, Android asks which one to use — pick “Always” once to make the question go away. If Cordn is your only app, nothing changes: links keep opening Cordn directly.'
 	},
 	{
+		id: 'cordn-news-2026-10-07-performance',
+		createdAt: Date.UTC(2026, 9, 7),
+		version: 1,
+		title: 'Typing and scrolling are smooth again, even in big chats',
+		body: '- 🐛 Some phones felt sluggish after the last update: typing could stutter and long chats scrolled unevenly — the more history a chat had behind it, the worse it got. That is fixed: typing and scrolling stay smooth no matter how far back a chat goes.\n- 🔄 Opening a chat with a long history is quicker now, and the app handles its message history far more efficiently behind the scenes — same messages, same unread counts, same search, just lighter on your phone.'
+	},
+	{
 		id: 'cordn-news-2026-10-06-invite-cards',
 		createdAt: Date.UTC(2026, 9, 6),
 		version: 1,

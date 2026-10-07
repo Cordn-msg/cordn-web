@@ -1319,3 +1319,40 @@ describe('wedged-send convergence heal (staleMark + empty catch-up fetch)', () =
 		});
 	});
 });
+
+describe('store history proxying', () => {
+	test('message history enters the reactive store unproxied', async () => {
+		const { getChatGroup, persistGroup, StoredChatMessageList } =
+			await import('./chatGroups.svelte');
+		const message = {
+			cursor: 1,
+			createdAt: 1,
+			direction: 'inbound' as const,
+			sender: 'cc'.repeat(32),
+			id: 'raw-1',
+			kind: 9,
+			tags: [],
+			content: 'hi'
+		};
+
+		persistGroup({
+			id: 'raw-history',
+			coordinatorKey: 'aa'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 1,
+			fetchCursor: 1,
+			messages: [message],
+			syncIssues: [],
+			snapshots: [],
+			joinEpoch: 0n
+		} as StoredChatGroup);
+
+		const stored = getChatGroup('raw-history');
+		// Svelte's $state deep proxy skips Array subclasses (proxy.js prototype
+		// check). If this fails, every stored message property became a reactive
+		// source again and history scans lost their raw-array speed.
+		expect(stored?.messages).toBeInstanceOf(StoredChatMessageList);
+		expect(stored?.messages[0]).toBe(message);
+	});
+});

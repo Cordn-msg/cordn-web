@@ -34,12 +34,35 @@ export const chatGroupPresenceStore = $state<{
 
 let activePresenceStorageKey = getPresenceStorageKey();
 
-function savePresence() {
+function writePresence() {
 	if (!browser) return;
 	const payload: PersistedGroupPresence = {
 		groups: chatGroupPresenceStore.groups
 	};
 	localStorage.setItem(activePresenceStorageKey, JSON.stringify(payload));
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function flushPresence() {
+	if (saveTimer === undefined) return;
+	clearTimeout(saveTimer);
+	saveTimer = undefined;
+	writePresence();
+}
+
+// Trailing debounce: visibility-driven read marking fires in bursts (every
+// frame while scrolling), and a synchronous JSON.stringify + localStorage.setItem
+// per mark was the 0.5.4 scroll regression. Coalesce to one write per pause.
+function scheduleSavePresence() {
+	if (!browser) return;
+	clearTimeout(saveTimer);
+	saveTimer = setTimeout(flushPresence, 300);
+}
+
+if (browser) {
+	// A pending write must not lose read marks to an abrupt tab close.
+	addEventListener('pagehide', flushPresence);
 }
 
 function getPresenceStorageKey(ownerPubkey?: string) {
@@ -48,6 +71,10 @@ function getPresenceStorageKey(ownerPubkey?: string) {
 
 export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 	if (!browser) return;
+	// Flush any pending write to the outgoing owner's key before switching.
+	flushPresence();
+	// Cached summaries pin the outgoing owner's history arrays.
+	summaryCache.clear();
 	activePresenceStorageKey = getPresenceStorageKey(ownerPubkey);
 	try {
 		const raw =
@@ -66,6 +93,7 @@ export function loadChatGroupPresenceForOwner(ownerPubkey?: string) {
 
 export function deleteChatGroupPresenceForOwner(ownerPubkey: string) {
 	if (!browser) return;
+	flushPresence();
 	const storageKey = getPresenceStorageKey(ownerPubkey);
 	localStorage.removeItem(storageKey);
 	if (activePresenceStorageKey === storageKey) {
@@ -109,7 +137,7 @@ export function markChatGroupRead(groupId: string, cursor?: number) {
 			lastReadCursor: nextCursor
 		}
 	};
-	savePresence();
+	scheduleSavePresence();
 	// Reading dismisses the group's notifications right away — the shade must never outlive
 	// the content it points at (platform guidance: drop stale notifications immediately).
 	void clearShownNotifications([groupId]);
@@ -134,7 +162,7 @@ export function markChatGroupMentionsRead(groupId: string, cursor?: number) {
 			lastReadMentionCursor: nextCursor
 		}
 	};
-	savePresence();
+	scheduleSavePresence();
 }
 
 /** Mark every local group fully read (messages + mentions), across all
@@ -147,59 +175,36 @@ export function markAllChatGroupsRead() {
 	}
 }
 
-export function getUnreadChatGroupMessageCount(groupId: string): number {
-	const group = getChatGroup(groupId);
-	if (!group) return 0;
-	const lastReadCursor = getChatGroupLastReadCursor(groupId);
-	// O(1) common case: lastCursor is the high-water mark of every stored
-	// message (ingest advances it via Math.max), so nothing can be unread at or
-	// below the read cursor. Keeps per-message sidebar/title recomputes from
-	// rescanning every group's full history.
-	if (group.lastCursor <= lastReadCursor) return 0;
-	// Own messages never count as unread: the coordinator assigns their cursor at
-	// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
-	// filter a send would badge its own group as unread. Same rule as the mention
-	// scan (`message.sender !== pubkey`); with no active identity there is nothing to
-	// attribute, so keep counting rather than hide real unread.
-	const activePubkey = manager.active?.pubkey;
-	let count = 0;
-	for (const message of group.messages) {
-		if (message.cursor <= lastReadCursor || message.kind === SYSTEM_MESSAGE_KIND) continue;
-		if (activePubkey && samePubKey(message.sender, activePubkey)) continue;
-		count++;
-	}
-	return count;
-}
-
 export function listUnreadChatGroupReferenceTargets(groupId: string, pubkey: string) {
 	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
 	const group = getChatGroup(groupId);
-	// Same O(1) guard as getUnreadChatGroupMessageCount, against the mention
-	// cursor: no message exists past lastCursor, so no unread reference either.
+	// Same O(1) guard as the summary's unread count (getChatGroupMessageSummary),
+	// against the mention cursor: no message exists past lastCursor, so no unread
+	// reference either.
 	if (!group || group.lastCursor <= lastReadMentionCursor) return [];
 	const messages = listChatGroupMessages(groupId);
+	const references = messages.filter(
+		(message) =>
+			message.cursor > lastReadMentionCursor &&
+			message.sender !== pubkey &&
+			chatMessageReferencesPubkey(message.tags, pubkey)
+	);
+	// Resolving reply/reaction targets needs the byEventId map (a full-history
+	// allocation); plain mentions don't, and they are the common case.
+	if (!references.some((message) => isAnnotationKind(message.kind))) {
+		return references.map((message) => ({ reference: message, target: message }));
+	}
 	const byEventId = new Map(messages.map((message) => [message.id, message]));
 
-	return messages
-		.filter(
-			(message) =>
-				message.cursor > lastReadMentionCursor &&
-				message.sender !== pubkey &&
-				chatMessageReferencesPubkey(message.tags, pubkey)
-		)
-		.map((message) => {
-			if (!isAnnotationKind(message.kind)) {
-				return { reference: message, target: message };
-			}
+	return references.map((message) => {
+		if (!isAnnotationKind(message.kind)) {
+			return { reference: message, target: message };
+		}
 
-			const targetId = message.tags.find((tag) => tag[0] === 'e')?.[1];
-			const target = targetId ? byEventId.get(targetId) : undefined;
-			return { reference: message, target: target ?? message };
-		});
-}
-
-export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
-	return listUnreadChatGroupReferenceTargets(groupId, pubkey).length;
+		const targetId = message.tags.find((tag) => tag[0] === 'e')?.[1];
+		const target = targetId ? byEventId.get(targetId) : undefined;
+		return { reference: message, target: target ?? message };
+	});
 }
 
 export interface ChatGroupSummary {
@@ -208,41 +213,122 @@ export interface ChatGroupSummary {
 	unreadReferenceCount: number;
 }
 
-export function getChatGroupSummary(groupId: string, activePubkey?: string): ChatGroupSummary {
-	return {
-		preview: getLatestChatGroupMessagePreview(groupId),
-		unreadCount: getUnreadChatGroupMessageCount(groupId),
-		unreadReferenceCount: activePubkey ? getUnreadChatGroupReferenceCount(groupId, activePubkey) : 0
-	};
-}
+// One pass over history per event (ingest batch, read mark, account change),
+// cached — the staircase `recomputeUnread` frequency, without their SQL:
+// copy-on-write store writes replace the messages array, so the ref changes
+// exactly when history changed. Typing and scrolling leave the cache hot and
+// skip the full-history scans that sidebar/attention deriveds used to trigger
+// per keystroke. Every input the summary reads is part of the entry or its
+// validity check (messages ref, the group's lastCursor + description, both
+// read cursors); entries are keyed by the pubkeys the two rules use and
+// cleared on account switch and group pruning.
+type MessageSummary = {
+	messages: StoredChatMessage[] | undefined;
+	lastCursor: number;
+	description: string | undefined;
+	lastReadCursor: number;
+	lastReadMentionCursor: number;
+	messagePreview: string;
+	unreadCount: number;
+	unreadReferenceCount: number;
+};
 
-function getLatestChatGroupMessagePreview(groupId: string): string {
-	const draftPreview = getChatDraftPreview(groupId);
-	if (draftPreview) {
-		return draftPreview;
+const summaryCache = new Map<string, MessageSummary>();
+
+function getChatGroupMessageSummary(
+	groupId: string,
+	senderPubkey: string | undefined,
+	refPubkey: string | undefined
+): MessageSummary {
+	const group = getChatGroup(groupId);
+	const messages = group?.messages;
+	const lastCursor = group?.lastCursor ?? 0;
+	const description = group?.metadata?.description;
+	const lastReadCursor = getChatGroupLastReadCursor(groupId);
+	const lastReadMentionCursor = getChatGroupLastReadMentionCursor(groupId);
+	const key = `${groupId}\u0000${senderPubkey ?? ''}\u0000${refPubkey ?? ''}`;
+	const cached = summaryCache.get(key);
+	if (
+		cached &&
+		cached.messages === messages &&
+		cached.lastCursor === lastCursor &&
+		cached.description === description &&
+		cached.lastReadCursor === lastReadCursor &&
+		cached.lastReadMentionCursor === lastReadMentionCursor
+	) {
+		return cached;
 	}
 
-	const group = getChatGroup(groupId);
+	// Same O(1) guards as before: no message exists past lastCursor, so nothing
+	// can be unread either (legacy records carrying stored messages above the
+	// counter stay deliberately not badge-counted — see
+	// getChatGroupStoredHighWater's comment).
+	const countUnread = Boolean(group && group.lastCursor > lastReadCursor);
 	let latestMessage: StoredChatMessage | undefined;
-	if (group) {
-		for (const message of group.messages) {
-			if (!latestMessage || message.cursor > latestMessage.cursor) {
-				latestMessage = message;
-			}
+	let unreadCount = 0;
+	for (const message of messages ?? []) {
+		if (!latestMessage || message.cursor > latestMessage.cursor) {
+			latestMessage = message;
+		}
+		if (countUnread && message.cursor > lastReadCursor && message.kind !== SYSTEM_MESSAGE_KIND) {
+			// Own messages never count as unread: the coordinator assigns their cursor at
+			// validation (the ✓) and echoes them back `direction: 'inbound'`, so without this
+			// filter a send would badge its own group as unread. Same rule as the mention
+			// scan (`message.sender !== pubkey`); with no active identity there is nothing to
+			// attribute, so keep counting rather than hide real unread.
+			if (!(senderPubkey && samePubKey(message.sender, senderPubkey))) unreadCount++;
 		}
 	}
-	// Media and system messages render as labels/sentences (getChatMessagePreviewText);
-	// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
-	// mention tokens before names replace them — an 80-char cap ate the entire
-	// text of any mention-first message.
-	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
-	if (preview) return preview;
 
-	return group?.metadata?.description || 'Group chat';
+	const preview = latestMessage ? getChatMessagePreviewText(latestMessage) : '';
+	const summary: MessageSummary = {
+		messages,
+		lastCursor,
+		description,
+		lastReadCursor,
+		lastReadMentionCursor,
+		// Media and system messages render as labels/sentences (getChatMessagePreviewText);
+		// no length cap: cards clip with CSS, and cutting here would slice `nostr:`
+		// mention tokens before names replace them — an 80-char cap ate the entire
+		// text of any mention-first message.
+		messagePreview: preview || description || 'Group chat',
+		unreadCount,
+		// Single source of truth for the reference matcher and target resolution:
+		// the unread-reference list. Cached here so attention/sidebar deriveds never
+		// rescan per keystroke.
+		unreadReferenceCount: refPubkey
+			? listUnreadChatGroupReferenceTargets(groupId, refPubkey).length
+			: 0
+	};
+	summaryCache.set(key, summary);
+	return summary;
+}
+
+export function getUnreadChatGroupMessageCount(groupId: string): number {
+	const activePubkey = manager.active?.pubkey;
+	return getChatGroupMessageSummary(groupId, activePubkey, activePubkey).unreadCount;
+}
+
+export function getUnreadChatGroupReferenceCount(groupId: string, pubkey: string): number {
+	return getChatGroupMessageSummary(groupId, manager.active?.pubkey, pubkey).unreadReferenceCount;
+}
+
+export function getChatGroupSummary(groupId: string, activePubkey?: string): ChatGroupSummary {
+	const summary = getChatGroupMessageSummary(groupId, manager.active?.pubkey, activePubkey);
+	return {
+		// Draft previews replace the message preview while composing and change
+		// per keystroke — merged outside the cache so it never goes stale.
+		preview: getChatDraftPreview(groupId) || summary.messagePreview,
+		unreadCount: summary.unreadCount,
+		unreadReferenceCount: summary.unreadReferenceCount
+	};
 }
 
 export function pruneChatGroupPresence() {
 	if (!areChatGroupsLoaded()) return;
+	// Removed groups' summaries pin history arrays; a full clear is cheap
+	// (one pass per group on the next read).
+	summaryCache.clear();
 
 	const validGroupIds = new Set(listChatGroups().map((group) => group.id));
 	const nextEntries = Object.entries(chatGroupPresenceStore.groups).filter(([groupId]) =>
@@ -251,7 +337,7 @@ export function pruneChatGroupPresence() {
 	if (nextEntries.length === Object.keys(chatGroupPresenceStore.groups).length) return;
 
 	chatGroupPresenceStore.groups = Object.fromEntries(nextEntries);
-	savePresence();
+	scheduleSavePresence();
 }
 
 export function removeChatGroupPresence(groupId: string) {
@@ -259,5 +345,5 @@ export function removeChatGroupPresence(groupId: string) {
 	const nextGroups = { ...chatGroupPresenceStore.groups };
 	delete nextGroups[groupId];
 	chatGroupPresenceStore.groups = nextGroups;
-	savePresence();
+	scheduleSavePresence();
 }
