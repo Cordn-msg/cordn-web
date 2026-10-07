@@ -94,7 +94,7 @@ export async function initNativeShell(): Promise<void> {
 
 	// --- Phase 2/3: background delivery + sidecar ---
 	void applyDeliveryConfig();
-	void drainBackgroundSidecar(); // ingest anything staged while the app was closed
+	void runDrain(); // ingest anything staged while the app was closed
 	void seedBackground();
 	void routeLaunchGid(); // deep-link if launched from a notification tap
 	void clearShownNotifications(); // drop stale shade entries now that the app is foregrounded
@@ -107,7 +107,7 @@ export async function initNativeShell(): Promise<void> {
 			// Foreground → drain staged bytes (catch-up) then re-seed.
 			if (isActive) {
 				void clearShownNotifications(); // user is back in-app → shade notifications are stale
-				void drainBackgroundSidecar().then(() => void seedBackground());
+				void runDrain().then(() => void seedBackground());
 				void routeLaunchGid();
 				void routeSharedContent();
 			} else {
@@ -147,7 +147,7 @@ export async function initNativeShell(): Promise<void> {
 	// foregrounded gap, firing exactly when there are confirmed un-ingested bytes.
 	try {
 		await CordnBackground.addListener('sidecarUpdated', () => {
-			void drainBackgroundSidecar();
+			void runDrain();
 		});
 	} catch {
 		// plugin unavailable — foreground-transition drain still covers recovery
@@ -380,7 +380,19 @@ export async function routeLaunchGid(): Promise<void> {
 	const gid = await CordnBackground.consumeLaunchGid()
 		.then((r) => r.gid)
 		.catch(() => null);
-	if (gid) goto(resolve('/chat/[id]', { id: groupRouteId(gid) }));
+	if (!gid) return;
+	// Land at the FIRST UNREAD message, not the bottom: the open-at-first-unread
+	// snapshot (ChatShell) reads the local store once, at open — and the notified
+	// messages exist only as staged sidecar bytes until the drain ingests them.
+	// Sequence behind the (shared, deduped) drain so the group opens with them
+	// already stored; bounded so a hung plugin can't strand navigation (the
+	// timeout falls back to today's immediate open, same as web).
+	try {
+		await Promise.race([runDrain(), new Promise((resolve) => setTimeout(resolve, 2000))]);
+	} catch {
+		// drainBackgroundSidecar never rejects in practice — belt and braces
+	}
+	goto(resolve('/chat/[id]', { id: groupRouteId(gid) }));
 }
 
 // ───────────────────────────── share target (Android SEND intent) ─────────────────────────────
@@ -593,4 +605,20 @@ export async function drainBackgroundSidecar(): Promise<void> {
 			console.warn('[native] sidecar ingest failed', { gid, error });
 		}
 	}
+}
+
+/**
+ * Shared sidecar-drain lane: concurrent callers (init, the foreground
+ * transition, the sidecarUpdated event, notification-tap routing in
+ * routeLaunchGid) join the same in-flight drain instead of racing duplicate
+ * drains. The slot clears on settle, so the next caller starts a fresh
+ * (idempotent, usually empty) drain.
+ */
+let drainInFlight: Promise<void> | null = null;
+
+function runDrain(): Promise<void> {
+	drainInFlight ??= drainBackgroundSidecar().finally(() => {
+		drainInFlight = null;
+	});
+	return drainInFlight;
 }
