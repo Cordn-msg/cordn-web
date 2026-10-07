@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-10-07-notification-first-unread',
+		createdAt: Date.UTC(2026, 9, 7),
+		version: 1,
+		title: 'Opening a chat from a notification lands on the new messages',
+		body: '- 🐛 On Android, tapping a notification used to drop you at the very bottom of the conversation and quietly mark everything as read on the way — the unread marker and the missed-messages badge were gone before you saw a thing. Tapping now opens the chat at the first unread message, exactly like opening it from the list.'
+	},
+	{
 		id: 'cordn-news-2026-10-07-staircase-links',
 		createdAt: Date.UTC(2026, 9, 7),
 		version: 1,
