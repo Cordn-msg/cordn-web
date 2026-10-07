@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.5 — 2026-10-07
+
+### Features
+
+- **chat:** add GIF picker via gifs.nostr.build
+- **news:** announce mention-caption and video-playback fixes
+- **news:** announce the notification-tap first-unread fix
+- **news:** announce the typing and scrolling smoothness fix
+- **news:** announce Staircase as a cordn.net link handler
+- add Staircase to cordn.net app links
+
+### Fixes
+
+- **chat:** ignore media elements in bubble swipe/long-press gestures
+- **chat:** keep composer focus away from video controls on touch
+- **chat:** format mention tokens in composer previews
+- **chat:** serialize mentions in media and voice captions
+- **native:** open notification-tap group at the first unread message
+- close summary-cache invalidation gaps and dedupe the reference matcher
+
+### Performance
+
+- lazy cursor set in unrecoveredDropHorizon
+- keep message history out of the $state deep proxy
+- cache per-group chat summary on one pass per event
+- debounce presence writes and cache per-message hot-path scans
+
 ## 0.5.4 — 2026-10-06
 
 ### Features
