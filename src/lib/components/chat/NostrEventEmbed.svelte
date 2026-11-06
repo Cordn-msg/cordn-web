@@ -3,6 +3,7 @@
 	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
 	import ChatMarkdown from '$lib/chat/markdown/ChatMarkdown.svelte';
 	import CollapsibleText from '$lib/components/chat/CollapsibleText.svelte';
+	import GitPullRequestEmbed from '$lib/components/chat/GitPullRequestEmbed.svelte';
 	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { useNostrEvent } from '$lib/services/useNostrEvent.svelte';
 	import { getRenderNostrEmbeds } from '$lib/services/chatComposerSettings.svelte';
@@ -12,6 +13,7 @@
 		splitHighlightContext,
 		type ChatHighlightNostrSource
 	} from '$lib/chat/highlights';
+	import { parseGitPullRequest } from '$lib/chat/gitPullRequests';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
 	import {
@@ -77,9 +79,19 @@
 		[kinds.Metadata]: 'Metadata',
 		[kinds.Contacts]: 'Contacts',
 		[kinds.RelayList]: 'Relays',
-		[kinds.Highlights]: 'Highlight'
+		[kinds.Highlights]: 'Highlight',
+		[kinds.GitPullRequest]: 'Pull request'
 	};
 	const kindLabel = (kind: number) => KIND_LABELS[kind] ?? `Kind ${kind}`;
+
+	// NIP-34 pull requests get their own body; the shared card header/meta/
+	// overflow menu stays here so PR and non-PR cards cannot drift apart.
+	const isPullRequest = $derived(event.current?.kind === kinds.GitPullRequest);
+	const pullRequest = $derived(
+		isPullRequest
+			? parseGitPullRequest(event.current?.tags ?? [], event.current?.content ?? '')
+			: null
+	);
 
 	// NIP-84 highlights: content is the highlighted excerpt; a comment tag
 	// turns it into a quote highlight (comment = the highlighter's prose,
@@ -199,6 +211,11 @@
 		<DropdownMenuContent side="bottom" align="end" sideOffset={4} class="rounded-2xl p-1">
 			<DropdownMenuItem onclick={openInApp}>Open in app</DropdownMenuItem>
 			<DropdownMenuItem onclick={() => void copyToClipboard(entity)}>Copy entity</DropdownMenuItem>
+			{#if pullRequest?.cloneUrls[0]}
+				<DropdownMenuItem onclick={() => void copyToClipboard(pullRequest!.cloneUrls[0])}>
+					Copy clone URL
+				</DropdownMenuItem>
+			{/if}
 			<DropdownMenuItem onclick={() => void openMessageLink(externalHref)}>
 				Open in nostr.at
 			</DropdownMenuItem>
@@ -331,6 +348,8 @@
 					{/each}
 				</span>
 			{/if}
+		{:else if isPullRequest && pullRequest}
+			<GitPullRequestEmbed event={event.current} {pullRequest} {isOwn} {metaClass} />
 		{:else if event.current.content}
 			<span class="mt-1 block text-sm">
 				<CollapsibleText length={event.current.content.length} {isOwn}>
