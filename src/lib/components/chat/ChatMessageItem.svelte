@@ -989,6 +989,57 @@
 								<ChatMessageMedia {message} />
 								<ChatInlineBody {message} {groupId} {onVote} {onOpenRich} />
 							{/if}
+
+							<div
+								class={cn(
+									'mt-1 flex items-center justify-end gap-1 text-[10px] leading-none select-none sm:text-[11px]',
+									isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground/80'
+								)}
+							>
+								<p>{message.timeLabel}</p>
+								{#if message.pinned}
+									<span class="inline-flex items-center" aria-label="Pinned" title="Pinned">
+										<Pin class="size-3" />
+									</span>
+								{/if}
+								{#if message.edited}
+									<span class="inline-flex items-center" aria-label="Edited" title="Edited">
+										<Pencil class="size-3" />
+									</span>
+								{/if}
+								{#if message.isOwn && message.deliveryState === 'sent'}
+									<span
+										class="inline-flex items-center"
+										aria-label={getDeliveryStateLabel()}
+										title={getDeliveryStateLabel()}
+									>
+										<Check class="size-3" />
+									</span>
+								{:else if message.isOwn && message.deliveryState === 'error'}
+									<button
+										type="button"
+										class="inline-flex items-center text-destructive hover:text-destructive/80"
+										aria-label={message.media ? 'Remove failed upload' : 'Retry send'}
+										title={message.media
+											? 'Upload failed — tap to remove'
+											: 'Failed to send — click to retry'}
+										onclick={() => onRetrySend(message)}
+									>
+										<X class="size-3" />
+									</button>
+								{:else if message.isOwn && message.deliveryState === 'queued'}
+									<span
+										class="inline-flex items-center"
+										aria-label={message.deliveryDetail ?? getDeliveryStateLabel()}
+										title={message.deliveryDetail ?? getDeliveryStateLabel()}
+									>
+										<Clock class="size-3" />
+									</span>
+								{:else if message.isOwn && message.deliveryState === 'sending'}
+									<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span
+									>
+								{/if}
+							</div>
 						</div>
 					</div>
 
@@ -1033,53 +1084,6 @@
 								</Tooltip>
 							{/each}
 						</div>
-					{/if}
-				</div>
-
-				<div
-					class="flex shrink-0 items-center gap-1 self-end px-1 text-[10px] text-muted-foreground/80 sm:text-[11px]"
-				>
-					<p>{message.timeLabel}</p>
-					{#if message.pinned}
-						<span class="inline-flex items-center" aria-label="Pinned" title="Pinned">
-							<Pin class="size-3" />
-						</span>
-					{/if}
-					{#if message.edited}
-						<span class="inline-flex items-center" aria-label="Edited" title="Edited">
-							<Pencil class="size-3" />
-						</span>
-					{/if}
-					{#if message.isOwn && message.deliveryState === 'sent'}
-						<span
-							class="inline-flex items-center"
-							aria-label={getDeliveryStateLabel()}
-							title={getDeliveryStateLabel()}
-						>
-							<Check class="size-3" />
-						</span>
-					{:else if message.isOwn && message.deliveryState === 'error'}
-						<button
-							type="button"
-							class="inline-flex items-center text-destructive hover:text-destructive/80"
-							aria-label={message.media ? 'Remove failed upload' : 'Retry send'}
-							title={message.media
-								? 'Upload failed — tap to remove'
-								: 'Failed to send — click to retry'}
-							onclick={() => onRetrySend(message)}
-						>
-							<X class="size-3" />
-						</button>
-					{:else if message.isOwn && message.deliveryState === 'queued'}
-						<span
-							class="inline-flex items-center"
-							aria-label={message.deliveryDetail ?? getDeliveryStateLabel()}
-							title={message.deliveryDetail ?? getDeliveryStateLabel()}
-						>
-							<Clock class="size-3" />
-						</span>
-					{:else if message.isOwn && message.deliveryState === 'sending'}
-						<span aria-label={getDeliveryStateLabel()} title={getDeliveryStateLabel()}>…</span>
 					{/if}
 				</div>
 			</div>
