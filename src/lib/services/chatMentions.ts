@@ -2,6 +2,8 @@ import { nip19 } from 'nostr-tools';
 import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
 import { isGroupRef } from '@cordn/core';
 
+import { matchEmojiShortcodes, type EmojiDisplay } from '$lib/chat/emoji';
+
 import type { ChatMentionReference } from '$lib/components/chat/chat.types';
 import { normalizePubKey, samePubKey } from '$lib/utils';
 
@@ -14,7 +16,8 @@ export type ChatMentionTextPart =
 	| { type: 'text'; text: string }
 	| { type: 'profile'; text: string; pubkey: string }
 	| { type: 'event'; text: string; pointer: EventPointer | AddressPointer }
-	| { type: 'link'; text: string; href: string };
+	| { type: 'link'; text: string; href: string }
+	| { type: 'emoji'; text: string; name: string; display: EmojiDisplay };
 
 const NOSTR_PROFILE_REFERENCE_PATTERN =
 	/nostr:((?:npub|nprofile)1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
@@ -84,7 +87,40 @@ export function serializeChatProfileMentions(
 	};
 }
 
-function appendTextWithLinks(parts: ChatMentionTextPart[], text: string) {
+function appendTextWithEmoji(
+	parts: ChatMentionTextPart[],
+	text: string,
+	emoji: Map<string, EmojiDisplay>
+) {
+	if (emoji.size === 0) {
+		parts.push({ type: 'text', text });
+		return;
+	}
+	let lastIndex = 0;
+	for (const match of matchEmojiShortcodes(text)) {
+		const display = emoji.get(match.name);
+		if (!display) continue;
+		if (match.index > lastIndex) {
+			parts.push({ type: 'text', text: text.slice(lastIndex, match.index) });
+		}
+		parts.push({
+			type: 'emoji',
+			text: `:${match.name}:`,
+			name: match.name,
+			display
+		});
+		lastIndex = match.index + match.length;
+	}
+	if (lastIndex < text.length) {
+		parts.push({ type: 'text', text: text.slice(lastIndex) });
+	}
+}
+
+function appendTextWithLinks(
+	parts: ChatMentionTextPart[],
+	text: string,
+	emoji: Map<string, EmojiDisplay>
+) {
 	// Collect link-worthy tokens: http(s) URLs and bare cordn1 group refs. A
 	// cordn1 inside a URL (e.g. https://cordn.net/chat/cordn1…) is skipped by the
 	// overlap guard below so the whole URL stays one link.
@@ -103,18 +139,21 @@ function appendTextWithLinks(parts: ChatMentionTextPart[], text: string) {
 	for (const token of tokens) {
 		if (token.index < lastIndex) continue; // overlap: token is inside an earlier link
 		if (token.index > lastIndex) {
-			parts.push({ type: 'text', text: text.slice(lastIndex, token.index) });
+			appendTextWithEmoji(parts, text.slice(lastIndex, token.index), emoji);
 		}
 		parts.push({ type: 'link', text: token.value, href: token.value });
 		lastIndex = token.index + token.value.length;
 	}
 
 	if (lastIndex < text.length) {
-		parts.push({ type: 'text', text: text.slice(lastIndex) });
+		appendTextWithEmoji(parts, text.slice(lastIndex), emoji);
 	}
 }
 
-export function parseChatProfileMentions(content: string): ChatMentionTextPart[] {
+export function parseChatProfileMentions(
+	content: string,
+	emoji: Map<string, EmojiDisplay> = new Map()
+): ChatMentionTextPart[] {
 	const parts: ChatMentionTextPart[] = [];
 	let lastIndex = 0;
 
@@ -149,7 +188,7 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 
 	for (const token of tokens) {
 		if (token.index > lastIndex) {
-			appendTextWithLinks(parts, content.slice(lastIndex, token.index));
+			appendTextWithLinks(parts, content.slice(lastIndex, token.index), emoji);
 		}
 
 		try {
@@ -160,7 +199,7 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 				} else if (decoded.type === 'nprofile') {
 					parts.push({ type: 'profile', text: token.text, pubkey: decoded.data.pubkey });
 				} else {
-					appendTextWithLinks(parts, token.text);
+					appendTextWithLinks(parts, token.text, emoji);
 				}
 			} else if (decoded.type === 'nevent' || decoded.type === 'note') {
 				parts.push({
@@ -171,17 +210,17 @@ export function parseChatProfileMentions(content: string): ChatMentionTextPart[]
 			} else if (decoded.type === 'naddr') {
 				parts.push({ type: 'event', text: token.text, pointer: decoded.data });
 			} else {
-				appendTextWithLinks(parts, token.text);
+				appendTextWithLinks(parts, token.text, emoji);
 			}
 		} catch {
-			appendTextWithLinks(parts, token.text);
+			appendTextWithLinks(parts, token.text, emoji);
 		}
 
 		lastIndex = token.index + token.text.length;
 	}
 
 	if (lastIndex < content.length) {
-		appendTextWithLinks(parts, content.slice(lastIndex));
+		appendTextWithLinks(parts, content.slice(lastIndex), emoji);
 	}
 
 	return parts.length ? parts : [{ type: 'text', text: content }];

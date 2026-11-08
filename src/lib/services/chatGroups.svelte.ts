@@ -45,7 +45,7 @@ import {
 } from '$lib/services/chatGroupMessages.svelte';
 import { noteStateFingerprint } from '$lib/services/multiDevice';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
-import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
+import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
 import {
 	resolveOutboundMessage,
 	type ChatMessageReplyTarget,
@@ -2571,13 +2571,24 @@ export async function sendChatGroupMessage(input: {
 		}
 
 		const state = decodeStoredGroupState(group);
+		// A custom emoji blob is sealed under the epoch it was prepared at. If a
+		// catch-up moved the epoch between preparation and this seal, send the
+		// shortcode as text rather than a picture nobody can open.
+		let tags = outboundShape.tags;
+		if (
+			input.mediaKeyBase64 &&
+			tags.some((tag) => tag[0] === 'emoji-media') &&
+			bytesToBase64(await deriveMediaKey(state)) !== input.mediaKeyBase64
+		) {
+			tags = tags.filter((tag) => tag[0] !== 'emoji-media');
+		}
 		const outbound = await createApplicationMessageBase64({
 			state,
 			event: createUnsignedCordnMessageEvent({
 				pubkey: normalizePubKey(account.pubkey),
 				content: outboundShape.content,
 				kind: outboundShape.kind,
-				tags: outboundShape.tags,
+				tags,
 				createdAt: input.eventCreatedAt
 			}),
 			authenticatedData: encodeAuthenticatedSender(normalizePubKey(account.pubkey))
@@ -2620,7 +2631,7 @@ export async function sendChatGroupMessage(input: {
 			content: outbound.event.content,
 			// Use the caller-provided key when present (media sends pin it to the
 			// encryption epoch); otherwise derive from the current send state.
-			mediaKeyBase64: findImetaTag(outbound.event.tags)
+			mediaKeyBase64: hasEncryptedMediaTag(outbound.event.tags)
 				? (input.mediaKeyBase64 ?? bytesToBase64(await deriveMediaKey(state)))
 				: undefined
 		};

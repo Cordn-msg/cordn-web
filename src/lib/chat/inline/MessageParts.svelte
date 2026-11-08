@@ -4,6 +4,8 @@
 	import NostrEventEmbed from '$lib/components/chat/NostrEventEmbed.svelte';
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
+	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
+	import { emojiMapFromTags } from '$lib/chat/emoji';
 	import type { ChatMentionTextPart } from '$lib/services/chatMentions';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import {
@@ -25,10 +27,22 @@
 		messageId,
 		text,
 		isOwn = false,
+		tags,
+		mediaKeyBase64,
 		parts: partsProp
-	}: { messageId: string; text: string; isOwn?: boolean; parts?: ChatMentionTextPart[] } = $props();
+	}: {
+		messageId: string;
+		text: string;
+		isOwn?: boolean;
+		/** The event's tags: custom emoji render only from what the event carries. */
+		tags?: string[][];
+		/** The epoch key for an `emoji-media` picture. */
+		mediaKeyBase64?: string;
+		parts?: ChatMentionTextPart[];
+	} = $props();
 
-	const parts = $derived(partsProp ?? getCachedChatMessageParts(messageId, text));
+	const emoji = $derived(emojiMapFromTags(tags ?? []));
+	const parts = $derived(partsProp ?? getCachedChatMessageParts(messageId, text, emoji));
 </script>
 
 {#each parts as part, index (`${messageId}:part:${index}`)}
@@ -47,6 +61,8 @@
 		<NostrEventEmbed pointer={part.pointer} text={part.text} {isOwn} />
 	{:else if part.type === 'link' && mediaUrlKind(part.href)}
 		<InlineMediaUrl href={part.href} {isOwn} />
+	{:else if part.type === 'emoji'}
+		<CustomEmoji display={part.display} {mediaKeyBase64} />
 	{:else if part.type === 'link'}
 		<button
 			type="button"

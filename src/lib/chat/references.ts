@@ -10,6 +10,7 @@
 import { safeNormalizePubKey, samePubKey } from '$lib/utils';
 import { ChatKinds } from '$lib/chat/kinds';
 import { createPollMessageTags, createPollResponseTags, type PollDraft } from '$lib/chat/polls';
+import { emojiMapFromTags, nameOfWholeShortcode, type EmojiDisplay } from '$lib/chat/emoji';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 // ---------------------------------------------------------------------------
@@ -22,6 +23,8 @@ export interface ChatMessageReplyTarget {
 	kind: number;
 	content: string;
 	tags: string[][];
+	/** The parent's epoch key when its quote carries custom emoji. */
+	mediaKeyBase64?: string;
 }
 
 /** Common target shape for annotation sends (reaction / edit / delete).
@@ -306,7 +309,7 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 		return {
 			kind: ChatKinds.Poll,
 			content: input.poll.question,
-			tags: createPollMessageTags(input.poll)
+			tags: [...createPollMessageTags(input.poll), ...(input.tags ?? [])]
 		};
 	}
 
@@ -316,7 +319,10 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 			// Bubble text for pre-poll clients; the NIP-31 `alt` tag in the tags
 			// covers future clients that know to fall back to it.
 			content: input.content,
-			tags: createPollResponseTags(input.voteTo.target, input.voteTo.optionIds)
+			tags: [
+				...createPollResponseTags(input.voteTo.target, input.voteTo.optionIds),
+				...(input.tags ?? [])
+			]
 		};
 	}
 
@@ -332,7 +338,7 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 		return {
 			kind: ChatKinds.Reaction,
 			content: input.content,
-			tags: createReactionMessageTags(input.reactionTo!)
+			tags: [...createReactionMessageTags(input.reactionTo!), ...(input.tags ?? [])]
 		};
 	}
 
@@ -369,6 +375,9 @@ export interface ReactionIndexEntry {
 	 *  ids; membership means "at least one live reaction event", so deleting
 	 *  one of two events keeps the chip). */
 	reactors: Map<string, Set<string>>;
+	/** A custom emoji picture carried by the first reaction event that has one. */
+	display?: EmojiDisplay;
+	mediaKeyBase64?: string;
 }
 
 export interface AnnotationIndex {
@@ -440,6 +449,12 @@ export function buildAnnotationIndex(messages: StoredChatMessage[]): AnnotationI
 		const eventIds = entry.reactors.get(sender) ?? new Set<string>();
 		eventIds.add(message.id);
 		entry.reactors.set(sender, eventIds);
+		const customName = nameOfWholeShortcode(reference.reaction);
+		const custom = customName ? emojiMapFromTags(message.tags).get(customName) : undefined;
+		if (custom && (!entry.display || (custom.media && !entry.display.media))) {
+			entry.display = custom;
+			entry.mediaKeyBase64 = custom.media ? message.mediaKeyBase64 : undefined;
+		}
 		byEmoji.set(reference.reaction, entry);
 		reactionMap.set(reference.targetId, byEmoji);
 	}

@@ -8,6 +8,7 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import ImagePlay from '@lucide/svelte/icons/image-play';
 	import BarChart3 from '@lucide/svelte/icons/bar-chart-3';
+	import Smile from '@lucide/svelte/icons/smile';
 	import { isNativePlatform } from '$lib/services/nativeShims';
 
 	/**
@@ -22,7 +23,8 @@
 		onPickImage = () => {},
 		onPickDocument = () => {},
 		onPickGif = () => {},
-		onCreatePoll = () => {}
+		onCreatePoll = () => {},
+		onPickEmoji = () => {}
 	}: {
 		onTakePhoto?: () => void;
 		onTakeVideo?: () => void;
@@ -30,6 +32,7 @@
 		onPickDocument?: () => void;
 		onPickGif?: () => void;
 		onCreatePoll?: () => void;
+		onPickEmoji?: () => void;
 	} = $props();
 </script>
 
@@ -42,8 +45,8 @@
 				variant="ghost"
 				size="icon"
 				class="h-11 w-11 shrink-0 rounded-xl"
-				aria-label="Add attachment"
-				title="Add attachment"
+				aria-label="Add attachment or emoji"
+				title="Add attachment or emoji"
 			>
 				<Plus class="size-4" />
 			</Button>
@@ -67,6 +70,10 @@
 		<DropdownMenu.Item onclick={onPickGif} class="gap-2">
 			<ImagePlay class="size-4" />
 			<span>GIF</span>
+		</DropdownMenu.Item>
+		<DropdownMenu.Item onclick={onPickEmoji} class="gap-2">
+			<Smile class="size-4" />
+			<span>Custom emoji</span>
 		</DropdownMenu.Item>
 		<DropdownMenu.Item onclick={onPickDocument} class="gap-2">
 			<FileText class="size-4" />

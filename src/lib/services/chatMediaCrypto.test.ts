@@ -4,14 +4,17 @@ import type { ClientState } from 'ts-mls';
 import {
 	blobAddress,
 	buildImetaTag,
+	buildMediaTag,
 	buildMediaAad,
 	decryptMedia,
 	deriveMediaKey,
 	encryptMedia,
 	findImetaTag,
+	hasEncryptedMediaTag,
 	isKnownMediaVersion,
 	MEDIA_VERSION,
 	parseImetaTag,
+	parseMediaTag,
 	type MediaMetadata
 } from '$lib/services/chatMediaCrypto';
 
@@ -255,5 +258,13 @@ describe('imeta tag', () => {
 		expect(isKnownMediaVersion(MEDIA_VERSION)).toBe(true);
 		expect(isKnownMediaVersion('cordn-em-v2')).toBe(false);
 		expect(isKnownMediaVersion(undefined)).toBe(false);
+	});
+
+	test('the same fields travel under emoji-media, and both tags need the key', () => {
+		const tag = buildMediaTag('emoji-media', baseRef);
+		expect(parseMediaTag('emoji-media', tag)?.url).toBe(baseRef.url);
+		expect(parseImetaTag(tag)).toBeNull();
+		expect(hasEncryptedMediaTag([tag])).toBe(true);
+		expect(hasEncryptedMediaTag([['e', 'x']])).toBe(false);
 	});
 });

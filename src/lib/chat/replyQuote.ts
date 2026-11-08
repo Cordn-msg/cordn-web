@@ -13,6 +13,9 @@ export interface ReplyQuoteView {
 	author: string;
 	text: string;
 	deleted?: boolean;
+	/** The parent's tags, so its custom emoji render in the quote. */
+	tags?: string[][];
+	mediaKeyBase64?: string;
 }
 
 export interface ReplyQuoteSource {
@@ -22,8 +25,9 @@ export interface ReplyQuoteSource {
 	content: string;
 	/** Parent is deleted — `content` is ignored and the renderer shows its tombstone. */
 	deleted?: boolean;
-	/** Parent's event tags — read only to label textless media parents. */
+	/** Parent's event tags — label textless media parents and carry custom emoji. */
 	tags?: string[][];
+	mediaKeyBase64?: string;
 }
 
 export function buildReplyQuote(source: ReplyQuoteSource): ReplyQuoteView {
@@ -35,13 +39,16 @@ export function buildReplyQuote(source: ReplyQuoteSource): ReplyQuoteView {
 			deleted: true
 		};
 	}
-	return {
+	const quote: ReplyQuoteView = {
 		id: source.id,
 		author: source.author,
 		// A textless media parent must not render as a blank quote — that reads
 		// as "the reply text was dropped".
 		text: source.content || quotePlaceholder(source.tags)
 	};
+	if (source.tags) quote.tags = source.tags;
+	if (source.mediaKeyBase64) quote.mediaKeyBase64 = source.mediaKeyBase64;
+	return quote;
 }
 
 /**

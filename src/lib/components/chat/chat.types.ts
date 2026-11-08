@@ -1,4 +1,20 @@
+import type { EmojiDisplay } from '$lib/chat/emoji';
 import type { ReplyQuoteView } from '$lib/chat/replyQuote';
+
+export interface ChatReaction {
+	emoji: string;
+	count: number;
+	reactedByMe?: boolean;
+	reactors: string[];
+	/** A custom emoji's picture, when the reaction event carried one. */
+	display?: EmojiDisplay;
+	mediaKeyBase64?: string;
+}
+
+export interface ChatReactionEmojiView {
+	display: EmojiDisplay;
+	mediaKeyBase64?: string;
+}
 
 export interface ChatMessage {
 	id: string;
@@ -16,16 +32,15 @@ export interface ChatMessage {
 	deliveryDetail?: string;
 	edited?: boolean;
 	deleted?: boolean;
-	reactions?: Array<{
-		emoji: string;
-		count: number;
-		reactedByMe?: boolean;
-		reactors: string[];
-	}>;
+	reactions?: ChatReaction[];
 	replyTo?: ReplyQuoteView;
 	cursor?: number;
 	/** Confirmed-message event tags (carries `imeta` for media). */
 	tags?: string[][];
+	/** Tags of the text actually displayed: an edit's tags when edited. */
+	displayTags?: string[][];
+	/** The media key belonging to `displayTags` (an edit's own epoch key). */
+	displayMediaKeyBase64?: string;
 	/** Per-epoch media key for decrypting this message's `imeta` media. */
 	mediaKeyBase64?: string;
 	/** True when this message is currently in the group's derived pin set. */
@@ -42,6 +57,8 @@ export interface ChatMessage {
 	reactionTarget?: string;
 	/** Reaction marker only: distinct reaction emojis, in arrival order. */
 	reactionEmojis?: string[];
+	/** Reaction marker only: the custom picture behind a reaction, by emoji. */
+	reactionEmojiViews?: Record<string, ChatReactionEmojiView>;
 	/** Reaction marker only: distinct reactor pubkeys, in arrival order. */
 	reactionSenders?: string[];
 	/** Reaction marker only: the member rows folded into this summary (merged

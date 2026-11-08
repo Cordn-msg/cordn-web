@@ -30,6 +30,7 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChatComposerActions from './ChatComposerActions.svelte';
 	import GifPicker from './GifPicker.svelte';
+	import EmojiPicker from './EmojiPicker.svelte';
 	import PollComposerDialog from './PollComposerDialog.svelte';
 	import type { PollDraft } from '$lib/chat/polls';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -585,19 +586,20 @@
 	}
 
 	let gifPickerOpen = $state(false);
+	let emojiPickerOpen = $state(false);
 	let pollDialogOpen = $state(false);
 
-	/** Insert a picked GIF's URL at the caret (a leading space unless already separated). */
-	function insertGifUrl(url: string) {
+	/** Insert picked text at the caret, with a separating space when needed. */
+	function insertAtCaret(text: string) {
 		const textarea = textareaRef;
 		if (!textarea) {
-			value = value.trim() ? `${value.trimEnd()} ${url}` : url;
+			value = value.trim() ? `${value.trimEnd()} ${text}` : text;
 			return;
 		}
 		const start = textarea.selectionStart ?? value.length;
 		const end = textarea.selectionEnd ?? start;
 		const before = value.slice(0, start);
-		const inserted = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${url}`;
+		const inserted = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${text}`;
 		value = `${before}${inserted}${value.slice(end)}`;
 		const nextCaret = start + inserted.length;
 		queueMicrotask(() => {
@@ -605,6 +607,14 @@
 			textareaRef?.setSelectionRange(nextCaret, nextCaret);
 			resizeTextarea();
 		});
+	}
+
+	function insertGifUrl(url: string) {
+		insertAtCaret(url);
+	}
+
+	function insertEmojiShortcode(code: string) {
+		insertAtCaret(`${code} `);
 	}
 
 	function handleFileSelected(event: Event) {
@@ -981,9 +991,11 @@
 					onPickImage={pickImage}
 					onPickDocument={pickDocument}
 					onPickGif={() => (gifPickerOpen = true)}
+					onPickEmoji={() => (emojiPickerOpen = true)}
 					onCreatePoll={() => (pollDialogOpen = true)}
 				/>
 				<GifPicker bind:open={gifPickerOpen} onPick={insertGifUrl} />
+				<EmojiPicker bind:open={emojiPickerOpen} onPick={insertEmojiShortcode} />
 				<PollComposerDialog bind:open={pollDialogOpen} onCreate={onSendPoll} />
 				<ChatAttachmentCaptionSheet
 					bind:open={captionSheetOpen}

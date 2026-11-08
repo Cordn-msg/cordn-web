@@ -20,6 +20,9 @@
 	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import Avatar from '$lib/components/Avatar.svelte';
+	import CustomEmoji from './CustomEmoji.svelte';
+	import { emojiMapFromTags, nameOfWholeShortcode, type EmojiDisplay } from '$lib/chat/emoji';
+	import { packEmojiByName } from '$lib/services/chatEmojiPacks.svelte';
 	import { useProfile } from '$lib/services/useProfile.svelte';
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import * as Marker from '$lib/components/ui/marker/index.js';
@@ -204,7 +207,13 @@
 		() => profile?.name || profile?.display_name || profile?.nip05 || `${authorNpub.slice(0, 12)}…`
 	);
 	const replyParts = $derived.by(() =>
-		message.replyTo ? getCachedChatMessageParts(message.replyTo.id, message.replyTo.text) : []
+		message.replyTo
+			? getCachedChatMessageParts(
+					message.replyTo.id,
+					message.replyTo.text,
+					emojiMapFromTags(message.replyTo.tags ?? [])
+				)
+			: []
 	);
 
 	$effect(() => {
@@ -221,12 +230,32 @@
 	function normalizeCustomReaction(value: string) {
 		const trimmed = value.trim();
 		if (!trimmed) return '';
+		if (nameOfWholeShortcode(trimmed)) return trimmed;
 		if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
 			const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 			const [first] = Array.from(segmenter.segment(trimmed));
 			return first?.segment ?? '';
 		}
 		return Array.from(trimmed)[0] ?? '';
+	}
+
+	const localPackEmoji = $derived(packEmojiByName());
+	// The reaction menu is a shortcut, not the picker: 48 entries is plenty and
+	// keeps a 500-emoji pack from mounting 500 rows per open message menu.
+	const localPackReactions = $derived([...localPackEmoji.values()].slice(0, 48));
+
+	function localReactionDisplay(value: string): EmojiDisplay | undefined {
+		const name = nameOfWholeShortcode(value);
+		if (!name) return undefined;
+		const emoji = localPackEmoji.get(name);
+		return emoji ? { name: emoji.name, url: emoji.url } : undefined;
+	}
+
+	function reactionDisplay(
+		emoji: string,
+		views: ChatMessage['reactionEmojiViews']
+	): { display: EmojiDisplay; mediaKeyBase64?: string } | undefined {
+		return views?.[emoji];
 	}
 
 	function persistCustomReaction(reaction: string) {
@@ -467,18 +496,57 @@
 						aria-label={`React ${reaction}`}
 						onclick={() => void chooseReaction(reaction)}
 					>
-						{reaction}
+						{#if localReactionDisplay(reaction)}
+							<CustomEmoji display={localReactionDisplay(reaction)!} sizeClass="size-5" />
+						{:else}
+							{reaction}
+						{/if}
 					</button>
 				{:else}
 					<DropdownMenuItem
 						onSelect={() => void chooseReaction(reaction)}
 						class="flex size-10 shrink-0 items-center justify-center rounded-xl p-0 text-lg"
 					>
-						{reaction}
+						{#if localReactionDisplay(reaction)}
+							<CustomEmoji display={localReactionDisplay(reaction)!} sizeClass="size-5" />
+						{:else}
+							{reaction}
+						{/if}
 					</DropdownMenuItem>
 				{/if}
 			{/each}
 		</div>
+		{#if localPackReactions.length > 0}
+			<div
+				class={touch
+					? 'flex max-h-24 flex-wrap gap-1 overflow-y-auto'
+					: 'flex max-h-[5.5rem] max-w-[15rem] flex-wrap gap-1 overflow-y-auto p-0.5'}
+				role="group"
+				aria-label="Custom emoji reactions"
+			>
+				{#each localPackReactions as emoji (emoji.coordinate + ':' + emoji.name)}
+					{#if touch}
+						<button
+							type="button"
+							class="flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-muted/40"
+							aria-label={`React :${emoji.name}:`}
+							title={`:${emoji.name}:`}
+							onclick={() => void chooseReaction(`:${emoji.name}:`)}
+						>
+							<CustomEmoji display={{ name: emoji.name, url: emoji.url }} sizeClass="size-7" />
+						</button>
+					{:else}
+						<DropdownMenuItem
+							onSelect={() => void chooseReaction(`:${emoji.name}:`)}
+							class="flex size-10 shrink-0 items-center justify-center rounded-xl p-0"
+							title={`:${emoji.name}:`}
+						>
+							<CustomEmoji display={{ name: emoji.name, url: emoji.url }} sizeClass="size-6" />
+						</DropdownMenuItem>
+					{/if}
+				{/each}
+			</div>
+		{/if}
 		<div class="flex shrink-0 items-center gap-1 border-t border-border/70 pt-1.5">
 			<form
 				class="flex items-center gap-1"
@@ -491,8 +559,8 @@
 					bind:ref={customReactionInput}
 					bind:value={customReaction}
 					class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-					placeholder="🙂"
-					maxlength={8}
+					placeholder="🙂 or :name:"
+					maxlength={40}
 					aria-label="Custom reaction"
 					oninput={() => {
 						customReaction = normalizeCustomReaction(customReaction);
@@ -569,7 +637,18 @@
 					{/each}
 					{#if senders.length > 2}+{senders.length - 2}{/if}
 					reacted
-					{#each emojis.slice(0, 3) as emoji (emoji)}{emoji}{/each}
+					{#each emojis.slice(0, 3) as emoji (emoji)}
+						{@const view = reactionDisplay(emoji, message.reactionEmojiViews)}
+						{#if view}
+							<CustomEmoji
+								display={view.display}
+								mediaKeyBase64={view.mediaKeyBase64}
+								sizeClass="size-4"
+							/>
+						{:else}
+							{emoji}
+						{/if}
+					{/each}
 					{#if emojis.length > 3}…{/if}
 					{#if (message.reactionItems?.length ?? 0) > 1}
 						<button
@@ -605,9 +684,22 @@
 		{#if reactionGroupOpen && (message.reactionItems?.length ?? 0) > 1}
 			<div class="flex flex-col gap-0.5 py-0.5 pl-10">
 				{#each message.reactionItems ?? [] as item (item.id)}
+					{@const reactionValue = item.reactionEmojis?.[0] ?? ''}
+					{@const reactionView = reactionDisplay(reactionValue, item.reactionEmojiViews)}
 					<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<MarkerName pubkey={item.reactionSenders?.[0] ?? item.author} />
-						<span>reacted {item.reactionEmojis?.[0] ?? ''}</span>
+						<span>
+							reacted
+							{#if reactionView}
+								<CustomEmoji
+									display={reactionView.display}
+									mediaKeyBase64={reactionView.mediaKeyBase64}
+									sizeClass="size-3.5"
+								/>
+							{:else}
+								{reactionValue}
+							{/if}
+						</span>
 						{#if item.reactionTarget}
 							<button
 								type="button"
@@ -960,6 +1052,12 @@
 													>
 														@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
 													</span>
+												{:else if part.type === 'emoji'}
+													<CustomEmoji
+														display={part.display}
+														mediaKeyBase64={message.replyTo?.mediaKeyBase64}
+														sizeClass="size-[1.1em]"
+													/>
 												{:else if part.type === 'link'}
 													<a
 														href={part.href}
@@ -1067,7 +1165,15 @@
 												onpointerenter={activateInteractionControls}
 												onfocus={activateInteractionControls}
 											>
-												<span>{reaction.emoji}</span>
+												{#if reaction.display}
+													<CustomEmoji
+														display={reaction.display}
+														mediaKeyBase64={reaction.mediaKeyBase64}
+														sizeClass="size-4"
+													/>
+												{:else}
+													<span>{reaction.emoji}</span>
+												{/if}
 												<span>{reaction.count}</span>
 											</button>
 										{/snippet}

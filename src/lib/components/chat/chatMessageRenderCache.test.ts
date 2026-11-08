@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { estimateChatMessageHeight } from '$lib/components/chat/chatMessageRenderCache';
+import {
+	estimateChatMessageHeight,
+	getCachedChatMessageParts
+} from '$lib/components/chat/chatMessageRenderCache';
 import type { ChatMessage } from '$lib/components/chat/chat.types';
 
 function msg(partial: Partial<ChatMessage>): ChatMessage {
@@ -29,5 +32,17 @@ describe('estimateChatMessageHeight', () => {
 	it('grows text estimates with length and caps at thirty lines', () => {
 		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(240) }))).toBe(202);
 		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(2000) }))).toBe(642);
+	});
+});
+
+describe('cached message parts', () => {
+	it('reparses when the event emoji tags change', () => {
+		const emoji = new Map([['cat', { name: 'cat', url: 'https://cdn.example/cat.png' }]]);
+		expect(getCachedChatMessageParts('m1', 'hi :cat:', emoji).some((p) => p.type === 'emoji')).toBe(
+			true
+		);
+		expect(
+			getCachedChatMessageParts('m1', 'hi :cat:', new Map()).some((p) => p.type === 'emoji')
+		).toBe(false);
 	});
 });

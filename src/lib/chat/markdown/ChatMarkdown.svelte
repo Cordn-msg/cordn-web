@@ -13,8 +13,16 @@
 	let {
 		blocks,
 		messageId,
-		isOwn = false
-	}: { blocks: MarkdownBlock[]; messageId: string; isOwn?: boolean } = $props();
+		isOwn = false,
+		tags,
+		mediaKeyBase64
+	}: {
+		blocks: MarkdownBlock[];
+		messageId: string;
+		isOwn?: boolean;
+		tags?: string[][];
+		mediaKeyBase64?: string;
+	} = $props();
 
 	// Static strings only: Tailwind generates classes it can see in source.
 	const alignClass = (align: 'left' | 'center' | 'right' | undefined) =>
@@ -25,18 +33,18 @@
 	{#each blocks as block, index (index)}
 		{#if block.type === 'paragraph'}
 			<p class={MESSAGE_TEXT_WRAP_CLASS}>
-				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} />
+				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 			</p>
 		{:else if block.type === 'heading'}
 			<p class={cn('font-semibold', MESSAGE_TEXT_WRAP_CLASS)}>
-				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} />
+				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 			</p>
 		{:else if block.type === 'list'}
 			{#if block.ordered}
 				<ol class={cn('list-decimal space-y-0.5 pl-5', MESSAGE_TEXT_WRAP_CLASS)}>
 					{#each block.items as item, itemIndex (itemIndex)}
 						<li class="list-outside">
-							<ChatMarkdownInline nodes={item} {messageId} {isOwn} />
+							<ChatMarkdownInline nodes={item} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 						</li>
 					{/each}
 				</ol>
@@ -44,7 +52,7 @@
 				<ul class={cn('list-disc space-y-0.5 pl-5', MESSAGE_TEXT_WRAP_CLASS)}>
 					{#each block.items as item, itemIndex (itemIndex)}
 						<li class="list-outside">
-							<ChatMarkdownInline nodes={item} {messageId} {isOwn} />
+							<ChatMarkdownInline nodes={item} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 						</li>
 					{/each}
 				</ul>
@@ -70,7 +78,7 @@
 										alignClass(block.aligns[cellIndex])
 									)}
 								>
-									<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+									<ChatMarkdownInline nodes={cell} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 								</th>
 							{/each}
 						</tr>
@@ -84,7 +92,7 @@
 							>
 								{#each row as cell, cellIndex (cellIndex)}
 									<td class={cn('px-2 py-1 align-top', alignClass(block.aligns[cellIndex]))}>
-										<ChatMarkdownInline nodes={cell} {messageId} {isOwn} />
+										<ChatMarkdownInline nodes={cell} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 									</td>
 								{/each}
 							</tr>
@@ -99,7 +107,7 @@
 					isOwn ? 'border-primary-foreground/40' : 'border-border'
 				)}
 			>
-				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} />
+				<ChatMarkdownInline nodes={block.inline} {messageId} {isOwn} {tags} {mediaKeyBase64} />
 			</blockquote>
 		{/if}
 	{/each}

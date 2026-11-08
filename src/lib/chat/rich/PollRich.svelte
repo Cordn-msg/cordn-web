@@ -74,7 +74,12 @@
 			<p class="text-base font-semibold break-words whitespace-pre-wrap">
 				<!-- Same lane as DefaultRich's body; the auto-load gate lives in
 					InlineMediaUrl, not in the callers. -->
-				<MessageParts messageId={eventId} text={definition.question} />
+				<MessageParts
+					messageId={eventId}
+					text={definition.question}
+					tags={pollMessage?.tags}
+					mediaKeyBase64={pollMessage?.mediaKeyBase64}
+				/>
 			</p>
 			<p class="mt-1 text-xs text-muted-foreground">
 				{#if definition.endsAt !== null}

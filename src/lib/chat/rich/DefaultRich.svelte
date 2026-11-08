@@ -11,6 +11,8 @@
 	import { buildAnnotationIndex, getMessageThreadReference } from '$lib/chat/references';
 	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
 	import ChatMarkdown from '$lib/chat/markdown/ChatMarkdown.svelte';
+	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
+	import type { EmojiDisplay } from '$lib/chat/emoji';
 	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { formatUnixTimestamp, normalizePubKey } from '$lib/utils';
 	import RichReactions from './RichReactions.svelte';
@@ -34,6 +36,8 @@
 		count: number;
 		reactedByMe: boolean;
 		reactors: string[];
+		display?: EmojiDisplay;
+		mediaKeyBase64?: string;
 	};
 
 	function reactionsFor(messageId: string): ReactionView[] {
@@ -43,7 +47,9 @@
 			emoji: entry.emoji,
 			count: entry.reactors.size,
 			reactedByMe: activePubkey ? entry.reactors.has(activePubkey) : false,
-			reactors: Array.from(entry.reactors.keys())
+			reactors: Array.from(entry.reactors.keys()),
+			display: entry.display,
+			mediaKeyBase64: entry.mediaKeyBase64
 		}));
 	}
 
@@ -55,6 +61,15 @@
 
 	function isEdited(message: StoredChatMessage): boolean {
 		return !index.deletedIds.has(message.id) && index.editMap.has(message.id);
+	}
+
+	/** The tags of the text actually displayed: an edit carries its own emoji. */
+	function displayTags(message: StoredChatMessage): string[][] {
+		return index.editMap.get(message.id)?.tags ?? message.tags ?? [];
+	}
+
+	function displayMediaKey(message: StoredChatMessage): string | undefined {
+		return index.editMap.get(message.id)?.mediaKeyBase64 ?? message.mediaKeyBase64;
 	}
 
 	const isDeleted = $derived(subject ? index.deletedIds.has(subject.id) : false);
@@ -162,7 +177,15 @@
 				<span
 					class={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground' : 'border-border bg-muted/40 text-muted-foreground'}`}
 				>
-					<span>{reaction.emoji}</span>
+					{#if reaction.display}
+						<CustomEmoji
+							display={reaction.display}
+							mediaKeyBase64={reaction.mediaKeyBase64}
+							sizeClass="size-4"
+						/>
+					{:else}
+						<span>{reaction.emoji}</span>
+					{/if}
 					<span>{reaction.count}</span>
 				</span>
 			{/each}
@@ -202,7 +225,13 @@
 									<p class="mt-1 text-muted-foreground italic">This message was deleted.</p>
 								{:else}
 									<p class="mt-1 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-										{displayContent}
+										<MessageParts
+											messageId={subject.id}
+											text={displayContent}
+											tags={displayTags(subject)}
+											mediaKeyBase64={displayMediaKey(subject)}
+											{isOwn}
+										/>
 									</p>
 								{/if}
 							</div>
@@ -240,11 +269,23 @@
 					{@const markdownBlocks = getCachedChatMarkdownBlocks(subject.id, displayContent)}
 					{#if markdownBlocks}
 						<div class="mt-2">
-							<ChatMarkdown blocks={markdownBlocks} messageId={subject.id} {isOwn} />
+							<ChatMarkdown
+								blocks={markdownBlocks}
+								messageId={subject.id}
+								{isOwn}
+								tags={displayTags(subject)}
+								mediaKeyBase64={displayMediaKey(subject)}
+							/>
 						</div>
 					{:else}
 						<p class="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-							<MessageParts messageId={subject.id} text={displayContent} {isOwn} />
+							<MessageParts
+								messageId={subject.id}
+								text={displayContent}
+								tags={displayTags(subject)}
+								mediaKeyBase64={displayMediaKey(subject)}
+								{isOwn}
+							/>
 						</p>
 					{/if}
 				{/if}

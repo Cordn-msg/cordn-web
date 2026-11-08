@@ -151,10 +151,10 @@ export interface MediaReference {
 	readonly waveform?: number[];
 }
 
-/** Encodes a media reference as a NIP-92 `imeta` tag (`["imeta", "url ...", …]`). */
-export function buildImetaTag(ref: MediaReference): string[] {
+/** Encodes a media reference under any tag name (`imeta`, `emoji-media`). */
+export function buildMediaTag(tagName: string, ref: MediaReference): string[] {
 	const tag = [
-		'imeta',
+		tagName,
 		`url ${ref.url}`,
 		`m ${ref.mime}`,
 		`filename ${ref.filename}`,
@@ -172,13 +172,18 @@ export function buildImetaTag(ref: MediaReference): string[] {
 	return tag;
 }
 
+/** Encodes a media reference as a NIP-92 `imeta` tag (`["imeta", "url ...", …]`). */
+export function buildImetaTag(ref: MediaReference): string[] {
+	return buildMediaTag('imeta', ref);
+}
+
 /**
- * Parse a single `imeta` tag. Returns `null` if it is not `imeta` or is missing
- * a required field. The first space in each entry separates key from value, so
- * values (filename, alt) may themselves contain spaces (§5).
+ * Parse a media tag under `tagName`. Returns `null` if it is another tag or is
+ * missing a required field. The first space in each entry separates key from
+ * value, so values (filename, alt) may themselves contain spaces (§5).
  */
-export function parseImetaTag(tag: string[]): MediaReference | null {
-	if (tag[0] !== 'imeta') return null;
+export function parseMediaTag(tagName: string, tag: string[]): MediaReference | null {
+	if (tag[0] !== tagName) return null;
 	const fields: Record<string, string> = {};
 	for (let i = 1; i < tag.length; i++) {
 		const entry = tag[i] ?? '';
@@ -219,6 +224,16 @@ export function findImetaTag(tags: string[][]): MediaReference | null {
 		if (parsed) return parsed;
 	}
 	return null;
+}
+
+/** Parse a single `imeta` tag. */
+export function parseImetaTag(tag: string[]): MediaReference | null {
+	return parseMediaTag('imeta', tag);
+}
+
+/** True for a message whose pictures need the epoch media key: an attachment or a custom emoji. */
+export function hasEncryptedMediaTag(tags: string[][]): boolean {
+	return tags.some((tag) => tag[0] === 'imeta' || tag[0] === 'emoji-media');
 }
 
 /** §4: receivers MUST reject `imeta` whose `v` is absent or names an unknown version. */
