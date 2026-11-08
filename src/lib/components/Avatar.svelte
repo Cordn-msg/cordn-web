@@ -45,7 +45,13 @@
 				loaded ? 'opacity-100' : 'opacity-0'
 			)}
 			decoding="sync"
-			onload={() => picture && loadedPictures.add(picture)}
+			onload={(event) => {
+				// Read the loaded element, not the prop: a virtualized row can unmount
+				// while its image is still loading, and the prop then belongs to a
+				// destroyed effect (Svelte's derived_inert warning).
+				const src = event.currentTarget.getAttribute('src');
+				if (src) loadedPictures.add(src);
+			}}
 		/>
 	</div>
 {:else}
