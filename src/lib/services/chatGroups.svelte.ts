@@ -113,13 +113,15 @@ import {
 	buildMessageLedgerRows,
 	refreshMessageLedgersForGroups
 } from '$lib/services/chatUnreadLedger.svelte';
+import { traceChat } from '$lib/services/chatTrace';
 import {
 	capWindowRows,
 	HISTORY_PAGE_ROWS,
 	IDLE_WINDOW_ROWS,
 	MAX_WINDOW_ROWS,
 	mergeWindowMessages,
-	TAIL_WINDOW_ROWS
+	TAIL_WINDOW_ROWS,
+	windowHasNewRows
 } from '$lib/services/chatGroupWindows';
 
 const groupIdDecoder = new TextDecoder();
@@ -295,6 +297,13 @@ function toWindowList(messages: StoredChatMessage[]): StoredChatMessageList {
 function updateGroupMessagesWindow(groupId: string, incoming: StoredChatMessage[]) {
 	const current = chatGroupsStore.groups.find((group) => group.id === groupId);
 	if (!current) return;
+	// An idempotent page must not rewrite the group object: every reader of it
+	// (ChatShell's ensure effect included) would run again on identical data,
+	// and that read→write→read cycle is what spun an open group at ~90% CPU.
+	if (!windowHasNewRows(current.messages, incoming)) {
+		traceChat('window update: page added nothing', { groupId, incoming: incoming.length });
+		return;
+	}
 	const window = toWindowList(
 		capWindowRows(mergeWindowMessages(current.messages, incoming), 'high')
 	);
@@ -303,14 +312,34 @@ function updateGroupMessagesWindow(groupId: string, incoming: StoredChatMessage[
 	);
 }
 
-/** Grow the window to the open-group tail size (called when a chat opens). */
+/** Window signature already confirmed against storage, per group: an effect or
+ *  retry re-asking for the same window must not re-read the database. */
+const ensuredWindowSignatures = new Map<string, string>();
+
+function windowSignature(group: StoredChatGroup): string {
+	const first = group.messages[0];
+	const last = group.messages[group.messages.length - 1];
+	return `${group.messages.length}:${first ? first.cursor : 0}:${last ? last.cursor : 0}`;
+}
+
+/** Grow the open-group tail window. Idempotent: a group whose window already
+ *  matched storage once returns without a read until its window changes, so a
+ *  short history settles instead of re-reading on every caller pass. */
 export async function ensureChatGroupWindow(groupId: string): Promise<void> {
 	const group = getChatGroup(groupId);
 	if (!group || group.messages.length >= TAIL_WINDOW_ROWS) return;
+	if (ensuredWindowSignatures.get(groupId) === windowSignature(group)) {
+		traceChat('ensureChatGroupWindow: settled, no read', { groupId });
+		return;
+	}
+	traceChat('ensureChatGroupWindow: reading', { groupId, rows: group.messages.length });
 	const storage = await getChatStorage();
 	const page = await storage.getGroupMessagesPage(groupId, { limit: TAIL_WINDOW_ROWS });
-	if (page.length === 0) return;
-	updateGroupMessagesWindow(groupId, page);
+	if (page.length > 0) updateGroupMessagesWindow(groupId, page);
+	// Record the window the read was settled against, so only a real change
+	// (new rows, eviction) buys another read.
+	const settled = getChatGroup(groupId);
+	if (settled) ensuredWindowSignatures.set(groupId, windowSignature(settled));
 }
 
 /** Load the next history page below the window (scroll-up). Returns the rows
@@ -492,6 +521,9 @@ async function loadGroups(ownerPubkey?: string) {
 	// pending Welcome (the next watch sync finalizes + delivers it).
 	pendingEpochOperations.clear();
 	groupStateEntries.clear();
+	// Group ids can be shared across accounts; a stale signature would let
+	// ensureChatGroupWindow skip a read this owner still needs.
+	ensuredWindowSignatures.clear();
 	const storage = await getChatStorage();
 	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
 

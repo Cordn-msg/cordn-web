@@ -15,6 +15,22 @@ export const MAX_WINDOW_ROWS = 2_000;
 /** Rows per history page (scroll-up / around a jump target). */
 export const HISTORY_PAGE_ROWS = 200;
 
+/** Whether a page offers the window any cursor it does not already hold.
+ *
+ *  Persisted rows are immutable per cursor — an edit, a reaction or a delete
+ *  lands as a NEW row at a higher cursor — so this is the whole "did anything
+ *  change" question. It keeps an idempotent re-read from rewriting the group
+ *  object, which would re-trigger every reader of it on identical data (the
+ *  open-group read→write→read loop that cost ~90% CPU). */
+export function windowHasNewRows(
+	window: readonly StoredChatMessage[],
+	incoming: readonly StoredChatMessage[]
+): boolean {
+	if (incoming.length === 0) return false;
+	const held = new Set(window.map((message) => message.cursor));
+	return incoming.some((message) => !held.has(message.cursor));
+}
+
 /** Copy-on-write merge: deduped by cursor (windowed ingest and recovery may
  *  re-offer rows the window already holds), sorted ascending. */
 export function mergeWindowMessages(

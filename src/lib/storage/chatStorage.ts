@@ -4,6 +4,7 @@ import type {
 	StoredChatMessage,
 	StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
+import { traceChat } from '$lib/services/chatTrace';
 import type { PendingEpochOperation } from '$lib/services/chatGroupProtocol';
 import type { ChatMessageReplyTarget } from '$lib/chat/references';
 
@@ -704,6 +705,7 @@ class IndexedDbChatStorage implements ChatStorage {
 		{ after, before, limit }: { after?: number; before?: number; limit: number }
 	): Promise<StoredChatMessage[]> {
 		const db = this.requireDatabase();
+		traceChat('idb getGroupMessagesPage', { groupId, after, before, limit });
 		return new Promise<StoredChatMessage[]>((resolve, reject) => {
 			const transaction = db.transaction([MESSAGE_STORE], 'readonly');
 			const store = transaction.objectStore(MESSAGE_STORE);

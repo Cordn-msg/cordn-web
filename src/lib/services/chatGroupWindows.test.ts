@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
-import { capWindowRows, MAX_WINDOW_ROWS, TAIL_WINDOW_ROWS } from '$lib/services/chatGroupWindows';
+import {
+	capWindowRows,
+	MAX_WINDOW_ROWS,
+	TAIL_WINDOW_ROWS,
+	windowHasNewRows
+} from '$lib/services/chatGroupWindows';
 
 function makeMessage(cursor: number): StoredChatMessage {
 	return {
@@ -51,5 +56,20 @@ describe('capWindowRows', () => {
 		const capped = capWindowRows(rows, 'high');
 		expect(capped).toHaveLength(MAX_WINDOW_ROWS);
 		expect(capped.slice(-TAIL_WINDOW_ROWS)[0].cursor).toBe(rows.at(-TAIL_WINDOW_ROWS)!.cursor);
+	});
+});
+
+describe('windowHasNewRows', () => {
+	test('a page the window already holds adds nothing', () => {
+		// The regression this guards: an idempotent re-read used to rewrite the
+		// group object, re-triggering the ensure effect in an unbounded loop.
+		expect(windowHasNewRows(range(1, 50), range(1, 50))).toBe(false);
+		expect(windowHasNewRows(range(1, 50), range(20, 30))).toBe(false);
+		expect(windowHasNewRows(range(1, 50), [])).toBe(false);
+	});
+
+	test('a cursor outside the window is new', () => {
+		expect(windowHasNewRows(range(1, 50), range(45, 60))).toBe(true);
+		expect(windowHasNewRows([], range(1, 5))).toBe(true);
 	});
 });
