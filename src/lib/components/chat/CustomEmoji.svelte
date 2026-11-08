@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { cn } from '$lib/utils';
 	import type { EmojiDisplay } from '$lib/chat/emoji';
-	import { resolveEmojiMedia } from '$lib/services/chatMediaStorage.svelte';
+	import {
+		getMediaAutoLoad,
+		isMessageMediaFailed,
+		markMessageMediaFailed,
+		resolveEmojiMedia
+	} from '$lib/services/chatMediaStorage.svelte';
 
 	/**
 	 * One custom emoji: a plain pack picture, or the encrypted `emoji-media`
@@ -13,17 +18,21 @@
 		display,
 		mediaKeyBase64,
 		class: className = '',
-		sizeClass = 'size-[1.15em]'
+		sizeClass = 'size-[1.15em]',
+		gateAutoLoad = true
 	}: {
 		display: EmojiDisplay;
 		mediaKeyBase64?: string;
 		class?: string;
 		sizeClass?: string;
+		/** Event-carried emoji honor the media auto-load setting; browsing does not. */
+		gateAutoLoad?: boolean;
 	} = $props();
 
 	let resolvedUrl = $state<string | null>(null);
 	let mediaFailed = $state(false);
 	let imageFailed = $state(false);
+	const autoLoad = $derived(!gateAutoLoad || getMediaAutoLoad());
 
 	$effect(() => {
 		// The URL is a dependency too: a plain tag changing is a new picture.
@@ -33,19 +42,26 @@
 		resolvedUrl = null;
 		mediaFailed = false;
 		imageFailed = false;
+		if (!autoLoad) return;
 		if (!media) return;
-		if (!key) {
+		if (!key || isMessageMediaFailed(media.plaintextHashHex)) {
 			mediaFailed = true;
 			return;
 		}
 		let cancelled = false;
 		void resolveEmojiMedia(media, key)
 			.then((resolved) => {
-				if (!cancelled) resolvedUrl = resolved?.url ?? null;
-				if (!cancelled && !resolved) mediaFailed = true;
+				if (cancelled) return;
+				resolvedUrl = resolved?.url ?? null;
+				if (!resolved) {
+					mediaFailed = true;
+					markMessageMediaFailed(media.plaintextHashHex);
+				}
 			})
 			.catch(() => {
-				if (!cancelled) mediaFailed = true;
+				if (cancelled) return;
+				mediaFailed = true;
+				markMessageMediaFailed(media.plaintextHashHex);
 			});
 		return () => {
 			cancelled = true;
@@ -53,7 +69,10 @@
 	});
 
 	const src = $derived(
-		resolvedUrl ?? (display.media && !mediaFailed && mediaKeyBase64 ? null : (display.url ?? null))
+		autoLoad
+			? (resolvedUrl ??
+					(display.media && !mediaFailed && mediaKeyBase64 ? null : (display.url ?? null)))
+			: null
 	);
 </script>
 

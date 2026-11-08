@@ -1,21 +1,31 @@
 <script lang="ts">
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
-	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
+	import EmojiPackPreview from '$lib/components/chat/EmojiPackPreview.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import {
 		addEmojiPack,
+		addEmojiPackSnapshot,
+		fetchEmojiPack,
 		listEmojiPacks,
 		removeEmojiPack
 	} from '$lib/services/chatEmojiPacks.svelte';
+	import { emojiPackNaddr, type EmojiPack } from '$lib/chat/emoji';
+	import { copyToClipboard } from '$lib/utils';
 	import Smile from '@lucide/svelte/icons/smile';
+	import Copy from '@lucide/svelte/icons/copy';
+	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	const packs = $derived(listEmojiPacks());
 	let input = $state('');
 	let busy = $state(false);
 	let message = $state<{ kind: 'ok' | 'error'; text: string } | null>(null);
+	let preview = $state<EmojiPack | null>(null);
+	let previewFor = $state('');
+	const previewMatches = $derived(preview !== null && previewFor === input.trim());
 
 	const errors = {
 		address: 'Paste an naddr or a 30030: coordinate.',
@@ -25,23 +35,52 @@
 		'signed-out': 'Log in to add emoji packs.'
 	} as const;
 
+	function handleInput() {
+		preview = null;
+		previewFor = '';
+		message = null;
+	}
+
+	async function previewPack() {
+		if (busy || !input.trim()) return;
+		busy = true;
+		message = null;
+		const result = await fetchEmojiPack(input);
+		busy = false;
+		if ('error' in result) {
+			preview = null;
+			previewFor = '';
+			message = { kind: 'error', text: errors[result.error] };
+			return;
+		}
+		preview = result.pack;
+		previewFor = input.trim();
+	}
+
 	async function add() {
 		if (busy || !input.trim()) return;
 		busy = true;
 		message = null;
-		const result = await addEmojiPack(input);
+		const result =
+			previewMatches && preview ? addEmojiPackSnapshot(preview) : await addEmojiPack(input);
 		busy = false;
 		if ('error' in result) {
 			message = { kind: 'error', text: errors[result.error] };
 			return;
 		}
 		input = '';
+		preview = null;
+		previewFor = '';
 		message = { kind: 'ok', text: `Added ${result.pack.title}.` };
 	}
 
 	function remove(coordinate: string, title: string) {
 		removeEmojiPack(coordinate);
 		message = { kind: 'ok', text: `Removed ${title}.` };
+	}
+
+	async function copyPack(pack: EmojiPack) {
+		await copyToClipboard(emojiPackNaddr(pack));
 	}
 </script>
 
@@ -78,17 +117,41 @@
 					</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-3">
-					<div class="flex gap-2">
+					<div class="flex flex-wrap gap-2">
 						<Input
 							bind:value={input}
 							placeholder="naddr1… or 30030:…"
 							aria-label="Emoji pack address"
+							class="min-w-0 flex-1"
+							oninput={handleInput}
 							onkeydown={(event) => event.key === 'Enter' && void add()}
 						/>
+						<Button
+							type="button"
+							variant="outline"
+							disabled={busy || !input.trim()}
+							onclick={() => void previewPack()}
+						>
+							Preview
+						</Button>
 						<Button type="button" disabled={busy || !input.trim()} onclick={() => void add()}>
-							{busy ? 'Adding…' : 'Add'}
+							{busy ? 'Working…' : 'Add'}
 						</Button>
 					</div>
+					{#if previewMatches && preview}
+						<div class="space-y-3 rounded-xl border border-border bg-card/50 p-3">
+							<div class="flex items-center justify-between gap-3">
+								<div class="min-w-0">
+									<p class="truncate text-sm font-medium">{preview.title}</p>
+									<p class="text-xs text-muted-foreground">{preview.emoji.length} emoji</p>
+								</div>
+								<Button type="button" size="sm" disabled={busy} onclick={() => void add()}>
+									Add pack
+								</Button>
+							</div>
+							<EmojiPackPreview pack={preview} gateAutoLoad={false} />
+						</div>
+					{/if}
 					{#if message}
 						<p
 							class="text-sm {message.kind === 'error'
@@ -122,32 +185,48 @@
 										{pack.emoji.length} emoji · {pack.coordinate}
 									</Card.Description>
 								</div>
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon"
-									class="shrink-0 text-muted-foreground"
-									aria-label={`Remove ${pack.title}`}
-									title={`Remove ${pack.title}`}
-									onclick={() => remove(pack.coordinate, pack.title)}
-								>
-									<Trash2 class="size-4" />
-								</Button>
+								<div class="flex shrink-0 items-center gap-1">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										class="rounded-lg text-muted-foreground"
+										aria-label={`Copy ${pack.title} naddr`}
+										title={`Copy ${pack.title} naddr`}
+										onclick={() => void copyPack(pack)}
+									>
+										<Copy class="size-4" />
+									</Button>
+									<DropdownMenu.Root>
+										<DropdownMenu.Trigger>
+											{#snippet child({ props })}
+												<Button
+													{...props}
+													type="button"
+													variant="ghost"
+													size="icon-sm"
+													class="rounded-lg text-muted-foreground"
+													aria-label={`Actions for ${pack.title}`}
+													title={`Actions for ${pack.title}`}
+												>
+													<EllipsisVertical class="size-4" />
+												</Button>
+											{/snippet}
+										</DropdownMenu.Trigger>
+										<DropdownMenu.Content align="end" class="w-44">
+											<DropdownMenu.Item
+												onclick={() => remove(pack.coordinate, pack.title)}
+												class="gap-2 text-destructive data-[highlighted]:text-destructive"
+											>
+												<Trash2 class="size-4" />
+												<span>Remove pack</span>
+											</DropdownMenu.Item>
+										</DropdownMenu.Content>
+									</DropdownMenu.Root>
+								</div>
 							</Card.Header>
 							<Card.Content>
-								<div class="flex flex-wrap gap-2">
-									{#each pack.emoji.slice(0, 16) as emoji (emoji.name)}
-										<span
-											class="flex size-10 items-center justify-center rounded-lg border border-border bg-card"
-											title={`:${emoji.name}:`}
-										>
-											<CustomEmoji
-												display={{ name: emoji.name, url: emoji.url }}
-												sizeClass="size-7"
-											/>
-										</span>
-									{/each}
-								</div>
+								<EmojiPackPreview {pack} gateAutoLoad={false} />
 							</Card.Content>
 						</Card.Root>
 					{/each}

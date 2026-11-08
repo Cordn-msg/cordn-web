@@ -14,6 +14,15 @@
 		type ChatHighlightNostrSource
 	} from '$lib/chat/highlights';
 	import { parseGitPullRequest } from '$lib/chat/gitPullRequests';
+	import {
+		EMOJI_SET_KIND,
+		isEmojiRelayUrl,
+		parseEmojiSetEvent,
+		type EmojiPack
+	} from '$lib/chat/emoji';
+	import EmojiPackPreview from '$lib/components/chat/EmojiPackPreview.svelte';
+	import { addEmojiPackSnapshot, listEmojiPacks } from '$lib/services/chatEmojiPacks.svelte';
+	import { toast } from 'svelte-sonner';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
 	import {
@@ -80,7 +89,8 @@
 		[kinds.Contacts]: 'Contacts',
 		[kinds.RelayList]: 'Relays',
 		[kinds.Highlights]: 'Highlight',
-		[kinds.GitPullRequest]: 'Pull request'
+		[kinds.GitPullRequest]: 'Pull request',
+		[EMOJI_SET_KIND]: 'Emoji pack'
 	};
 	const kindLabel = (kind: number) => KIND_LABELS[kind] ?? `Kind ${kind}`;
 
@@ -189,7 +199,52 @@
 	const highlightBodyLength = $derived(
 		(event.current?.content.length ?? 0) + (highlightContext?.length ?? 0)
 	);
+
+	const emojiPack = $derived.by(() => {
+		const current = event.current;
+		if (!current || current.kind !== EMOJI_SET_KIND) return null;
+		const pack = parseEmojiSetEvent(current);
+		if (!pack) return null;
+		const relays = ('relays' in pointer ? pointer.relays : undefined)?.filter(isEmojiRelayUrl);
+		return relays?.length ? { ...pack, relays } : pack;
+	});
+	const packAdded = $derived(
+		emojiPack ? listEmojiPacks().some((pack) => pack.coordinate === emojiPack.coordinate) : false
+	);
+
+	function addEmojiPack() {
+		if (!emojiPack) return;
+		const result = addEmojiPackSnapshot(emojiPack);
+		if ('error' in result) {
+			toast.error(
+				result.error === 'full'
+					? 'You have reached the pack limit.'
+					: result.error === 'signed-out'
+						? 'Log in to add emoji packs.'
+						: 'That pack is already added.'
+			);
+			return;
+		}
+		toast.success(`Added ${result.pack.title}`);
+	}
 </script>
+
+{#snippet emojiPackBody(pack: EmojiPack)}
+	<span class="mt-1 flex min-w-0 flex-col gap-2">
+		<span class="flex min-w-0 items-center justify-between gap-2">
+			<span class="min-w-0 flex-1">
+				<span class="block truncate text-sm font-semibold">{pack.title}</span>
+				<span class={cn('block text-xs', metaClass)}>{pack.emoji.length} emoji</span>
+			</span>
+			{#if packAdded}
+				<Button type="button" variant="outline" size="sm" disabled>Added</Button>
+			{:else}
+				<Button type="button" variant="outline" size="sm" onclick={addEmojiPack}>Add pack</Button>
+			{/if}
+		</span>
+		<EmojiPackPreview {pack} />
+	</span>
+{/snippet}
 
 {#snippet overflowMenu()}
 	<DropdownMenuRoot>
@@ -348,6 +403,8 @@
 					{/each}
 				</span>
 			{/if}
+		{:else if emojiPack}
+			{@render emojiPackBody(emojiPack)}
 		{:else if isPullRequest && pullRequest}
 			<GitPullRequestEmbed event={event.current} {pullRequest} {isOwn} {metaClass} />
 		{:else if event.current.content}

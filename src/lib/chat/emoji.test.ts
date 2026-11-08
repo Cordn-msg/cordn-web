@@ -3,12 +3,16 @@ import { nip19 } from 'nostr-tools';
 
 import {
 	EMOJI_MEDIA_TAG,
+	dropStaleEmojiMediaTags,
+	emojiByName,
 	emojiMapFromTags,
+	emojiPackNaddr,
 	matchEmojiShortcodes,
 	nameOfWholeShortcode,
 	parseEmojiMediaTag,
 	parseEmojiSetAddress,
-	parseEmojiSetEvent
+	parseEmojiSetEvent,
+	shortcodeQueryAt
 } from '$lib/chat/emoji';
 
 const author = 'a'.repeat(64);
@@ -29,6 +33,18 @@ describe('emoji set addresses', () => {
 		expect(parseEmojiSetAddress(`30030:${author.toUpperCase()}:cats`)?.pubkey).toBe(author);
 	});
 
+	it('keeps relay hints on a pack naddr and drops non-websocket hints', () => {
+		const pack = {
+			coordinate: `30030:${author}:cats`,
+			title: 'Cats',
+			emoji: [{ name: 'cat', url: 'https://cdn.example/cat.png' }],
+			relays: ['wss://relay.example', 'https://not-a-relay.example']
+		};
+		const address = parseEmojiSetAddress(emojiPackNaddr(pack));
+		expect(address?.coordinate).toBe(pack.coordinate);
+		expect(address?.relays).toEqual(['wss://relay.example']);
+	});
+
 	it('refuses a non-set or malformed address', () => {
 		expect(parseEmojiSetAddress('')).toBeNull();
 		expect(parseEmojiSetAddress('cats')).toBeNull();
@@ -39,6 +55,22 @@ describe('emoji set addresses', () => {
 });
 
 describe('emoji sets', () => {
+	it('lets the first pack win a duplicate shortcode', () => {
+		const packs = [
+			{
+				coordinate: `30030:${author}:first`,
+				title: 'First',
+				emoji: [{ name: 'cat', url: 'https://cdn.example/first.png' }]
+			},
+			{
+				coordinate: `30030:${author}:second`,
+				title: 'Second',
+				emoji: [{ name: 'cat', url: 'https://cdn.example/second.png' }]
+			}
+		];
+		expect(emojiByName(packs).get('cat')?.url).toBe('https://cdn.example/first.png');
+	});
+
 	it('reads rows in order, skipping bad and duplicate ones', () => {
 		const pack = parseEmojiSetEvent({
 			kind: 30030,
@@ -112,6 +144,27 @@ describe('emoji tags', () => {
 		]);
 		expect(map.get('cat')?.url).toBe('https://cdn.example/cat.png');
 		expect(map.get('cat')?.media).toBeUndefined();
+	});
+
+	it('finds a composer token only at a word boundary', () => {
+		expect(shortcodeQueryAt(':cat', 4)).toEqual({ start: 0, query: 'cat' });
+		expect(shortcodeQueryAt('hi :ca', 6)).toEqual({ start: 3, query: 'ca' });
+		expect(shortcodeQueryAt('hi\n:', 4)).toEqual({ start: 3, query: '' });
+		expect(shortcodeQueryAt('hi:cat', 6)).toBeNull();
+		expect(shortcodeQueryAt('10:30', 5)).toBeNull();
+		expect(shortcodeQueryAt(':cat:', 5)).toBeNull();
+	});
+
+	it('drops only stale emoji-media tags', () => {
+		const tags = [
+			[EMOJI_MEDIA_TAG, 'name cat'],
+			['p', author]
+		];
+		expect(dropStaleEmojiMediaTags(tags, 'prepared', 'prepared')).toBe(tags);
+		expect(dropStaleEmojiMediaTags(tags, 'prepared', 'current')).toEqual([['p', author]]);
+		expect(dropStaleEmojiMediaTags([['p', author]], 'prepared', 'current')).toEqual([
+			['p', author]
+		]);
 	});
 
 	it('matches shortcodes by boundary and leaves times and words alone', () => {

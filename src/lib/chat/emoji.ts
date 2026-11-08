@@ -31,6 +31,8 @@ export interface EmojiPack {
 	coordinate: string;
 	title: string;
 	emoji: PackEmoji[];
+	/** Relay hints from the naddr this pack was imported through. */
+	relays?: string[];
 }
 
 export interface EmojiPackAddress {
@@ -66,6 +68,11 @@ export interface EmojiShortcodeMatch {
 	length: number;
 }
 
+export interface EmojiShortcodeQuery {
+	start: number;
+	query: string;
+}
+
 export function isValidEmojiName(name: string): boolean {
 	return NAME_PATTERN.test(name);
 }
@@ -79,6 +86,10 @@ export function isEmojiUrl(url: string): boolean {
 	);
 }
 
+export function isEmojiRelayUrl(url: string): boolean {
+	return /^wss?:\/\//i.test(url);
+}
+
 export function shortcode(name: string): string {
 	return `:${name}:`;
 }
@@ -86,6 +97,31 @@ export function shortcode(name: string): string {
 /** The name when `text` is one whole `:name:` and nothing else. */
 export function nameOfWholeShortcode(text: string): string | null {
 	return WHOLE_SHORTCODE_PATTERN.exec(text.trim())?.[1] ?? null;
+}
+
+/** The `:partial` token ending at `caret`, when it starts a word. */
+export function shortcodeQueryAt(text: string, caret: number): EmojiShortcodeQuery | null {
+	const end = Math.max(0, Math.min(caret, text.length));
+	const match = /(^|\s):([A-Za-z0-9_+-]{0,32})$/.exec(text.slice(0, end));
+	if (!match) return null;
+	const query = match[2];
+	return { start: end - query.length - 1, query };
+}
+
+/** Drop prepared `emoji-media` tags when the room epoch moved under them. */
+export function dropStaleEmojiMediaTags(
+	tags: string[][],
+	preparedKeyBase64: string | undefined,
+	currentKeyBase64: string
+): string[][] {
+	if (
+		!preparedKeyBase64 ||
+		preparedKeyBase64 === currentKeyBase64 ||
+		!tags.some((tag) => tag[0] === EMOJI_MEDIA_TAG)
+	) {
+		return tags;
+	}
+	return tags.filter((tag) => tag[0] !== EMOJI_MEDIA_TAG);
 }
 
 /** Every `:name:` in `text`, with the boundary rule that keeps `10:30:00` and `a:b:` as text. */
@@ -226,12 +262,25 @@ export function parseEmojiSetAddress(input: string): EmojiPackAddress | null {
 		return {
 			pubkey,
 			identifier,
-			relays: decoded.data.relays ?? [],
+			relays: (decoded.data.relays ?? []).filter(isEmojiRelayUrl),
 			coordinate: `${EMOJI_SET_KIND}:${pubkey}:${identifier}`
 		};
 	} catch {
 		return null;
 	}
+}
+
+/** Canonical naddr, keeping the relay hints the pack was imported through. */
+export function emojiPackNaddr(pack: EmojiPack): string {
+	const address = parseEmojiSetAddress(pack.coordinate);
+	if (!address) return pack.coordinate;
+	const relays = (pack.relays ?? []).filter(isEmojiRelayUrl);
+	return nip19.naddrEncode({
+		kind: EMOJI_SET_KIND,
+		pubkey: address.pubkey,
+		identifier: address.identifier,
+		...(relays.length > 0 ? { relays } : {})
+	});
 }
 
 /** Every pack's emoji by shortcode, first pack in the list winning. */

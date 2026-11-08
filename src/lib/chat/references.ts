@@ -309,7 +309,7 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 		return {
 			kind: ChatKinds.Poll,
 			content: input.poll.question,
-			tags: [...createPollMessageTags(input.poll), ...(input.tags ?? [])]
+			tags: createPollMessageTags(input.poll)
 		};
 	}
 
@@ -319,10 +319,7 @@ export function resolveOutboundMessage(input: OutboundMessageInput): OutboundMes
 			// Bubble text for pre-poll clients; the NIP-31 `alt` tag in the tags
 			// covers future clients that know to fall back to it.
 			content: input.content,
-			tags: [
-				...createPollResponseTags(input.voteTo.target, input.voteTo.optionIds),
-				...(input.tags ?? [])
-			]
+			tags: createPollResponseTags(input.voteTo.target, input.voteTo.optionIds)
 		};
 	}
 

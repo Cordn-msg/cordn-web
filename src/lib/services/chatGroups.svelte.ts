@@ -46,6 +46,7 @@ import {
 import { noteStateFingerprint } from '$lib/services/multiDevice';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
+import { dropStaleEmojiMediaTags } from '$lib/chat/emoji';
 import {
 	resolveOutboundMessage,
 	type ChatMessageReplyTarget,
@@ -2575,12 +2576,12 @@ export async function sendChatGroupMessage(input: {
 		// catch-up moved the epoch between preparation and this seal, send the
 		// shortcode as text rather than a picture nobody can open.
 		let tags = outboundShape.tags;
-		if (
-			input.mediaKeyBase64 &&
-			tags.some((tag) => tag[0] === 'emoji-media') &&
-			bytesToBase64(await deriveMediaKey(state)) !== input.mediaKeyBase64
-		) {
-			tags = tags.filter((tag) => tag[0] !== 'emoji-media');
+		if (input.mediaKeyBase64 && tags.some((tag) => tag[0] === 'emoji-media')) {
+			tags = dropStaleEmojiMediaTags(
+				tags,
+				input.mediaKeyBase64,
+				bytesToBase64(await deriveMediaKey(state))
+			);
 		}
 		const outbound = await createApplicationMessageBase64({
 			state,

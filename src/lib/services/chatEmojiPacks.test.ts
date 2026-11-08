@@ -8,10 +8,12 @@ vi.mock('./accountManager.svelte', () => ({
 }));
 
 import {
+	addEmojiPackSnapshot,
 	deleteEmojiPacksForOwner,
 	emojiSourcesForContent,
 	listEmojiPacks,
 	loadEmojiPacksForOwner,
+	packEmojiByName,
 	removeEmojiPack
 } from './chatEmojiPacks.svelte';
 
@@ -61,10 +63,20 @@ describe('emoji packs', () => {
 			{ name: 'cat', url: 'https://cdn.example/cat.png', coordinate: cats.coordinate },
 			{ name: 'wave', url: 'https://cdn.example/wave.png', coordinate: cats.coordinate }
 		]);
+		expect(emojiSourcesForContent('see https://example.com/:cat: and :cat:')).toEqual([
+			{ name: 'cat', url: 'https://cdn.example/cat.png', coordinate: cats.coordinate }
+		]);
+		expect(packEmojiByName().get('cat')?.url).toBe('https://cdn.example/cat.png');
 
 		active.pubkey = other;
 		loadEmojiPacksForOwner(other);
 		expect(listEmojiPacks()).toEqual([]);
+	});
+
+	test('adds a fetched snapshot and keeps its relay hints', () => {
+		const snapshot = { ...cats, relays: ['wss://relay.example'] };
+		expect(addEmojiPackSnapshot(snapshot)).toEqual({ pack: snapshot });
+		expect(listEmojiPacks()).toEqual([snapshot]);
 	});
 
 	test('removes one pack and deletes the owner key on logout', () => {

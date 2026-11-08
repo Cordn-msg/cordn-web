@@ -28,7 +28,8 @@ import {
 } from '$lib/services/chatMediaCrypto';
 import { EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
 import { emojiSourcesForContent } from '$lib/services/chatEmojiPacks.svelte';
-import { mediaExtFromMime, sniffMediaMime } from '$lib/services/mediaSniff';
+import { fetchEmojiImage } from '$lib/services/chatEmojiImage';
+import { mediaExtFromMime } from '$lib/services/mediaSniff';
 import {
 	decodeStoredGroupState,
 	getChatGroup,
@@ -557,70 +558,9 @@ export interface EmojiImageSource {
 	url: string;
 }
 
-const MAX_EMOJI_IMAGE_BYTES = 512 * 1024;
-const MAX_EMOJI_IMAGES = 64;
 const MAX_EMOJI_MEMOS = 200;
 const MAX_EMOJI_TAGS_PER_MESSAGE = 32;
-const emojiImageCache = new Map<string, { mime: string; bytes: Uint8Array }>();
 const emojiMediaMemo = new Map<string, string[]>();
-
-async function fetchEmojiImage(url: string): Promise<{ mime: string; bytes: Uint8Array }> {
-	const cached = emojiImageCache.get(url);
-	if (cached) return cached;
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), 8000);
-	let response: Response;
-	try {
-		response = await fetch(url, { referrerPolicy: 'no-referrer', signal: controller.signal });
-	} finally {
-		clearTimeout(timer);
-	}
-	if (!response.ok) throw new Error(`emoji fetch failed: ${response.status}`);
-	const declared = Number(response.headers.get('content-length') ?? '');
-	if (Number.isFinite(declared) && declared > MAX_EMOJI_IMAGE_BYTES) {
-		throw new Error('emoji image is too large');
-	}
-	const reader = response.body?.getReader();
-	let bytes: Uint8Array;
-	if (reader) {
-		const chunks: Uint8Array[] = [];
-		let total = 0;
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			total += value.byteLength;
-			if (total > MAX_EMOJI_IMAGE_BYTES) {
-				await reader.cancel().catch(() => {});
-				throw new Error('emoji image is too large');
-			}
-			chunks.push(value);
-		}
-		bytes = new Uint8Array(total);
-		let offset = 0;
-		for (const chunk of chunks) {
-			bytes.set(chunk, offset);
-			offset += chunk.byteLength;
-		}
-	} else {
-		bytes = new Uint8Array(await response.arrayBuffer());
-	}
-	if (bytes.length === 0 || bytes.length > MAX_EMOJI_IMAGE_BYTES) {
-		throw new Error('emoji image is empty or too large');
-	}
-	const mime = sniffMediaMime(bytes, false);
-	// The four raster types Staircase can decode: anything else would be a tag
-	// it cannot draw, so it travels as the shortcode instead.
-	if (!mime || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) {
-		throw new Error('emoji is not a supported image');
-	}
-	const image = { mime, bytes };
-	if (emojiImageCache.size >= MAX_EMOJI_IMAGES) {
-		const oldest = emojiImageCache.keys().next().value;
-		if (oldest) emojiImageCache.delete(oldest);
-	}
-	emojiImageCache.set(url, image);
-	return image;
-}
 
 /**
  * Encrypt and upload the pictures for a message's custom emoji, returning the

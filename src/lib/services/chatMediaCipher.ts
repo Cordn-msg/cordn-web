@@ -178,12 +178,12 @@ export function buildImetaTag(ref: MediaReference): string[] {
 }
 
 /**
- * Parse a media tag under `tagName`. Returns `null` if it is another tag or is
- * missing a required field. The first space in each entry separates key from
- * value, so values (filename, alt) may themselves contain spaces (§5).
+ * Parse a single `imeta` tag. Returns `null` if it is not `imeta` or is missing
+ * a required field. The first space in each entry separates key from value, so
+ * values (filename, alt) may themselves contain spaces (§5).
  */
-export function parseMediaTag(tagName: string, tag: string[]): MediaReference | null {
-	if (tag[0] !== tagName) return null;
+export function parseImetaTag(tag: string[]): MediaReference | null {
+	if (tag[0] !== 'imeta') return null;
 	const fields: Record<string, string> = {};
 	for (let i = 1; i < tag.length; i++) {
 		const entry = tag[i] ?? '';
@@ -224,11 +224,6 @@ export function findImetaTag(tags: string[][]): MediaReference | null {
 		if (parsed) return parsed;
 	}
 	return null;
-}
-
-/** Parse a single `imeta` tag. */
-export function parseImetaTag(tag: string[]): MediaReference | null {
-	return parseMediaTag('imeta', tag);
 }
 
 /** True for a message whose pictures need the epoch media key: an attachment or a custom emoji. */

@@ -21,6 +21,7 @@
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import Avatar from '$lib/components/Avatar.svelte';
 	import CustomEmoji from './CustomEmoji.svelte';
+	import EmojiPicker from './EmojiPicker.svelte';
 	import { emojiMapFromTags, nameOfWholeShortcode, type EmojiDisplay } from '$lib/chat/emoji';
 	import { packEmojiByName } from '$lib/services/chatEmojiPacks.svelte';
 	import { useProfile } from '$lib/services/useProfile.svelte';
@@ -42,6 +43,7 @@
 	import Info from '@lucide/svelte/icons/info';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import SmilePlus from '@lucide/svelte/icons/smile-plus';
+	import Smile from '@lucide/svelte/icons/smile';
 	import Pin from '@lucide/svelte/icons/pin';
 	import X from '@lucide/svelte/icons/x';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -110,9 +112,8 @@
 	let reactionMenuOpen = $state(false);
 	let reactionGroupOpen = $state(false);
 	let actionsMenuOpen = $state(false);
-	let customReactionOpen = $state(false);
+	let reactionEmojiPickerOpen = $state(false);
 	let customReaction = $state('');
-	let customReactionInput: HTMLInputElement | null = $state(null);
 	let interactionControlsActive = $state(false);
 	let mobileSheetOpen = $state(false);
 	let isHolding = $state(false);
@@ -140,7 +141,7 @@
 	const savedReactions = $derived(sharedSavedReactions ?? []);
 	const availableReactions = $derived.by(() => [...REACTIONS, ...savedReactions]);
 	const shouldMountInteractionControls = $derived(
-		interactionControlsActive || reactionMenuOpen || actionsMenuOpen || customReactionOpen
+		interactionControlsActive || reactionMenuOpen || actionsMenuOpen || reactionEmojiPickerOpen
 	);
 	const replySwipeDirection = $derived(isOwn ? -1 : 1);
 	const replySwipeProgress = $derived(Math.min(Math.abs(swipeOffset) / SWIPE_REPLY_THRESHOLD, 1));
@@ -217,11 +218,6 @@
 	);
 
 	$effect(() => {
-		if (!customReactionOpen || !customReactionInput) return;
-		customReactionInput.focus();
-	});
-
-	$effect(() => {
 		if (sharedSavedReactions === null) {
 			sharedSavedReactions = loadCustomChatReactions();
 		}
@@ -240,9 +236,6 @@
 	}
 
 	const localPackEmoji = $derived(packEmojiByName());
-	// The reaction menu is a shortcut, not the picker: 48 entries is plenty and
-	// keeps a 500-emoji pack from mounting 500 rows per open message menu.
-	const localPackReactions = $derived([...localPackEmoji.values()].slice(0, 48));
 
 	function localReactionDisplay(value: string): EmojiDisplay | undefined {
 		const name = nameOfWholeShortcode(value);
@@ -270,7 +263,7 @@
 	}
 
 	function maybeDeactivateInteractionControls() {
-		if (reactionMenuOpen || actionsMenuOpen || customReactionOpen) return;
+		if (reactionMenuOpen || actionsMenuOpen || reactionEmojiPickerOpen) return;
 		interactionControlsActive = false;
 	}
 
@@ -279,6 +272,13 @@
 	function dismissActionSurfaces() {
 		actionsMenuOpen = false;
 		mobileSheetOpen = false;
+	}
+
+	function openReactionEmojiPicker() {
+		reactionMenuOpen = false;
+		actionsMenuOpen = false;
+		mobileSheetOpen = false;
+		reactionEmojiPickerOpen = true;
 	}
 
 	// Tapping your own emoji removes it (WhatsApp/Signal deselect convention)
@@ -308,7 +308,6 @@
 		persistCustomReaction(reaction);
 		await toggleReaction(reaction);
 		customReaction = '';
-		customReactionOpen = false;
 		reactionMenuOpen = false;
 		dismissActionSurfaces();
 	}
@@ -321,17 +320,13 @@
 
 	function handleReactionMenuOpenChange(open: boolean) {
 		reactionMenuOpen = open;
-		if (!open) {
-			customReactionOpen = false;
-			customReaction = '';
-		}
+		if (!open) customReaction = '';
 	}
 
 	function handleActionsMenuOpenChange(open: boolean) {
 		actionsMenuOpen = open;
 		if (!open) {
 			reactionMenuOpen = false;
-			customReactionOpen = false;
 			customReaction = '';
 		}
 	}
@@ -476,15 +471,14 @@
 
 <div class="flex flex-col gap-2">
 	{#snippet reactionChoices(touch = false)}
-		<!-- One picker, two renderings: a wrapped emoji grid (never horizontal
-	     overflow) with the custom-emoji form below it, outside the scrollable
-	     grid — always reachable. Desktop caps the grid at ~3 visible rows and
-	     scrolls vertically; the mobile sheet wraps and scrolls as a whole
-	     (nested scroll containers are thumb-hostile). -->
+		<!-- One picker, two renderings: standard reactions wrap; the custom-emoji
+	     button opens the shared searchable EmojiPicker sheet instead of mounting
+	     every pack emoji in this menu. Desktop caps the grid and scrolls
+	     vertically; the mobile sheet wraps and scrolls as a whole. -->
 		<div
 			class={touch
 				? 'flex flex-wrap gap-1'
-				: 'flex max-h-[8.5rem] max-w-[15rem] flex-wrap gap-1 overflow-y-auto p-0.5'}
+				: 'no-scrollbar flex max-h-[8.5rem] max-w-[15rem] flex-wrap gap-1 overflow-y-auto p-0.5'}
 			role="group"
 			aria-label="Quick reactions"
 		>
@@ -497,7 +491,11 @@
 						onclick={() => void chooseReaction(reaction)}
 					>
 						{#if localReactionDisplay(reaction)}
-							<CustomEmoji display={localReactionDisplay(reaction)!} sizeClass="size-5" />
+							<CustomEmoji
+								display={localReactionDisplay(reaction)!}
+								gateAutoLoad={false}
+								sizeClass="size-5"
+							/>
 						{:else}
 							{reaction}
 						{/if}
@@ -508,7 +506,11 @@
 						class="flex size-10 shrink-0 items-center justify-center rounded-xl p-0 text-lg"
 					>
 						{#if localReactionDisplay(reaction)}
-							<CustomEmoji display={localReactionDisplay(reaction)!} sizeClass="size-5" />
+							<CustomEmoji
+								display={localReactionDisplay(reaction)!}
+								gateAutoLoad={false}
+								sizeClass="size-5"
+							/>
 						{:else}
 							{reaction}
 						{/if}
@@ -516,38 +518,24 @@
 				{/if}
 			{/each}
 		</div>
-		{#if localPackReactions.length > 0}
-			<div
-				class={touch
-					? 'flex max-h-24 flex-wrap gap-1 overflow-y-auto'
-					: 'flex max-h-[5.5rem] max-w-[15rem] flex-wrap gap-1 overflow-y-auto p-0.5'}
-				role="group"
-				aria-label="Custom emoji reactions"
-			>
-				{#each localPackReactions as emoji (emoji.coordinate + ':' + emoji.name)}
-					{#if touch}
-						<button
-							type="button"
-							class="flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-muted/40"
-							aria-label={`React :${emoji.name}:`}
-							title={`:${emoji.name}:`}
-							onclick={() => void chooseReaction(`:${emoji.name}:`)}
-						>
-							<CustomEmoji display={{ name: emoji.name, url: emoji.url }} sizeClass="size-7" />
-						</button>
-					{:else}
-						<DropdownMenuItem
-							onSelect={() => void chooseReaction(`:${emoji.name}:`)}
-							class="flex size-10 shrink-0 items-center justify-center rounded-xl p-0"
-							title={`:${emoji.name}:`}
-						>
-							<CustomEmoji display={{ name: emoji.name, url: emoji.url }} sizeClass="size-6" />
-						</DropdownMenuItem>
-					{/if}
-				{/each}
-			</div>
-		{/if}
-		<div class="flex shrink-0 items-center gap-1 border-t border-border/70 pt-1.5">
+		<div class="flex shrink-0 flex-col gap-1 border-t border-border/70 pt-1.5">
+			{#if localPackEmoji.size > 0}
+				{#if touch}
+					<button
+						type="button"
+						class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+						onclick={openReactionEmojiPicker}
+					>
+						<Smile class="size-4 shrink-0 text-muted-foreground" />
+						<span>Custom emoji</span>
+					</button>
+				{:else}
+					<DropdownMenuItem onSelect={openReactionEmojiPicker} class="gap-2">
+						<Smile class="size-4" />
+						<span>Custom emoji</span>
+					</DropdownMenuItem>
+				{/if}
+			{/if}
 			<form
 				class="flex items-center gap-1"
 				onsubmit={async (event) => {
@@ -556,10 +544,9 @@
 				}}
 			>
 				<Input
-					bind:ref={customReactionInput}
 					bind:value={customReaction}
 					class="h-10 w-12 rounded-xl border border-border/70 bg-background px-2 text-center text-base"
-					placeholder="🙂 or :name:"
+					placeholder=""
 					maxlength={40}
 					aria-label="Custom reaction"
 					oninput={() => {
@@ -1285,6 +1272,10 @@
 					</Sheet.Content>
 				</Sheet.Root>
 			{/if}
+			<EmojiPicker
+				bind:open={reactionEmojiPickerOpen}
+				onPick={(code) => void chooseReaction(code)}
+			/>
 		</article>
 	{/if}
 </div>

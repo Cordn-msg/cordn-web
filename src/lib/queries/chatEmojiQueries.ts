@@ -2,6 +2,7 @@ import { firstValueFrom } from 'applesauce-core/observable';
 
 import {
 	EMOJI_SET_KIND,
+	isEmojiRelayUrl,
 	parseEmojiSetEvent,
 	type EmojiPack,
 	type EmojiPackAddress
@@ -29,7 +30,7 @@ export function emojiSetQueryOptions(address: EmojiPackAddress) {
 			}
 			const relays = [
 				...new Set([...address.relays, ...metadataRelays].map((relay) => relay.trim()))
-			].filter((relay) => relay.startsWith('wss://') || relay.startsWith('ws://'));
+			].filter(isEmojiRelayUrl);
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const event = await Promise.race([

@@ -5,11 +5,11 @@ import {
 	emojiByName,
 	isEmojiUrl,
 	isValidEmojiName,
-	matchEmojiShortcodes,
 	parseEmojiSetAddress,
 	type EmojiPack
 } from '$lib/chat/emoji';
 import { manager } from '$lib/services/accountManager.svelte';
+import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { safeNormalizePubKey } from '$lib/utils';
 
 const STORAGE_KEY = 'cordn-chat-emoji-packs';
@@ -23,6 +23,8 @@ export interface EmojiPackSource {
 export type AddEmojiPackResult =
 	| { pack: EmojiPack }
 	| { error: 'address' | 'exists' | 'full' | 'missing' | 'signed-out' };
+
+export type FetchEmojiPackResult = { pack: EmojiPack } | { error: 'address' | 'missing' };
 
 const store = $state<{ owner: string; packs: EmojiPack[] }>({ owner: '', packs: [] });
 
@@ -51,7 +53,9 @@ function isStoredPack(value: unknown): value is EmojiPack {
 				isValidEmojiName(emoji.name) &&
 				typeof emoji.url === 'string' &&
 				isEmojiUrl(emoji.url)
-		)
+		) &&
+		(pack.relays === undefined ||
+			(Array.isArray(pack.relays) && pack.relays.every((relay) => typeof relay === 'string')))
 	);
 }
 
@@ -113,30 +117,34 @@ export function emojiDisplayTags(content: string): string[][] {
 	]);
 }
 
-/** The pack emoji a message's content actually names, each once, in text order. */
+/**
+ * The pack emoji a message's content actually names, each once, in text order.
+ * Shared with rendering so a shortcode inside a URL stays a URL and is not
+ * fetched or encrypted for nothing.
+ */
 export function emojiSourcesForContent(content: string): EmojiPackSource[] {
 	const byName = packEmojiByName();
 	if (byName.size === 0) return [];
+	const displays = new Map<string, { name: string; url: string }>();
+	for (const emoji of byName.values()) {
+		displays.set(emoji.name, { name: emoji.name, url: emoji.url });
+	}
 	const out: EmojiPackSource[] = [];
 	const seen = new Set<string>();
-	for (const match of matchEmojiShortcodes(content)) {
-		const emoji = byName.get(match.name);
-		if (!emoji || seen.has(match.name)) continue;
-		seen.add(match.name);
+	for (const part of parseChatProfileMentions(content, displays)) {
+		if (part.type !== 'emoji' || seen.has(part.name)) continue;
+		const emoji = byName.get(part.name);
+		if (!emoji) continue;
+		seen.add(part.name);
 		out.push({ name: emoji.name, url: emoji.url, coordinate: emoji.coordinate });
 	}
 	return out;
 }
 
-export async function addEmojiPack(input: string): Promise<AddEmojiPackResult> {
+/** Fetch a pack without saving it, so settings can preview before importing. */
+export async function fetchEmojiPack(input: string): Promise<FetchEmojiPackResult> {
 	const address = parseEmojiSetAddress(input);
 	if (!address) return { error: 'address' };
-	const owner = activeOwner();
-	if (!owner) return { error: 'signed-out' };
-	ensureEmojiPacksForActiveAccount();
-	const packs = listEmojiPacks();
-	if (packs.some((pack) => pack.coordinate === address.coordinate)) return { error: 'exists' };
-	if (packs.length >= MAX_EMOJI_PACKS) return { error: 'full' };
 
 	let pack: EmojiPack | null = null;
 	try {
@@ -149,9 +157,30 @@ export async function addEmojiPack(input: string): Promise<AddEmojiPackResult> {
 		// A relay timeout and a removed set are the same thing to the person adding it.
 	}
 	if (!pack) return { error: 'missing' };
-	if (activeOwner() !== owner) return { error: 'signed-out' };
-	save([...listEmojiPacks(), pack]);
+	return { pack: { ...pack, ...(address.relays.length ? { relays: address.relays } : {}) } };
+}
+
+/** Save a pack that is already in hand (preview, or a chat card's event). */
+export function addEmojiPackSnapshot(pack: EmojiPack): AddEmojiPackResult {
+	const owner = activeOwner();
+	if (!owner) return { error: 'signed-out' };
+	ensureEmojiPacksForActiveAccount();
+	const packs = listEmojiPacks();
+	if (packs.some((candidate) => candidate.coordinate === pack.coordinate)) {
+		return { error: 'exists' };
+	}
+	if (packs.length >= MAX_EMOJI_PACKS) return { error: 'full' };
+	save([...packs, pack]);
 	return { pack };
+}
+
+export async function addEmojiPack(input: string): Promise<AddEmojiPackResult> {
+	const owner = activeOwner();
+	if (!owner) return { error: 'signed-out' };
+	const fetched = await fetchEmojiPack(input);
+	if ('error' in fetched) return fetched;
+	if (activeOwner() !== owner) return { error: 'signed-out' };
+	return addEmojiPackSnapshot(fetched.pack);
 }
 
 export function removeEmojiPack(coordinate: string): void {

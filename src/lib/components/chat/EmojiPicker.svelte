@@ -3,7 +3,7 @@
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { Input } from '$lib/components/ui/input';
 	import CustomEmoji from './CustomEmoji.svelte';
-	import { shortcode } from '$lib/chat/emoji';
+	import { emojiByName, shortcode } from '$lib/chat/emoji';
 	import { listEmojiPacks } from '$lib/services/chatEmojiPacks.svelte';
 
 	/**
@@ -16,14 +16,19 @@
 
 	let query = $state('');
 	const packs = $derived(listEmojiPacks());
+	// Same first-pack-wins rule as sending: never show a duplicate the message
+	// would not use.
+	const winning = $derived(emojiByName(packs));
 	const sections = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
 		return packs
 			.map((pack) => ({
 				...pack,
-				emoji: needle
-					? pack.emoji.filter((emoji) => emoji.name.toLowerCase().includes(needle))
-					: pack.emoji
+				emoji: pack.emoji.filter(
+					(emoji) =>
+						winning.get(emoji.name)?.coordinate === pack.coordinate &&
+						(!needle || emoji.name.toLowerCase().includes(needle))
+				)
 			}))
 			.filter((pack) => pack.emoji.length > 0);
 	});
@@ -46,7 +51,7 @@
 				aria-label="Search emoji"
 			/>
 		</Sheet.Header>
-		<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
+		<div class="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
 			{#if packs.length === 0}
 				<div
 					class="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground"
@@ -78,6 +83,7 @@
 									>
 										<CustomEmoji
 											display={{ name: emoji.name, url: emoji.url }}
+											gateAutoLoad={false}
 											sizeClass="size-8"
 										/>
 										<span class="w-full truncate text-center text-[11px] text-muted-foreground">
