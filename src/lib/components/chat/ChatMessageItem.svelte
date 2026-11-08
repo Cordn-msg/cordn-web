@@ -666,7 +666,7 @@
 				onfocusin={activateInteractionControls}
 				onpointerleave={maybeDeactivateInteractionControls}
 			>
-				<div class="relative flex max-w-full min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
+				<div class="relative flex max-w-[90%] min-w-0 flex-col gap-1.5" class:items-end={isOwn}>
 					{#if shouldMountInteractionControls}
 						<TooltipProvider>
 							<div
