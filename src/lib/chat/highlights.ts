@@ -43,14 +43,6 @@ export interface ChatHighlightContextParts {
 	after: string;
 }
 
-/** Parse an NIP-33 `a` tag (`kind:pubkey:identifier`) into an address pointer. */
-export function parseHighlightAddress(
-	value: string | undefined,
-	relayHint?: string
-): AddressPointer | null {
-	return parseNostrAddress(value, relayHint);
-}
-
 export function getHighlightContext(tags: string[][]): string | undefined {
 	const value = tags.find((tag) => tag[0] === 'context')?.[1];
 	return value?.trim() || undefined;
@@ -99,7 +91,7 @@ export function getHighlightSources(tags: string[][]): ChatHighlightSource[] {
 					entity
 				});
 			} else if (name === 'a') {
-				const pointer = parseHighlightAddress(value, attribute);
+				const pointer = parseNostrAddress(value, attribute);
 				if (!pointer) continue;
 				const entity = naddrEncode(pointer);
 				add({

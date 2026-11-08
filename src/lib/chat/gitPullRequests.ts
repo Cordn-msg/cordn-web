@@ -18,7 +18,6 @@ export interface ChatGitPullRequestRepository {
 	/** Canonical naddr for opening the repository announcement. */
 	naddr: string;
 	identifier: string;
-	relays: string[];
 }
 
 export interface ChatGitPullRequest {
@@ -28,7 +27,6 @@ export interface ChatGitPullRequest {
 	branchName: string;
 	targetBranch: string;
 	commit: string;
-	mergeBase: string;
 	cloneUrls: string[];
 	labels: string[];
 }
@@ -36,10 +34,7 @@ export interface ChatGitPullRequest {
 export interface ChatGitRepository {
 	identifier: string;
 	name: string;
-	description: string;
 	webUrls: string[];
-	cloneUrls: string[];
-	relays: string[];
 }
 
 function tagValue(tags: string[][], name: string): string {
@@ -88,8 +83,7 @@ function parseRepository(tags: string[][]): ChatGitPullRequestRepository | null 
 		return {
 			pointer,
 			naddr: naddrEncode(pointer),
-			identifier: pointer.identifier,
-			relays: pointer.relays ?? []
+			identifier: pointer.identifier
 		};
 	}
 	return null;
@@ -103,7 +97,6 @@ export function parseGitPullRequest(tags: string[][], description = ''): ChatGit
 		branchName: tagValue(tags, 'branch-name'),
 		targetBranch: tagValue(tags, 'target-branch'),
 		commit: tagValue(tags, 'c'),
-		mergeBase: tagValue(tags, 'merge-base'),
 		cloneUrls: filterCloneUrls(allTagValues(tags, 'clone')),
 		labels: unique(allTagValues(tags, 't'))
 	};
@@ -127,9 +120,6 @@ export function parseGitRepository(
 	return {
 		identifier,
 		name: tagValue(event.tags, 'name') || identifier,
-		description: tagValue(event.tags, 'description'),
-		webUrls: filterWebUrls(allTagValues(event.tags, 'web')),
-		cloneUrls: filterCloneUrls(allTagValues(event.tags, 'clone')),
-		relays: unique(allTagValues(event.tags, 'relays'))
+		webUrls: filterWebUrls(allTagValues(event.tags, 'web'))
 	};
 }

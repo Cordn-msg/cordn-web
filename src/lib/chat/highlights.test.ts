@@ -1,33 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { nip19 } from 'nostr-tools';
 
-import {
-	getHighlightContext,
-	getHighlightSources,
-	parseHighlightAddress,
-	splitHighlightContext
-} from './highlights';
+import { getHighlightContext, getHighlightSources, splitHighlightContext } from './highlights';
 
 const ARTICLE_ADDRESS =
 	'30023:bb1ba8fae639bbb64e0a27e19e6e0145e88d9a7db03bcf484a19372e26f8721e:v2idea';
+const EVENT_ID = 'aa'.repeat(32);
 
 describe('highlight parsing', () => {
-	test('parses an address tag with an optional relay hint', () => {
-		expect(parseHighlightAddress(ARTICLE_ADDRESS, 'wss://relay.damus.io')).toEqual({
-			kind: 30023,
-			pubkey: 'bb1ba8fae639bbb64e0a27e19e6e0145e88d9a7db03bcf484a19372e26f8721e',
-			identifier: 'v2idea',
-			relays: ['wss://relay.damus.io']
-		});
-		expect(parseHighlightAddress(ARTICLE_ADDRESS, 'https://example.com')).toEqual({
-			kind: 30023,
-			pubkey: 'bb1ba8fae639bbb64e0a27e19e6e0145e88d9a7db03bcf484a19372e26f8721e',
-			identifier: 'v2idea'
-		});
-		expect(parseHighlightAddress('not-an-address')).toBeNull();
-		expect(parseHighlightAddress('30023::missing-pubkey')).toBeNull();
-	});
-
 	test('turns a/r tags into de-duplicated sources', () => {
 		const sources = getHighlightSources([
 			['a', ARTICLE_ADDRESS, 'wss://relay.damus.io'],
@@ -55,6 +35,36 @@ describe('highlight parsing', () => {
 			href: 'https://example.com/post'
 		});
 		expect(sources[2]).toEqual({ type: 'text', label: 'wss://not-a-web-link.example' });
+	});
+
+	test('turns an e tag into a nostr.at event link, skipping non-hex ids', () => {
+		const entity = nip19.neventEncode({ id: EVENT_ID });
+		expect(
+			getHighlightSources([
+				['e', 'zzzz'],
+				['e', EVENT_ID]
+			])
+		).toEqual([
+			{
+				type: 'nostr',
+				label: 'Nostr event',
+				href: `https://nostr.at/${entity}`,
+				entity
+			}
+		]);
+	});
+
+	test('r tags with the mention attribute are comment mentions, not sources', () => {
+		expect(getHighlightSources([['r', 'https://example.com', 'mention']])).toEqual([]);
+	});
+
+	test('i tags link out only when they are URLs', () => {
+		expect(getHighlightSources([['i', 'isbn:9780123456789']])).toEqual([
+			{ type: 'text', label: 'isbn:9780123456789' }
+		]);
+		expect(getHighlightSources([['i', 'https://pod.example.com/ep/42']])).toEqual([
+			{ type: 'link', label: 'pod.example.com', href: 'https://pod.example.com/ep/42' }
+		]);
 	});
 
 	test('reads and trims the context tag', () => {
