@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-08-highlight-sources-pr-cards',
+		createdAt: Date.UTC(2026, 10, 8),
+		version: 1,
+		title: 'Highlights tell you where they came from — and pull requests arrive as cards',
+		body: '- ✨ A nostr highlight now lists every source it was made from, and a nostr article source is labelled with the article’s real title instead of a generic link.\n- 🔄 When the original passage is available, the quote sits emphasised inside it with the surrounding text dimmed, instead of a separate line below.\n- ✨ Paste a nostr pull request link and it renders as a proper card: repository, branches, commit, labels and description, with a copy-clone-URL action in its menu.'
+	},
+	{
 		id: 'cordn-news-2026-10-30-multi-device-convergence',
 		createdAt: Date.UTC(2026, 9, 30),
 		version: 1,
