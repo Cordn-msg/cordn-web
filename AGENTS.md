@@ -111,4 +111,5 @@ Workflow for incoming PRs:
 3. `ngit pr view <id>` — description, author, and `Target:`, which reveals stack order for stacked PRs (`--comments` for discussion).
 4. `ngit pr checkout <id>` — fetches the PR commits from relay.ngit.dev and creates/checks out a local branch `pr/<name>(<8-hex>)` tracking nostr. For stacks, check out base → tip.
 5. Inspect with normal git: `git log master..<branch>`, and diff each stacked branch against its parent PR branch (not master) — every stacked branch contains its ancestors' commits.
-6. Merge with `ngit pr merge <id>` (local no-ff merge commit), then push via the normal flow. This step is documented from ngit's own help, not yet verified hands-on.
+6. Merge with `ngit pr merge <id>` (local no-ff merge commit), then push via the normal flow.
+7. Stacked-PR gotcha: after the stack base is merged, its `pr/` target ref is deleted, and `ngit pr merge` of the next PR fails (`--force` does not bypass the stale-tip guard, and ngit may create then reset the merge). Publish a fresh proposal with `ngit send --base <parent-sha> --force-pr`, close the old PR with a link, point the new local PR branch at your tip (`git branch -f ...`), and merge with plain `git merge --no-ff` — that is all `ngit pr merge` does.
