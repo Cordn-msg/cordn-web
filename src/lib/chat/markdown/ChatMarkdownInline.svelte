@@ -29,7 +29,7 @@
 
 {#each nodes as node, index (index)}
 	{#if node.type === 'text'}
-		<MessageParts {messageId} text={node.text} {isOwn} {tags} {mediaKeyBase64} />
+		<MessageParts {messageId} text={node.text} {isOwn} {tags} {mediaKeyBase64} emojiOnly={false} />
 	{:else if node.type === 'code'}
 		<code
 			class={cn(

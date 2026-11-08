@@ -23,13 +23,27 @@
 	 * body parts (its cards stand in for the removed links); the sidebar omits it
 	 * and keeps the verbatim text.
 	 */
+	function isEmojiOnly(parts: ChatMentionTextPart[]): boolean {
+		let seen = false;
+		for (const part of parts) {
+			if (part.type === 'emoji') {
+				seen = true;
+				continue;
+			}
+			if (part.type === 'text' && part.text.trim() === '') continue;
+			return false;
+		}
+		return seen;
+	}
+
 	let {
 		messageId,
 		text,
 		isOwn = false,
 		tags,
 		mediaKeyBase64,
-		parts: partsProp
+		parts: partsProp,
+		emojiOnly
 	}: {
 		messageId: string;
 		text: string;
@@ -39,10 +53,13 @@
 		/** The epoch key for an `emoji-media` picture. */
 		mediaKeyBase64?: string;
 		parts?: ChatMentionTextPart[];
+		/** Markdown renders per text node, so it forces inline sizing. */
+		emojiOnly?: boolean;
 	} = $props();
 
 	const emoji = $derived(emojiMapFromTags(tags ?? []));
 	const parts = $derived(partsProp ?? getCachedChatMessageParts(messageId, text, emoji));
+	const onlyEmoji = $derived(emojiOnly ?? isEmojiOnly(parts));
 </script>
 
 {#each parts as part, index (`${messageId}:part:${index}`)}
@@ -62,7 +79,7 @@
 	{:else if part.type === 'link' && mediaUrlKind(part.href)}
 		<InlineMediaUrl href={part.href} {isOwn} />
 	{:else if part.type === 'emoji'}
-		<CustomEmoji display={part.display} {mediaKeyBase64} />
+		<CustomEmoji display={part.display} {mediaKeyBase64} zoomable emojiOnly={onlyEmoji} />
 	{:else if part.type === 'link'}
 		<button
 			type="button"

@@ -3,15 +3,18 @@
 	import type { EmojiPack } from '$lib/chat/emoji';
 
 	/** A bounded pack grid shared by settings and chat cards; +N expands in place. */
-	let { pack, gateAutoLoad = true }: { pack: EmojiPack; gateAutoLoad?: boolean } = $props();
+	let {
+		pack,
+		limit = 8,
+		gateAutoLoad = true
+	}: { pack: EmojiPack; limit?: number; gateAutoLoad?: boolean } = $props();
 
-	const COLLAPSED_LIMIT = 8;
 	// Coordinate-keyed so reusing the component for another pack starts collapsed.
 	let expandedFor = $state<string | null>(null);
 	const expanded = $derived(expandedFor === pack.coordinate);
-	const shown = $derived(expanded ? pack.emoji : pack.emoji.slice(0, COLLAPSED_LIMIT));
-	const remaining = $derived(Math.max(0, pack.emoji.length - COLLAPSED_LIMIT));
-	const canExpand = $derived(pack.emoji.length > COLLAPSED_LIMIT);
+	const shown = $derived(expanded ? pack.emoji : pack.emoji.slice(0, limit));
+	const remaining = $derived(Math.max(0, pack.emoji.length - limit));
+	const canExpand = $derived(pack.emoji.length > limit);
 </script>
 
 <span class="flex min-w-0 flex-wrap gap-1.5">
@@ -24,6 +27,7 @@
 				display={{ name: emoji.name, url: emoji.url }}
 				{gateAutoLoad}
 				sizeClass="size-6"
+				zoomable
 			/>
 		</span>
 	{/each}

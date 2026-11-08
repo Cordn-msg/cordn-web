@@ -68,6 +68,13 @@ export interface EmojiShortcodeMatch {
 	length: number;
 }
 
+export interface EmojiSetEventLike {
+	kind: number;
+	pubkey: string;
+	tags: string[][];
+	created_at: number;
+}
+
 export interface EmojiShortcodeQuery {
 	start: number;
 	query: string;
@@ -232,6 +239,26 @@ export function parseEmojiSetEvent(event: {
 		title: title || identifier,
 		emoji
 	};
+}
+
+/** Parse and dedupe pack events by coordinate, newest copy winning. */
+export function emojiPacksFromEvents(events: Iterable<EmojiSetEventLike>): EmojiPack[] {
+	const newest = new Map<string, { pack: EmojiPack; createdAt: number }>();
+	for (const event of events) {
+		const pack = parseEmojiSetEvent(event);
+		if (!pack) continue;
+		const current = newest.get(pack.coordinate);
+		if (!current || event.created_at > current.createdAt) {
+			newest.set(pack.coordinate, { pack, createdAt: event.created_at });
+		}
+	}
+	return [...newest.values()]
+		.map(({ pack }) => pack)
+		.sort(
+			(a, b) =>
+				a.title.toLowerCase().localeCompare(b.title.toLowerCase()) ||
+				a.coordinate.localeCompare(b.coordinate)
+		);
 }
 
 /** An `naddr1…`, `nostr:` URI, link containing one, or bare `30030:` coordinate. */

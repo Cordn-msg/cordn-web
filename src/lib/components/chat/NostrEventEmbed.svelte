@@ -25,10 +25,7 @@
 	import { toast } from 'svelte-sonner';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
-	import {
-		MESSAGE_PART_CONTAINER_CLASS,
-		MESSAGE_TEXT_WRAP_CLASS
-	} from '$lib/chat/messageTextClasses';
+	import { MESSAGE_AUTHOR_CHIP_CLASS, MESSAGE_TEXT_WRAP_CLASS } from '$lib/chat/messageTextClasses';
 	import {
 		DropdownMenuRoot,
 		DropdownMenuContent,
@@ -134,8 +131,7 @@
 	// muted-foreground on an own bubble (bg-primary) is unreadable.
 	const authorChipClass = $derived(
 		cn(
-			'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold',
-			MESSAGE_PART_CONTAINER_CLASS,
+			MESSAGE_AUTHOR_CHIP_CLASS,
 			isOwn ? 'bg-primary-foreground/15 text-primary-foreground' : 'bg-muted text-foreground'
 		)
 	);

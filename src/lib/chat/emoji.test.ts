@@ -6,6 +6,7 @@ import {
 	dropStaleEmojiMediaTags,
 	emojiByName,
 	emojiMapFromTags,
+	emojiPacksFromEvents,
 	emojiPackNaddr,
 	matchEmojiShortcodes,
 	nameOfWholeShortcode,
@@ -90,6 +91,26 @@ describe('emoji sets', () => {
 		});
 		expect(pack?.emoji.map((emoji) => emoji.name)).toEqual(['cat', 'wave']);
 		expect(pack?.emoji[0].url).toBe('https://cdn.example/cat.png');
+	});
+
+	it('dedupes relay copies by coordinate, keeping the newest set', () => {
+		const event = (createdAt: number, title: string) => ({
+			kind: 30030,
+			pubkey: author,
+			created_at: createdAt,
+			tags: [
+				['d', 'cats'],
+				['title', title],
+				['emoji', 'cat', 'https://cdn.example/cat.png']
+			]
+		});
+		const packs = emojiPacksFromEvents([
+			event(10, 'Old'),
+			event(20, 'New'),
+			{ ...event(30, 'Ignored'), kind: 1 }
+		]);
+		expect(packs).toHaveLength(1);
+		expect(packs[0].title).toBe('New');
 	});
 
 	it('falls back to the d identifier and refuses an empty set', () => {

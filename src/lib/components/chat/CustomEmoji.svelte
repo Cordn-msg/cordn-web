@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { cn } from '$lib/utils';
 	import type { EmojiDisplay } from '$lib/chat/emoji';
+	import { openMediaLightbox } from '$lib/services/chatMediaLightbox.svelte';
 	import {
 		getMediaAutoLoad,
 		isMessageMediaFailed,
@@ -18,17 +19,26 @@
 		display,
 		mediaKeyBase64,
 		class: className = '',
-		sizeClass = 'size-[1.15em]',
-		gateAutoLoad = true
+		sizeClass,
+		gateAutoLoad = true,
+		zoomable = false,
+		emojiOnly = false
 	}: {
 		display: EmojiDisplay;
 		mediaKeyBase64?: string;
 		class?: string;
+		/** Chrome passes a fixed size; message content follows the surrounding text. */
 		sizeClass?: string;
 		/** Event-carried emoji honor the media auto-load setting; browsing does not. */
 		gateAutoLoad?: boolean;
+		zoomable?: boolean;
+		/** A message that is nothing but emoji gets a larger but still bounded picture. */
+		emojiOnly?: boolean;
 	} = $props();
 
+	const resolvedSizeClass = $derived(
+		sizeClass ?? (emojiOnly ? 'max-h-16 max-w-16' : 'size-[1.15em]')
+	);
 	let resolvedUrl = $state<string | null>(null);
 	let mediaFailed = $state(false);
 	let imageFailed = $state(false);
@@ -74,19 +84,44 @@
 					(display.media && !mediaFailed && mediaKeyBase64 ? null : (display.url ?? null)))
 			: null
 	);
+
+	function openLightbox() {
+		if (!src) return;
+		openMediaLightbox({ url: src, filename: display.name, mime: 'image/*' });
+	}
 </script>
 
 {#if src && !imageFailed}
-	<img
-		{src}
-		alt={`:${display.name}:`}
-		title={`:${display.name}:`}
-		class={cn('inline-block object-contain align-[-0.2em]', sizeClass, className)}
-		loading="lazy"
-		decoding="async"
-		referrerpolicy="no-referrer"
-		onerror={() => (imageFailed = true)}
-	/>
+	{#if zoomable}
+		<button
+			type="button"
+			class="inline-block cursor-zoom-in align-middle"
+			aria-label={`View :${display.name}:`}
+			onclick={openLightbox}
+		>
+			<img
+				{src}
+				alt={`:${display.name}:`}
+				title={`:${display.name}:`}
+				class={cn('block object-contain', resolvedSizeClass, className)}
+				loading="lazy"
+				decoding="async"
+				referrerpolicy="no-referrer"
+				onerror={() => (imageFailed = true)}
+			/>
+		</button>
+	{:else}
+		<img
+			{src}
+			alt={`:${display.name}:`}
+			title={`:${display.name}:`}
+			class={cn('inline-block object-contain align-[-0.2em]', resolvedSizeClass, className)}
+			loading="lazy"
+			decoding="async"
+			referrerpolicy="no-referrer"
+			onerror={() => (imageFailed = true)}
+		/>
+	{/if}
 {:else}
 	<span class={cn('inline-block align-[-0.2em]', className)}>{`:${display.name}:`}</span>
 {/if}
