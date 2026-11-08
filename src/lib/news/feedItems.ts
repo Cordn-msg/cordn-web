@@ -91,18 +91,11 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
-		id: 'cordn-news-2026-11-08-inside-bubble-metadata',
+		id: 'cordn-news-2026-11-08-highlights-prs-bubbles',
 		createdAt: Date.UTC(2026, 10, 8),
 		version: 1,
-		title: 'Timestamps move inside the bubble',
-		body: '- ✨ Message time, pin and delivery state now sit in a quiet row inside the bubble, right-aligned — and they no longer get swept along when you select and copy message text.\n- 🔄 Your own messages no longer show your own picture: a right-aligned bubble already says it’s you.'
-	},
-	{
-		id: 'cordn-news-2026-11-08-highlight-sources-pr-cards',
-		createdAt: Date.UTC(2026, 10, 8),
-		version: 1,
-		title: 'Highlights tell you where they came from — and pull requests arrive as cards',
-		body: '- ✨ A nostr highlight now lists every source it was made from, and a nostr article source is labelled with the article’s real title instead of a generic link.\n- 🔄 When the original passage is available, the quote sits emphasised inside it with the surrounding text dimmed, instead of a separate line below.\n- ✨ Paste a nostr pull request link and it renders as a proper card: repository, branches, commit, labels and description, with a copy-clone-URL action in its menu.'
+		title: 'Highlights tell you where they came from, and an open chat stops burning CPU',
+		body: '- ✨ A nostr highlight now lists every source it was made from, and a nostr article source is labelled with the article’s real title instead of a generic link.\n- ✨ Paste a nostr pull request link and it renders as a proper card: repository, branches, commit, labels and description, with a copy-clone-URL action in its menu.\n- ✨ Message time, pin and delivery state now sit in a quiet row inside the bubble, right-aligned — and they no longer get swept along when you select and copy message text.\n- 🐛 A chat left open kept re-reading its own message history from storage hundreds of times a second, which is why fans spun up and laptops got warm. An open chat now sits at almost no CPU at all.\n- 🔄 When the original passage is available, the quote sits emphasised inside it with the surrounding text dimmed, instead of a separate line below.\n- 🔄 Your own messages no longer show your own picture: a right-aligned bubble already says it’s you.'
 	},
 	{
 		id: 'cordn-news-2026-10-30-multi-device-convergence',
