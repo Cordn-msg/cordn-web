@@ -13,7 +13,6 @@
 	// these give deterministic avatar colors without fetching real Nostr
 	// profiles. They are NOT real identities — this is a static hero mock.
 	const SAM = 'c24a7e0000000000000000000000000000000000000000000000000000000000';
-	const YOU = '2f6bd100000000000000000000000000000000000000000000000000000000000';
 
 	interface Line {
 		own: boolean;
@@ -58,9 +57,11 @@
 				class:flex-row-reverse={line.own}
 				in:fly={{ y: 10, duration: 420, delay: 220 * i }}
 			>
-				<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={line.own}>
-					<Avatar pubkey={line.own ? YOU : SAM} size="h-8 w-8" alt={line.name} />
-				</div>
+				{#if !line.own}
+					<div class="flex h-8 w-8 shrink-0 items-end">
+						<Avatar pubkey={SAM} size="h-8 w-8" alt={line.name} />
+					</div>
+				{/if}
 
 				<div
 					class="flex max-w-[min(100%,30rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2"

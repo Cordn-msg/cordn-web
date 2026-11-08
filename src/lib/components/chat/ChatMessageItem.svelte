@@ -628,24 +628,27 @@
 		{/if}
 	{:else}
 		<article class="flex min-w-0 items-end gap-2 sm:gap-3" class:flex-row-reverse={isOwn}>
-			<div class="flex h-8 w-8 shrink-0 items-end" class:justify-end={isOwn}>
-				{#if showAvatar}
-					<a
-						href={authorHref}
-						class="rounded-full focus-visible:ring-2 focus-visible:ring-ring"
-						aria-label={`Open profile for ${displayName}`}
-					>
-						<Avatar
-							pubkey={message.author}
-							picture={profile?.picture}
-							size="h-8 w-8"
-							alt={displayName}
-						/>
-					</a>
-				{:else}
-					<div class="h-8 w-8" aria-hidden="true"></div>
-				{/if}
-			</div>
+			<!-- Own avatars are omitted: a right-aligned bubble already implies the sender. -->
+			{#if !isOwn}
+				<div class="flex h-8 w-8 shrink-0 items-end">
+					{#if showAvatar}
+						<a
+							href={authorHref}
+							class="rounded-full focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label={`Open profile for ${displayName}`}
+						>
+							<Avatar
+								pubkey={message.author}
+								picture={profile?.picture}
+								size="h-8 w-8"
+								alt={displayName}
+							/>
+						</a>
+					{:else}
+						<div class="h-8 w-8" aria-hidden="true"></div>
+					{/if}
+				</div>
+			{/if}
 
 			<div
 				role="presentation"
