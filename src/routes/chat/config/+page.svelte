@@ -13,6 +13,7 @@
 	import Smartphone from '@lucide/svelte/icons/smartphone';
 	import Bell from '@lucide/svelte/icons/bell';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
+	import Smile from '@lucide/svelte/icons/smile';
 	import Palette from '@lucide/svelte/icons/palette';
 	import { isNativePlatform } from '$lib/services/nativeBridge';
 	import { browser } from '$app/environment';
@@ -218,6 +219,22 @@
 									<p class="font-medium">Media</p>
 									<p class="mt-1 text-sm text-muted-foreground">
 										Blossom server used for encrypted image and file uploads.
+									</p>
+								</div>
+							</a>
+
+							<a href={resolve('/chat/config/emoji')} class="block">
+								<div
+									class="rounded-2xl border border-border bg-background px-4 py-4 transition-colors hover:bg-muted/50"
+								>
+									<div
+										class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card"
+									>
+										<Smile class="size-4" />
+									</div>
+									<p class="font-medium">Emoji packs</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										Add NIP-30 custom emoji packs for messages and reactions.
 									</p>
 								</div>
 							</a>

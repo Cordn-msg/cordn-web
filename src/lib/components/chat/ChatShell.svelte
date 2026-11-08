@@ -43,6 +43,9 @@
 		getMessageReactionReference,
 		type MessageTarget
 	} from '$lib/chat/references';
+	import { emojiMapFromTags, nameOfWholeShortcode } from '$lib/chat/emoji';
+	import { emojiDisplayTags, packEmojiByName } from '$lib/services/chatEmojiPacks.svelte';
+	import type { ChatReactionEmojiView } from './chat.types';
 	import { buildReplyQuote, unavailableReplyQuote } from '$lib/chat/replyQuote';
 	import { ChatKinds, SYSTEM_MESSAGE_KIND, isStreamHiddenKind } from '$lib/chat/kinds';
 	import {
@@ -229,8 +232,29 @@
 			unreadReference: Boolean(unreadReferenceCursor),
 			unreadReferenceCursor,
 			tags: message.tags,
-			mediaKeyBase64: message.mediaKeyBase64
+			displayTags: message.tags,
+			mediaKeyBase64: message.mediaKeyBase64,
+			displayMediaKeyBase64: message.mediaKeyBase64
 		};
+	}
+
+	function customReactionView(
+		reaction: string,
+		tags: string[][],
+		mediaKeyBase64?: string
+	): ChatReactionEmojiView | undefined {
+		const name = nameOfWholeShortcode(reaction);
+		if (!name) return undefined;
+		const display = emojiMapFromTags(tags).get(name);
+		if (!display) return undefined;
+		return { display, mediaKeyBase64: display.media ? mediaKeyBase64 : undefined };
+	}
+
+	function optimisticReactionDisplay(reaction: string) {
+		const name = nameOfWholeShortcode(reaction);
+		if (!name) return undefined;
+		const emoji = packEmojiByName().get(name);
+		return emoji ? { name: emoji.name, url: emoji.url } : undefined;
 	}
 
 	function compareChatMessages(a: ChatMessage, b: ChatMessage): number {
@@ -345,12 +369,18 @@
 					);
 					if (!reference) return null;
 					const target = byEventId.get(reference.targetId);
+					const custom = customReactionView(
+						reference.reaction,
+						message.tags,
+						message.mediaKeyBase64
+					);
 					return {
 						...toChatMessage(message),
 						text: '',
 						systemKind: 'reaction',
 						reactionTarget: target ? `${target.id}:${target.cursor}` : undefined,
 						reactionEmojis: [reference.reaction],
+						reactionEmojiViews: custom ? { [reference.reaction]: custom } : undefined,
 						reactionSenders: [message.sender]
 					} satisfies ChatMessage;
 				}
@@ -368,6 +398,7 @@
 
 				const threadReference = getMessageThreadReference(message.tags);
 				const replySource = threadReference ? byEventId.get(threadReference.parentId) : undefined;
+				const replyPendingEdit = replySource ? pendingEditByTarget.get(replySource.id) : undefined;
 				const reactions = reactionMap.get(message.id);
 				const deleted = Boolean(deletedIds.has(message.id) || optimisticDeletes[message.id]);
 				// Deleted rows hide their content, so their overlays go silent too —
@@ -394,13 +425,19 @@
 						);
 						const count = entry.reactors.size - (mine ? 1 : 0);
 						if (count === 0) return null;
+						const reactedByMe = entry.reactors.has(activePubkey) && !mine;
 						return {
 							emoji: entry.emoji,
 							count,
-							reactedByMe: entry.reactors.has(activePubkey) && !mine,
+							reactedByMe,
 							reactors: Array.from(entry.reactors.keys()).filter(
 								(pubkey) => !(mine && pubkey === activePubkey)
-							)
+							),
+							// If my own reaction could not carry a picture, keep drawing
+							// the one this device already has instead of flicking to text.
+							display:
+								entry.display ?? (reactedByMe ? optimisticReactionDisplay(entry.emoji) : undefined),
+							mediaKeyBase64: entry.mediaKeyBase64
 						};
 					})
 					.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -418,7 +455,9 @@
 								emoji,
 								count: 1,
 								reactedByMe: true,
-								reactors: [activePubkey]
+								reactors: [activePubkey],
+								display: optimisticReactionDisplay(emoji),
+								mediaKeyBase64: undefined
 							});
 						}
 					}
@@ -430,6 +469,12 @@
 					deliveryState: pendingEdit?.deliveryState ?? view.deliveryState,
 					deliveryDetail: pendingEdit?.deliveryDetail,
 					text: deleted ? '' : (pendingEdit?.content ?? edit?.content ?? message.content),
+					displayTags: pendingEdit
+						? emojiDisplayTags(pendingEdit.content)
+						: (edit?.tags ?? message.tags),
+					displayMediaKeyBase64: pendingEdit
+						? undefined
+						: (edit?.mediaKeyBase64 ?? message.mediaKeyBase64),
 					deleted,
 					pinned,
 					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
@@ -441,11 +486,16 @@
 								author: replySource.sender,
 								content: deletedIds.has(replySource.id)
 									? ''
-									: (pendingEditByTarget.get(replySource.id)?.content ??
+									: (replyPendingEdit?.content ??
 										editMap.get(replySource.id)?.content ??
 										replySource.content),
 								deleted: deletedIds.has(replySource.id),
-								tags: replySource.tags
+								tags: replyPendingEdit
+									? emojiDisplayTags(replyPendingEdit.content)
+									: (editMap.get(replySource.id)?.tags ?? replySource.tags),
+								mediaKeyBase64: replyPendingEdit
+									? undefined
+									: (editMap.get(replySource.id)?.mediaKeyBase64 ?? replySource.mediaKeyBase64)
 							})
 						: threadReference
 							? unavailableReplyQuote(threadReference.parentId, threadReference.parentPubkey)
@@ -628,6 +678,7 @@
 			isOwn: true,
 			deliveryState: 'sending',
 			replyTo: optimisticReplyTo,
+			displayTags: emojiDisplayTags(text),
 			media: {
 				mime: file.type || 'application/octet-stream',
 				filename: file.name,
@@ -712,6 +763,7 @@
 			isOwn: true,
 			deliveryState: 'sending',
 			replyTo: optimisticReplyTarget,
+			displayTags: emojiDisplayTags(text),
 			media: {
 				mime: result.mime,
 				filename: result.file.name,
@@ -815,7 +867,8 @@
 			pubkey: storedMessage.sender,
 			kind: storedMessage.kind,
 			content: storedMessage.content,
-			tags: storedMessage.tags
+			tags: storedMessage.tags,
+			mediaKeyBase64: storedMessage.mediaKeyBase64
 		};
 		composerFocusKey += 1;
 	}
@@ -832,7 +885,8 @@
 			id: replyTarget.id,
 			author: replyTarget.pubkey,
 			content: replyTarget.content,
-			tags: replyTarget.tags
+			tags: replyTarget.tags,
+			mediaKeyBase64: replyTarget.mediaKeyBase64
 		});
 	}
 

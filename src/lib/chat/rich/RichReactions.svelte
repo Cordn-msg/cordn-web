@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import type { AnnotationIndex } from '$lib/chat/references';
@@ -26,7 +27,9 @@
 			emoji: entry.emoji,
 			count: entry.reactors.size,
 			reactedByMe: activePubkey ? entry.reactors.has(activePubkey) : false,
-			reactors: Array.from(entry.reactors.keys())
+			reactors: Array.from(entry.reactors.keys()),
+			display: entry.display,
+			mediaKeyBase64: entry.mediaKeyBase64
 		}));
 	});
 	const reactionTotal = $derived(reactions.reduce((total, reaction) => total + reaction.count, 0));
@@ -53,7 +56,15 @@
 					<span
 						class={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${reaction.reactedByMe ? 'border-primary/30 bg-primary/10 text-foreground' : 'border-border bg-muted/40 text-muted-foreground'}`}
 					>
-						<span>{reaction.emoji}</span>
+						{#if reaction.display}
+							<CustomEmoji
+								display={reaction.display}
+								mediaKeyBase64={reaction.mediaKeyBase64}
+								sizeClass="size-4"
+							/>
+						{:else}
+							<span>{reaction.emoji}</span>
+						{/if}
 						<span>{reaction.count}</span>
 					</span>
 				{/each}
@@ -64,7 +75,15 @@
 					{#each reactions as reaction (`${messageId}:rxn-detail:${reaction.emoji}`)}
 						<div class="rounded-2xl border p-3">
 							<div class="mb-2 flex items-center gap-2">
-								<span class="text-lg">{reaction.emoji}</span>
+								{#if reaction.display}
+									<CustomEmoji
+										display={reaction.display}
+										mediaKeyBase64={reaction.mediaKeyBase64}
+										sizeClass="size-6"
+									/>
+								{:else}
+									<span class="text-lg">{reaction.emoji}</span>
+								{/if}
 								<span class="font-medium">
 									{reaction.count} reaction{reaction.count === 1 ? '' : 's'}
 								</span>

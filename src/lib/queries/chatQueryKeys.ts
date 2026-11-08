@@ -41,5 +41,8 @@ export const chatQueryKeys = {
 	 * GIF search (gifs.nostr.build public API). Account-independent like
 	 * profileIdentifier: one shared query space, keyed by the trimmed query.
 	 */
-	gifSearch: (query: string) => [...chatQueryKeys.all, 'gif-search', query] as const
+	gifSearch: (query: string) => [...chatQueryKeys.all, 'gif-search', query] as const,
+	/** A public NIP-30 kind 30030 emoji set. Not account-scoped: the set is the same for everyone. */
+	emojiSet: (pubkey: string, identifier: string) =>
+		[...chatQueryKeys.all, 'emoji-set', normalizePubKey(pubkey), identifier] as const
 } as const;

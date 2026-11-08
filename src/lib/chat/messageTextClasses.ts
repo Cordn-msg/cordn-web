@@ -9,3 +9,5 @@ export const MESSAGE_LINK_WRAP_CLASS =
 	'inline max-w-full whitespace-normal break-words text-left align-baseline underline underline-offset-2 [overflow-wrap:anywhere] [word-break:break-word]';
 export const MESSAGE_PART_CONTAINER_CLASS =
 	'min-w-0 max-w-full break-words [overflow-wrap:anywhere] [word-break:break-word]';
+export const MESSAGE_AUTHOR_CHIP_CLASS =
+	'inline-flex max-w-full min-w-0 rounded-full px-1 font-semibold ' + MESSAGE_PART_CONTAINER_CLASS;

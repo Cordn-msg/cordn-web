@@ -30,6 +30,8 @@ import {
 	type ChatMessageReplyTarget,
 	type MessageTarget
 } from '$lib/chat/references';
+import { emojiMediaTagsForContent } from './chatEmojiMedia';
+import { emojiDisplayTags } from './chatEmojiPacks.svelte';
 import { buildReplyQuote } from '$lib/chat/replyQuote';
 import type { ChatMessage as UiChatMessage } from '$lib/components/chat/chat.types';
 import { errorMessage, formatUnixTimestamp, normalizePubKey } from '$lib/utils';
@@ -118,12 +120,16 @@ function outboxEntryToChatMessage(entry: StoredChatOutboxRecord): UiChatMessage 
 		deliveryDetail: entry.lastError,
 		reactions: [],
 		tags: entry.tags,
+		// The queued bubble can draw its pack emoji from the local pack list; the
+		// sent event carries only the encrypted `emoji-media` tags.
+		displayTags: emojiDisplayTags(entry.content),
 		replyTo: entry.replyTo
 			? buildReplyQuote({
 					id: entry.replyTo.id,
 					author: entry.replyTo.pubkey,
 					content: entry.replyTo.content,
-					tags: entry.replyTo.tags
+					tags: entry.replyTo.tags,
+					mediaKeyBase64: entry.replyTo.mediaKeyBase64
 				})
 			: undefined
 	};
@@ -311,10 +317,17 @@ type AttemptOutcome = 'sent' | 'transient' | 'definitive' | 'abort';
 async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutcome> {
 	projectDeliveryState(entry, { deliveryState: 'sending' });
 	try {
+		// Custom emoji are re-encrypted per attempt: the blob is sealed under the
+		// room's epoch, and an epoch may have moved while this intent waited.
+		// shortcut: a retry after an epoch change makes a new tag and therefore a
+		// new event id; confirm-before-retry covers the ordinary ambiguous case.
+		// Persist the prepared tags on the entry if a duplicate ever shows up.
+		const emojiMedia = await emojiMediaTagsForContent(entry.groupId, entry.content);
 		await sendChatGroupMessage({
 			groupId: entry.groupId,
 			content: entry.content,
-			tags: entry.tags,
+			tags: [...entry.tags, ...emojiMedia.tags],
+			mediaKeyBase64: emojiMedia.mediaKeyBase64,
 			replyTo: entry.replyTo,
 			kind: entry.kind,
 			// Frozen at enqueue: every retry re-seals against the group's CURRENT

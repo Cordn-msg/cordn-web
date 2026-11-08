@@ -10,6 +10,8 @@ import {
 	getMessageThreadReference,
 	resolveOutboundMessage
 } from './references';
+import { buildMediaTag, MEDIA_VERSION } from '$lib/services/chatMediaCipher';
+import { EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 function msg(
@@ -146,8 +148,15 @@ describe('resolveOutboundMessage', () => {
 		expect(out.tags.some((t) => t[0] === 'E')).toBe(true);
 	});
 
-	test('reaction → kind 7, content preserved untrimmed', () => {
+	test('reaction → kind 7, content preserved untrimmed, extra emoji tags kept', () => {
 		expect(resolveOutboundMessage({ content: '🔥', reactionTo: target }).kind).toBe(7);
+		expect(
+			resolveOutboundMessage({
+				content: ':cat:',
+				reactionTo: target,
+				tags: [['emoji-media', 'name cat']]
+			}).tags.find((tag) => tag[0] === 'emoji-media')
+		).toEqual(['emoji-media', 'name cat']);
 	});
 
 	test('poll vote → kind 1018, readable content fallback, alt tag last', () => {
@@ -230,6 +239,32 @@ describe('buildAnnotationIndex', () => {
 		expect(index.editMap.get('editTarget')?.content).toBe('hello (edited)');
 		expect(index.deletedIds.has('orig')).toBe(true);
 	});
+	test('a custom reaction carries its picture and the key that opens it', () => {
+		const original = msg({ id: 'orig', kind: 9, content: 'hello', sender: 'aaaa' });
+		const mediaTag = buildMediaTag(EMOJI_MEDIA_TAG, {
+			url: 'https://blossom.example/blob',
+			mime: 'image/png',
+			filename: 'monero.png',
+			plaintextHashHex: 'a'.repeat(64),
+			nonceHex: 'b'.repeat(24),
+			version: MEDIA_VERSION
+		});
+		mediaTag.splice(1, 0, 'name monero');
+		const reaction = msg({
+			id: 'r1',
+			kind: 7,
+			content: ':monero:',
+			sender: 'bbbb',
+			mediaKeyBase64: 'a2V5',
+			tags: [['e', 'orig', '', 'aaaa'], ['p', 'aaaa'], ['k', '9'], mediaTag]
+		});
+		const entry = buildAnnotationIndex([original, reaction])
+			.reactionMap.get('orig')
+			?.get(':monero:');
+		expect(entry?.display?.media?.name).toBe('monero');
+		expect(entry?.mediaKeyBase64).toBe('a2V5');
+	});
+
 	test('deleting a reaction event un-chips the author; sibling events survive', () => {
 		const original = msg({ id: 'orig', kind: 9, content: 'hello', sender: 'aaaa' });
 		const reaction = (id: string) =>

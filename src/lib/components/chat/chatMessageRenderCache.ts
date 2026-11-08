@@ -1,6 +1,7 @@
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { mayContainMarkdown, parseMarkdown, type MarkdownBlock } from '$lib/markdown/parseMarkdown';
 import { extractChatInvites, tidyChatBodyText, type ChatInvite } from '$lib/chat/chatInvites';
+import type { EmojiDisplay } from '$lib/chat/emoji';
 import type { ChatMessage } from './chat.types';
 
 const MAX_CACHED_PARSED_MESSAGES = 1000;
@@ -8,6 +9,7 @@ const MAX_CACHED_PARSED_MESSAGES = 1000;
 type ParsedMentionParts = ReturnType<typeof parseChatProfileMentions>;
 type ParsedMentionCacheEntry = {
 	text: string;
+	emojiKey: string;
 	parts: ParsedMentionParts;
 	/** Lazily derived once per text: invite cards + the body parts left after
 	 * the invite link texts leave the message (a card stands in for each). */
@@ -17,9 +19,35 @@ type ParsedMentionCacheEntry = {
 
 const parsedMentionCache = new Map<string, ParsedMentionCacheEntry>();
 
-function getCachedChatMessagePartsEntry(messageId: string, text: string): ParsedMentionCacheEntry {
-	const parsed = parseChatProfileMentions(text);
-	const entry: ParsedMentionCacheEntry = { text, parts: parsed };
+/** A stable string for the emoji an event carries, so a tag change reparses. */
+function emojiCacheKey(emoji: Map<string, EmojiDisplay>): string {
+	if (emoji.size === 0) return '';
+	return [...emoji.values()]
+		.sort((a, b) => a.name.localeCompare(b.name))
+		.map((display) => {
+			const media = display.media;
+			return [
+				display.name,
+				display.url ?? '',
+				media?.url ?? '',
+				media?.mime ?? '',
+				media?.filename ?? '',
+				media?.plaintextHashHex ?? '',
+				media?.nonceHex ?? '',
+				media?.version ?? ''
+			].join('\u0000');
+		})
+		.join('\u0001');
+}
+
+function getCachedChatMessagePartsEntry(
+	messageId: string,
+	text: string,
+	emoji: Map<string, EmojiDisplay>
+): ParsedMentionCacheEntry {
+	const emojiKey = emojiCacheKey(emoji);
+	const parsed = parseChatProfileMentions(text, emoji);
+	const entry: ParsedMentionCacheEntry = { text, emojiKey, parts: parsed };
 	parsedMentionCache.set(messageId, entry);
 	if (parsedMentionCache.size > MAX_CACHED_PARSED_MESSAGES) {
 		const oldestKey = parsedMentionCache.keys().next().value;
@@ -28,11 +56,16 @@ function getCachedChatMessagePartsEntry(messageId: string, text: string): Parsed
 	return entry;
 }
 
-export function getCachedChatMessageParts(messageId: string, text: string): ParsedMentionParts {
+export function getCachedChatMessageParts(
+	messageId: string,
+	text: string,
+	emoji: Map<string, EmojiDisplay> = new Map()
+): ParsedMentionParts {
+	const emojiKey = emojiCacheKey(emoji);
 	const cached = parsedMentionCache.get(messageId);
-	if (cached?.text === text) return cached.parts;
+	if (cached?.text === text && cached.emojiKey === emojiKey) return cached.parts;
 
-	return getCachedChatMessagePartsEntry(messageId, text).parts;
+	return getCachedChatMessagePartsEntry(messageId, text, emoji).parts;
 }
 
 export interface ChatMessageInvites {
@@ -46,9 +79,16 @@ export interface ChatMessageInvites {
  * texts leave it. Same cache entry (and discipline) as the mention parts, so
  * the plain-text pipeline parses a message at most twice ever (raw + tidied)
  * and only when it actually carries an invite. */
-export function getCachedChatMessageInvites(messageId: string, text: string): ChatMessageInvites {
+export function getCachedChatMessageInvites(
+	messageId: string,
+	text: string,
+	emoji: Map<string, EmojiDisplay> = new Map()
+): ChatMessageInvites {
 	let entry = parsedMentionCache.get(messageId);
-	if (entry?.text !== text) entry = getCachedChatMessagePartsEntry(messageId, text);
+	const emojiKey = emojiCacheKey(emoji);
+	if (entry?.text !== text || entry.emojiKey !== emojiKey) {
+		entry = getCachedChatMessagePartsEntry(messageId, text, emoji);
+	}
 	if (entry.invites !== undefined && entry.bodyParts !== undefined) {
 		return { invites: entry.invites, bodyParts: entry.bodyParts };
 	}
@@ -60,7 +100,7 @@ export function getCachedChatMessageInvites(messageId: string, text: string): Ch
 		(typeof window !== 'undefined' ? text.includes(window.location.hostname) : false);
 	const extracted = saysCordn ? extractChatInvites(entry.parts) : { invites: [], linkTexts: [] };
 	const bodyParts = extracted.invites.length
-		? parseChatProfileMentions(tidyChatBodyText(text, extracted.linkTexts))
+		? parseChatProfileMentions(tidyChatBodyText(text, extracted.linkTexts), emoji)
 		: entry.parts;
 	entry.invites = extracted.invites;
 	entry.bodyParts = bodyParts;

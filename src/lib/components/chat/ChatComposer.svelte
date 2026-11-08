@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
+	import { get } from 'svelte/store';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { addressLoader } from '$lib/services/loaders.svelte';
@@ -29,7 +31,9 @@
 	import Trash from '@lucide/svelte/icons/trash-2';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChatComposerActions from './ChatComposerActions.svelte';
+	import CustomEmoji from './CustomEmoji.svelte';
 	import GifPicker from './GifPicker.svelte';
+	import EmojiPicker from './EmojiPicker.svelte';
 	import PollComposerDialog from './PollComposerDialog.svelte';
 	import type { PollDraft } from '$lib/chat/polls';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -45,6 +49,8 @@
 	} from './chat.types';
 	import { enterKeySends } from '$lib/services/chatComposerSettings.svelte';
 	import { sanitizeImageFile } from '$lib/services/imageSanitize';
+	import { shortcodeQueryAt } from '$lib/chat/emoji';
+	import { packEmojiByName, type EmojiPackSource } from '$lib/services/chatEmojiPacks.svelte';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 
 	const COMPOSER_PREVIEW_WRAP_CLASS =
@@ -307,11 +313,65 @@
 	let mentionQuery = $state('');
 	let mentionStart = $state(-1);
 	let highlightedMentionIndex = $state(0);
+	let emojiStart = $state(-1);
+	let emojiQuery = $state('');
+	let highlightedEmojiIndex = $state(0);
 	const profileHints = useProfileHints(() =>
 		mentionCandidates.map((candidate) => candidate.pubkey)
 	);
 
 	const activeMention = $derived(mentionStart >= 0);
+	const allPackEmoji = $derived([...packEmojiByName().values()]);
+	const activeEmoji = $derived(emojiStart >= 0);
+	let emojiStrip = $state<HTMLDivElement | null>(null);
+	const emojiVirtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => emojiStrip,
+		horizontal: true,
+		estimateSize: () => 104,
+		overscan: 6
+	});
+	const emojiVirtualItems = $derived($emojiVirtualizer.getVirtualItems());
+	const emojiStripWidth = $derived($emojiVirtualizer.getTotalSize());
+
+	$effect(() => {
+		void emojiStrip;
+		// `$store.method()` would subscribe this effect to the store it writes
+		// (setOptions/scrollToIndex notify subscribers), looping forever.
+		get(emojiVirtualizer).setOptions({
+			count: emojiMatches.length,
+			getItemKey: (index) => {
+				const emoji = emojiMatches[index];
+				return emoji ? `${emoji.coordinate}:${emoji.name}` : index;
+			}
+		});
+	});
+
+	$effect(() => {
+		void emojiQuery;
+		if (activeEmoji && emojiMatches.length > 0) {
+			get(emojiVirtualizer).scrollToIndex(highlightedEmojiIndex, { align: 'auto' });
+		}
+	});
+
+	function emojiTier(name: string, query: string): number {
+		const value = name.toLowerCase();
+		return value === query ? 0 : value.startsWith(query) ? 1 : 2;
+	}
+
+	const emojiMatches = $derived.by(() => {
+		if (!activeEmoji) return [];
+		const query = emojiQuery.toLowerCase();
+		return allPackEmoji
+			.filter((emoji) => emoji.name.toLowerCase().includes(query))
+			.sort(
+				(a, b) =>
+					emojiTier(a.name, query) - emojiTier(b.name, query) ||
+					a.name.length - b.name.length ||
+					a.name.localeCompare(b.name)
+			);
+	});
+
 	const mentionMatches = $derived.by(() => {
 		if (!activeMention) return [];
 		const query = mentionQuery.toLowerCase();
@@ -373,6 +433,8 @@
 	// attachment is honored by BOTH paths — otherwise Enter with text + an image
 	// would silently send only the text.
 	function dispatchSubmit() {
+		closeMentionDialog();
+		closeEmojiDialog();
 		if (attachmentsProcessing) return;
 		if (pendingAttachments.length > 0) {
 			// First file: the draft (as today). Later files: their own captions.
@@ -413,6 +475,31 @@
 				return;
 			}
 		}
+		if (activeEmoji) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				closeEmojiDialog();
+				return;
+			}
+			if (emojiMatches.length > 0) {
+				if (event.key === 'ArrowDown') {
+					event.preventDefault();
+					highlightedEmojiIndex = (highlightedEmojiIndex + 1) % emojiMatches.length;
+					return;
+				}
+				if (event.key === 'ArrowUp') {
+					event.preventDefault();
+					highlightedEmojiIndex =
+						(highlightedEmojiIndex - 1 + emojiMatches.length) % emojiMatches.length;
+					return;
+				}
+				if (event.key === 'Enter' || event.key === 'Tab') {
+					event.preventDefault();
+					selectEmoji(emojiMatches[highlightedEmojiIndex]);
+					return;
+				}
+			}
+		}
 		// Enter-key behavior resolves per keypress from the user preference +
 		// pointer type ('auto' sends on keyboard devices, inserts a newline on
 		// touch — WhatsApp/iMessage convention). `isComposing` guards IME (CJK)
@@ -428,7 +515,10 @@
 	}
 
 	function handleInput(event: Event) {
-		updateMentionState(event.currentTarget as HTMLTextAreaElement);
+		const target = event.currentTarget as HTMLTextAreaElement;
+		updateMentionState(target);
+		if (mentionStart >= 0) closeEmojiDialog();
+		else updateEmojiState(target);
 		requestAnimationFrame(() => resizeTextarea());
 	}
 
@@ -473,6 +563,42 @@
 		mentionStart = -1;
 		mentionQuery = '';
 		highlightedMentionIndex = 0;
+	}
+
+	function updateEmojiState(target: HTMLTextAreaElement) {
+		const query = shortcodeQueryAt(value, target.selectionStart ?? value.length);
+		if (!query) {
+			closeEmojiDialog();
+			return;
+		}
+		emojiStart = query.start;
+		emojiQuery = query.query;
+		highlightedEmojiIndex = 0;
+	}
+
+	function closeEmojiDialog() {
+		emojiStart = -1;
+		emojiQuery = '';
+		highlightedEmojiIndex = 0;
+	}
+
+	function selectEmoji(candidate: EmojiPackSource) {
+		if (emojiStart < 0) return;
+		// Splice at the end of the tracked token, not the caret: the Android
+		// keyboard can reset the caret while the suggestion strip is open.
+		const queryEnd = emojiStart + 1 + emojiQuery.length;
+		const before = value.slice(0, emojiStart);
+		const after = value.slice(queryEnd).replace(/^\s*/, '');
+		const inserted = `:${candidate.name}: `;
+		value = `${before}${inserted}${after}`;
+		closeEmojiDialog();
+		queueMicrotask(() => {
+			if (!textareaRef) return;
+			const nextCaret = before.length + inserted.length;
+			textareaRef.focus();
+			textareaRef.setSelectionRange(nextCaret, nextCaret);
+			resizeTextarea();
+		});
 	}
 
 	function selectMention(candidate: ChatMentionCandidate) {
@@ -585,19 +711,20 @@
 	}
 
 	let gifPickerOpen = $state(false);
+	let emojiPickerOpen = $state(false);
 	let pollDialogOpen = $state(false);
 
-	/** Insert a picked GIF's URL at the caret (a leading space unless already separated). */
-	function insertGifUrl(url: string) {
+	/** Insert picked text at the caret, with a separating space when needed. */
+	function insertAtCaret(text: string) {
 		const textarea = textareaRef;
 		if (!textarea) {
-			value = value.trim() ? `${value.trimEnd()} ${url}` : url;
+			value = value.trim() ? `${value.trimEnd()} ${text}` : text;
 			return;
 		}
 		const start = textarea.selectionStart ?? value.length;
 		const end = textarea.selectionEnd ?? start;
 		const before = value.slice(0, start);
-		const inserted = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${url}`;
+		const inserted = `${before.length > 0 && !/\s$/.test(before) ? ' ' : ''}${text}`;
 		value = `${before}${inserted}${value.slice(end)}`;
 		const nextCaret = start + inserted.length;
 		queueMicrotask(() => {
@@ -605,6 +732,16 @@
 			textareaRef?.setSelectionRange(nextCaret, nextCaret);
 			resizeTextarea();
 		});
+	}
+
+	function insertGifUrl(url: string) {
+		closeEmojiDialog();
+		insertAtCaret(url);
+	}
+
+	function insertEmojiShortcode(code: string) {
+		closeEmojiDialog();
+		insertAtCaret(`${code} `);
 	}
 
 	function handleFileSelected(event: Event) {
@@ -981,9 +1118,11 @@
 					onPickImage={pickImage}
 					onPickDocument={pickDocument}
 					onPickGif={() => (gifPickerOpen = true)}
+					onPickEmoji={() => (emojiPickerOpen = true)}
 					onCreatePoll={() => (pollDialogOpen = true)}
 				/>
 				<GifPicker bind:open={gifPickerOpen} onPick={insertGifUrl} />
+				<EmojiPicker bind:open={emojiPickerOpen} onPick={insertEmojiShortcode} />
 				<PollComposerDialog bind:open={pollDialogOpen} onCreate={onSendPoll} />
 				<ChatAttachmentCaptionSheet
 					bind:open={captionSheetOpen}
@@ -1015,6 +1154,45 @@
 									</div>
 								</button>
 							{/each}
+						</div>
+					{/if}
+					{#if activeEmoji && emojiMatches.length > 0}
+						<div class="rounded-xl border border-border bg-popover p-1 shadow-lg">
+							<div
+								bind:this={emojiStrip}
+								class="no-scrollbar h-12 overflow-x-auto overscroll-x-contain"
+								role="listbox"
+								aria-label="Custom emoji suggestions"
+							>
+								<div class="relative h-full" style={`width: ${emojiStripWidth}px`}>
+									{#each emojiVirtualItems as item (item.key)}
+										{@const emoji = emojiMatches[item.index]}
+										{#if emoji}
+											<div
+												class="absolute top-0 left-0 flex h-full items-center"
+												style={`width: ${item.size}px; transform: translateX(${item.start}px)`}
+											>
+												<button
+													type="button"
+													role="option"
+													aria-selected={item.index === highlightedEmojiIndex}
+													class={`flex h-9 max-w-full items-center gap-2 rounded-lg px-2 text-left text-xs ${item.index === highlightedEmojiIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`}
+													title={`:${emoji.name}:`}
+													onmouseenter={() => (highlightedEmojiIndex = item.index)}
+													onclick={() => selectEmoji(emoji)}
+												>
+													<CustomEmoji
+														display={{ name: emoji.name, url: emoji.url }}
+														gateAutoLoad={false}
+														sizeClass="size-6"
+													/>
+													<span class="max-w-[5.25rem] truncate">:{emoji.name}:</span>
+												</button>
+											</div>
+										{/if}
+									{/each}
+								</div>
+							</div>
 						</div>
 					{/if}
 					<div class="flex justify-center">

@@ -15,6 +15,7 @@ import {
 } from '$lib/services/chatBlossomClient';
 import {
 	buildImetaTag,
+	buildMediaTag,
 	deriveMediaKey,
 	encryptMedia,
 	findImetaTag,
@@ -25,6 +26,10 @@ import {
 	type MediaDecryptRequest,
 	type MediaWorkerResponse
 } from '$lib/services/chatMediaCrypto';
+import { EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
+import { emojiSourcesForContent } from '$lib/services/chatEmojiPacks.svelte';
+import { fetchEmojiImage } from '$lib/services/chatEmojiImage';
+import { mediaExtFromMime } from '$lib/services/mediaSniff';
 import {
 	decodeStoredGroupState,
 	getChatGroup,
@@ -378,15 +383,24 @@ export async function sendChatMediaMessage(params: {
 		waveform: voice?.waveform
 	});
 
+	// A caption can carry custom emoji too. They must be sealed under the same
+	// epoch as the attachment; if the epoch moved while they were prepared, send
+	// them as text rather than making one row carry two undecryptable keys.
+	const mediaKeyBase64 = bytesToBase64(key);
+	const captionEmoji = text
+		? await prepareEmojiMediaTags(groupId, emojiSourcesForContent(text))
+		: { tags: [] };
+	const captionTags = captionEmoji.mediaKeyBase64 === mediaKeyBase64 ? captionEmoji.tags : [];
+
 	// Thread the exact encryption key so the sender's stashed copy decrypts the
 	// media too (receivers derive their own key at the seal epoch, which the
 	// re-check above aligns to the encryption epoch).
 	await sendChatGroupMessage({
 		groupId,
 		content: text,
-		tags: [imeta, ...(tags ?? [])],
+		tags: [imeta, ...(tags ?? []), ...captionTags],
 		replyTo,
-		mediaKeyBase64: bytesToBase64(key)
+		mediaKeyBase64
 	});
 }
 
@@ -478,22 +492,11 @@ function cacheResolvedMedia(
 	return resolved;
 }
 
-/**
- * Resolve a message's `imeta` to a viewable ObjectURL: fetch the encrypted blob
- * from the store, decrypt with the stashed per-epoch key, cache the result.
- * Returns `null` if the message has no media, an unknown version (§4: reject),
- * or no stashed key (pre-`mediaKeyBase64` messages; treated as undecryptable).
- *
- * Idempotent: repeated calls for the same plaintext hash return the cached URL.
- */
-export async function resolveMessageMedia(params: {
-	messageId: string;
-	tags: string[][];
-	mediaKeyBase64?: string;
-}): Promise<ResolvedMedia | null> {
-	const ref = findImetaTag(params.tags);
-	if (!ref || !isKnownMediaVersion(ref.version)) return null;
-	if (!params.mediaKeyBase64) return null;
+async function resolveMediaReference(
+	ref: MediaReference,
+	mediaKeyBase64: string | undefined
+): Promise<ResolvedMedia | null> {
+	if (!isKnownMediaVersion(ref.version) || !mediaKeyBase64) return null;
 
 	const hash = ref.plaintextHashHex;
 	const cached = mediaObjectUrlCache[hash];
@@ -501,11 +504,10 @@ export async function resolveMessageMedia(params: {
 	const existing = mediaInFlight[hash];
 	if (existing) return existing;
 
-	const keyBase64 = params.mediaKeyBase64;
 	mediaInFlight[hash] = (async () => {
 		const blob = await fetchBlob(ref.url);
 		const plaintext = await runMediaWorker({
-			key: base64ToBytes(keyBase64),
+			key: base64ToBytes(mediaKeyBase64),
 			blob,
 			nonce: hexToBytes(ref.nonceHex),
 			mime: ref.mime,
@@ -520,6 +522,138 @@ export async function resolveMessageMedia(params: {
 	} finally {
 		delete mediaInFlight[hash];
 	}
+}
+
+/**
+ * Resolve a message's `imeta` to a viewable ObjectURL: fetch the encrypted blob
+ * from the store, decrypt with the stashed per-epoch key, cache the result.
+ * Returns `null` if the message has no media, an unknown version (§4: reject),
+ * or no stashed key (pre-`mediaKeyBase64` messages; treated as undecryptable).
+ *
+ * Idempotent: repeated calls for the same plaintext hash return the cached URL.
+ */
+export async function resolveMessageMedia(params: {
+	messageId: string;
+	tags: string[][];
+	mediaKeyBase64?: string;
+}): Promise<ResolvedMedia | null> {
+	const ref = findImetaTag(params.tags);
+	return ref ? resolveMediaReference(ref, params.mediaKeyBase64) : null;
+}
+
+/** A custom emoji's encrypted picture, opened with the key its row carried at ingest. */
+export async function resolveEmojiMedia(
+	ref: MediaReference,
+	mediaKeyBase64: string | undefined
+): Promise<ResolvedMedia | null> {
+	return resolveMediaReference(ref, mediaKeyBase64);
+}
+
+// ---------------------------------------------------------------------------
+// Custom emoji send: one encrypted blob per shortcode, room and epoch.
+// ---------------------------------------------------------------------------
+
+export interface EmojiImageSource {
+	name: string;
+	url: string;
+}
+
+const MAX_EMOJI_MEMOS = 200;
+const MAX_EMOJI_TAGS_PER_MESSAGE = 32;
+const emojiMediaMemo = new Map<string, string[]>();
+
+/**
+ * Encrypt and upload the pictures for a message's custom emoji, returning the
+ * `emoji-media` tags and the key they were sealed under. A source that cannot
+ * be fetched or uploaded is skipped: the message still sends.
+ */
+export async function prepareEmojiMediaTags(
+	groupId: string,
+	sources: EmojiImageSource[]
+): Promise<{ tags: string[][]; mediaKeyBase64?: string }> {
+	const unique = sources
+		.filter(
+			(source, index) =>
+				sources.findIndex(
+					(candidate) => candidate.name === source.name && candidate.url === source.url
+				) === index
+		)
+		.slice(0, MAX_EMOJI_TAGS_PER_MESSAGE);
+	if (unique.length === 0) return { tags: [] };
+
+	// Fetch in parallel: one dead pack host must cost one timeout, not one per
+	// emoji in the message. Uploads then stay sequential per try/pass.
+	const fetched = (
+		await Promise.all(
+			unique.map(async (source) => {
+				try {
+					return { source, image: await fetchEmojiImage(source.url) };
+				} catch (error) {
+					console.warn(`Could not prepare custom emoji :${source.name}:`, error);
+					return null;
+				}
+			})
+		)
+	).filter(
+		(entry): entry is { source: EmojiImageSource; image: { mime: string; bytes: Uint8Array } } =>
+			entry !== null
+	);
+	if (fetched.length === 0) return { tags: [] };
+
+	// An epoch can move while the uploads run; one retry re-seals under the new key.
+	for (let pass = 0; pass < 2; pass++) {
+		const group = getChatGroup(groupId);
+		if (!group) return { tags: [] };
+		const state = decodeStoredGroupState(group);
+		const key = await deriveMediaKey(state);
+		const keyBase64 = bytesToBase64(key);
+		const epoch = String(state.groupContext.epoch);
+		const signer = ephemeralBlossomSigner();
+		const tags: string[][] = [];
+
+		for (const { source, image } of fetched) {
+			const memoKey = `${groupId}:${epoch}:${source.name}:${source.url}`;
+			const remembered = emojiMediaMemo.get(memoKey);
+			if (remembered) {
+				tags.push(remembered);
+				continue;
+			}
+			try {
+				const filename = `${source.name}.${mediaExtFromMime(image.mime)}`;
+				const enc = encryptMedia({
+					key,
+					plaintext: image.bytes,
+					metadata: { mime: image.mime, filename }
+				});
+				cacheResolvedMedia(image.bytes, image.mime, filename, bytesToHex(enc.plaintextHash));
+				const { url } = await uploadBlobWithFallback(enc.blob, signer);
+				const tag = buildMediaTag(EMOJI_MEDIA_TAG, {
+					url,
+					mime: image.mime,
+					filename,
+					plaintextHashHex: bytesToHex(enc.plaintextHash),
+					nonceHex: bytesToHex(enc.nonce),
+					version: MEDIA_VERSION
+				});
+				// emoji-media names the shortcode it stands behind; the rest is imeta's shape.
+				tag.splice(1, 0, `name ${source.name}`);
+				if (emojiMediaMemo.size >= MAX_EMOJI_MEMOS) {
+					const oldest = emojiMediaMemo.keys().next().value;
+					if (oldest) emojiMediaMemo.delete(oldest);
+				}
+				emojiMediaMemo.set(memoKey, tag);
+				tags.push(tag);
+			} catch (error) {
+				console.warn(`Could not prepare custom emoji :${source.name}:`, error);
+			}
+		}
+
+		const latest = getChatGroup(groupId);
+		if (!latest || decodeStoredGroupState(latest).groupContext.epoch === state.groupContext.epoch) {
+			return tags.length > 0 ? { tags, mediaKeyBase64: keyBase64 } : { tags: [] };
+		}
+	}
+	return { tags: [] };
 }
 
 /** Extract the imeta reference for rendering (without fetching). Used by the

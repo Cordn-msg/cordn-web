@@ -132,7 +132,13 @@
 		>
 			<!-- The question renders through the shared message-parts lane: links,
 				mentions and pasted media behave as in any message, auto-load gate included. -->
-			<MessageParts messageId={message.eventId} text={definition.question} {isOwn} />
+			<MessageParts
+				messageId={message.eventId}
+				text={definition.question}
+				tags={message.displayTags ?? message.tags}
+				mediaKeyBase64={message.displayMediaKeyBase64 ?? message.mediaKeyBase64}
+				{isOwn}
+			/>
 		</p>
 		<div class="mt-2 flex flex-col gap-1.5">
 			{#each options as option (option.id)}

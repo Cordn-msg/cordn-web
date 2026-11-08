@@ -178,6 +178,12 @@ describe('mayContainMarkdown', () => {
 		expect(mayContainMarkdown('a ` b')).toBe(true);
 		expect(mayContainMarkdown('[x](https://a)')).toBe(true);
 	});
+
+	it('ignores underscores inside a shortcode name', () => {
+		expect(mayContainMarkdown(':gigachad_becky:')).toBe(false);
+		expect(mayContainMarkdown(':gigachad_becky: :coomer_dance:')).toBe(false);
+		expect(mayContainMarkdown(':gigachad_becky: _really_')).toBe(true);
+	});
 });
 
 describe('parseMarkdown tables', () => {

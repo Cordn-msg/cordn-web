@@ -429,7 +429,9 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
  * through the existing mention/link pipeline at today's cost.
  */
 export function mayContainMarkdown(text: string): boolean {
+	// A shortcode name may contain `_`; it is still literal text, not emphasis.
+	const withoutShortcodes = text.replace(/:[A-Za-z0-9_+-]{1,32}:/g, '');
 	// `#`/`>` only matter at line start (headings, quotes) so URL fragments and
 	// comparison prose don't trigger a parse; `*_`~[` and `[` anywhere do.
-	return /[*_`~[|]/.test(text) || /^\s*(#|>|-\s|\d+\.\s|```)/m.test(text);
+	return /[*_`~[|]/.test(withoutShortcodes) || /^\s*(#|>|-\s|\d+\.\s|```)/m.test(text);
 }

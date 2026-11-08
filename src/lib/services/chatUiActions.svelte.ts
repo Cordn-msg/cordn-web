@@ -49,6 +49,7 @@ import { getDefaultChatCoordinator } from '$lib/services/chatCoordinators.svelte
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import { toast } from 'svelte-sonner';
 import type { ChatMessageReplyTarget, MessageTarget, PinOp } from '$lib/chat/references';
+import { emojiMediaTagsForContent } from '$lib/services/chatEmojiMedia';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
@@ -251,19 +252,22 @@ export async function sendGroupMessageAction(
 ): Promise<StoredChatMessage | false> {
 	const text = content.trim();
 	if ((!text && !reactionTo && !deleteTo && !pinTo) || !groupId) return false;
-	return runSend(() =>
-		sendChatGroupMessage({
+	return runSend(async () => {
+		const messageContent = reactionTo ? content : text;
+		const emojiMedia = await emojiMediaTagsForContent(groupId, messageContent);
+		return sendChatGroupMessage({
 			groupId,
-			content: reactionTo ? content : text,
+			content: messageContent,
 			replyTo,
 			reactionTo,
-			tags,
+			tags: [...tags, ...emojiMedia.tags],
+			mediaKeyBase64: emojiMedia.mediaKeyBase64,
 			editTo,
 			deleteTo,
 			pinTo,
 			pinOp
-		})
-	);
+		});
+	});
 }
 
 /** Cast (or re-cast) a poll vote: a complete-selection replacement for the

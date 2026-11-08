@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { nip19 } from 'nostr-tools';
 import { chatMessageReferencesPubkey, parseChatProfileMentions } from '$lib/services/chatMentions';
+import type { EmojiDisplay } from '$lib/chat/emoji';
 import { encodeGroupRef } from '@cordn/core';
 
 const COORD = '92753cbe63e943d0c4a0c61d745437892af6e98f179ce04a7a863aad4e00b1a5';
@@ -124,5 +125,27 @@ describe('chatMessageReferencesPubkey', () => {
 				target
 			)
 		).toBe(false);
+	});
+});
+
+describe('parseChatProfileMentions custom emoji', () => {
+	const emoji = new Map<string, EmojiDisplay>([
+		['cat', { name: 'cat', url: 'https://cdn.example/cat.png' }]
+	]);
+
+	it('tokenizes only shortcodes the event carries', () => {
+		const parts = parseChatProfileMentions('hi :cat: and :dog:', emoji);
+		const found = parts.filter((part) => part.type === 'emoji');
+		expect(found).toHaveLength(1);
+		if (found[0].type === 'emoji') {
+			expect(found[0].name).toBe('cat');
+			expect(found[0].display.url).toBe('https://cdn.example/cat.png');
+		}
+	});
+
+	it('keeps a shortcode inside a URL as part of the link', () => {
+		const parts = parseChatProfileMentions('see https://example.com/:cat:', emoji);
+		expect(parts.filter((part) => part.type === 'emoji')).toHaveLength(0);
+		expect(parts.filter((part) => part.type === 'link')).toHaveLength(1);
 	});
 });

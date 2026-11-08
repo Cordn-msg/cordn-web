@@ -15,7 +15,7 @@ import {
 } from 'ts-mls';
 import { getEventHash, type UnsignedEvent } from 'nostr-tools';
 
-import { findImetaTag, deriveMediaKey } from '$lib/services/chatMediaCrypto';
+import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
 import {
 	decryptGroupPayloadBase64,
 	decryptGroupPayloadWithKeyBase64,
@@ -51,12 +51,13 @@ export interface StoredChatMessage {
 	kind: UnsignedEvent['kind'];
 	tags: UnsignedEvent['tags'];
 	content: string;
-	/** For media-bearing messages (`imeta` tag): the per-epoch media key
-	 *  (base64) captured at ingest/send time, when the processing state holds
-	 *  the correct epoch's exporter secret. Stashed rather than re-derived at
-	 *  render time because the exporter secret rotates on commits, so the
-	 *  current state can't decrypt media from prior epochs. Derivable from the
-	 *  persisted group state, so storing it adds no new trust boundary. */
+	/** For a message carrying encrypted pictures (`imeta` or `emoji-media`):
+	 *  the per-epoch media key (base64) captured at ingest/send time, when the
+	 *  processing state holds the correct epoch's exporter secret. Stashed
+	 *  rather than re-derived at render time because the exporter secret rotates
+	 *  on commits, so the current state can't decrypt media from prior epochs.
+	 *  Derivable from the persisted group state, so storing it adds no new trust
+	 *  boundary. */
 	mediaKeyBase64?: string;
 }
 
@@ -1179,7 +1180,7 @@ export async function ingestChatGroupMessages(params: {
 				kind: event.kind,
 				tags: event.tags,
 				content: event.content,
-				mediaKeyBase64: findImetaTag(event.tags)
+				mediaKeyBase64: hasEncryptedMediaTag(event.tags)
 					? bytesToBase64(await deriveMediaKey(group.state))
 					: undefined
 			};

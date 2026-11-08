@@ -15,13 +15,21 @@
 	let {
 		nodes,
 		messageId,
-		isOwn = false
-	}: { nodes: MarkdownInlineNode[]; messageId: string; isOwn?: boolean } = $props();
+		isOwn = false,
+		tags,
+		mediaKeyBase64
+	}: {
+		nodes: MarkdownInlineNode[];
+		messageId: string;
+		isOwn?: boolean;
+		tags?: string[][];
+		mediaKeyBase64?: string;
+	} = $props();
 </script>
 
 {#each nodes as node, index (index)}
 	{#if node.type === 'text'}
-		<MessageParts {messageId} text={node.text} {isOwn} />
+		<MessageParts {messageId} text={node.text} {isOwn} {tags} {mediaKeyBase64} emojiOnly={false} />
 	{:else if node.type === 'code'}
 		<code
 			class={cn(
@@ -30,11 +38,15 @@
 			)}>{node.text}</code
 		>
 	{:else if node.type === 'strong'}
-		<strong class="font-semibold"><Self nodes={node.children} {messageId} {isOwn} /></strong>
+		<strong class="font-semibold"
+			><Self nodes={node.children} {messageId} {isOwn} {tags} {mediaKeyBase64} /></strong
+		>
 	{:else if node.type === 'em'}
-		<em><Self nodes={node.children} {messageId} {isOwn} /></em>
+		<em><Self nodes={node.children} {messageId} {isOwn} {tags} {mediaKeyBase64} /></em>
 	{:else if node.type === 'del'}
-		<del class="opacity-80"><Self nodes={node.children} {messageId} {isOwn} /></del>
+		<del class="opacity-80"
+			><Self nodes={node.children} {messageId} {isOwn} {tags} {mediaKeyBase64} /></del
+		>
 	{:else if node.type === 'link'}
 		<button
 			type="button"

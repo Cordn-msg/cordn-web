@@ -45,6 +45,10 @@ export function mergeAdjacentReactionMarkers(rows: ChatMessage[]): ChatMessage[]
 				reactionEmojis: [
 					...new Set([...(previous.reactionEmojis ?? []), ...(row.reactionEmojis ?? [])])
 				],
+				reactionEmojiViews: {
+					...(previous.reactionEmojiViews ?? {}),
+					...(row.reactionEmojiViews ?? {})
+				},
 				reactionSenders: [
 					...new Set([...(previous.reactionSenders ?? []), ...(row.reactionSenders ?? [])])
 				],
