@@ -7,8 +7,8 @@ const getGroupMessagesPage = vi.fn();
 
 vi.mock('$app/environment', () => ({ browser: false }));
 
-// Only the read this module performs is needed; the rest of the surface stays
-// absent so an accidental new dependency fails loudly in the tests that care.
+// Only what these cases touch: the group page read this module performs, plus
+// the key-package list the module loads alongside it at startup.
 vi.mock('$lib/storage/chatStorage', () => ({
 	getChatStorage: async () => ({ getGroupMessagesPage, listKeyPackages: async () => [] })
 }));
@@ -16,44 +16,43 @@ vi.mock('$lib/storage/chatStorage', () => ({
 function rows(cursors: number[]): StoredChatMessage[] {
 	return cursors.map((cursor) => ({
 		cursor,
-		downloadedAt: 0,
-		direction: 'incoming',
-		sender: 'aa'.repeat(32),
-		content: `message ${cursor}`,
+		createdAt: cursor,
+		direction: 'inbound',
+		sender: 'cc'.repeat(32),
+		id: `ev-${cursor}`,
 		kind: 9,
-		origin: 'live',
-		receivedAt: 0,
-		tags: []
-	})) as unknown as StoredChatMessage[];
+		tags: [],
+		content: `message ${cursor}`
+	}));
 }
 
-function group(id: string, cursorList: number[]) {
-	return { id, messages: rows(cursorList) } as unknown as StoredChatMessage extends never
-		? never
-		: StoredChatGroup;
+function group(id: string, cursors: number[]): StoredChatGroup {
+	return { id, messages: rows(cursors) } as unknown as StoredChatGroup;
+}
+
+async function seed(id: string, cursors: number[], pageCursors: number[]) {
+	const { chatGroupsStore, ensureChatGroupWindow } = await import('./chatGroups.svelte');
+	chatGroupsStore.groups = [group(id, cursors)];
+	getGroupMessagesPage.mockResolvedValue(rows(pageCursors));
+	return { chatGroupsStore, ensureChatGroupWindow };
 }
 
 describe('ensureChatGroupWindow', () => {
-	it('does not rewrite the group when the page adds nothing (render-loop regression)', async () => {
+	it('leaves the store untouched when the page adds nothing (the render-loop regression)', async () => {
 		// The measured bug: each pass rewrote the group object, re-triggering
 		// ChatShell's ensure effect → another storage read → another write, at
 		// ~18k IndexedDB callbacks/s while a group under the tail size was open.
-		const { chatGroupsStore, ensureChatGroupWindow } = await import('./chatGroups.svelte');
-		chatGroupsStore.groups = [group('g1', [1, 2, 3])];
+		const { chatGroupsStore, ensureChatGroupWindow } = await seed('g1', [1, 2, 3], [1, 2, 3]);
 		const groups = chatGroupsStore.groups;
-		const first = groups[0];
-		getGroupMessagesPage.mockResolvedValue(rows([1, 2, 3]));
 
 		await ensureChatGroupWindow('g1');
 
 		expect(chatGroupsStore.groups).toBe(groups);
-		expect(chatGroupsStore.groups[0]).toBe(first);
+		expect(chatGroupsStore.groups[0]).toBe(groups[0]);
 	});
 
 	it('extends the window when the page carries a new cursor', async () => {
-		const { chatGroupsStore, ensureChatGroupWindow } = await import('./chatGroups.svelte');
-		chatGroupsStore.groups = [group('g2', [1, 2])];
-		getGroupMessagesPage.mockResolvedValue(rows([1, 2, 3]));
+		const { chatGroupsStore, ensureChatGroupWindow } = await seed('g2', [1, 2], [1, 2, 3]);
 
 		await ensureChatGroupWindow('g2');
 
@@ -61,14 +60,24 @@ describe('ensureChatGroupWindow', () => {
 	});
 
 	it('skips the read for a window already settled against storage', async () => {
-		const { chatGroupsStore, ensureChatGroupWindow } = await import('./chatGroups.svelte');
-		chatGroupsStore.groups = [group('g3', [1, 2])];
-		getGroupMessagesPage.mockResolvedValue(rows([1, 2]));
+		const { ensureChatGroupWindow } = await seed('g3', [1, 2], [1, 2]);
 
 		await ensureChatGroupWindow('g3');
 		const reads = getGroupMessagesPage.mock.calls.length;
 		await ensureChatGroupWindow('g3');
 
 		expect(getGroupMessagesPage.mock.calls.length).toBe(reads);
+	});
+
+	it('reads again once the window changes', async () => {
+		const { chatGroupsStore, ensureChatGroupWindow } = await seed('g4', [1, 2], [1, 2]);
+		await ensureChatGroupWindow('g4');
+		const reads = getGroupMessagesPage.mock.calls.length;
+
+		chatGroupsStore.groups = [group('g4', [1, 2, 3])];
+
+		await ensureChatGroupWindow('g4');
+
+		expect(getGroupMessagesPage.mock.calls.length).toBe(reads + 1);
 	});
 });

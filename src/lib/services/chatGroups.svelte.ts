@@ -113,6 +113,7 @@ import {
 	buildMessageLedgerRows,
 	refreshMessageLedgersForGroups
 } from '$lib/services/chatUnreadLedger.svelte';
+import { traceChat } from '$lib/services/chatTrace';
 import {
 	capWindowRows,
 	HISTORY_PAGE_ROWS,
@@ -299,7 +300,10 @@ function updateGroupMessagesWindow(groupId: string, incoming: StoredChatMessage[
 	// An idempotent page must not rewrite the group object: every reader of it
 	// (ChatShell's ensure effect included) would run again on identical data,
 	// and that read→write→read cycle is what spun an open group at ~90% CPU.
-	if (!windowHasNewRows(current.messages, incoming)) return;
+	if (!windowHasNewRows(current.messages, incoming)) {
+		traceChat('window update: page added nothing', { groupId, incoming: incoming.length });
+		return;
+	}
 	const window = toWindowList(
 		capWindowRows(mergeWindowMessages(current.messages, incoming), 'high')
 	);
@@ -324,7 +328,11 @@ function windowSignature(group: StoredChatGroup): string {
 export async function ensureChatGroupWindow(groupId: string): Promise<void> {
 	const group = getChatGroup(groupId);
 	if (!group || group.messages.length >= TAIL_WINDOW_ROWS) return;
-	if (ensuredWindowSignatures.get(groupId) === windowSignature(group)) return;
+	if (ensuredWindowSignatures.get(groupId) === windowSignature(group)) {
+		traceChat('ensureChatGroupWindow: settled, no read', { groupId });
+		return;
+	}
+	traceChat('ensureChatGroupWindow: reading', { groupId, rows: group.messages.length });
 	const storage = await getChatStorage();
 	const page = await storage.getGroupMessagesPage(groupId, { limit: TAIL_WINDOW_ROWS });
 	if (page.length > 0) updateGroupMessagesWindow(groupId, page);
@@ -513,6 +521,9 @@ async function loadGroups(ownerPubkey?: string) {
 	// pending Welcome (the next watch sync finalizes + delivers it).
 	pendingEpochOperations.clear();
 	groupStateEntries.clear();
+	// Group ids can be shared across accounts; a stale signature would let
+	// ensureChatGroupWindow skip a read this owner still needs.
+	ensuredWindowSignatures.clear();
 	const storage = await getChatStorage();
 	const normalizedOwner = ownerPubkey ? normalizePubKey(ownerPubkey) : undefined;
 
