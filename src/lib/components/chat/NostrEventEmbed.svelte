@@ -6,10 +6,18 @@
 	import { getCachedChatMarkdownBlocks } from '$lib/components/chat/chatMessageRenderCache';
 	import { useNostrEvent } from '$lib/services/useNostrEvent.svelte';
 	import { getRenderNostrEmbeds } from '$lib/services/chatComposerSettings.svelte';
-	import { highlightSource } from './highlightSource';
+	import {
+		getHighlightContext,
+		getHighlightSources,
+		splitHighlightContext,
+		type ChatHighlightNostrSource
+	} from '$lib/chat/highlights';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import { formatUnixTimestamp, copyToClipboard, cn } from '$lib/utils';
-	import { MESSAGE_PART_CONTAINER_CLASS } from '$lib/chat/messageTextClasses';
+	import {
+		MESSAGE_PART_CONTAINER_CLASS,
+		MESSAGE_TEXT_WRAP_CLASS
+	} from '$lib/chat/messageTextClasses';
 	import {
 		DropdownMenuRoot,
 		DropdownMenuContent,
@@ -19,6 +27,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import { kinds } from 'nostr-tools';
+	import { neventEncode } from 'nostr-tools/nip19';
 	import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
 
 	/**
@@ -80,9 +89,8 @@
 		isHighlight ? (event.current?.tags.find((tag) => tag[0] === 'comment')?.[1] ?? '') : ''
 	);
 	const highlightContext = $derived(
-		isHighlight ? (event.current?.tags.find((tag) => tag[0] === 'context')?.[1] ?? '') : ''
+		isHighlight ? (getHighlightContext(event.current?.tags ?? []) ?? '') : ''
 	);
-	const highlightSrc = $derived(isHighlight ? highlightSource(event.current?.tags ?? []) : null);
 
 	// flex-col (not block): Svelte keeps single-space text nodes between the
 	// card sections, and in a block container each becomes an anonymous block
@@ -130,6 +138,44 @@
 		highlightComment && event.current
 			? getCachedChatMarkdownBlocks(`${event.current.id}:comment`, highlightComment)
 			: null
+	);
+
+	const highlightSources = $derived(
+		isHighlight ? getHighlightSources(event.current?.tags ?? []) : []
+	);
+	const highlightNostrSource = $derived(
+		highlightSources.find(
+			(source): source is ChatHighlightNostrSource => source.type === 'nostr' && !!source.pointer
+		)
+	);
+	// Load the source article so its NIP-23 title can label the source row.
+	const highlightSourceEvent = useNostrEvent(() =>
+		renderEmbeds ? highlightNostrSource?.pointer : undefined
+	);
+	const highlightSourceTitle = $derived(
+		highlightSourceEvent.current?.kind === kinds.LongFormArticle
+			? (highlightSourceEvent.current.tags.find((tag) => tag[0] === 'title')?.[1] ?? '')
+			: ''
+	);
+	// The same article is commonly referenced twice: an `a` coordinate for the
+	// address and an `e` id for the highlighted version. Once the address
+	// resolves to an article, drop the duplicate event row (its generic "Nostr
+	// event" label adds nothing below the article title).
+	const visibleHighlightSources = $derived.by(() => {
+		const article = highlightSourceEvent.current;
+		if (article?.kind !== kinds.LongFormArticle) return highlightSources;
+		const articleEntity = neventEncode({ id: article.id });
+		return highlightSources.filter(
+			(source) => source.type !== 'nostr' || !!source.pointer || source.entity !== articleEntity
+		);
+	});
+	const highlightContextParts = $derived(
+		event.current && isHighlight
+			? splitHighlightContext(highlightContext, event.current.content)
+			: null
+	);
+	const highlightBodyLength = $derived(
+		(event.current?.content.length ?? 0) + (highlightContext?.length ?? 0)
 	);
 </script>
 
@@ -200,8 +246,8 @@
 			<span class="mt-0.5 block text-sm font-semibold">{articleTitle}</span>
 		{/if}
 		{#if isHighlight}
-			<!-- NIP-84: the excerpt is a quote, not prose — the border/italics set it
-			     apart from note cards. Quote highlights lead with the comment. -->
+			<!-- NIP-84: quote highlights lead with the comment, then the excerpt.
+			     When context is available, the excerpt is emphasised inside it. -->
 			{#if highlightComment}
 				<span class="mt-1 block text-sm">
 					<CollapsibleText length={highlightComment.length} {isOwn}>
@@ -221,7 +267,29 @@
 					</CollapsibleText>
 				</span>
 			{/if}
-			{#if event.current.content}
+			{#if highlightContextParts}
+				<span
+					class={cn(
+						'mt-1 block border-l-2 pl-2 text-sm italic',
+						isOwn ? 'border-primary-foreground/40' : 'border-border'
+					)}
+				>
+					<CollapsibleText length={highlightBodyLength} {isOwn}>
+						<span class={MESSAGE_TEXT_WRAP_CLASS}>
+							{#if highlightContextParts.before}<span class={metaClass}
+									>{highlightContextParts.before}</span
+								>{/if}<span
+								class={cn(
+									'font-medium not-italic',
+									isOwn ? 'text-primary-foreground' : 'text-foreground'
+								)}>{highlightContextParts.highlight}</span
+							>{#if highlightContextParts.after}<span class={metaClass}
+									>{highlightContextParts.after}</span
+								>{/if}
+						</span>
+					</CollapsibleText>
+				</span>
+			{:else if event.current.content}
 				<span
 					class={cn(
 						'mt-1 block border-l-2 pl-2 text-sm italic',
@@ -236,24 +304,31 @@
 						{/if}
 					</CollapsibleText>
 				</span>
+				{#if highlightContext}
+					<span class={cn('mt-1 block text-xs leading-4', metaClass)}>{highlightContext}</span>
+				{/if}
 			{/if}
-			{#if highlightContext}
-				<span class={cn('mt-1 block text-xs leading-4', metaClass)}>{highlightContext}</span>
-			{/if}
-			{#if highlightSrc}
-				<span class={cn('mt-1 flex min-w-0 items-center gap-1 text-xs leading-4', metaClass)}>
-					<span class="shrink-0">Source:</span>
-					{#if highlightSrc.href}
-						<button
-							type="button"
-							class="min-w-0 truncate font-medium underline-offset-2 hover:underline"
-							onclick={() => void openMessageLink(highlightSrc!.href!)}
-						>
-							{highlightSrc.label}
-						</button>
-					{:else}
-						<span class="min-w-0 truncate">{highlightSrc.label}</span>
-					{/if}
+			{#if visibleHighlightSources.length}
+				<span class={cn('mt-1 flex min-w-0 flex-col gap-0.5 text-xs leading-4', metaClass)}>
+					{#each visibleHighlightSources as source, index (source.type + ':' + index)}
+						<span class={cn('flex min-w-0 items-center gap-1', index > 0 && 'pl-4')}>
+							{#if index === 0}<span class="shrink-0">Source:</span>{/if}
+							{#if source.type === 'text'}
+								<span class="min-w-0 truncate">{source.label}</span>
+							{:else}
+								<button
+									type="button"
+									class="min-w-0 truncate font-medium underline-offset-2 hover:underline"
+									title={source.href}
+									onclick={() => void openMessageLink(source.href)}
+								>
+									{highlightNostrSource === source && highlightSourceTitle
+										? highlightSourceTitle
+										: source.label}
+								</button>
+							{/if}
+						</span>
+					{/each}
 				</span>
 			{/if}
 		{:else if event.current.content}
