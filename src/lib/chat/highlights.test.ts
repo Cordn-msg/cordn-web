@@ -8,8 +8,9 @@ const ARTICLE_ADDRESS =
 const EVENT_ID = 'aa'.repeat(32);
 
 describe('highlight parsing', () => {
-	test('turns a/r tags into de-duplicated sources', () => {
+	test('turns a/r tags into de-duplicated sources, skipping malformed ones', () => {
 		const sources = getHighlightSources([
+			['a', 'not-an-address'],
 			['a', ARTICLE_ADDRESS, 'wss://relay.damus.io'],
 			['a', ARTICLE_ADDRESS],
 			['r', 'https://example.com/post'],

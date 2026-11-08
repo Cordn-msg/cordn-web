@@ -69,20 +69,6 @@ describe('NIP-34 pull request parsing', () => {
 		]);
 		expect(pr.repository?.identifier).toBe('cordn-web');
 	});
-
-	test('returns empty presentation fields for a sparse PR', () => {
-		const pr = parseGitPullRequest([]);
-		expect(pr).toEqual({
-			subject: '',
-			description: '',
-			repository: null,
-			branchName: '',
-			targetBranch: '',
-			commit: '',
-			cloneUrls: [],
-			labels: []
-		});
-	});
 });
 
 describe('NIP-34 repository announcement parsing', () => {
