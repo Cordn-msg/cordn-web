@@ -8,8 +8,8 @@
 
 	/**
 	 * The composer's custom emoji sheet: one section per active NIP-30 pack.
-	 * Picking inserts the shortcode; the picture is attached when the message
-	 * sends, so nothing is fetched by merely opening this.
+	 * Picking inserts the shortcode; the picture is encrypted and uploaded when
+	 * the message sends. Opening this only loads the preview pictures.
 	 */
 	let { open = $bindable(false), onPick }: { open?: boolean; onPick: (value: string) => void } =
 		$props();

@@ -55,11 +55,14 @@
 	}
 
 	async function previewPack() {
-		if (busy || !input.trim()) return;
+		const requested = input.trim();
+		if (busy || !requested) return;
 		busy = true;
 		message = null;
-		const result = await fetchEmojiPack(input);
+		const result = await fetchEmojiPack(requested);
 		busy = false;
+		// The address may have changed while the relays answered; drop the reply.
+		if (input.trim() !== requested) return;
 		if ('error' in result) {
 			preview = null;
 			previewFor = '';
@@ -67,21 +70,22 @@
 			return;
 		}
 		preview = result.pack;
-		previewFor = input.trim();
+		previewFor = requested;
 	}
 
 	async function add() {
-		if (busy || !input.trim()) return;
+		const requested = input.trim();
+		if (busy || !requested) return;
 		busy = true;
 		message = null;
 		const result =
-			previewMatches && preview ? addEmojiPackSnapshot(preview) : await addEmojiPack(input);
+			previewMatches && preview ? addEmojiPackSnapshot(preview) : await addEmojiPack(requested);
 		busy = false;
 		if ('error' in result) {
 			message = { kind: 'error', text: errors[result.error] };
 			return;
 		}
-		input = '';
+		if (input.trim() === requested) input = '';
 		preview = null;
 		previewFor = '';
 		message = { kind: 'ok', text: `Added ${result.pack.title}.` };
@@ -102,7 +106,6 @@
 	let discoveryRelays = $state(getEmojiDiscoveryRelays());
 	let discovering = $state(false);
 	let discovered = $state<EmojiPack[]>([]);
-	let discoveredTotal = $state(0);
 	let discoveryQuery = $state('');
 	let discoveryMessage = $state<{ kind: 'ok' | 'empty' | 'error'; text: string } | null>(null);
 	const filteredDiscovered = $derived.by(() => {
@@ -121,8 +124,8 @@
 			const found = filteredDiscovered.length;
 			return `${shown} of ${found} match${found === 1 ? '' : 'es'}`;
 		}
-		return discoveredTotal > shown
-			? `${shown} of ${discoveredTotal} packs`
+		return discovered.length > shown
+			? `${shown} of ${discovered.length} packs`
 			: `${shown} pack${shown === 1 ? '' : 's'}`;
 	});
 
@@ -133,31 +136,32 @@
 		discoveryRelays = next;
 		setEmojiDiscoveryRelays(next);
 		discovered = [];
-		discoveredTotal = 0;
 		discoveryQuery = '';
 		discoveryMessage = null;
+		// A request already in flight belongs to the old selection; let a new search run.
+		discovering = false;
 	}
 
 	async function discover() {
 		if (discovering || discoveryRelays.length === 0) return;
+		const selected = discoveryRelays;
 		discovering = true;
 		discovered = [];
-		discoveredTotal = 0;
 		discoveryQuery = '';
 		discoveryMessage = null;
 		try {
-			const found = await searchEmojiPacks(discoveryRelays);
+			const found = await searchEmojiPacks(selected);
+			if (discoveryRelays !== selected) return;
 			discovered = found;
-			discoveredTotal = found.length;
 			if (found.length === 0) {
 				discoveryMessage = { kind: 'empty', text: 'No emoji packs found on those relays.' };
 			}
 		} catch {
+			if (discoveryRelays !== selected) return;
 			discovered = [];
-			discoveredTotal = 0;
 			discoveryMessage = { kind: 'error', text: 'Could not search those relays. Try again.' };
 		} finally {
-			discovering = false;
+			if (discoveryRelays === selected) discovering = false;
 		}
 	}
 
@@ -250,7 +254,7 @@
 					{/if}
 					<p class="text-xs text-muted-foreground">
 						Packs are kept on this device. The pack's host is contacted only when its pictures are
-						shown.
+						shown or sent.
 					</p>
 				</Card.Content>
 			</Card.Root>
