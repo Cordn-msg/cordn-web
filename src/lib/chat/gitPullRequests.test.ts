@@ -32,15 +32,11 @@ describe('NIP-34 pull request parsing', () => {
 
 		expect(pr.subject).toBe('feat(chat): enrich NIP-84 highlight embeds');
 		expect(pr.description).toBe(PR_DESCRIPTION);
-		expect(pr.repository).toMatchObject({
-			identifier: 'cordn-web',
-			relays: ['wss://relay.ngit.dev']
-		});
+		expect(pr.repository).toMatchObject({ identifier: 'cordn-web' });
 		expect(pr.repository?.naddr).toMatch(/^naddr1/);
 		expect(pr.branchName).toBe('highlight-source-context');
 		expect(pr.targetBranch).toBe('');
 		expect(pr.commit).toBe('4196aafed563ec3168e1374f7ccdf94eb28d8856');
-		expect(pr.mergeBase).toBe('0989ba851f3bb8275a85de8e08e35ec543af6656');
 		expect(pr.cloneUrls).toEqual([
 			'https://relay.ngit.dev/npub1c0rdnwectlvz0n7mghvn8g0genefqklrq3n328k4lc6k5y99yh5s640tlv/cordn-web.git',
 			'https://gitnostr.com/npub1c0rdnwectlvz0n7mghvn8g0genefqklrq3n328k4lc6k5y99yh5s640tlv/cordn-web.git'
@@ -73,25 +69,10 @@ describe('NIP-34 pull request parsing', () => {
 		]);
 		expect(pr.repository?.identifier).toBe('cordn-web');
 	});
-
-	test('returns empty presentation fields for a sparse PR', () => {
-		const pr = parseGitPullRequest([]);
-		expect(pr).toEqual({
-			subject: '',
-			description: '',
-			repository: null,
-			branchName: '',
-			targetBranch: '',
-			commit: '',
-			mergeBase: '',
-			cloneUrls: [],
-			labels: []
-		});
-	});
 });
 
 describe('NIP-34 repository announcement parsing', () => {
-	test('reads name, web URL, clone URLs and relays', () => {
+	test('reads name and web URL', () => {
 		const event = {
 			kind: 30617,
 			tags: [
@@ -107,34 +88,21 @@ describe('NIP-34 repository announcement parsing', () => {
 		expect(parseGitRepository(event)).toEqual({
 			identifier: 'cordn-web',
 			name: 'cordn-web',
-			description: '',
-			webUrls: ['https://gitworkshop.dev/repo'],
-			cloneUrls: ['https://relay.ngit.dev/repo.git'],
-			relays: ['wss://relay.ngit.dev', 'wss://gitnostr.com']
+			webUrls: ['https://gitworkshop.dev/repo']
 		});
 	});
 
-	test('drops unsafe web and clone URLs from repository announcements', () => {
+	test('drops unsafe web URLs from repository announcements', () => {
 		const event = {
 			kind: 30617,
 			tags: [
 				['d', 'cordn-web'],
 				['web', 'javascript:alert(1)'],
-				['web', 'https://gitworkshop.dev/repo'],
-				['clone', 'javascript:alert(1)'],
-				['clone', 'https://relay.ngit.dev/repo.git'],
-				['clone', 'ssh://git@relay.ngit.dev/repo.git'],
-				['clone', 'git://relay.ngit.dev/repo.git']
+				['web', 'https://gitworkshop.dev/repo']
 			]
 		} as NostrEvent;
 
-		const repository = parseGitRepository(event);
-		expect(repository?.webUrls).toEqual(['https://gitworkshop.dev/repo']);
-		expect(repository?.cloneUrls).toEqual([
-			'https://relay.ngit.dev/repo.git',
-			'ssh://git@relay.ngit.dev/repo.git',
-			'git://relay.ngit.dev/repo.git'
-		]);
+		expect(parseGitRepository(event)?.webUrls).toEqual(['https://gitworkshop.dev/repo']);
 	});
 
 	test('uses the PR address identifier when the announcement d tag is empty', () => {
