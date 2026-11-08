@@ -700,9 +700,10 @@
 						{@const nextMessage = messageSnapshot[virtualItem.index + 1]}
 						{@const systemRow = Boolean(message.systemKind)}
 						{@const runHead = !systemRow && previousMessage?.author !== message.author}
-						<!-- Pfp anchors to the NEWEST message of a run (bottom-aligned like Signal): the hop to
-							a new tail only mounts an Avatar whose picture prop is already resolved and cached
-							(loadedPictures paints it at full opacity instantly), so no fade replays. -->
+						<!-- Incoming pfp anchors to the NEWEST message of a run (bottom-aligned like Signal):
+							the hop to a new tail only mounts an Avatar whose picture prop is already resolved
+							and cached (loadedPictures paints it at full opacity instantly), so no fade replays.
+							Own messages omit the pfp entirely. -->
 						{@const runTail = isRunTail(message, nextMessage)}
 						<div
 							data-index={virtualItem.index}

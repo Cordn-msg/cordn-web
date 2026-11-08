@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-08-inside-bubble-metadata',
+		createdAt: Date.UTC(2026, 10, 8),
+		version: 1,
+		title: 'Timestamps move inside the bubble',
+		body: '- ✨ Message time, pin and delivery state now sit in a quiet row inside the bubble, right-aligned — and they no longer get swept along when you select and copy message text.\n- 🔄 Your own messages no longer show your own picture: a right-aligned bubble already says it’s you.'
+	},
+	{
 		id: 'cordn-news-2026-11-08-highlight-sources-pr-cards',
 		createdAt: Date.UTC(2026, 10, 8),
 		version: 1,
