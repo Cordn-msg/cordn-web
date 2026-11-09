@@ -13,6 +13,11 @@ vi.mock('$lib/storage/chatStorage', () => ({
 	getChatStorage: async () => ({ getGroupMessagesPage, listKeyPackages: async () => [] })
 }));
 
+// Warm the heavy module graph at file scope: vi.mock is hoisted above this, so
+// mocks apply, and the in-test import no longer pays transform+eval against the
+// 5s timeout under parallel load (the flake chatGroups.test.ts already avoids).
+await import('./chatGroups.svelte');
+
 function rows(cursors: number[]): StoredChatMessage[] {
 	return cursors.map((cursor) => ({
 		cursor,

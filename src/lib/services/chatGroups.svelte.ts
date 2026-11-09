@@ -46,7 +46,7 @@ import {
 import { noteStateFingerprint } from '$lib/services/multiDevice';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
-import { dropStaleEmojiMediaTags } from '$lib/chat/emoji';
+import { dropStaleEmojiMediaTags, EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
 import {
 	resolveOutboundMessage,
 	type ChatMessageReplyTarget,
@@ -313,6 +313,30 @@ function updateGroupMessagesWindow(groupId: string, incoming: StoredChatMessage[
 	);
 }
 
+function isLegacyEmojiMediaRow(message: StoredChatMessage): boolean {
+	return !message.mediaKeyBase64 && message.tags.some((tag) => tag[0] === EMOJI_MEDIA_TAG);
+}
+
+/** Rows stored before `emoji-media` existed carry no media key. The current
+ *  epoch's exporter secret is the only one still held, so hand it to those rows
+ *  as a candidate: the normal authenticated decrypt accepts it, or the emoji
+ *  stays the shortcode. Applied to loaded pages only — never a history scan. */
+export async function withLegacyEmojiMediaKey(
+	group: StoredChatGroup,
+	messages: StoredChatMessage[]
+): Promise<StoredChatMessage[]> {
+	if (!messages.some(isLegacyEmojiMediaRow)) return messages;
+	let key: string;
+	try {
+		key = bytesToBase64(await deriveMediaKey(decodeStoredGroupState(group)));
+	} catch {
+		return messages; // undecodable state: nothing to derive from
+	}
+	return messages.map((message) =>
+		isLegacyEmojiMediaRow(message) ? { ...message, mediaKeyBase64: key } : message
+	);
+}
+
 /** Window signature already confirmed against storage, per group: an effect or
  *  retry re-asking for the same window must not re-read the database. */
 const ensuredWindowSignatures = new Map<string, string>();
@@ -336,7 +360,9 @@ export async function ensureChatGroupWindow(groupId: string): Promise<void> {
 	traceChat('ensureChatGroupWindow: reading', { groupId, rows: group.messages.length });
 	const storage = await getChatStorage();
 	const page = await storage.getGroupMessagesPage(groupId, { limit: TAIL_WINDOW_ROWS });
-	if (page.length > 0) updateGroupMessagesWindow(groupId, page);
+	if (page.length > 0) {
+		updateGroupMessagesWindow(groupId, await withLegacyEmojiMediaKey(group, page));
+	}
 	// Record the window the read was settled against, so only a real change
 	// (new rows, eviction) buys another read.
 	const settled = getChatGroup(groupId);
@@ -357,7 +383,7 @@ export async function loadOlderChatGroupMessages(
 		limit
 	});
 	if (page.length === 0) return 0;
-	updateGroupMessagesWindow(groupId, page);
+	updateGroupMessagesWindow(groupId, await withLegacyEmojiMediaKey(group, page));
 	return page.length;
 }
 
@@ -377,7 +403,10 @@ export async function loadChatGroupMessagesAround(
 		storage.getGroupMessagesPage(groupId, { before: cursor + 1, limit: radius + 1 }),
 		storage.getGroupMessagesPage(groupId, { after: cursor, limit: radius })
 	]);
-	updateGroupMessagesWindow(groupId, [...atOrBelow, ...above]);
+	updateGroupMessagesWindow(
+		groupId,
+		await withLegacyEmojiMediaKey(group, [...atOrBelow, ...above])
+	);
 }
 
 function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
@@ -491,6 +520,7 @@ async function loadAndNormalizeChatGroup(
 	}
 
 	const group = fromStoredGroupData(data);
+	group.messages = await withLegacyEmojiMediaKey(group, group.messages);
 	let changed = false;
 
 	if (group.snapshots.length === 0 && !isChatGroupPoisoned(group)) {

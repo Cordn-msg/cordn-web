@@ -37,7 +37,7 @@
 	} = $props();
 
 	const resolvedSizeClass = $derived(
-		sizeClass ?? (emojiOnly ? 'max-h-16 max-w-16' : 'size-[1.15em]')
+		sizeClass ?? (emojiOnly ? 'max-h-20 max-w-20' : 'size-[1.15em]')
 	);
 	let resolvedUrl = $state<string | null>(null);
 	let mediaFailed = $state(false);

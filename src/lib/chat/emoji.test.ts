@@ -8,6 +8,7 @@ import {
 	emojiMapFromTags,
 	emojiPacksFromEvents,
 	emojiPackNaddr,
+	isEmojiOnlyText,
 	matchEmojiShortcodes,
 	nameOfWholeShortcode,
 	parseEmojiMediaTag,
@@ -195,5 +196,33 @@ describe('emoji tags', () => {
 		expect(matchEmojiShortcodes('é:cat: ok :cat:').map((m) => m.name)).toEqual(['cat']);
 		expect(nameOfWholeShortcode(':cat:')).toBe('cat');
 		expect(nameOfWholeShortcode('a :cat:')).toBeNull();
+	});
+});
+
+describe('isEmojiOnlyText', () => {
+	it('accepts emoji sequences, alone or with spacing', () => {
+		for (const text of [
+			'😂',
+			'😂😂',
+			' ❤️ ',
+			'👍🏽',
+			'👨‍👩‍👧',
+			'🇧🇷',
+			'1️⃣',
+			'#️⃣',
+			'😭\n😭',
+			'➡️',
+			'✈️',
+			'©️',
+			'™️'
+		]) {
+			expect(isEmojiOnlyText(text), text).toBe(true);
+		}
+	});
+
+	it('rejects anything with other content', () => {
+		for (const text of ['', '   ', 'hi', '😂 hi', '123', ':cat:', 'ok 👍']) {
+			expect(isEmojiOnlyText(text), text).toBe(false);
+		}
 	});
 });

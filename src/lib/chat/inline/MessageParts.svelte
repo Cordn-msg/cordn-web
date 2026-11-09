@@ -5,7 +5,7 @@
 	import { cn, mediaUrlKind } from '$lib/utils';
 	import { getCachedChatMessageParts } from '$lib/components/chat/chatMessageRenderCache';
 	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
-	import { emojiMapFromTags } from '$lib/chat/emoji';
+	import { emojiMapFromTags, isEmojiOnlyText } from '$lib/chat/emoji';
 	import type { ChatMentionTextPart } from '$lib/services/chatMentions';
 	import { openMessageLink } from '$lib/utils/groupShareLink';
 	import {
@@ -30,7 +30,10 @@
 				seen = true;
 				continue;
 			}
-			if (part.type === 'text' && part.text.trim() === '') continue;
+			if (part.type === 'text' && (part.text.trim() === '' || isEmojiOnlyText(part.text))) {
+				seen = true;
+				continue;
+			}
 			return false;
 		}
 		return seen;
@@ -95,6 +98,11 @@
 			{part.text}
 		</button>
 	{:else}
-		<span class={MESSAGE_PART_CONTAINER_CLASS}>{part.text}</span>
+		<span
+			class={cn(
+				MESSAGE_PART_CONTAINER_CLASS,
+				onlyEmoji && part.text.trim() !== '' && 'text-5xl leading-[1.1]'
+			)}>{part.text}</span
+		>
 	{/if}
 {/each}
