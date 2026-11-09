@@ -269,6 +269,7 @@ export async function notifyForUnreadChatMessages() {
 		await showLocalNotification({
 			title: title || 'Cordn',
 			body,
+			count: eligible.length,
 			icon,
 			groupId: group.id
 		});

@@ -65,6 +65,8 @@ export interface CordnBackgroundPostNotificationOptions {
 	title?: string;
 	/** Message body — decrypted preview from the live path, or a count from the worker. */
 	body?: string;
+	/** New messages in this notification; also the locked-screen count. */
+	count?: number;
 }
 
 export interface CordnBackgroundAdvanceCursorOptions {

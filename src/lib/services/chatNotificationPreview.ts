@@ -1,5 +1,5 @@
 import { clientStateDecoder } from 'ts-mls';
-import type { CordnBackgroundNotificationPreview } from 'cordn-background';
+import type { CordnBackgroundNotificationPreview, StagedMessage } from 'cordn-background';
 
 import {
 	formatChatNotificationBody,
@@ -16,16 +16,6 @@ import { getNotificationPreviewsEnabled } from '$lib/services/chatNotificationSe
 import { selectNotificationPreview } from '$lib/services/chatNotificationPreviewText';
 import { getChatStorage } from '$lib/storage/chatStorage';
 
-/** One encrypted row staged by the native poller. */
-export interface StagedEncryptedMessage {
-	gid: string;
-	cursor: number;
-	msg64: string;
-	at: number;
-}
-
-export type NotificationPreview = CordnBackgroundNotificationPreview;
-
 interface PreviewMessage {
 	cursor: number;
 	createdAt: number;
@@ -34,7 +24,7 @@ interface PreviewMessage {
 
 interface ColdPreviewRequest {
 	accountPubkey: string;
-	rows: StagedEncryptedMessage[];
+	rows: StagedMessage[];
 }
 
 interface ColdPreviewBridge {
@@ -104,8 +94,8 @@ export async function runColdNotificationPreviews(): Promise<void> {
  */
 export async function generateNotificationPreviews(input: {
 	accountPubkey: string;
-	rows: StagedEncryptedMessage[];
-}): Promise<NotificationPreview[]> {
+	rows: StagedMessage[];
+}): Promise<CordnBackgroundNotificationPreview[]> {
 	const ownerPubkey = input.accountPubkey.trim().toLowerCase();
 	if (!ownerPubkey || input.rows.length === 0) return [];
 
@@ -133,7 +123,7 @@ export async function generateNotificationPreviews(input: {
 		.sort((a, b) => b.latestCursor - a.latestCursor)
 		.slice(0, MAX_PREVIEW_GROUPS);
 
-	const previews: NotificationPreview[] = [];
+	const previews: CordnBackgroundNotificationPreview[] = [];
 	for (const { gid, rows } of groups) {
 		if (Date.now() >= deadline) break;
 		try {

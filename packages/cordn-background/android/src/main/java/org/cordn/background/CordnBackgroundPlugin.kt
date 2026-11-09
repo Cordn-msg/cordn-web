@@ -98,7 +98,15 @@ class CordnBackgroundPlugin : Plugin() {
         val (cachedTitle, iconBytes) = BackgroundStore.get(getContext()).getGroupMeta(gid)
         val title = call.getString("title")?.takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
         val body = call.getString("body", "New message") ?: "New message"
-        Notifications.postMessageNotification(getContext(), gid, title, body, iconBytes)
+        val count = (call.getInt("count") ?: 1).coerceAtLeast(1)
+        Notifications.postMessageNotification(
+            getContext(),
+            gid,
+            title,
+            body,
+            iconBytes,
+            publicBody = if (count == 1) "New message" else "$count new messages"
+        )
         call.resolve()
     }
 

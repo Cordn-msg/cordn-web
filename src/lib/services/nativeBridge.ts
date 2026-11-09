@@ -7,8 +7,15 @@ import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CordnBackground, ShareTarget, type DeliveryMode, type PollGroup } from 'cordn-background';
+import {
+	CordnBackground,
+	ShareTarget,
+	type CordnBackgroundDrainResult,
+	type DeliveryMode,
+	type PollGroup
+} from 'cordn-background';
 import { generateNotificationPreviews } from '$lib/services/chatNotificationPreview';
+import { createWarmPreviewQueue } from '$lib/services/chatNotificationPreviewQueue';
 import {
 	applyNotificationPreviewsSetting,
 	getNotificationPreviewsEnabled
@@ -282,6 +289,8 @@ export async function connectAndroidSigner(app: InstalledSignerApp): Promise<voi
 export interface ChatLocalNotification {
 	title: string;
 	body: string;
+	/** New messages in this batch; native uses it for the locked-screen count. */
+	count: number;
 	/** Web only: group/favicon icon URL. Native reads its icon from the cache (NativeGroupMetaSync). */
 	icon?: string;
 	/** Stable group id — dedup tag (web) and coalescing id (native). */
@@ -361,7 +370,13 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 		// from the native cache (NativeGroupMetaSync), not passed here — Capacitor LocalNotifications
 		// ignored the web `icon` field anyway, which is why live-path notifications used to have no
 		// icon. Web stays on the browser Notification API below.
-		void postMessageNotification(n.groupId, n.title || 'Cordn', n.body);
+		const count = Math.max(1, n.count);
+		const body = getNotificationPreviewsEnabled()
+			? n.body
+			: count === 1
+				? 'New message'
+				: `${count} new messages`;
+		void postMessageNotification(n.groupId, n.title || 'Cordn', body, count);
 		return;
 	}
 	if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -415,11 +430,12 @@ export async function clearShownNotifications(gids?: string[]): Promise<void> {
 export async function postMessageNotification(
 	gid: string,
 	title: string,
-	body: string
+	body: string,
+	count = 1
 ): Promise<void> {
 	if (!isNativePlatform()) return;
 	try {
-		await CordnBackground.postMessageNotification({ gid, title, body });
+		await CordnBackground.postMessageNotification({ gid, title, body, count });
 	} catch {
 		// never block chat on a failed notification
 	}
@@ -693,44 +709,13 @@ function runDrain(): Promise<void> {
 	return drainInFlight;
 }
 
-let warmPreviewInFlight: Promise<void> | null = null;
-let pendingWarmPreviewEvent: WarmPreviewEvent | null = null;
-
-interface WarmPreviewEvent {
-	accountPubkey: string | null;
-	messages: Array<{ gid: string; cursor: number; msg64: string; at: number }>;
-}
-
 /**
  * Decrypt staged rows for the worker while the real WebView is alive. This is
  * the cheap path: native posts its count notification first, then asks here
  * and silently upgrades it to text. The sidecar is only peeked — the normal
- * foreground drain still owns ingestion and MLS state. Requests can overlap
- * when Fast and WorkManager poll together: keep the newest for a follow-up
- * pass so the shade converges on the latest staged cursor.
+ * foreground drain still owns ingestion and MLS state.
  */
-function runWarmNotificationPreviews(event: WarmPreviewEvent): Promise<void> {
-	pendingWarmPreviewEvent = event;
-	warmPreviewInFlight ??= (async () => {
-		while (pendingWarmPreviewEvent) {
-			const next = pendingWarmPreviewEvent;
-			pendingWarmPreviewEvent = null;
-			try {
-				await deliverWarmNotificationPreviews(next);
-			} catch (error) {
-				console.warn('[notification-preview] warm pass failed', { error });
-			}
-		}
-	})().finally(() => {
-		warmPreviewInFlight = null;
-		// A request that landed between the loop draining and this microtask
-		// must not wait for the next poll.
-		if (pendingWarmPreviewEvent) void runWarmNotificationPreviews(pendingWarmPreviewEvent);
-	});
-	return warmPreviewInFlight;
-}
-
-async function deliverWarmNotificationPreviews(event: WarmPreviewEvent): Promise<void> {
+async function deliverWarmNotificationPreviews(event: CordnBackgroundDrainResult): Promise<void> {
 	if (appActive || !getNotificationPreviewsEnabled()) return;
 	const accountPubkey = event.accountPubkey ?? manager.active?.pubkey;
 	if (!accountPubkey || event.messages.length === 0) return;
@@ -745,3 +730,5 @@ async function deliverWarmNotificationPreviews(event: WarmPreviewEvent): Promise
 		await CordnBackground.applyNotificationPreviews({ previews });
 	}
 }
+
+const runWarmNotificationPreviews = createWarmPreviewQueue(deliverWarmNotificationPreviews);
