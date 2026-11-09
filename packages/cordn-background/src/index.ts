@@ -63,7 +63,7 @@ export interface CordnBackgroundNotificationMessage {
 	sender: string;
 	/** Decrypted one-line preview text. */
 	text: string;
-	/** Message timestamp in seconds, used to order the notification thread. */
+	/** Coordinator timestamp in Unix milliseconds, used to order the notification thread. */
 	at: number;
 }
 
@@ -92,7 +92,7 @@ export interface StagedMessage {
 	cursor: number;
 	/** Base64 of the raw encrypted message bytes (`msg_64` on the wire). */
 	msg64: string;
-	/** Coordinator timestamp in seconds (wire `at`). */
+	/** Coordinator timestamp in Unix milliseconds (wire `at`). */
 	at: number;
 }
 

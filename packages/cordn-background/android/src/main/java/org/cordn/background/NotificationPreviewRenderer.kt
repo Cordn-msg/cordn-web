@@ -225,7 +225,12 @@ internal object NotificationPreviewRenderer {
             try {
                 val previews = JSONObject(payload).optJSONArray("previews") ?: JSONArray()
                 android.util.Log.i("CordnBg", "preview: result entries=${previews.length()}")
-                if (!CordnBackgroundPlugin.appForegrounded) {
+                val store = BackgroundStore.get(context)
+                if (
+                    !CordnBackgroundPlugin.appForegrounded &&
+                    store.getNotificationPreviews() &&
+                    store.getCurrentAccount() == account
+                ) {
                     Notifications.applyPreviews(context, previews)
                 }
             } catch (t: Throwable) {

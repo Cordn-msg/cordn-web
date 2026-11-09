@@ -136,13 +136,13 @@ internal object Notifications {
             for (message in thread) {
                 style.addMessage(
                     message.text,
-                    message.at * 1000L,
+                    message.at,
                     Person.Builder().setName(message.sender).build()
                 )
             }
             builder.setStyle(style)
             if (thread.last().at > 0) {
-                builder.setWhen(thread.last().at * 1000L).setShowWhen(true)
+                builder.setWhen(thread.last().at).setShowWhen(true)
             }
         }
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
