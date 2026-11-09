@@ -3,8 +3,7 @@ import type { CordnBackgroundNotificationPreview, StagedMessage } from 'cordn-ba
 
 import {
 	formatChatNotificationBody,
-	getChatGroupDisplayTitle,
-	getProfileDisplayName
+	getChatGroupDisplayTitle
 } from '$lib/components/chat/chatGroupDisplay';
 import { listGroupMembers } from '$lib/services/chatAdminPolicy';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
@@ -179,8 +178,7 @@ export async function generateNotificationPreviews(input: {
 			if (!selected) continue;
 			const { count, thread } = selected;
 			const messages = thread.map((message) => ({
-				sender: getProfileDisplayName(message.sender),
-				text: formatChatNotificationBody(message.sender, message),
+				text: formatChatNotificationBody(message),
 				at: message.createdAt
 			}));
 			const latest = messages[messages.length - 1]!;

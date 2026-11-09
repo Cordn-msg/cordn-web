@@ -10,7 +10,6 @@ import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
 	formatChatNotificationBody,
-	getProfileDisplayName,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -248,9 +247,7 @@ export async function notifyForUnreadChatMessages() {
 		const previews = getNotificationPreviewsEnabled();
 		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
 		const representative = getRepresentativeMemberPubkey(group, { activePubkey, memberPubkeys });
-		const profilePubkeys = new Set(
-			previews ? eligible.slice(-6).map((message) => message.sender) : []
-		);
+		const profilePubkeys = new Set<string>();
 		if (representative) profilePubkeys.add(representative);
 		const profileHints: ChatGroupProfileHints = {};
 		const hints = await Promise.all(
@@ -272,8 +269,7 @@ export async function notifyForUnreadChatMessages() {
 		for (const message of eligible) rememberNotifiedMessage(message.id);
 		const messages = previews
 			? eligible.slice(-6).map((message) => ({
-					sender: getProfileDisplayName(message.sender, profileHints),
-					text: formatChatNotificationBody(message.sender, message, profileHints),
+					text: formatChatNotificationBody(message, profileHints),
 					at: message.createdAt
 				}))
 			: undefined;

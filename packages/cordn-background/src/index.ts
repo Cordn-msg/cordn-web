@@ -59,8 +59,6 @@ export interface CordnBackgroundMetaOptions {
 }
 
 export interface CordnBackgroundNotificationMessage {
-	/** Display name of the sender. */
-	sender: string;
 	/** Decrypted one-line preview text. */
 	text: string;
 	/** Coordinator timestamp in Unix milliseconds, used to order the notification thread. */

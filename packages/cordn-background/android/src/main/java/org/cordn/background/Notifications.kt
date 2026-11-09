@@ -131,10 +131,7 @@ internal object Notifications {
         if (thread.isNotEmpty()) {
             val style = NotificationCompat.InboxStyle().setBigContentTitle(title)
             for (message in thread) {
-                style.addLine(
-                    if (message.sender.isBlank() || message.sender == title) message.text
-                    else "${message.sender}: ${message.text}"
-                )
+                style.addLine(message.text)
             }
             builder.setStyle(style)
             if (thread.last().at > 0) {
@@ -172,7 +169,7 @@ internal object Notifications {
         }
     }
 
-    private data class ThreadMessage(val sender: String, val text: String, val at: Long)
+    private data class ThreadMessage(val text: String, val at: Long)
 
     private fun parseThread(messages: JSONArray?): List<ThreadMessage> {
         if (messages == null || messages.length() == 0) return emptyList()
@@ -182,7 +179,6 @@ internal object Notifications {
             val text = message.optString("text").trim()
             if (text.isEmpty()) continue
             parsed += ThreadMessage(
-                sender = message.optString("sender").ifBlank { "Cordn" },
                 text = text,
                 at = message.optLong("at", 0L)
             )

@@ -67,7 +67,6 @@ export function getChatMessagePreviewText(message: StoredChatMessage): string {
 }
 
 export function formatChatNotificationBody(
-	sender: string,
 	message: StoredChatMessage,
 	profileHints: ChatGroupProfileHints = {}
 ): string {
@@ -78,7 +77,7 @@ export function formatChatNotificationBody(
 		getChatMessagePreviewText(message),
 		profileHints
 	).trim();
-	return trimmed || `New message from ${getProfileDisplayName(sender, profileHints)}`;
+	return trimmed || 'New message';
 }
 
 function getMediaPreviewLabel(media: MediaReference): string {
