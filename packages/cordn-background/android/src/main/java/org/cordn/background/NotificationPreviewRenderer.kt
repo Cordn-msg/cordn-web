@@ -22,20 +22,21 @@ import kotlin.coroutines.resume
 /**
  * Decrypted notification text without a visible Activity.
  *
- * The worker's primary path is the live WebView: when a Capacitor bridge is
- * present, [CordnBackgroundPlugin.requestPreviewFromWebView] hands the work to
- * the real app (which already has the MLS state loaded). A cold process has no
- * WebView, so this class creates one off-screen, loads the tiny
- * `/background-preview` route from the bundled assets on the SAME
- * `https://localhost` origin, and lets it read the app's IndexedDB normally.
+ * The worker always creates a short-lived WebView off-screen. The visible
+ * app's WebView is paused/frozen once the app is backgrounded, so asking it to
+ * decrypt can leave the notification count-only forever. The hidden WebView
+ * loads the tiny `/background-preview` route from the bundled assets on the SAME
+ * `https://localhost` origin and reads the app's IndexedDB normally.
  *
  * The page only builds throwaway clones; the sidecar is peeked, never drained,
  * and the authoritative MLS state is never persisted. Every failure or timeout
  * leaves the count-only notification already posted by the worker in place.
  *
- * shortcut: a detached WebView is not a documented background API; an OEM or
- * memory kill can lose the preview. If rich text ever becomes a hard guarantee,
- * move MLS decryption into the native worker instead.
+ * shortcut: every preview starts a hidden WebView (the backgrounded app WebView
+ * freezes); add an acknowledged warm path if the cost matters. A detached WebView
+ * is not a documented background API; an OEM or memory kill can lose the preview.
+ * If rich text ever becomes a hard guarantee, move MLS decryption into the native
+ * worker instead.
  */
 internal object NotificationPreviewRenderer {
     private const val PREVIEW_URL = "https://localhost/background-preview"
@@ -48,10 +49,6 @@ internal object NotificationPreviewRenderer {
         if (store.peekSidecar(account).isEmpty()) return
         // Foreground notifications are suppressed entirely; the live path owns text there.
         if (CordnBackgroundPlugin.appForegrounded) return
-
-        // Warm WebView: the real app decrypts and applies the update itself.
-        val plugin = CordnBackgroundPlugin.instance
-        if (plugin != null && runCatching { plugin.requestPreviewFromWebView() }.getOrDefault(false)) return
 
         android.util.Log.i("CordnBg", "preview: starting hidden WebView")
         withContext(Dispatchers.Main) {

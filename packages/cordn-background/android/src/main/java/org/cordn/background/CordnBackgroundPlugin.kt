@@ -165,13 +165,6 @@ class CordnBackgroundPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun applyNotificationPreviews(call: PluginCall) {
-        val previews = call.getArray("previews", JSArray()) ?: JSArray()
-        Notifications.applyPreviews(getContext(), previews)
-        call.resolve()
-    }
-
-    @PluginMethod
     fun isBatteryExempted(call: PluginCall) {
         val pm = getContext().getSystemService(Context.POWER_SERVICE) as PowerManager
         val exempted = pm.isIgnoringBatteryOptimizations(getContext().packageName)
@@ -239,27 +232,6 @@ class CordnBackgroundPlugin : Plugin() {
         notifyListeners(EVENT_SIDECAR_UPDATED, JSObject())
     }
 
-    /**
-     * Ask the live WebView to decrypt staged rows for notification text. Returns
-     * false when no listener is attached, so the caller can use the short-lived
-     * hidden renderer instead. Event delivery is marshalled to the main thread.
-     */
-    fun requestPreviewFromWebView(): Boolean {
-        if (!hasListeners(EVENT_PREVIEW_REQUESTED)) return false
-        val store = BackgroundStore.get(getContext())
-        val account = store.getCurrentAccount()
-        // Carry the rows in the event: the live path may drain the sidecar at any
-        // moment, and the preview must still have the ciphertext it was asked for.
-        val payload = stagedRowsResult(
-            if (account != null) store.peekSidecar(account) else emptyList(),
-            account
-        )
-        getBridge().executeOnMainThread {
-            notifyListeners(EVENT_PREVIEW_REQUESTED, payload)
-        }
-        return true
-    }
-
     // Bridge handle for the background fetcher (runs from the foreground service / WorkManager,
     // same app process). Set in load() (bridge alive), cleared in handleOnDestroy(). Null when the
     // app is cold-started by the background worker before the user opens it — then the
@@ -277,7 +249,6 @@ class CordnBackgroundPlugin : Plugin() {
     companion object {
         const val EXTRA_GID = "cordn_gid"
         const val EVENT_SIDECAR_UPDATED = "sidecarUpdated"
-        const val EVENT_PREVIEW_REQUESTED = "previewRequested"
 
         /** True while the app UI is foregrounded; see [handleOnResume]. */
         @Volatile

@@ -141,10 +141,6 @@ export interface CordnBackgroundPlugin {
 	drain(): Promise<CordnBackgroundDrainResult>;
 	/** Turn decrypted notification text on/off for future worker notifications. */
 	setNotificationPreviews(options: CordnBackgroundPreviewPreference): Promise<void>;
-	/** Apply decrypted text to the existing per-group notifications (silent update). */
-	applyNotificationPreviews(options: {
-		previews: CordnBackgroundNotificationPreview[];
-	}): Promise<void>;
 	/** Whether this app is exempt from battery optimization (Doze). */
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */
@@ -153,11 +149,6 @@ export interface CordnBackgroundPlugin {
 	addListener(
 		eventName: 'sidecarUpdated',
 		listener: () => void
-	): Promise<PluginListenerHandle>;
-	/** Worker staged new rows and wants decrypted text while the WebView is alive. */
-	addListener(
-		eventName: 'previewRequested',
-		listener: (event: CordnBackgroundDrainResult) => void
 	): Promise<PluginListenerHandle>;
 }
 
