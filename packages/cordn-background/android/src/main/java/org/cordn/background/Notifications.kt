@@ -11,7 +11,6 @@ import android.os.Build
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.app.Person
 import org.json.JSONArray
 
 /**
@@ -93,9 +92,9 @@ internal object Notifications {
      * No `.setGroup`: each group is its own notification id, so multiple groups never collapse
      * into Android's auto-summary (the old "copy/stack" icon).
      *
-     * When [messages] is present the latest six unread messages are rendered as a
-     * `MessagingStyle` thread; the collapsed line uses the newest text and the count
-     * stays the total unread count. Count-only posters omit it.
+     * When [messages] is present the latest six unread messages are rendered as an
+     * `InboxStyle` list; the collapsed line uses the newest text and the count stays
+     * the total unread count. Count-only posters omit it.
      */
     fun postMessageNotification(
         ctx: Context,
@@ -130,14 +129,11 @@ internal object Notifications {
             .setAutoCancel(true)
             .setColor(BRAND_COLOR)
         if (thread.isNotEmpty()) {
-            val style = NotificationCompat.MessagingStyle(Person.Builder().setName("You").build())
-                .setConversationTitle(title)
-                .setGroupConversation(true)
+            val style = NotificationCompat.InboxStyle().setBigContentTitle(title)
             for (message in thread) {
-                style.addMessage(
-                    message.text,
-                    message.at,
-                    Person.Builder().setName(message.sender).build()
+                style.addLine(
+                    if (message.sender.isBlank() || message.sender == title) message.text
+                    else "${message.sender}: ${message.text}"
                 )
             }
             builder.setStyle(style)
