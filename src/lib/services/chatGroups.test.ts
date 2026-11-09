@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { StoredChatGroup } from './chatGroups.svelte';
+import type { StoredChatMessage } from './chatGroupMessages.svelte';
 
 const clientStateDecoderMock = vi.fn();
 const encodeMock = vi.fn(() => new Uint8Array([1]));
@@ -118,7 +119,9 @@ vi.mock('$lib/services/chatGroupSessions.svelte', () => ({
 	syncChatGroupMessages: vi.fn()
 }));
 
-vi.mock('$lib/services/chatMlsUtils', () => ({
+vi.mock('$lib/services/chatMlsUtils', async (importOriginal) => ({
+	// The real cipher suite: `withLegacyEmojiMediaKey` derives a media key.
+	...(await importOriginal<typeof import('$lib/services/chatMlsUtils')>()),
 	addMembersToGroup: vi.fn(),
 	createSelfUpdateCommit: createSelfUpdateCommitMock,
 	encodeWelcomeBase64: vi.fn(),
@@ -1476,5 +1479,63 @@ describe('group state facts cache', () => {
 		chatGroupsStore.groups = [factsGroup('AQ==')];
 		expect(isChatGroupRemoved(chatGroupsStore.groups[0])).toBe(true);
 		expect(clientStateDecoderMock).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('withLegacyEmojiMediaKey()', () => {
+	const secret = new Uint8Array(32).fill(9);
+
+	beforeEach(() => {
+		clientStateDecoderMock.mockReset();
+		clientStateDecoderMock.mockReturnValue([{ keySchedule: { exporterSecret: secret } }]);
+	});
+
+	function group(): StoredChatGroup {
+		return { id: 'legacy', stateBase64: 'AA==' } as unknown as StoredChatGroup;
+	}
+
+	function row(cursor: number, mediaKeyBase64?: string): StoredChatMessage {
+		return {
+			cursor,
+			createdAt: cursor,
+			direction: 'inbound',
+			sender: 'cc'.repeat(32),
+			id: `ev-${cursor}`,
+			kind: 9,
+			tags: [
+				['emoji-media', 'name what_dog', 'url https://blob.example/x.bin', 'm image/gif'],
+				['imeta', 'url https://blob.example/y.bin']
+			],
+			content: ':what_dog:',
+			mediaKeyBase64
+		};
+	}
+
+	test('hands the current epoch key to keyless emoji-media rows only', async () => {
+		const { withLegacyEmojiMediaKey } = await import('./chatGroups.svelte');
+		const { deriveMediaKey } = await import('./chatMediaCrypto');
+		const { bytesToBase64 } = await vi.importActual<typeof import('ts-mls')>('ts-mls');
+		const expected = bytesToBase64(
+			await deriveMediaKey({ keySchedule: { exporterSecret: secret } } as never)
+		);
+		const keyed: StoredChatMessage = { ...row(2), mediaKeyBase64: 'kept' };
+		const plain: StoredChatMessage = { ...row(3), tags: [] };
+
+		const out = await withLegacyEmojiMediaKey(group(), [row(1), keyed, plain]);
+
+		expect(out[0].mediaKeyBase64).toBe(expected);
+		expect(out[1].mediaKeyBase64).toBe('kept');
+		expect(out[2].mediaKeyBase64).toBeUndefined();
+		// Untouched arrays stay the same reference (no per-page copies).
+		const unchanged = [plain];
+		expect(await withLegacyEmojiMediaKey(group(), unchanged)).toBe(unchanged);
+	});
+
+	test('returns rows unchanged when the stored state cannot be decoded', async () => {
+		clientStateDecoderMock.mockReturnValue(undefined);
+		const { withLegacyEmojiMediaKey } = await import('./chatGroups.svelte');
+		const messages = [row(1)];
+
+		expect(await withLegacyEmojiMediaKey(group(), messages)).toBe(messages);
 	});
 });
