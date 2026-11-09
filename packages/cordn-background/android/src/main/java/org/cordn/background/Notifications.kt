@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import org.json.JSONArray
 
 /**
  * Shared notification plumbing (roadmap §4.4). Two channels: message notifications (default
@@ -84,53 +85,144 @@ internal object Notifications {
     /**
      * Unified message-notification poster (notification consolidation, roadmap §4.4). The SINGLE
      * renderer for BOTH the background worker (count-only body) and the live foreground path
-     * (decrypted sender/text body, routed here from `showLocalNotification` on native) — same
+     * (decrypted message text, routed here from `showLocalNotification` on native) — same
      * smallIcon, channel, brand color, and per-group id (a burst coalesces; latest message wins).
      * Web notifications stay on the browser Notification API (unchanged); this is native parity.
      *
      * No `.setGroup`: each group is its own notification id, so multiple groups never collapse
      * into Android's auto-summary (the old "copy/stack" icon).
      *
-     * ponytail: simple title+body per group. MessagingStyle per-room accumulation (armada's
-     * NotificationRelayService pattern) is the upgrade path once multi-message threading matters.
+     * When [messages] is present the latest six unread messages are rendered as an
+     * `InboxStyle` list; the collapsed line uses the newest text and the count stays
+     * the number of new messages in the notification. Count-only posters omit it.
      */
     fun postMessageNotification(
         ctx: Context,
         gid: String,
         title: String,
         body: String,
-        iconBytes: String?
+        iconBytes: String?,
+        /** Silent update of an existing notification (count → decrypted text). */
+        onlyAlertOnce: Boolean = false,
+        /** What a locked screen may show instead of [body]; null hides the text. */
+        publicBody: String? = null,
+        /** Total new messages in this notification; the thread may show fewer. */
+        count: Int = 1,
+        /** Recent decrypted messages, oldest first. */
+        messages: JSONArray? = null
     ) {
         ensureChannels(ctx)
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
         // Record for orphan-free clears: clearMessageNotifications cancels seeded ∪ recorded
         // gids, so a notification whose group was unseeded after posting still gets canceled.
         BackgroundStore.get(ctx).addNotifiedGid(gid)
+        val thread = parseThread(messages)
         val builder = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_cordn)
             .setContentTitle(title)
-            .setContentText(body)
+            .setContentText(thread.lastOrNull()?.text ?: body)
+            .setNumber(count.coerceAtLeast(1))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setOnlyAlertOnce(onlyAlertOnce)
             .setAutoCancel(true)
             .setColor(BRAND_COLOR)
+        if (thread.isNotEmpty()) {
+            val style = NotificationCompat.InboxStyle().setBigContentTitle(title)
+            for (message in thread) {
+                style.addLine(message.text)
+            }
+            builder.setStyle(style)
+            if (thread.last().at > 0) {
+                builder.setWhen(thread.last().at).setShowWhen(true)
+            }
+        }
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
         val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
-        if (tapIntent != null) {
+        val contentIntent = tapIntent?.let {
             // Carry the group id so a tap deep-links into the conversation (routeLaunchGid on resume).
-            tapIntent.putExtra(CordnBackgroundPlugin.EXTRA_GID, gid)
-            builder.setContentIntent(
-                PendingIntent.getActivity(
-                    ctx,
-                    gid.hashCode(),
-                    tapIntent,
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
+            it.putExtra(CordnBackgroundPlugin.EXTRA_GID, gid)
+            PendingIntent.getActivity(
+                ctx,
+                gid.hashCode(),
+                it,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
+        if (publicBody != null) {
+            val publicBuilder = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_stat_cordn)
+                // A locked screen gets the app name + count, never the chat name.
+                .setContentTitle("Cordn")
+                .setContentText(publicBody)
+                .setAutoCancel(true)
+                .setColor(BRAND_COLOR)
+            if (contentIntent != null) publicBuilder.setContentIntent(contentIntent)
+            builder.setPublicVersion(publicBuilder.build())
+        }
+        if (contentIntent != null) builder.setContentIntent(contentIntent)
         try {
             NotificationManagerCompat.from(ctx).notify(gid.hashCode(), builder.build())
         } catch (t: SecurityException) {
             // POST_NOTIFICATIONS not granted — silently skip.
+        }
+    }
+
+    private data class ThreadMessage(val text: String, val at: Long)
+
+    private fun parseThread(messages: JSONArray?): List<ThreadMessage> {
+        if (messages == null || messages.length() == 0) return emptyList()
+        val parsed = ArrayList<ThreadMessage>(messages.length())
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            val text = message.optString("text").trim()
+            if (text.isEmpty()) continue
+            parsed += ThreadMessage(
+                text = text,
+                at = message.optLong("at", 0L)
+            )
+        }
+        return parsed.takeLast(6)
+    }
+
+    /**
+     * Upgrade count notifications in place with decrypted text. The count already
+     * alerted; these updates are silent, and a locked screen keeps the count only.
+     * Bad entries are skipped so one malformed preview cannot drop the rest.
+     */
+    fun applyPreviews(ctx: Context, previews: JSONArray) {
+        val store = BackgroundStore.get(ctx)
+        val active = runCatching { NotificationManagerCompat.from(ctx).activeNotifications }
+            .getOrNull()
+            ?.map { it.id }
+            ?.toSet()
+        for (i in 0 until previews.length()) {
+            val preview = previews.optJSONObject(i) ?: continue
+            val gid = preview.optString("gid")
+            val body = preview.optString("body")
+            if (gid.isEmpty() || body.isEmpty()) continue
+            // Never resurrect a notification the person already dismissed.
+            if (active != null && gid.hashCode() !in active) continue
+            // The worker's nativeCursor only moves forward. A preview built from an
+            // older poll must not overwrite a newer notification.
+            val cursor = preview.optLong("cursor", 0L)
+            if (cursor in 1 until store.getNativeCursor(gid)) continue
+            val (cachedTitle, iconBytes) = store.getGroupMeta(gid)
+            val title = cachedTitle?.takeIf { it.isNotBlank() } ?: preview.optString("title").takeIf { it.isNotBlank() } ?: "Cordn"
+            val count = preview.optInt("count", 1).coerceAtLeast(1)
+            val publicBody = if (count == 1) "New message" else "$count new messages"
+            postMessageNotification(
+                ctx = ctx,
+                gid = gid,
+                title = title,
+                body = body,
+                iconBytes = iconBytes,
+                onlyAlertOnce = true,
+                publicBody = publicBody,
+                count = count,
+                messages = preview.optJSONArray("messages")
+            )
         }
     }
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { nip19 } from 'nostr-tools';
 import {
 	formatChatMessagePreviewText,
+	formatChatNotificationBody,
 	getChatMessagePreviewText
 } from '$lib/components/chat/chatGroupDisplay';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
@@ -42,6 +43,13 @@ describe('formatChatMessagePreviewText', () => {
 		expect(formatChatMessagePreviewText('see https://cordn.net now')).toBe(
 			'see https://cordn.net now'
 		);
+	});
+});
+
+describe('formatChatNotificationBody', () => {
+	it('never falls back to a raw pubkey', () => {
+		expect(formatChatNotificationBody(message({ content: 'hi' }))).toBe('hi');
+		expect(formatChatNotificationBody(message({ content: '   ' }))).toBe('New message');
 	});
 });
 

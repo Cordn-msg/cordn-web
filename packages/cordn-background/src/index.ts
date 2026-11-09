@@ -58,6 +58,13 @@ export interface CordnBackgroundMetaOptions {
 	iconBytes?: string;
 }
 
+export interface CordnBackgroundNotificationMessage {
+	/** Decrypted one-line preview text. */
+	text: string;
+	/** Coordinator timestamp in Unix milliseconds, used to order the notification thread. */
+	at: number;
+}
+
 export interface CordnBackgroundPostNotificationOptions {
 	/** Coordinator group id — the per-group notification key (a burst coalesces; latest wins). */
 	gid: string;
@@ -65,6 +72,10 @@ export interface CordnBackgroundPostNotificationOptions {
 	title?: string;
 	/** Message body — decrypted preview from the live path, or a count from the worker. */
 	body?: string;
+	/** New messages in this notification; also the locked-screen count. */
+	count?: number;
+	/** Recent decrypted messages, oldest first; native shows the latest six as a thread. */
+	messages?: CordnBackgroundNotificationMessage[];
 }
 
 export interface CordnBackgroundAdvanceCursorOptions {
@@ -79,13 +90,29 @@ export interface StagedMessage {
 	cursor: number;
 	/** Base64 of the raw encrypted message bytes (`msg_64` on the wire). */
 	msg64: string;
-	/** Coordinator timestamp in seconds (wire `at`). */
+	/** Coordinator timestamp in Unix milliseconds (wire `at`). */
 	at: number;
 }
 
 export interface CordnBackgroundDrainResult {
 	accountPubkey: string | null;
 	messages: StagedMessage[];
+}
+
+/** Decrypted notification text for one group, produced by a throwaway MLS clone. */
+export interface CordnBackgroundNotificationPreview {
+	gid: string;
+	title: string;
+	body: string;
+	count: number;
+	/** Recent decrypted messages, oldest first. */
+	messages: CordnBackgroundNotificationMessage[];
+	/** Highest staged cursor this preview decrypts; stale previews are skipped. */
+	cursor: number;
+}
+
+export interface CordnBackgroundPreviewPreference {
+	enabled: boolean;
 }
 
 export interface CordnBackgroundBatteryResult {
@@ -123,6 +150,8 @@ export interface CordnBackgroundPlugin {
 	consumeLaunchGid(): Promise<{ gid: string | null }>;
 	/** Pull staged sidecar rows (wire format) and clear them. Call on foreground catch-up. */
 	drain(): Promise<CordnBackgroundDrainResult>;
+	/** Turn decrypted notification text on/off for future worker notifications. */
+	setNotificationPreviews(options: CordnBackgroundPreviewPreference): Promise<void>;
 	/** Whether this app is exempt from battery optimization (Doze). */
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */

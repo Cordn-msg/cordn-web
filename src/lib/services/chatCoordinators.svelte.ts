@@ -123,7 +123,7 @@ function saveCoordinators() {
 }
 
 function loadCoordinators() {
-	if (!browser) return;
+	if (!browser || typeof window === 'undefined' || 'CordnPreviewBridge' in window) return;
 	let firstRun = false;
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
@@ -259,7 +259,10 @@ function syncCoordinatorProfileWatches(keys: string[]): void {
 // union) and keeps kind-0 subscriptions in sync. Runs detached in an effect
 // root at module load; store hydration and later coordinator discovery
 // re-trigger it through the reactive reads inside `listKnownCoordinatorKeys`.
-if (browser) {
+// The hidden notification-preview WebView imports this module through the
+// ingestion graph. It only decrypts local rows, so starting the profile
+// watcher there would spend network wake-ups on work the preview never uses.
+if (browser && typeof window !== 'undefined' && !('CordnPreviewBridge' in window)) {
 	$effect.root(() => {
 		$effect(() => {
 			const keys = listKnownCoordinatorKeys();

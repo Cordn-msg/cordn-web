@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * Per coordinator: throwaway `Keys.generate()` + stateless `Client` → one `tools/call`
  * `msg_fetch_many` with `after: nativeCursor` → parse `structuredContent.messages` → stage the
  * wire bytes verbatim into the sidecar → advance `nativeCursor` (advance-on-notify) → post a
- * count-only local notification with the cached group icon + title.
+ * count-only notification with the cached group icon + title, then let the preview renderer
+ * upgrade it when decrypted text is available.
  */
 internal object MessageFetcher {
     private val reqId = AtomicInteger(0)
@@ -74,6 +75,16 @@ internal object MessageFetcher {
             // already ingested the message (no redundant drain). Backgrounded → null/suspended;
             // the foreground-transition drain then covers recovery.
             CordnBackgroundPlugin.instance?.emitSidecarUpdated()
+            // Count notifications are already posted; try to upgrade them to
+            // decrypted text without delaying or endangering the notification
+            // itself. Timeout/failure leaves the counts untouched.
+            try {
+                NotificationPreviewRenderer.render(context)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                android.util.Log.w("CordnBg", "preview pass failed", t)
+            }
         }
         return notifiedAny
     }
@@ -203,7 +214,15 @@ internal object MessageFetcher {
         val name = title?.takeIf { it.isNotBlank() } ?: "Cordn"
         val body = if (count == 1) "New message" else "$count new messages"
         // Shared renderer — identical icon/channel/format to the live foreground path.
-        Notifications.postMessageNotification(context, gid, name, body, iconBytes)
+        Notifications.postMessageNotification(
+            ctx = context,
+            gid = gid,
+            title = name,
+            body = body,
+            iconBytes = iconBytes,
+            publicBody = body,
+            count = count
+        )
         android.util.Log.i("CordnBg", "notified gid=$gid count=$count hasIcon=${iconBytes != null}")
     }
 }

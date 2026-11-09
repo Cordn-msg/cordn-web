@@ -42,6 +42,12 @@ class CordnBackgroundPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun setNotificationPreviews(call: PluginCall) {
+        BackgroundStore.get(getContext()).setNotificationPreviews(call.getBoolean("enabled") ?: true)
+        call.resolve()
+    }
+
+    @PluginMethod
     fun seed(call: PluginCall) {
         val accountPubkey = call.getString("accountPubkey")
         if (accountPubkey.isNullOrEmpty()) {
@@ -92,7 +98,18 @@ class CordnBackgroundPlugin : Plugin() {
         val (cachedTitle, iconBytes) = BackgroundStore.get(getContext()).getGroupMeta(gid)
         val title = call.getString("title")?.takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
         val body = call.getString("body", "New message") ?: "New message"
-        Notifications.postMessageNotification(getContext(), gid, title, body, iconBytes)
+        val count = (call.getInt("count") ?: 1).coerceAtLeast(1)
+        val messages = call.getArray("messages", JSArray()) ?: JSArray()
+        Notifications.postMessageNotification(
+            getContext(),
+            gid,
+            title,
+            body,
+            iconBytes,
+            publicBody = if (count == 1) "New message" else "$count new messages",
+            count = count,
+            messages = messages.takeIf { it.length() > 0 }
+        )
         call.resolve()
     }
 
@@ -129,25 +146,25 @@ class CordnBackgroundPlugin : Plugin() {
         call.resolve()
     }
 
+    private fun stagedRowsResult(rows: List<BackgroundStore.StagedRow>, account: String?): JSObject {
+        val messages = JSArray()
+        for (r in rows) {
+            val o = JSObject()
+            o.put("gid", r.gid)
+            o.put("cursor", r.cursor)
+            o.put("msg64", r.msg64)
+            o.put("at", r.at)
+            messages.put(o)
+        }
+        return JSObject().put("accountPubkey", account).put("messages", messages)
+    }
+
     @PluginMethod
     fun drain(call: PluginCall) {
         val store = BackgroundStore.get(getContext())
         val account = store.getCurrentAccount()
-        val messages = JSArray()
-        if (account != null) {
-            for (r in store.drainSidecar(account)) {
-                val o = JSObject()
-                o.put("gid", r.gid)
-                o.put("cursor", r.cursor)
-                o.put("msg64", r.msg64)
-                o.put("at", r.at)
-                messages.put(o)
-            }
-        }
-        val ret = JSObject()
-        ret.put("accountPubkey", account)
-        ret.put("messages", messages)
-        call.resolve(ret)
+        val rows = if (account != null) store.drainSidecar(account) else emptyList()
+        call.resolve(stagedRowsResult(rows, account))
     }
 
     @PluginMethod

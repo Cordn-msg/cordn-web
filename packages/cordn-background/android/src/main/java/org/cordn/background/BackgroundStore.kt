@@ -108,6 +108,11 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
     fun getDeliveryIntervalMinutes(default: Long): Long =
         get(KV_DELIVERY_INTERVAL)?.toLongOrNull() ?: default
 
+    /** Decrypted notification text is on unless explicitly opted out. */
+    fun setNotificationPreviews(enabled: Boolean) = put(KV_NOTIFICATION_PREVIEWS, if (enabled) "1" else "0")
+
+    fun getNotificationPreviews(): Boolean = get(KV_NOTIFICATION_PREVIEWS) != "0"
+
     /**
      * Track gids with a live message notification (any poster). The seeded-gid set alone can't
      * cancel a notification whose group was unseeded after posting (removed, account switch) —
@@ -323,28 +328,42 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
         }
     }
 
+    private fun readSidecar(db: SQLiteDatabase, accountPubkey: String): List<StagedRow> {
+        val out = ArrayList<StagedRow>()
+        db.query(
+            T_SIDECAR,
+            arrayOf("gid", "cursor", "msg64", "at"),
+            "account_pubkey = ?",
+            arrayOf(accountPubkey),
+            null, null, "gid ASC, cursor ASC"
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += StagedRow(
+                    gid = c.getString(0),
+                    cursor = c.getLong(1),
+                    msg64 = c.getString(2),
+                    at = c.getLong(3)
+                )
+            }
+        }
+        return out
+    }
+
+    /**
+     * Read staged rows without consuming them. Notification previews need the
+     * ciphertext but must leave the sidecar intact: the foreground drain is the
+     * only path that may clear rows, and it should do so only after persistence.
+     */
+    fun peekSidecar(accountPubkey: String): List<StagedRow> =
+        readSidecar(readableDatabase, accountPubkey)
+
     /** Return all staged rows for the active account and clear them (foreground drain). */
     fun drainSidecar(accountPubkey: String): List<StagedRow> {
-        val out = ArrayList<StagedRow>()
         val db = writableDatabase
+        var out: List<StagedRow>
         db.beginTransaction()
         try {
-            db.query(
-                T_SIDECAR,
-                arrayOf("gid", "cursor", "msg64", "at"),
-                "account_pubkey = ?",
-                arrayOf(accountPubkey),
-                null, null, "gid ASC, cursor ASC"
-            ).use { c ->
-                while (c.moveToNext()) {
-                    out += StagedRow(
-                        gid = c.getString(0),
-                        cursor = c.getLong(1),
-                        msg64 = c.getString(2),
-                        at = c.getLong(3)
-                    )
-                }
-            }
+            out = readSidecar(db, accountPubkey)
             db.delete(T_SIDECAR, "account_pubkey = ?", arrayOf(accountPubkey))
             db.setTransactionSuccessful()
         } finally {
@@ -384,4 +403,5 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
 private const val KV_ACCOUNT = "account_pubkey"
 private const val KV_DELIVERY_MODE = "delivery_mode"
 private const val KV_DELIVERY_INTERVAL = "delivery_interval_minutes"
+private const val KV_NOTIFICATION_PREVIEWS = "notification_previews"
 private const val KV_NOTIFIED_GIDS = "notified_gids"

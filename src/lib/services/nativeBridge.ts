@@ -7,7 +7,17 @@ import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CordnBackground, ShareTarget, type DeliveryMode, type PollGroup } from 'cordn-background';
+import {
+	CordnBackground,
+	ShareTarget,
+	type CordnBackgroundNotificationMessage,
+	type DeliveryMode,
+	type PollGroup
+} from 'cordn-background';
+import {
+	applyNotificationPreviewsSetting,
+	getNotificationPreviewsEnabled
+} from '$lib/services/chatNotificationSettings';
 import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
@@ -98,6 +108,7 @@ export async function initNativeShell(): Promise<void> {
 
 	// --- Phase 2/3: background delivery + sidecar ---
 	void applyDeliveryConfig();
+	void applyNotificationPreviewsSetting();
 	void runDrain(); // ingest anything staged while the app was closed
 	void seedBackground();
 	void routeLaunchGid(); // deep-link if launched from a notification tap
@@ -154,7 +165,8 @@ export async function initNativeShell(): Promise<void> {
 	// foregrounded gap, firing exactly when there are confirmed un-ingested bytes.
 	try {
 		await CordnBackground.addListener('sidecarUpdated', () => {
-			void runDrain();
+			// Backgrounded JS stays alive, but ingestion belongs to the foreground.
+			if (appActive) void runDrain();
 		});
 	} catch {
 		// plugin unavailable — foreground-transition drain still covers recovery
@@ -263,6 +275,10 @@ export async function connectAndroidSigner(app: InstalledSignerApp): Promise<voi
 export interface ChatLocalNotification {
 	title: string;
 	body: string;
+	/** New messages in this batch; native uses it for the locked-screen count. */
+	count: number;
+	/** Native only: recent decrypted messages, oldest first; native shows the latest six. */
+	messages?: CordnBackgroundNotificationMessage[];
 	/** Web only: group/favicon icon URL. Native reads its icon from the cache (NativeGroupMetaSync). */
 	icon?: string;
 	/** Stable group id — dedup tag (web) and coalescing id (native). */
@@ -335,6 +351,11 @@ async function requestBatteryExemptionOnce(): Promise<void> {
 
 export async function showLocalNotification(n: ChatLocalNotification): Promise<void> {
 	if (!browser) return;
+	// Re-check at post time: the profile lookup before this call can outlive a
+	// settings change, and opting out must hide text immediately on web too.
+	const count = Math.max(1, n.count);
+	const previews = getNotificationPreviewsEnabled();
+	const body = previews ? n.body : count === 1 ? 'New message' : `${count} new messages`;
 	if (isNativePlatform()) {
 		// Suppress while foregrounded — the in-app UI already surfaces attention (title badge, unread dots).
 		if (appActive) return;
@@ -342,12 +363,18 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 		// from the native cache (NativeGroupMetaSync), not passed here — Capacitor LocalNotifications
 		// ignored the web `icon` field anyway, which is why live-path notifications used to have no
 		// icon. Web stays on the browser Notification API below.
-		void postMessageNotification(n.groupId, n.title || 'Cordn', n.body);
+		void postMessageNotification(
+			n.groupId,
+			n.title || 'Cordn',
+			body,
+			count,
+			previews ? n.messages : undefined
+		);
 		return;
 	}
 	if (!('Notification' in window) || Notification.permission !== 'granted') return;
 	const notification = new Notification(n.title || 'Cordn', {
-		body: n.body,
+		body,
 		icon: n.icon,
 		tag: `cordn-group-${n.groupId}`
 	});
@@ -396,11 +423,13 @@ export async function clearShownNotifications(gids?: string[]): Promise<void> {
 export async function postMessageNotification(
 	gid: string,
 	title: string,
-	body: string
+	body: string,
+	count = 1,
+	messages?: CordnBackgroundNotificationMessage[]
 ): Promise<void> {
 	if (!isNativePlatform()) return;
 	try {
-		await CordnBackground.postMessageNotification({ gid, title, body });
+		await CordnBackground.postMessageNotification({ gid, title, body, count, messages });
 	} catch {
 		// never block chat on a failed notification
 	}
