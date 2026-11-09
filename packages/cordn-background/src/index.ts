@@ -88,6 +88,18 @@ export interface CordnBackgroundDrainResult {
 	messages: StagedMessage[];
 }
 
+/** Decrypted notification text for one group, produced by a throwaway MLS clone. */
+export interface CordnBackgroundNotificationPreview {
+	gid: string;
+	title: string;
+	body: string;
+	count: number;
+}
+
+export interface CordnBackgroundPreviewPreference {
+	enabled: boolean;
+}
+
 export interface CordnBackgroundBatteryResult {
 	exempted: boolean;
 }
@@ -123,6 +135,12 @@ export interface CordnBackgroundPlugin {
 	consumeLaunchGid(): Promise<{ gid: string | null }>;
 	/** Pull staged sidecar rows (wire format) and clear them. Call on foreground catch-up. */
 	drain(): Promise<CordnBackgroundDrainResult>;
+	/** Turn decrypted notification text on/off for future worker notifications. */
+	setNotificationPreviews(options: CordnBackgroundPreviewPreference): Promise<void>;
+	/** Apply decrypted text to the existing per-group notifications (silent update). */
+	applyNotificationPreviews(options: {
+		previews: CordnBackgroundNotificationPreview[];
+	}): Promise<void>;
 	/** Whether this app is exempt from battery optimization (Doze). */
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */
@@ -131,6 +149,11 @@ export interface CordnBackgroundPlugin {
 	addListener(
 		eventName: 'sidecarUpdated',
 		listener: () => void
+	): Promise<PluginListenerHandle>;
+	/** Worker staged new rows and wants decrypted text while the WebView is alive. */
+	addListener(
+		eventName: 'previewRequested',
+		listener: (event: CordnBackgroundDrainResult) => void
 	): Promise<PluginListenerHandle>;
 }
 

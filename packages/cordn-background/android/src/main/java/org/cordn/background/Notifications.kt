@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import org.json.JSONArray
 
 /**
  * Shared notification plumbing (roadmap §4.4). Two channels: message notifications (default
@@ -99,7 +100,11 @@ internal object Notifications {
         gid: String,
         title: String,
         body: String,
-        iconBytes: String?
+        iconBytes: String?,
+        /** Silent update of an existing notification (count → decrypted text). */
+        onlyAlertOnce: Boolean = false,
+        /** What a locked screen may show instead of [body]; null hides the text. */
+        publicBody: String? = null
     ) {
         ensureChannels(ctx)
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
@@ -111,9 +116,21 @@ internal object Notifications {
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setOnlyAlertOnce(onlyAlertOnce)
             .setAutoCancel(true)
             .setColor(BRAND_COLOR)
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
+        if (publicBody != null) {
+            val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_stat_cordn)
+                .setContentTitle(title)
+                .setContentText(publicBody)
+                .setColor(BRAND_COLOR)
+                .build()
+            builder.setPublicVersion(public)
+        }
         val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
         if (tapIntent != null) {
             // Carry the group id so a tap deep-links into the conversation (routeLaunchGid on resume).
@@ -131,6 +148,40 @@ internal object Notifications {
             NotificationManagerCompat.from(ctx).notify(gid.hashCode(), builder.build())
         } catch (t: SecurityException) {
             // POST_NOTIFICATIONS not granted — silently skip.
+        }
+    }
+
+    /**
+     * Upgrade count notifications in place with decrypted text. The count already
+     * alerted; these updates are silent, and a locked screen keeps the count only.
+     * Bad entries are skipped so one malformed preview cannot drop the rest.
+     */
+    fun applyPreviews(ctx: Context, previews: JSONArray) {
+        val store = BackgroundStore.get(ctx)
+        val active = runCatching { NotificationManagerCompat.from(ctx).activeNotifications }
+            .getOrNull()
+            ?.map { it.id }
+            ?.toSet()
+        for (i in 0 until previews.length()) {
+            val preview = previews.optJSONObject(i) ?: continue
+            val gid = preview.optString("gid")
+            val body = preview.optString("body")
+            if (gid.isEmpty() || body.isEmpty()) continue
+            // Never resurrect a notification the person already dismissed.
+            if (active != null && gid.hashCode() !in active) continue
+            val (cachedTitle, iconBytes) = store.getGroupMeta(gid)
+            val title = preview.optString("title").takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
+            val count = preview.optInt("count", 1).coerceAtLeast(1)
+            val publicBody = if (count == 1) "New message" else "$count new messages"
+            postMessageNotification(
+                ctx = ctx,
+                gid = gid,
+                title = title,
+                body = body,
+                iconBytes = iconBytes,
+                onlyAlertOnce = true,
+                publicBody = publicBody
+            )
         }
     }
 

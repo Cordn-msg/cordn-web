@@ -42,6 +42,12 @@ class CordnBackgroundPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun setNotificationPreviews(call: PluginCall) {
+        BackgroundStore.get(getContext()).setNotificationPreviews(call.getBoolean("enabled") ?: true)
+        call.resolve()
+    }
+
+    @PluginMethod
     fun seed(call: PluginCall) {
         val accountPubkey = call.getString("accountPubkey")
         if (accountPubkey.isNullOrEmpty()) {
@@ -129,25 +135,32 @@ class CordnBackgroundPlugin : Plugin() {
         call.resolve()
     }
 
+    private fun stagedRowsResult(rows: List<BackgroundStore.StagedRow>, account: String?): JSObject {
+        val messages = JSArray()
+        for (r in rows) {
+            val o = JSObject()
+            o.put("gid", r.gid)
+            o.put("cursor", r.cursor)
+            o.put("msg64", r.msg64)
+            o.put("at", r.at)
+            messages.put(o)
+        }
+        return JSObject().put("accountPubkey", account).put("messages", messages)
+    }
+
     @PluginMethod
     fun drain(call: PluginCall) {
         val store = BackgroundStore.get(getContext())
         val account = store.getCurrentAccount()
-        val messages = JSArray()
-        if (account != null) {
-            for (r in store.drainSidecar(account)) {
-                val o = JSObject()
-                o.put("gid", r.gid)
-                o.put("cursor", r.cursor)
-                o.put("msg64", r.msg64)
-                o.put("at", r.at)
-                messages.put(o)
-            }
-        }
-        val ret = JSObject()
-        ret.put("accountPubkey", account)
-        ret.put("messages", messages)
-        call.resolve(ret)
+        val rows = if (account != null) store.drainSidecar(account) else emptyList()
+        call.resolve(stagedRowsResult(rows, account))
+    }
+
+    @PluginMethod
+    fun applyNotificationPreviews(call: PluginCall) {
+        val previews = call.getArray("previews", JSArray()) ?: JSArray()
+        Notifications.applyPreviews(getContext(), previews)
+        call.resolve()
     }
 
     @PluginMethod
@@ -218,6 +231,27 @@ class CordnBackgroundPlugin : Plugin() {
         notifyListeners(EVENT_SIDECAR_UPDATED, JSObject())
     }
 
+    /**
+     * Ask the live WebView to decrypt staged rows for notification text. Returns
+     * false when no listener is attached, so the caller can use the short-lived
+     * hidden renderer instead. Event delivery is marshalled to the main thread.
+     */
+    fun requestPreviewFromWebView(): Boolean {
+        if (!hasListeners(EVENT_PREVIEW_REQUESTED)) return false
+        val store = BackgroundStore.get(getContext())
+        val account = store.getCurrentAccount()
+        // Carry the rows in the event: the live path may drain the sidecar at any
+        // moment, and the preview must still have the ciphertext it was asked for.
+        val payload = stagedRowsResult(
+            if (account != null) store.peekSidecar(account) else emptyList(),
+            account
+        )
+        getBridge().executeOnMainThread {
+            notifyListeners(EVENT_PREVIEW_REQUESTED, payload)
+        }
+        return true
+    }
+
     // Bridge handle for the background fetcher (runs from the foreground service / WorkManager,
     // same app process). Set in load() (bridge alive), cleared in handleOnDestroy(). Null when the
     // app is cold-started by the background worker before the user opens it — then the
@@ -235,6 +269,7 @@ class CordnBackgroundPlugin : Plugin() {
     companion object {
         const val EXTRA_GID = "cordn_gid"
         const val EVENT_SIDECAR_UPDATED = "sidecarUpdated"
+        const val EVENT_PREVIEW_REQUESTED = "previewRequested"
 
         /** True while the app UI is foregrounded; see [handleOnResume]. */
         @Volatile

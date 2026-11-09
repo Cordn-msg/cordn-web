@@ -8,11 +8,16 @@
 	import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
 	import NativeAppUpdateBanner from '$lib/components/NativeAppUpdateBanner.svelte';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import { initNativeShell } from '$lib/services/nativeBridge';
 	import { initAppearance } from '$lib/themes/appearance.svelte';
 	import { defineCustomElements } from '@ionic/pwa-elements/loader';
 
 	let { children } = $props();
+	// The hidden notification-preview WebView loads this route with no Capacitor
+	// bridge and no user-visible UI. Keep the app shell (and every startup side
+	// effect it owns) out of that boot.
+	const backgroundPreview = $derived(page.url.pathname.startsWith('/background-preview'));
 
 	// Safe-area-aware toast offsets: keep svelte-sonner's stock bases (24px desktop / 16px mobile)
 	// and add the bar insets on top, so toasts clear the gesture/nav bar in the native edge-to-edge
@@ -29,6 +34,7 @@
 	// WebView's first URL is https://localhost/chat), so no client redirect is needed here.
 	// Deep links and notification taps override it via their launch URL.
 	onMount(() => {
+		if (backgroundPreview) return;
 		// Register @ionic/pwa-elements' web components (pwa-camera-modal) once, lazily. @capacitor/camera's
 		// web `takePhoto` looks up `pwa-camera-modal` via customElements.get(); without this registration it
 		// logs a warning and falls back to a plain file input (which made 'Take Photo' duplicate 'Image' on
@@ -41,14 +47,19 @@
 	});
 </script>
 
-<Toaster offset={toastInsets('24px')} mobileOffset={toastInsets('16px')} />
-<ModeWatcher />
-<AppUpdateBanner />
-<NativeAppUpdateBanner />
-
 <svelte:head><link rel="icon" href="/favicon.svg" /></svelte:head>
-<QueryClientProvider client={queryClient}>
-	<Tooltip.Provider>
-		{@render children()}
-	</Tooltip.Provider>
-</QueryClientProvider>
+
+{#if backgroundPreview}
+	{@render children()}
+{:else}
+	<Toaster offset={toastInsets('24px')} mobileOffset={toastInsets('16px')} />
+	<ModeWatcher />
+	<AppUpdateBanner />
+	<NativeAppUpdateBanner />
+
+	<QueryClientProvider client={queryClient}>
+		<Tooltip.Provider>
+			{@render children()}
+		</Tooltip.Provider>
+	</QueryClientProvider>
+{/if}

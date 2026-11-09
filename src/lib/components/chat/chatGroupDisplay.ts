@@ -66,6 +66,21 @@ export function getChatMessagePreviewText(message: StoredChatMessage): string {
 	return body ? `${label}: ${body}` : label;
 }
 
+export function formatChatNotificationBody(
+	sender: string,
+	message: StoredChatMessage,
+	profileHints: ChatGroupProfileHints = {}
+): string {
+	// Same mention-token rendering as group-card previews (media labels and
+	// system sentences included). Shared with the background preview path so a
+	// notification reads identically whether it was built live or from a clone.
+	const trimmed = formatChatMessagePreviewText(
+		getChatMessagePreviewText(message),
+		profileHints
+	).trim();
+	return trimmed || `New message from ${getProfileDisplayName(sender, profileHints)}`;
+}
+
 function getMediaPreviewLabel(media: MediaReference): string {
 	if (media.durationMs !== undefined) return '🎤 Voice message';
 	if (media.mime.startsWith('image/')) return '📷 Photo';

@@ -74,6 +74,16 @@ internal object MessageFetcher {
             // already ingested the message (no redundant drain). Backgrounded → null/suspended;
             // the foreground-transition drain then covers recovery.
             CordnBackgroundPlugin.instance?.emitSidecarUpdated()
+            // Count notifications are already posted; try to upgrade them to
+            // decrypted text without delaying or endangering the notification
+            // itself. Timeout/failure leaves the counts untouched.
+            try {
+                NotificationPreviewRenderer.render(context)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                android.util.Log.w("CordnBg", "preview pass failed", t)
+            }
         }
         return notifiedAny
     }
@@ -203,7 +213,14 @@ internal object MessageFetcher {
         val name = title?.takeIf { it.isNotBlank() } ?: "Cordn"
         val body = if (count == 1) "New message" else "$count new messages"
         // Shared renderer — identical icon/channel/format to the live foreground path.
-        Notifications.postMessageNotification(context, gid, name, body, iconBytes)
+        Notifications.postMessageNotification(
+            ctx = context,
+            gid = gid,
+            title = name,
+            body = body,
+            iconBytes = iconBytes,
+            publicBody = body
+        )
         android.util.Log.i("CordnBg", "notified gid=$gid count=$count hasIcon=${iconBytes != null}")
     }
 }

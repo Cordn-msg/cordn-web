@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-09-notification-previews',
+		createdAt: Date.UTC(2026, 10, 9),
+		version: 1,
+		title: 'Notifications that say what arrived',
+		body: '- ✨ Android notifications can now show the newest message text instead of just a count. It is decrypted on your device from a temporary copy of the group state — no server ever sees it — and the count notification fills in quietly a moment later.\n- ✨ Previews are on by default. Turn them off under Settings → Notifications to keep notifications count-only; a locked screen only ever shows the chat name and count.\n- 🔄 Your saved history and encryption state are never changed by a preview, and tapping a notification still opens the chat at the first unread message.'
+	},
+	{
 		id: 'cordn-news-2026-11-08-highlights-prs-bubbles',
 		createdAt: Date.UTC(2026, 10, 8),
 		version: 2,

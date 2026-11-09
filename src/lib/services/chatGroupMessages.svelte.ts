@@ -820,6 +820,10 @@ export async function ingestChatGroupMessages(params: {
 	 * (sibling Commits / pre-reconcile). Such messages skip + await instead of
 	 * poisoning (§8/§10). */
 	mdActive?: boolean;
+	/** Decrypt a throwaway clone for notification text only: no storage reads,
+	 *  no global rescue/streak state, no persistence. The authoritative group is
+	 *  never touched, so this cannot advance the real MLS ratchet. */
+	previewOnly?: boolean;
 }): Promise<{
 	received: StoredChatMessage[];
 	issues: StoredChatSyncIssue[];
@@ -840,7 +844,7 @@ export async function ingestChatGroupMessages(params: {
 	// cursors already in storage count as seen too. Drop-class messages never
 	// have durable rows (they failed to decrypt the first time), so recovery
 	// refetches still process.
-	if (group.id && messages.length > 0) {
+	if (!params.previewOnly && group.id && messages.length > 0) {
 		try {
 			const storage = await getChatStorage();
 			const persisted = await storage.getPersistedMessageCursors(
@@ -921,7 +925,7 @@ export async function ingestChatGroupMessages(params: {
 					createdAt: message.createdAt,
 					detail: `${DECRYPT_FAILED_DETAIL}: ${detail}`
 				});
-				noteUnsealFailure(group.id);
+				if (!params.previewOnly) noteUnsealFailure(group.id);
 				// Missed-update evidence (staircase StaleEpochTest): this device cannot
 				// open what the group sends — it may have missed a Commit. Recorded so
 				// the outbound gate refuses work staged from the stale view.
@@ -1075,7 +1079,7 @@ export async function ingestChatGroupMessages(params: {
 					createdAt: message.createdAt,
 					detail: `Ahead of local epoch ${localEpoch} → ${envelope!.epoch}; awaiting group-document catch-up`
 				});
-				noteUnsealFailure(group.id);
+				if (!params.previewOnly) noteUnsealFailure(group.id);
 				// Same missed-update evidence as an unopenable seal (above).
 				group.staleMark = {
 					cursor: group.staleMark?.cursor ?? message.cursor,
@@ -1101,7 +1105,7 @@ export async function ingestChatGroupMessages(params: {
 			) {
 				group.fetchCursor = message.cursor;
 				group.lastCursor = Math.max(group.lastCursor, message.cursor);
-				noteUnsealFailure(group.id);
+				if (!params.previewOnly) noteUnsealFailure(group.id);
 
 				recordSyncIssue(group, issues, {
 					cursor: message.cursor,
@@ -1127,7 +1131,7 @@ export async function ingestChatGroupMessages(params: {
 			throw error;
 		}
 
-		noteUnsealSuccess(group.id, formerEpoch);
+		if (!params.previewOnly) noteUnsealSuccess(group.id, formerEpoch);
 		// A message that decrypts AT THE CURRENT EPOCH proves this device is on the
 		// group's line (staircase StaleEpochTest: "back to normal"): the
 		// missed-update mark goes and commits work again. A former-epoch decrypt

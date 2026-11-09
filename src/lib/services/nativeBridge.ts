@@ -8,6 +8,11 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { CordnBackground, ShareTarget, type DeliveryMode, type PollGroup } from 'cordn-background';
+import { generateNotificationPreviews } from '$lib/services/chatNotificationPreview';
+import {
+	applyNotificationPreviewsSetting,
+	getNotificationPreviewsEnabled
+} from '$lib/services/chatNotificationSettings';
 import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
@@ -98,6 +103,7 @@ export async function initNativeShell(): Promise<void> {
 
 	// --- Phase 2/3: background delivery + sidecar ---
 	void applyDeliveryConfig();
+	void applyNotificationPreviewsSetting();
 	void runDrain(); // ingest anything staged while the app was closed
 	void seedBackground();
 	void routeLaunchGid(); // deep-link if launched from a notification tap
@@ -158,6 +164,17 @@ export async function initNativeShell(): Promise<void> {
 		});
 	} catch {
 		// plugin unavailable — foreground-transition drain still covers recovery
+	}
+
+	// The worker asks the live WebView for notification text when it stages rows
+	// in the background. Native falls back to count-only if this listener is
+	// absent or the answer never arrives.
+	try {
+		await CordnBackground.addListener('previewRequested', (event) => {
+			void runWarmNotificationPreviews(event);
+		});
+	} catch {
+		// plugin unavailable — count-only notifications remain the fallback
 	}
 }
 
@@ -672,4 +689,36 @@ function runDrain(): Promise<void> {
 		drainInFlight = null;
 	});
 	return drainInFlight;
+}
+
+/**
+ * Decrypt staged rows for the worker while the real WebView is alive. This is
+ * the cheap path: native posts its count notification first, then asks here
+ * and silently upgrades it to text. The sidecar is only peeked — the normal
+ * foreground drain still owns ingestion and MLS state.
+ */
+let warmPreviewInFlight: Promise<void> | null = null;
+
+function runWarmNotificationPreviews(event: {
+	accountPubkey: string | null;
+	messages: Array<{ gid: string; cursor: number; msg64: string; at: number }>;
+}): Promise<void> {
+	warmPreviewInFlight ??= (async () => {
+		if (appActive || !getNotificationPreviewsEnabled()) return;
+		const accountPubkey = event.accountPubkey ?? manager.active?.pubkey;
+		if (!accountPubkey || event.messages.length === 0) return;
+		const previews = await generateNotificationPreviews({
+			accountPubkey,
+			rows: event.messages
+		});
+		// The user may have opened the app while decryption ran; foregrounding
+		// clears the shade, so a late update would resurrect a stale notification.
+		if (appActive) return;
+		if (previews.length > 0) {
+			await CordnBackground.applyNotificationPreviews({ previews });
+		}
+	})().finally(() => {
+		warmPreviewInFlight = null;
+	});
+	return warmPreviewInFlight;
 }

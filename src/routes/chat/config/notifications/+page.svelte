@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Switch } from '$lib/components/ui/switch';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import {
 		isNativePlatform,
@@ -9,6 +10,10 @@
 		setDeliveryConfig,
 		type DeliveryConfig
 	} from '$lib/services/nativeBridge';
+	import {
+		getNotificationPreviewsEnabled,
+		setNotificationPreviewsEnabled
+	} from '$lib/services/chatNotificationSettings';
 	import { CordnBackground, type DeliveryMode } from 'cordn-background';
 	import { App } from '@capacitor/app';
 	import { toast } from 'svelte-sonner';
@@ -18,6 +23,7 @@
 	import Check from '@lucide/svelte/icons/check';
 
 	let config = $state<DeliveryConfig>(getDeliveryConfig());
+	let previews = $state(getNotificationPreviewsEnabled());
 	let exempted = $state<boolean | null>(null); // null = unknown (not yet queried)
 
 	const modes: { mode: DeliveryMode; label: string; desc: string }[] = [
@@ -51,6 +57,11 @@
 	async function pickInterval(minutes: number) {
 		config = { ...config, intervalMinutes: minutes };
 		await setDeliveryConfig(config);
+	}
+
+	function setPreviews(enabled: boolean) {
+		previews = enabled;
+		setNotificationPreviewsEnabled(enabled);
 	}
 
 	async function refreshExempted() {
@@ -214,13 +225,39 @@
 
 				<Card.Root>
 					<Card.Header>
+						<Card.Title>Show message previews</Card.Title>
+						<Card.Description>
+							Decrypt the newest message on this device so notifications can show its text.
+						</Card.Description>
+					</Card.Header>
+					<Card.Content class="space-y-3">
+						<div class="flex items-center justify-between gap-4">
+							<p class="text-sm">
+								Previews are built on-device from a temporary copy of the group state; your saved
+								messages and encryption state are not changed.
+							</p>
+							<Switch
+								checked={previews}
+								onCheckedChange={setPreviews}
+								aria-label="Show message previews"
+							/>
+						</div>
+						<p class="text-xs text-muted-foreground">
+							On a locked screen only the app name and count are shown. Turn this off to keep
+							notifications count-only.
+						</p>
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root>
+					<Card.Header>
 						<Card.Title>How Cordn notifications work</Card.Title>
 					</Card.Header>
 					<Card.Content class="space-y-2 text-xs text-muted-foreground">
 						<p>
-							Cordn checks for new encrypted messages on a schedule and shows a count-only
-							notification — “N new in &lt;Group&gt;” with the group icon. Your messages are only
-							decrypted when you open the app, so the background checker never sees message content.
+							Cordn checks for new encrypted messages on a schedule. A notification appears with the
+							group icon as soon as a message arrives; when a preview can be built, the same
+							notification is quietly updated with the sender's text.
 						</p>
 						<p>
 							Notifications group by chat. Tapping one opens Cordn and downloads the full messages.

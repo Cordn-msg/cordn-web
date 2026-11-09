@@ -9,9 +9,7 @@ import {
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
-	getChatMessagePreviewText,
-	formatChatMessagePreviewText,
-	getProfileDisplayName,
+	formatChatNotificationBody,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -22,7 +20,6 @@ import {
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
-import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -169,21 +166,6 @@ export function syncChatAttention() {
 	if (favicon.getAttribute('href') !== DEFAULT_FAVICON) favicon.href = DEFAULT_FAVICON;
 }
 
-function getNotificationBody(
-	sender: string,
-	message: StoredChatMessage,
-	profileHints: ChatGroupProfileHints
-) {
-	// Same mention-token rendering as the group-card previews (media labels and
-	// system sentences included).
-	const trimmed = formatChatMessagePreviewText(
-		getChatMessagePreviewText(message),
-		profileHints
-	).trim();
-	if (trimmed) return trimmed;
-	return `New message from ${getProfileDisplayName(sender, profileHints)}`;
-}
-
 const NOTIFICATION_PROFILE_TIMEOUT_MS = 1500;
 
 /**
@@ -282,7 +264,8 @@ export async function notifyForUnreadChatMessages() {
 		const last = eligible[eligible.length - 1]!;
 		const extra = eligible.length - 1;
 		const body =
-			getNotificationBody(last.sender, last, profileHints) + (extra > 0 ? ` (+${extra} more)` : '');
+			formatChatNotificationBody(last.sender, last, profileHints) +
+			(extra > 0 ? ` (+${extra} more)` : '');
 		await showLocalNotification({
 			title: title || 'Cordn',
 			body,
