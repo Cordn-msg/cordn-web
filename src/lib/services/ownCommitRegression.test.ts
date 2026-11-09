@@ -609,7 +609,7 @@ describe('notification preview isolation', () => {
 				gid: group.id,
 				cursor: 2,
 				msg64: encryptedBase64,
-				at: Math.floor(Date.now() / 1000)
+				at: Date.now()
 			}
 		];
 		const storage = await getChatStorage();

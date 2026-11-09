@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * Per coordinator: throwaway `Keys.generate()` + stateless `Client` → one `tools/call`
  * `msg_fetch_many` with `after: nativeCursor` → parse `structuredContent.messages` → stage the
  * wire bytes verbatim into the sidecar → advance `nativeCursor` (advance-on-notify) → post a
- * count-only local notification with the cached group icon + title.
+ * count-only notification with the cached group icon + title, then let the preview renderer
+ * upgrade it when decrypted text is available.
  */
 internal object MessageFetcher {
     private val reqId = AtomicInteger(0)

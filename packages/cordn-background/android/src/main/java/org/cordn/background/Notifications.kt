@@ -85,7 +85,7 @@ internal object Notifications {
     /**
      * Unified message-notification poster (notification consolidation, roadmap §4.4). The SINGLE
      * renderer for BOTH the background worker (count-only body) and the live foreground path
-     * (decrypted sender/text body, routed here from `showLocalNotification` on native) — same
+     * (decrypted message text, routed here from `showLocalNotification` on native) — same
      * smallIcon, channel, brand color, and per-group id (a burst coalesces; latest message wins).
      * Web notifications stay on the browser Notification API (unchanged); this is native parity.
      *
@@ -94,7 +94,7 @@ internal object Notifications {
      *
      * When [messages] is present the latest six unread messages are rendered as an
      * `InboxStyle` list; the collapsed line uses the newest text and the count stays
-     * the total unread count. Count-only posters omit it.
+     * the number of new messages in the notification. Count-only posters omit it.
      */
     fun postMessageNotification(
         ctx: Context,
@@ -139,29 +139,29 @@ internal object Notifications {
             }
         }
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
+        val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+        val contentIntent = tapIntent?.let {
+            // Carry the group id so a tap deep-links into the conversation (routeLaunchGid on resume).
+            it.putExtra(CordnBackgroundPlugin.EXTRA_GID, gid)
+            PendingIntent.getActivity(
+                ctx,
+                gid.hashCode(),
+                it,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
         if (publicBody != null) {
-            val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+            val publicBuilder = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
                 .setSmallIcon(R.drawable.ic_stat_cordn)
                 // A locked screen gets the app name + count, never the chat name.
                 .setContentTitle("Cordn")
                 .setContentText(publicBody)
+                .setAutoCancel(true)
                 .setColor(BRAND_COLOR)
-                .build()
-            builder.setPublicVersion(public)
+            if (contentIntent != null) publicBuilder.setContentIntent(contentIntent)
+            builder.setPublicVersion(publicBuilder.build())
         }
-        val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
-        if (tapIntent != null) {
-            // Carry the group id so a tap deep-links into the conversation (routeLaunchGid on resume).
-            tapIntent.putExtra(CordnBackgroundPlugin.EXTRA_GID, gid)
-            builder.setContentIntent(
-                PendingIntent.getActivity(
-                    ctx,
-                    gid.hashCode(),
-                    tapIntent,
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
-            )
-        }
+        if (contentIntent != null) builder.setContentIntent(contentIntent)
         try {
             NotificationManagerCompat.from(ctx).notify(gid.hashCode(), builder.build())
         } catch (t: SecurityException) {

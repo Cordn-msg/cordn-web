@@ -351,6 +351,11 @@ async function requestBatteryExemptionOnce(): Promise<void> {
 
 export async function showLocalNotification(n: ChatLocalNotification): Promise<void> {
 	if (!browser) return;
+	// Re-check at post time: the profile lookup before this call can outlive a
+	// settings change, and opting out must hide text immediately on web too.
+	const count = Math.max(1, n.count);
+	const previews = getNotificationPreviewsEnabled();
+	const body = previews ? n.body : count === 1 ? 'New message' : `${count} new messages`;
 	if (isNativePlatform()) {
 		// Suppress while foregrounded — the in-app UI already surfaces attention (title badge, unread dots).
 		if (appActive) return;
@@ -358,9 +363,6 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 		// from the native cache (NativeGroupMetaSync), not passed here — Capacitor LocalNotifications
 		// ignored the web `icon` field anyway, which is why live-path notifications used to have no
 		// icon. Web stays on the browser Notification API below.
-		const count = Math.max(1, n.count);
-		const previews = getNotificationPreviewsEnabled();
-		const body = previews ? n.body : count === 1 ? 'New message' : `${count} new messages`;
 		void postMessageNotification(
 			n.groupId,
 			n.title || 'Cordn',
@@ -372,7 +374,7 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 	}
 	if (!('Notification' in window) || Notification.permission !== 'granted') return;
 	const notification = new Notification(n.title || 'Cordn', {
-		body: n.body,
+		body,
 		icon: n.icon,
 		tag: `cordn-group-${n.groupId}`
 	});
