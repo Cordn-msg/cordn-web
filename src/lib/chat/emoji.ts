@@ -131,6 +131,19 @@ export function dropStaleEmojiMediaTags(
 	return tags.filter((tag) => tag[0] !== EMOJI_MEDIA_TAG);
 }
 
+/** One emoji sequence: pictographs with their variation/skin modifiers and ZWJ
+ *  joins, flags, and keycaps. Deliberately not `\p{Emoji}`, which counts digits. */
+const EMOJI_ONLY_SEQUENCE =
+	/(?:\p{Extended_Pictographic}[\uFE0E\uFE0F]?(?:\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}[\uFE0E\uFE0F]?(?:\p{Emoji_Modifier})?)*|\p{Regional_Indicator}{2}|\d\uFE0F?\u20E3|[#*]\uFE0F?\u20E3)/gu;
+
+/** True when the text holds nothing but emoji and whitespace — the case a chat
+ *  bubble draws bigger. */
+export function isEmojiOnlyText(text: string): boolean {
+	const stripped = text.replace(/\s/g, '');
+	if (!stripped) return false;
+	return [...stripped.matchAll(EMOJI_ONLY_SEQUENCE)].map((match) => match[0]).join('') === stripped;
+}
+
 /** Every `:name:` in `text`, with the boundary rule that keeps `10:30:00` and `a:b:` as text. */
 export function matchEmojiShortcodes(text: string): EmojiShortcodeMatch[] {
 	const out: EmojiShortcodeMatch[] = [];
