@@ -1,11 +1,12 @@
 import { clientStateDecoder } from 'ts-mls';
+import type { CordnBackgroundNotificationPreview } from 'cordn-background';
 
 import {
 	formatChatNotificationBody,
 	getChatGroupDisplayTitle
 } from '$lib/components/chat/chatGroupDisplay';
-import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
 import { listGroupMembers } from '$lib/services/chatAdminPolicy';
+import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
 import {
 	ingestChatGroupMessages,
 	type StoredChatMessage
@@ -23,12 +24,7 @@ export interface StagedEncryptedMessage {
 	at: number;
 }
 
-export interface NotificationPreview {
-	gid: string;
-	title: string;
-	body: string;
-	count: number;
-}
+export type NotificationPreview = CordnBackgroundNotificationPreview;
 
 interface PreviewMessage {
 	cursor: number;
@@ -109,8 +105,6 @@ export async function runColdNotificationPreviews(): Promise<void> {
 export async function generateNotificationPreviews(input: {
 	accountPubkey: string;
 	rows: StagedEncryptedMessage[];
-	maxGroups?: number;
-	budgetMs?: number;
 }): Promise<NotificationPreview[]> {
 	const ownerPubkey = input.accountPubkey.trim().toLowerCase();
 	if (!ownerPubkey || input.rows.length === 0) return [];
@@ -129,7 +123,7 @@ export async function generateNotificationPreviews(input: {
 	if (rowsByGroup.size === 0) return [];
 
 	const storage = await getChatStorage();
-	const deadline = Date.now() + (input.budgetMs ?? PREVIEW_BUDGET_MS);
+	const deadline = Date.now() + PREVIEW_BUDGET_MS;
 	const groups = [...rowsByGroup.entries()]
 		.map(([gid, rows]) => ({
 			gid,
@@ -137,14 +131,23 @@ export async function generateNotificationPreviews(input: {
 			latestCursor: rows[rows.length - 1]?.cursor ?? 0
 		}))
 		.sort((a, b) => b.latestCursor - a.latestCursor)
-		.slice(0, input.maxGroups ?? MAX_PREVIEW_GROUPS);
+		.slice(0, MAX_PREVIEW_GROUPS);
 
 	const previews: NotificationPreview[] = [];
 	for (const { gid, rows } of groups) {
 		if (Date.now() >= deadline) break;
 		try {
 			const data = await storage.getGroup(gid, { messageLimit: 0 });
-			if (!data || data.status === 'removed' || data.status === 'poisoned') continue;
+			// Group ids can be shared across accounts. This runtime may only decrypt
+			// the account the worker named; a mismatched record stays count-only.
+			if (
+				!data ||
+				data.ownerPubkey !== ownerPubkey ||
+				data.status === 'removed' ||
+				data.status === 'poisoned'
+			) {
+				continue;
+			}
 
 			// A foreground ingest may already have handled these rows while the
 			// preview was being prepared. Its state is authoritative; never replay
@@ -185,10 +188,11 @@ export async function generateNotificationPreviews(input: {
 			if (!selected) continue;
 			const { last, count } = selected;
 			const extra = count - 1;
-			const memberPubkeys = listGroupMembers(state).map((member) => member.stablePubkey);
+			const memberPubkeys = listGroupMembers(working.state).map((member) => member.stablePubkey);
 			const title = getChatGroupDisplayTitle({
-				// Only id + metadata are read by the display helper.
-				group: { id: data.id, metadata } as StoredChatGroup,
+				// Only id + metadata are read by the display helper. Use the replayed
+				// metadata so a rename carried by this same batch is not lost.
+				group: { id: data.id, metadata: working.metadata } as StoredChatGroup,
 				activePubkey: ownerPubkey,
 				memberPubkeys
 			});
@@ -197,7 +201,8 @@ export async function generateNotificationPreviews(input: {
 				title,
 				body:
 					formatChatNotificationBody(last.sender, last) + (extra > 0 ? ` (+${extra} more)` : ''),
-				count
+				count,
+				cursor: freshRows[freshRows.length - 1]!.cursor
 			});
 		} catch (error) {
 			// One unreadable group must not suppress the others; the count

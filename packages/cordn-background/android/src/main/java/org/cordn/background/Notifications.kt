@@ -125,7 +125,8 @@ internal object Notifications {
         if (publicBody != null) {
             val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
                 .setSmallIcon(R.drawable.ic_stat_cordn)
-                .setContentTitle(title)
+                // A locked screen gets the app name + count, never the chat name.
+                .setContentTitle("Cordn")
                 .setContentText(publicBody)
                 .setColor(BRAND_COLOR)
                 .build()
@@ -169,8 +170,12 @@ internal object Notifications {
             if (gid.isEmpty() || body.isEmpty()) continue
             // Never resurrect a notification the person already dismissed.
             if (active != null && gid.hashCode() !in active) continue
+            // The worker's nativeCursor only moves forward. A preview built from an
+            // older poll must not overwrite a newer notification.
+            val cursor = preview.optLong("cursor", 0L)
+            if (cursor in 1 until store.getNativeCursor(gid)) continue
             val (cachedTitle, iconBytes) = store.getGroupMeta(gid)
-            val title = preview.optString("title").takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
+            val title = cachedTitle?.takeIf { it.isNotBlank() } ?: preview.optString("title").takeIf { it.isNotBlank() } ?: "Cordn"
             val count = preview.optInt("count", 1).coerceAtLeast(1)
             val publicBody = if (count == 1) "New message" else "$count new messages"
             postMessageNotification(

@@ -94,6 +94,8 @@ export interface CordnBackgroundNotificationPreview {
 	title: string;
 	body: string;
 	count: number;
+	/** Highest staged cursor this preview decrypts; stale previews are skipped. */
+	cursor: number;
 }
 
 export interface CordnBackgroundPreviewPreference {

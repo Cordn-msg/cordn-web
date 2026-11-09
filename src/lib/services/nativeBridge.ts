@@ -160,7 +160,9 @@ export async function initNativeShell(): Promise<void> {
 	// foregrounded gap, firing exactly when there are confirmed un-ingested bytes.
 	try {
 		await CordnBackground.addListener('sidecarUpdated', () => {
-			void runDrain();
+			// Backgrounded JS stays alive, but ingestion belongs to the foreground;
+			// draining here can consume the rows the warm preview still needs.
+			if (appActive) void runDrain();
 		});
 	} catch {
 		// plugin unavailable — foreground-transition drain still covers recovery
@@ -691,34 +693,55 @@ function runDrain(): Promise<void> {
 	return drainInFlight;
 }
 
+let warmPreviewInFlight: Promise<void> | null = null;
+let pendingWarmPreviewEvent: WarmPreviewEvent | null = null;
+
+interface WarmPreviewEvent {
+	accountPubkey: string | null;
+	messages: Array<{ gid: string; cursor: number; msg64: string; at: number }>;
+}
+
 /**
  * Decrypt staged rows for the worker while the real WebView is alive. This is
  * the cheap path: native posts its count notification first, then asks here
  * and silently upgrades it to text. The sidecar is only peeked — the normal
- * foreground drain still owns ingestion and MLS state.
+ * foreground drain still owns ingestion and MLS state. Requests can overlap
+ * when Fast and WorkManager poll together: keep the newest for a follow-up
+ * pass so the shade converges on the latest staged cursor.
  */
-let warmPreviewInFlight: Promise<void> | null = null;
-
-function runWarmNotificationPreviews(event: {
-	accountPubkey: string | null;
-	messages: Array<{ gid: string; cursor: number; msg64: string; at: number }>;
-}): Promise<void> {
+function runWarmNotificationPreviews(event: WarmPreviewEvent): Promise<void> {
+	pendingWarmPreviewEvent = event;
 	warmPreviewInFlight ??= (async () => {
-		if (appActive || !getNotificationPreviewsEnabled()) return;
-		const accountPubkey = event.accountPubkey ?? manager.active?.pubkey;
-		if (!accountPubkey || event.messages.length === 0) return;
-		const previews = await generateNotificationPreviews({
-			accountPubkey,
-			rows: event.messages
-		});
-		// The user may have opened the app while decryption ran; foregrounding
-		// clears the shade, so a late update would resurrect a stale notification.
-		if (appActive) return;
-		if (previews.length > 0) {
-			await CordnBackground.applyNotificationPreviews({ previews });
+		while (pendingWarmPreviewEvent) {
+			const next = pendingWarmPreviewEvent;
+			pendingWarmPreviewEvent = null;
+			try {
+				await deliverWarmNotificationPreviews(next);
+			} catch (error) {
+				console.warn('[notification-preview] warm pass failed', { error });
+			}
 		}
 	})().finally(() => {
 		warmPreviewInFlight = null;
+		// A request that landed between the loop draining and this microtask
+		// must not wait for the next poll.
+		if (pendingWarmPreviewEvent) void runWarmNotificationPreviews(pendingWarmPreviewEvent);
 	});
 	return warmPreviewInFlight;
+}
+
+async function deliverWarmNotificationPreviews(event: WarmPreviewEvent): Promise<void> {
+	if (appActive || !getNotificationPreviewsEnabled()) return;
+	const accountPubkey = event.accountPubkey ?? manager.active?.pubkey;
+	if (!accountPubkey || event.messages.length === 0) return;
+	const previews = await generateNotificationPreviews({
+		accountPubkey,
+		rows: event.messages
+	});
+	// The user may have opened the app while decryption ran; foregrounding
+	// clears the shade, so a late update would resurrect a stale notification.
+	if (appActive) return;
+	if (previews.length > 0) {
+		await CordnBackground.applyNotificationPreviews({ previews });
+	}
 }

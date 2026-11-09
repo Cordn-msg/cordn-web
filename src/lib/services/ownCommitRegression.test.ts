@@ -260,6 +260,7 @@ import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { getChatStorage } from '$lib/storage/chatStorage';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { CoordinatorRejectedError } from '$lib/services/coordinatorClient';
+import { generateNotificationPreviews } from '$lib/services/chatNotificationPreview';
 
 function decodeEpoch(stateBase64: string): bigint {
 	const decoded = clientStateDecoder(base64ToBytes(stateBase64), 0);
@@ -568,6 +569,70 @@ describe('sibling-commit detector (spec §10, cross-device)', () => {
 		await expect(
 			updateChatGroupMetadata({ groupId: group.id, name: 'nope' })
 		).rejects.toMatchObject({ name: 'GroupBehindSiblingError' });
+	});
+});
+
+describe('notification preview isolation', () => {
+	test('decrypts a staged row without touching authoritative state, and rejects another owner', async () => {
+		const group = await createChatGroup({
+			name: 'preview isolation',
+			coordinatorKey: 'ef'.repeat(32)
+		});
+		await inviteChatGroupMembers({
+			groupId: group.id,
+			targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+		});
+		await deliverEcho(group.id);
+		const welcome = storeWelcomeCalls.at(-1)!;
+		const carolState = await joinGroupFromWelcome({
+			welcomeBase64: welcome.welcome_64,
+			keyPackage: carolKeyPackage.publicPackage,
+			privateKeyPackage: carolKeyPackage.privatePackage
+		});
+		const made = await createApplicationMessageBase64({
+			state: carolState,
+			event: createUnsignedCordnMessageEvent({
+				pubkey: carolPubkey,
+				content: 'hello from carol',
+				kind: 9,
+				tags: [],
+				createdAt: Math.floor(Date.now() / 1000)
+			}),
+			authenticatedData: encodeAuthenticatedSender(carolPubkey)
+		});
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state: carolState,
+			opaqueMessageBase64: made.opaqueMessageBase64
+		});
+		const rows = [
+			{
+				gid: group.id,
+				cursor: 2,
+				msg64: encryptedBase64,
+				at: Math.floor(Date.now() / 1000)
+			}
+		];
+		const storage = await getChatStorage();
+		const before = await storage.getGroup(group.id);
+
+		const previews = await generateNotificationPreviews({
+			accountPubkey: account.pubkey,
+			rows
+		});
+		expect(previews).toEqual([
+			expect.objectContaining({ gid: group.id, body: 'hello from carol', count: 1, cursor: 2 })
+		]);
+
+		// The clone must not advance the real ratchet or write any history.
+		const after = await storage.getGroup(group.id);
+		expect(after?.stateBytes).toEqual(before?.stateBytes);
+		expect(after?.fetchCursor).toBe(before?.fetchCursor);
+		expect(after?.messages).toHaveLength(before?.messages.length ?? 0);
+
+		// A sweep for a different account must not decrypt this account's group.
+		expect(await generateNotificationPreviews({ accountPubkey: 'ff'.repeat(32), rows })).toEqual(
+			[]
+		);
 	});
 });
 
