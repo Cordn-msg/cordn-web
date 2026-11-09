@@ -99,13 +99,16 @@ class CordnBackgroundPlugin : Plugin() {
         val title = call.getString("title")?.takeIf { it.isNotBlank() } ?: cachedTitle ?: "Cordn"
         val body = call.getString("body", "New message") ?: "New message"
         val count = (call.getInt("count") ?: 1).coerceAtLeast(1)
+        val messages = call.getArray("messages", JSArray()) ?: JSArray()
         Notifications.postMessageNotification(
             getContext(),
             gid,
             title,
             body,
             iconBytes,
-            publicBody = if (count == 1) "New message" else "$count new messages"
+            publicBody = if (count == 1) "New message" else "$count new messages",
+            count = count,
+            messages = messages.takeIf { it.length() > 0 }
         )
         call.resolve()
     }

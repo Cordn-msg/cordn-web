@@ -3,7 +3,8 @@ import type { CordnBackgroundNotificationPreview, StagedMessage } from 'cordn-ba
 
 import {
 	formatChatNotificationBody,
-	getChatGroupDisplayTitle
+	getChatGroupDisplayTitle,
+	getProfileDisplayName
 } from '$lib/components/chat/chatGroupDisplay';
 import { listGroupMembers } from '$lib/services/chatAdminPolicy';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
@@ -176,8 +177,13 @@ export async function generateNotificationPreviews(input: {
 				lastReadCursor(ownerPubkey, gid)
 			);
 			if (!selected) continue;
-			const { last, count } = selected;
-			const extra = count - 1;
+			const { count, thread } = selected;
+			const messages = thread.map((message) => ({
+				sender: getProfileDisplayName(message.sender),
+				text: formatChatNotificationBody(message.sender, message),
+				at: message.createdAt
+			}));
+			const latest = messages[messages.length - 1]!;
 			const memberPubkeys = listGroupMembers(working.state).map((member) => member.stablePubkey);
 			const title = getChatGroupDisplayTitle({
 				// Only id + metadata are read by the display helper. Use the replayed
@@ -189,9 +195,9 @@ export async function generateNotificationPreviews(input: {
 			previews.push({
 				gid,
 				title,
-				body:
-					formatChatNotificationBody(last.sender, last) + (extra > 0 ? ` (+${extra} more)` : ''),
+				body: latest.text,
 				count,
+				messages,
 				cursor: freshRows[freshRows.length - 1]!.cursor
 			});
 		} catch (error) {

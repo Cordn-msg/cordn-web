@@ -31,6 +31,30 @@ describe('notification preview selection', () => {
 		);
 		expect(selected?.last.content).toBe('newest');
 		expect(selected?.count).toBe(3);
+		expect(selected?.thread.map((message) => message.content)).toEqual([
+			'old but unread',
+			'middle',
+			'newest'
+		]);
+	});
+
+	test('keeps the last six eligible messages in the thread', () => {
+		const selected = selectNotificationPreview(
+			Array.from({ length: 8 }, (_, index) =>
+				message({ cursor: index + 1, content: `message-${index + 1}` })
+			),
+			owner,
+			0
+		);
+		expect(selected?.count).toBe(8);
+		expect(selected?.thread.map((message) => message.content)).toEqual([
+			'message-3',
+			'message-4',
+			'message-5',
+			'message-6',
+			'message-7',
+			'message-8'
+		]);
 	});
 
 	test('drops messages at or below the read cursor', () => {

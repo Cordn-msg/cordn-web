@@ -219,7 +219,8 @@ internal object MessageFetcher {
             title = name,
             body = body,
             iconBytes = iconBytes,
-            publicBody = body
+            publicBody = body,
+            count = count
         )
         android.util.Log.i("CordnBg", "notified gid=$gid count=$count hasIcon=${iconBytes != null}")
     }

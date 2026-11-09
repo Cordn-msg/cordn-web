@@ -10,6 +10,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -42,17 +43,77 @@ internal object NotificationPreviewRenderer {
     private const val PREVIEW_URL = "https://localhost/background-preview"
     private const val PREVIEW_TIMEOUT_MS = 15_000L
 
-    suspend fun render(context: Context) {
-        val store = BackgroundStore.get(context)
-        if (!store.getNotificationPreviews()) return
-        val account = store.getCurrentAccount() ?: return
-        if (store.peekSidecar(account).isEmpty()) return
-        // Foreground notifications are suppressed entirely; the live path owns text there.
-        if (CordnBackgroundPlugin.appForegrounded) return
+    private data class PreviewRequest(
+        val account: String,
+        val rows: List<BackgroundStore.StagedRow>
+    )
 
+    private val lock = Any()
+    private var active: CompletableDeferred<Unit>? = null
+    private var pending: PreviewRequest? = null
+
+    suspend fun render(context: Context) {
+        val request = prepare(context) ?: return
+        val done: CompletableDeferred<Unit>
+        val owner: Boolean
+        synchronized(lock) {
+            val current = active
+            if (current == null) {
+                done = CompletableDeferred()
+                active = done
+                owner = true
+            } else {
+                pending = request
+                done = current
+                owner = false
+            }
+        }
+        if (!owner) {
+            done.await()
+            return
+        }
+
+        try {
+            var next: PreviewRequest? = request
+            while (next != null) {
+                renderOnce(context.applicationContext, next)
+                next = synchronized(lock) {
+                    val queued = pending
+                    pending = null
+                    if (queued == null || queued == next) {
+                        active = null
+                        done.complete(Unit)
+                        null
+                    } else {
+                        queued
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            synchronized(lock) {
+                if (active === done) active = null
+                pending = null
+                done.complete(Unit)
+            }
+            throw t
+        }
+    }
+
+    private fun prepare(context: Context): PreviewRequest? {
+        val store = BackgroundStore.get(context)
+        if (!store.getNotificationPreviews()) return null
+        val account = store.getCurrentAccount() ?: return null
+        val rows = store.peekSidecar(account)
+        // Foreground notifications are suppressed entirely; the live path owns text there.
+        if (rows.isEmpty() || CordnBackgroundPlugin.appForegrounded) return null
+        return PreviewRequest(account, rows)
+    }
+
+    private suspend fun renderOnce(context: Context, request: PreviewRequest) {
+        if (CordnBackgroundPlugin.appForegrounded) return
         android.util.Log.i("CordnBg", "preview: starting hidden WebView")
         withContext(Dispatchers.Main) {
-            awaitHiddenWebView(context.applicationContext, account)
+            awaitHiddenWebView(context, request.account)
         }
         android.util.Log.i("CordnBg", "preview: hidden WebView finished")
     }

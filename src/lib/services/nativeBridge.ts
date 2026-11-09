@@ -7,7 +7,13 @@ import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CordnBackground, ShareTarget, type DeliveryMode, type PollGroup } from 'cordn-background';
+import {
+	CordnBackground,
+	ShareTarget,
+	type CordnBackgroundNotificationMessage,
+	type DeliveryMode,
+	type PollGroup
+} from 'cordn-background';
 import {
 	applyNotificationPreviewsSetting,
 	getNotificationPreviewsEnabled
@@ -271,6 +277,8 @@ export interface ChatLocalNotification {
 	body: string;
 	/** New messages in this batch; native uses it for the locked-screen count. */
 	count: number;
+	/** Native only: recent decrypted messages, oldest first; native shows the latest six. */
+	messages?: CordnBackgroundNotificationMessage[];
 	/** Web only: group/favicon icon URL. Native reads its icon from the cache (NativeGroupMetaSync). */
 	icon?: string;
 	/** Stable group id — dedup tag (web) and coalescing id (native). */
@@ -351,12 +359,15 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 		// ignored the web `icon` field anyway, which is why live-path notifications used to have no
 		// icon. Web stays on the browser Notification API below.
 		const count = Math.max(1, n.count);
-		const body = getNotificationPreviewsEnabled()
-			? n.body
-			: count === 1
-				? 'New message'
-				: `${count} new messages`;
-		void postMessageNotification(n.groupId, n.title || 'Cordn', body, count);
+		const previews = getNotificationPreviewsEnabled();
+		const body = previews ? n.body : count === 1 ? 'New message' : `${count} new messages`;
+		void postMessageNotification(
+			n.groupId,
+			n.title || 'Cordn',
+			body,
+			count,
+			previews ? n.messages : undefined
+		);
 		return;
 	}
 	if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -411,11 +422,12 @@ export async function postMessageNotification(
 	gid: string,
 	title: string,
 	body: string,
-	count = 1
+	count = 1,
+	messages?: CordnBackgroundNotificationMessage[]
 ): Promise<void> {
 	if (!isNativePlatform()) return;
 	try {
-		await CordnBackground.postMessageNotification({ gid, title, body, count });
+		await CordnBackground.postMessageNotification({ gid, title, body, count, messages });
 	} catch {
 		// never block chat on a failed notification
 	}

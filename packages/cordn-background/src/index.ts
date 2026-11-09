@@ -58,6 +58,15 @@ export interface CordnBackgroundMetaOptions {
 	iconBytes?: string;
 }
 
+export interface CordnBackgroundNotificationMessage {
+	/** Display name of the sender. */
+	sender: string;
+	/** Decrypted one-line preview text. */
+	text: string;
+	/** Message timestamp in seconds, used to order the notification thread. */
+	at: number;
+}
+
 export interface CordnBackgroundPostNotificationOptions {
 	/** Coordinator group id — the per-group notification key (a burst coalesces; latest wins). */
 	gid: string;
@@ -67,6 +76,8 @@ export interface CordnBackgroundPostNotificationOptions {
 	body?: string;
 	/** New messages in this notification; also the locked-screen count. */
 	count?: number;
+	/** Recent decrypted messages, oldest first; native shows the latest six as a thread. */
+	messages?: CordnBackgroundNotificationMessage[];
 }
 
 export interface CordnBackgroundAdvanceCursorOptions {
@@ -96,6 +107,8 @@ export interface CordnBackgroundNotificationPreview {
 	title: string;
 	body: string;
 	count: number;
+	/** Recent decrypted messages, oldest first. */
+	messages: CordnBackgroundNotificationMessage[];
 	/** Highest staged cursor this preview decrypts; stale previews are skipped. */
 	cursor: number;
 }

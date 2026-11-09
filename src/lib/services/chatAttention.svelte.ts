@@ -10,6 +10,7 @@ import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
 	formatChatNotificationBody,
+	getProfileDisplayName,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -20,6 +21,7 @@ import {
 	getUnreadChatGroupReferenceCount
 } from '$lib/services/chatGroupPresence.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
+import { getNotificationPreviewsEnabled } from '$lib/services/chatNotificationSettings';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -225,26 +227,9 @@ export async function notifyForUnreadChatMessages() {
 
 		const nextMessages = group.messages.filter((message) => message.cursor > previousCursor);
 
-		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
-		const profileHints: ChatGroupProfileHints = {};
-		const representative = getRepresentativeMemberPubkey(group, { activePubkey, memberPubkeys });
-		if (representative) {
-			const hint = await resolveProfileHint(representative);
-			if (hint) profileHints[representative] = hint;
-		}
-		const title = getChatGroupDisplayTitle({
-			group,
-			activePubkey,
-			profileHints,
-			memberPubkeys
-		});
-		const icon =
-			getChatGroupNotificationIcon(group, { activePubkey, memberPubkeys, profileHints }) ??
-			DEFAULT_FAVICON;
-
-		// One notification per group pass: notify the LAST eligible message with a "+N more"
-		// suffix instead of one toast per message — a busy burst in several groups otherwise floods
-		// the shade (the web Notification tag only collapses same-group entries, native posts N).
+		// One notification per group pass: native shows the last six eligible messages as a
+		// thread; web keeps the latest text with a "+N more" suffix because a browser
+		// notification cannot stack messages.
 		const eligible = nextMessages.filter((message) => {
 			if (message.kind === SYSTEM_MESSAGE_KIND) return false;
 			if (message.direction !== 'inbound') return false;
@@ -260,16 +245,50 @@ export async function notifyForUnreadChatMessages() {
 		});
 		if (eligible.length === 0) continue;
 
+		const previews = getNotificationPreviewsEnabled();
+		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
+		const representative = getRepresentativeMemberPubkey(group, { activePubkey, memberPubkeys });
+		const profilePubkeys = new Set(
+			previews ? eligible.slice(-6).map((message) => message.sender) : []
+		);
+		if (representative) profilePubkeys.add(representative);
+		const profileHints: ChatGroupProfileHints = {};
+		const hints = await Promise.all(
+			[...profilePubkeys].map(async (pubkey) => [pubkey, await resolveProfileHint(pubkey)] as const)
+		);
+		for (const [pubkey, hint] of hints) {
+			if (hint) profileHints[pubkey] = hint;
+		}
+		const title = getChatGroupDisplayTitle({
+			group,
+			activePubkey,
+			profileHints,
+			memberPubkeys
+		});
+		const icon =
+			getChatGroupNotificationIcon(group, { activePubkey, memberPubkeys, profileHints }) ??
+			DEFAULT_FAVICON;
+
 		for (const message of eligible) rememberNotifiedMessage(message.id);
-		const last = eligible[eligible.length - 1]!;
+		const messages = previews
+			? eligible.slice(-6).map((message) => ({
+					sender: getProfileDisplayName(message.sender, profileHints),
+					text: formatChatNotificationBody(message.sender, message, profileHints),
+					at: message.createdAt
+				}))
+			: undefined;
+		const latest = messages ? messages[messages.length - 1] : undefined;
 		const extra = eligible.length - 1;
-		const body =
-			formatChatNotificationBody(last.sender, last, profileHints) +
-			(extra > 0 ? ` (+${extra} more)` : '');
+		const body = latest
+			? latest.text + (extra > 0 ? ` (+${extra} more)` : '')
+			: extra > 0
+				? `${eligible.length} new messages`
+				: 'New message';
 		await showLocalNotification({
 			title: title || 'Cordn',
 			body,
 			count: eligible.length,
+			messages,
 			icon,
 			groupId: group.id
 		});

@@ -227,7 +227,7 @@
 					<Card.Header>
 						<Card.Title>Show message previews</Card.Title>
 						<Card.Description>
-							Decrypt the newest message on this device so notifications can show its text.
+							Decrypt recent messages on this device so notifications can show their text.
 						</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-3">
@@ -257,7 +257,7 @@
 						<p>
 							Cordn checks for new encrypted messages on a schedule. A notification appears with the
 							group icon as soon as a message arrives; when a preview can be built, the same
-							notification is quietly updated with the sender's text.
+							notification is quietly updated with the recent messages.
 						</p>
 						<p>
 							Notifications group by chat. Tapping one opens Cordn and downloads the full messages.

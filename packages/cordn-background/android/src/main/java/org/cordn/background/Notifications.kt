@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
 import org.json.JSONArray
 
 /**
@@ -92,8 +93,9 @@ internal object Notifications {
      * No `.setGroup`: each group is its own notification id, so multiple groups never collapse
      * into Android's auto-summary (the old "copy/stack" icon).
      *
-     * ponytail: simple title+body per group. MessagingStyle per-room accumulation (armada's
-     * NotificationRelayService pattern) is the upgrade path once multi-message threading matters.
+     * When [messages] is present the latest six unread messages are rendered as a
+     * `MessagingStyle` thread; the collapsed line uses the newest text and the count
+     * stays the total unread count. Count-only posters omit it.
      */
     fun postMessageNotification(
         ctx: Context,
@@ -104,23 +106,45 @@ internal object Notifications {
         /** Silent update of an existing notification (count → decrypted text). */
         onlyAlertOnce: Boolean = false,
         /** What a locked screen may show instead of [body]; null hides the text. */
-        publicBody: String? = null
+        publicBody: String? = null,
+        /** Total new messages in this notification; the thread may show fewer. */
+        count: Int = 1,
+        /** Recent decrypted messages, oldest first. */
+        messages: JSONArray? = null
     ) {
         ensureChannels(ctx)
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
         // Record for orphan-free clears: clearMessageNotifications cancels seeded ∪ recorded
         // gids, so a notification whose group was unseeded after posting still gets canceled.
         BackgroundStore.get(ctx).addNotifiedGid(gid)
+        val thread = parseThread(messages)
         val builder = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_cordn)
             .setContentTitle(title)
-            .setContentText(body)
+            .setContentText(thread.lastOrNull()?.text ?: body)
+            .setNumber(count.coerceAtLeast(1))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setOnlyAlertOnce(onlyAlertOnce)
             .setAutoCancel(true)
             .setColor(BRAND_COLOR)
+        if (thread.isNotEmpty()) {
+            val style = NotificationCompat.MessagingStyle(Person.Builder().setName("You").build())
+                .setConversationTitle(title)
+                .setGroupConversation(true)
+            for (message in thread) {
+                style.addMessage(
+                    message.text,
+                    message.at * 1000L,
+                    Person.Builder().setName(message.sender).build()
+                )
+            }
+            builder.setStyle(style)
+            if (thread.last().at > 0) {
+                builder.setWhen(thread.last().at * 1000L).setShowWhen(true)
+            }
+        }
         decodeIcon(iconBytes)?.let { builder.setLargeIcon(it) }
         if (publicBody != null) {
             val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
@@ -150,6 +174,24 @@ internal object Notifications {
         } catch (t: SecurityException) {
             // POST_NOTIFICATIONS not granted — silently skip.
         }
+    }
+
+    private data class ThreadMessage(val sender: String, val text: String, val at: Long)
+
+    private fun parseThread(messages: JSONArray?): List<ThreadMessage> {
+        if (messages == null || messages.length() == 0) return emptyList()
+        val parsed = ArrayList<ThreadMessage>(messages.length())
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            val text = message.optString("text").trim()
+            if (text.isEmpty()) continue
+            parsed += ThreadMessage(
+                sender = message.optString("sender").ifBlank { "Cordn" },
+                text = text,
+                at = message.optLong("at", 0L)
+            )
+        }
+        return parsed.takeLast(6)
     }
 
     /**
@@ -185,7 +227,9 @@ internal object Notifications {
                 body = body,
                 iconBytes = iconBytes,
                 onlyAlertOnce = true,
-                publicBody = publicBody
+                publicBody = publicBody,
+                count = count,
+                messages = preview.optJSONArray("messages")
             )
         }
     }
