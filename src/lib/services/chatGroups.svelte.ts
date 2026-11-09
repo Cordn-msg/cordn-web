@@ -46,7 +46,7 @@ import {
 import { noteStateFingerprint } from '$lib/services/multiDevice';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
-import { dropStaleEmojiMediaTags } from '$lib/chat/emoji';
+import { dropStaleEmojiMediaTags, EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
 import {
 	resolveOutboundMessage,
 	type ChatMessageReplyTarget,
@@ -314,7 +314,7 @@ function updateGroupMessagesWindow(groupId: string, incoming: StoredChatMessage[
 }
 
 function isLegacyEmojiMediaRow(message: StoredChatMessage): boolean {
-	return !message.mediaKeyBase64 && message.tags.some((tag) => tag[0] === 'emoji-media');
+	return !message.mediaKeyBase64 && message.tags.some((tag) => tag[0] === EMOJI_MEDIA_TAG);
 }
 
 /** Rows stored before `emoji-media` existed carry no media key. The current

@@ -201,7 +201,21 @@ describe('emoji tags', () => {
 
 describe('isEmojiOnlyText', () => {
 	it('accepts emoji sequences, alone or with spacing', () => {
-		for (const text of ['😂', '😂😂', ' ❤️ ', '👍🏽', '👨‍👩‍👧', '🇧🇷', '1️⃣', '#️⃣', '😭\n😭']) {
+		for (const text of [
+			'😂',
+			'😂😂',
+			' ❤️ ',
+			'👍🏽',
+			'👨‍👩‍👧',
+			'🇧🇷',
+			'1️⃣',
+			'#️⃣',
+			'😭\n😭',
+			'➡️',
+			'✈️',
+			'©️',
+			'™️'
+		]) {
 			expect(isEmojiOnlyText(text), text).toBe(true);
 		}
 	});

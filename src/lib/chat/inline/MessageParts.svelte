@@ -101,7 +101,7 @@
 		<span
 			class={cn(
 				MESSAGE_PART_CONTAINER_CLASS,
-				onlyEmoji && isEmojiOnlyText(part.text) && 'text-5xl leading-[1.1]'
+				onlyEmoji && part.text.trim() !== '' && 'text-5xl leading-[1.1]'
 			)}>{part.text}</span
 		>
 	{/if}
