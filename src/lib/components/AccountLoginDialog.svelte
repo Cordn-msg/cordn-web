@@ -115,14 +115,13 @@
 		}
 	}
 
-	async function signInWithKey(key: string) {
+	function signInWithKey(key: string) {
 		if (!key.trim()) {
 			error = 'Please enter a private key';
 			return;
 		}
 
 		try {
-			loading = true;
 			error = '';
 
 			const account = PrivateKeyAccount.fromKey(key.trim());
@@ -132,15 +131,12 @@
 			closeDialog();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect with private key';
-		} finally {
-			loading = false;
 		}
 	}
 
-	async function createIdentity() {
-		if (loading) return;
+	function createIdentity() {
+		if (loading || createdAccount) return;
 		try {
-			loading = true;
 			error = '';
 
 			const account = PrivateKeyAccount.generateNew();
@@ -152,8 +148,6 @@
 			view = 'created';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create an identity';
-		} finally {
-			loading = false;
 		}
 	}
 
@@ -332,7 +326,7 @@
 		view === 'choose'
 			? 'Create an identity, or use one you already have.'
 			: view === 'created'
-				? 'Your account lives in this browser.'
+				? 'Your account lives on this device.'
 				: 'You can go back at any point.'
 	);
 	const signerApps = $derived(
@@ -369,11 +363,7 @@
 						disabled={loading}
 						onclick={createIdentity}
 					>
-						{#if loading}
-							<Spinner class="size-4 shrink-0" />
-						{:else}
-							<UserPlus class="size-4 shrink-0" aria-hidden="true" />
-						{/if}
+						<UserPlus class="size-4 shrink-0" aria-hidden="true" />
 						<span class="min-w-0 flex-1">
 							<span class="block text-sm font-medium">Create a new identity</span>
 							<span class="block text-xs text-muted-foreground"
@@ -469,22 +459,19 @@
 							class="font-mono"
 							autocomplete="off"
 							onkeydown={(event) => {
-								if (event.key === 'Enter' && importKey.trim() && !loading) signInWithKey(importKey);
+								if (event.key === 'Enter' && importKey.trim()) signInWithKey(importKey);
 							}}
 						/>
 						<p class="text-xs text-muted-foreground">
-							Your key stays in this browser. Use an extension or signer app if you'd rather keep it
+							Your key stays on this device. Use an extension or signer app if you'd rather keep it
 							out.
 						</p>
 					</div>
 					<Button
 						class="w-full"
 						onclick={() => signInWithKey(importKey)}
-						disabled={loading || !importKey.trim()}
+						disabled={!importKey.trim()}
 					>
-						{#if loading}
-							<Spinner class="mr-2 size-4" />
-						{/if}
 						Sign in
 					</Button>
 				</div>

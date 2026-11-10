@@ -7,6 +7,7 @@
 	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import { browser } from '$app/environment';
 	import { isAndroidNative } from '$lib/services/nativeBridge';
 	import { hasConfirmedBackup, hasSeenIntro, markIntroSeen } from '$lib/services/onboarding.svelte';
@@ -132,6 +133,10 @@
 	});
 	let introAuto = $state(!hasSeenIntro());
 	let introReplay = $state(false);
+
+	$effect(() => {
+		if (!hasAccount) introReplay = false;
+	});
 	let newConversationOpen = $state(false);
 	let newConversationInitialJoin = $state(false);
 
@@ -460,10 +465,16 @@
 		{/if}
 	</div>
 
-	{#if hasAccount && introReplay}
-		<div class="fixed inset-0 z-50 overflow-y-auto bg-background pt-safe pb-safe">
-			<LoggedOutIntro replay onSkip={() => (introReplay = false)} />
-		</div>
+	{#if hasAccount}
+		<Dialog.Root bind:open={introReplay}>
+			<Dialog.Content
+				aria-label="How Cordn works"
+				showCloseButton={false}
+				class="h-dvh max-h-none w-full max-w-none rounded-none p-0 pt-safe pb-safe sm:max-w-none"
+			>
+				<LoggedOutIntro replay onSkip={() => (introReplay = false)} />
+			</Dialog.Content>
+		</Dialog.Root>
 	{/if}
 
 	<NewConversationDialog

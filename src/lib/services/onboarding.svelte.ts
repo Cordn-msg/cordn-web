@@ -23,10 +23,9 @@ function read(key: string): boolean {
 	return browser && localStorage.getItem(key) === '1';
 }
 
-function write(key: string, value: boolean): void {
+function write(key: string): void {
 	if (!browser) return;
-	if (value) localStorage.setItem(key, '1');
-	else localStorage.removeItem(key);
+	localStorage.setItem(key, '1');
 }
 
 export function hasSeenIntro(): boolean {
@@ -36,7 +35,7 @@ export function hasSeenIntro(): boolean {
 export function markIntroSeen(): void {
 	if (flags.introSeen) return;
 	flags.introSeen = true;
-	write(INTRO_KEY, true);
+	write(INTRO_KEY);
 }
 
 export function hasConfirmedBackup(pubkey: string | undefined): boolean {
@@ -46,6 +45,6 @@ export function hasConfirmedBackup(pubkey: string | undefined): boolean {
 
 export function markBackupConfirmed(pubkey: string | undefined): void {
 	if (!pubkey) return;
-	write(`${BACKUP_PREFIX}${pubkey}`, true);
+	write(`${BACKUP_PREFIX}${pubkey}`);
 	flags.revision++;
 }

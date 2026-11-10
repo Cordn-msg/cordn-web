@@ -21,7 +21,7 @@
 		{
 			icon: KeyRound,
 			title: 'Your identity is a key you hold.',
-			body: 'No email, no phone number. On the web it lives in this browser, so a backup is the only copy.'
+			body: "No email, no phone number. If you keep your key on this device, make a backup — it's the only copy."
 		},
 		{
 			icon: Server,
