@@ -81,6 +81,12 @@
 	let floatingDayVisible = $state(false);
 	let floatingDayFrame: number | null = null;
 	let floatingDayHideTimer: number | null = null;
+	let floatingDayRetryTimer: number | null = null;
+	// Accumulated scroll movement since the chip last acted on it: slow
+	// trackpad/momentum deltas are often < 2px per event, so per-event
+	// thresholds would never fire. Direction is decided once a whole gesture
+	// clears FLOATING_DAY_DIRECTION_PX.
+	let floatingDayScrollDelta = 0;
 	// Programmatic scroll corrections (prepend anchor restore, load-older height
 	// compensation) move scrollTop DOWNWARD while the user is scrolling UP —
 	// ignore their scroll events so they can't hide the chip mid-read.
@@ -116,6 +122,8 @@
 	const VIRTUAL_OVERSCAN = 8;
 	const FLOATING_DAY_HIDE_MS = 1000;
 	const FLOATING_DAY_SUPPRESS_MS = 200;
+	const FLOATING_DAY_DIRECTION_PX = 8;
+	const FLOATING_DAY_RETRY_MS = 100;
 
 	// The virtualizer must only see list changes when the messages effect
 	// applies them through setOptions. estimateSize/getItemKey closures reading
@@ -357,6 +365,7 @@
 		// This correction moves scrollTop downward while the reader scrolls up.
 		// Keep the day chip up and let the next real upward scroll take over.
 		lastScrollTop = container.scrollTop;
+		floatingDayScrollDelta = 0;
 		floatingDaySuppressUntil = performance.now() + FLOATING_DAY_SUPPRESS_MS;
 		settledRun = run;
 	}
@@ -420,9 +429,27 @@
 		}
 	}
 
+	function clearFloatingDayRetry() {
+		if (floatingDayRetryTimer !== null) {
+			window.clearTimeout(floatingDayRetryTimer);
+			floatingDayRetryTimer = null;
+		}
+	}
+
 	function hideFloatingDay() {
 		clearFloatingDayTimer();
+		clearFloatingDayRetry();
+		floatingDayScrollDelta = 0;
 		floatingDayVisible = false;
+	}
+
+	function scheduleFloatingDayRetry(delayMs: number) {
+		if (!browser) return;
+		clearFloatingDayRetry();
+		floatingDayRetryTimer = window.setTimeout(() => {
+			floatingDayRetryTimer = null;
+			scheduleFloatingDayUpdate();
+		}, delayMs);
 	}
 
 	// The first virtual row whose wrapper still intersects the viewport top.
@@ -444,8 +471,18 @@
 		if (!browser || !container) return;
 		// Skip programmatic flights and paging corrections: their transient
 		// windows/offsets don't describe what the reader is actually looking at.
-		if (scrollRun !== settledRun || loadOlderInFlight) return;
-		if (performance.now() < floatingDaySuppressUntil) return;
+		// Retry instead of dropping the pass — the scroll event that revealed the
+		// chip is usually the one that also started the page load, so waiting for
+		// another event would leave the chip hidden while the reader sits parked.
+		if (scrollRun !== settledRun || loadOlderInFlight) {
+			scheduleFloatingDayRetry(FLOATING_DAY_RETRY_MS);
+			return;
+		}
+		const suppressionLeft = floatingDaySuppressUntil - performance.now();
+		if (suppressionLeft > 0) {
+			scheduleFloatingDayRetry(Math.max(suppressionLeft, FLOATING_DAY_RETRY_MS));
+			return;
+		}
 		if (isAtBottom()) {
 			hideFloatingDay();
 			return;
@@ -480,13 +517,19 @@
 		const delta = top - lastScrollTop;
 		lastScrollTop = top;
 		if (performance.now() >= floatingDaySuppressUntil) {
-			if (delta < -2) {
+			floatingDayScrollDelta += delta;
+			if (floatingDayScrollDelta <= -FLOATING_DAY_DIRECTION_PX) {
 				// Moving toward older messages: reveal/advance the day chip.
+				floatingDayScrollDelta = 0;
 				scheduleFloatingDayUpdate();
-			} else if (delta > 2) {
+			} else if (floatingDayScrollDelta >= FLOATING_DAY_DIRECTION_PX) {
 				// Moving toward newer messages: the chip slides away immediately.
 				hideFloatingDay();
 			}
+		} else {
+			// Compensation moves scrollTop, not the reader: start the next gesture
+			// from the corrected position rather than carrying its delta over.
+			floatingDayScrollDelta = 0;
 		}
 		if (top < 240) void handleLoadOlder();
 	}
@@ -517,6 +560,7 @@
 				// Compensating for prepended height looks like a downward scroll;
 				// don't let it dismiss the chip the reader opened by scrolling up.
 				lastScrollTop = container.scrollTop;
+				floatingDayScrollDelta = 0;
 				floatingDaySuppressUntil = performance.now() + FLOATING_DAY_SUPPRESS_MS;
 			}
 			measureVisibleItems();
@@ -598,7 +642,12 @@
 		const firstMessageId = messages[0]?.id ?? '';
 		const focusCursor = initialFocusCursor;
 		if (!browser || !container) return;
-		if (appliedGroupId !== groupId) hideFloatingDay();
+		if (appliedGroupId !== groupId) {
+			hideFloatingDay();
+			floatingDayLabel = '';
+			floatingDaySuppressUntil = 0;
+			lastScrollTop = container.scrollTop;
+		}
 		// ALWAYS advance the render snapshot, before any gating: rows render from
 		// messageSnapshot only, and content-only updates (a reaction chip landing,
 		// a peer edit/pin/delete) change no row ids or count — the applied* gate
@@ -774,6 +823,7 @@
 				window.cancelAnimationFrame(floatingDayFrame);
 			}
 			clearFloatingDayTimer();
+			clearFloatingDayRetry();
 			if (highlightTimeout) {
 				clearTimeout(highlightTimeout);
 			}
