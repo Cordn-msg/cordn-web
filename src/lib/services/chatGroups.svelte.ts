@@ -1985,13 +1985,10 @@ export async function inviteChatGroupMembers(input: {
 			addMemberOp.postedCursor = posted.cursor;
 		}
 
-		const syncBaseGroup: StoredChatGroup = {
-			...group,
-			stateBase64: encodeState(commitResult.newState),
-			metadata:
-				toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
-				group.metadata
-		};
+		// The post-intent record carries the payload key for the epoch this Commit
+		// left; without it, traffic sequenced just before our add fails to open at
+		// the new epoch and marks the group stale.
+		const syncBaseGroup = requireChatGroup(group.id);
 		const hasCursor = group.fetchCursor > 0;
 		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
 			client.FetchManyGroupMessages({

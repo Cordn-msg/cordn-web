@@ -31,6 +31,7 @@ import {
 
 const account = { id: 'acc-1', pubkey: 'ab'.repeat(32) };
 const carolPubkey = 'cd'.repeat(32);
+const davePubkey = 'de'.repeat(32);
 
 async function makeKeyPackage(pubkey: string) {
 	const cipherSuite = await getCordnCipherSuite();
@@ -47,6 +48,7 @@ async function makeKeyPackage(pubkey: string) {
 }
 
 let carolKeyPackage: Awaited<ReturnType<typeof makeKeyPackage>>;
+let daveKeyPackage: Awaited<ReturnType<typeof makeKeyPackage>>;
 
 // ---- fake coordinator: stores msg_64 verbatim like the real server ----------
 let postCursor = 0;
@@ -78,12 +80,13 @@ const fakeClient = {
 		}
 		return { messages: out };
 	},
-	async ConsumeKeyPackage() {
+	async ConsumeKeyPackage(input: { id: string }) {
+		const dave = input.id === davePubkey;
 		return {
 			keyPackage: {
-				pk: carolPubkey,
-				kp_ref: 'kp-carol',
-				event: { id: 'ev', sig: 'sig' } as never
+				pk: dave ? davePubkey : carolPubkey,
+				kp_ref: dave ? 'kp-dave' : 'kp-carol',
+				event: { id: dave ? 'ev-dave' : 'ev', sig: 'sig' } as never
 			}
 		};
 	},
@@ -148,13 +151,15 @@ vi.mock('$lib/query-client', () => ({
 	}
 }));
 
-// The invite consumes carol's published key package; the publication-event
+// The invite consumes the target's published key package; the publication-event
 // parse is orthogonal to what is under test.
 vi.mock('$lib/services/chatMlsUtils', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/services/chatMlsUtils')>();
 	return {
 		...actual,
-		parseConsumedPublishedKeyPackage: vi.fn(async () => carolKeyPackage.publicPackage)
+		parseConsumedPublishedKeyPackage: vi.fn(async ({ stablePubkey }: { stablePubkey: string }) =>
+			stablePubkey === davePubkey ? daveKeyPackage.publicPackage : carolKeyPackage.publicPackage
+		)
 	};
 });
 
@@ -288,6 +293,7 @@ beforeEach(async () => {
 	captureAtPost = null;
 	vi.mocked(isMultiDeviceActive).mockReturnValue(false);
 	carolKeyPackage = await makeKeyPackage(carolPubkey);
+	daveKeyPackage = await makeKeyPackage(davePubkey);
 });
 
 describe('own-commit adoption (report-05 regression)', () => {
@@ -457,6 +463,71 @@ describe('own-commit adoption (report-05 regression)', () => {
 		expect(
 			listChatGroupMessages(group.id).some((message) => message.content === 'still alive')
 		).toBe(true);
+	});
+
+	test('an add keeps the base epoch readable for its post-commit catch-up', async () => {
+		const group = await createChatGroup({
+			name: 'pre-add traffic',
+			coordinatorKey: 'ef'.repeat(32)
+		});
+		const preState = clientStateDecoder(base64ToBytes(getChatGroup(group.id)!.stateBase64), 0)![0];
+		const made = await createApplicationMessageBase64({
+			state: preState,
+			event: createUnsignedCordnMessageEvent({
+				pubkey: account.pubkey,
+				content: 'just before the add',
+				kind: 9,
+				tags: [],
+				createdAt: Math.floor(Date.now() / 1000)
+			}),
+			authenticatedData: encodeAuthenticatedSender(account.pubkey)
+		});
+		const { encryptedBase64 } = await encryptGroupPayloadBase64({
+			state: preState,
+			opaqueMessageBase64: made.opaqueMessageBase64
+		});
+
+		// The message lands after the pre-commit catch-up and before our Commit:
+		// exactly the window the invite's post-commit fetch replays at the new epoch.
+		const originalPost = fakeClient.PostGroupMessage;
+		fakeClient.PostGroupMessage = async (input) => {
+			const cursor = ++postCursor;
+			stored.push({
+				cursor,
+				gid: group.id,
+				msg_64: encryptedBase64,
+				at: Math.floor(Date.now() / 1000)
+			});
+			return originalPost(input);
+		};
+		try {
+			const first = await inviteChatGroupMembers({
+				groupId: group.id,
+				targets: [{ identifier: carolPubkey, expectedStablePubkey: carolPubkey }]
+			});
+			expect(first.failures).toEqual([]);
+			expect(getChatGroup(group.id)!.staleMark, 'no false missed-update mark').toBeUndefined();
+			expect(
+				listChatGroupMessages(group.id).some(
+					(message) => message.content === 'just before the add'
+				),
+				'pre-add traffic is retained'
+			).toBe(true);
+			expect(
+				getChatGroup(group.id)!.snapshots.some((snapshot) => snapshot.status === 'tentative'),
+				'the new epoch is still tentative'
+			).toBe(true);
+
+			// A second add needs no exogenous message: the tentative epoch is usable.
+			const second = await inviteChatGroupMembers({
+				groupId: group.id,
+				targets: [{ identifier: davePubkey, expectedStablePubkey: davePubkey }]
+			});
+			expect(second.failures).toEqual([]);
+			expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(2n);
+		} finally {
+			fakeClient.PostGroupMessage = originalPost;
+		}
 	});
 
 	test('guard: a failed probe fetch in adoptOwnCommitEvidence does not break adoption', async () => {
