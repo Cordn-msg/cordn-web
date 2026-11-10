@@ -55,6 +55,22 @@ describe('highlight parsing', () => {
 		]);
 	});
 
+	test('an addressable article supersedes bare event sources across revisions', () => {
+		const sources = getHighlightSources([
+			['a', ARTICLE_ADDRESS],
+			['e', EVENT_ID],
+			['r', 'https://example.com/post']
+		]);
+
+		expect(sources).toHaveLength(2);
+		expect(sources[0]).toMatchObject({ type: 'nostr', label: 'Nostr article' });
+		expect(sources[1]).toEqual({
+			type: 'link',
+			label: 'example.com',
+			href: 'https://example.com/post'
+		});
+	});
+
 	test('r tags with the mention attribute are comment mentions, not sources', () => {
 		expect(getHighlightSources([['r', 'https://example.com', 'mention']])).toEqual([]);
 	});

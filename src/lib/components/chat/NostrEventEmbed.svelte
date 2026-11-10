@@ -29,7 +29,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import Ellipsis from '@lucide/svelte/icons/ellipsis';
 	import { kinds } from 'nostr-tools';
-	import { neventEncode } from 'nostr-tools/nip19';
 	import type { AddressPointer, EventPointer } from 'nostr-tools/nip19';
 
 	/**
@@ -169,18 +168,6 @@
 			? (highlightSourceEvent.current.tags.find((tag) => tag[0] === 'title')?.[1] ?? '')
 			: ''
 	);
-	// The same article is commonly referenced twice: an `a` coordinate for the
-	// address and an `e` id for the highlighted version. Once the address
-	// resolves to an article, drop the duplicate event row (its generic "Nostr
-	// event" label adds nothing below the article title).
-	const visibleHighlightSources = $derived.by(() => {
-		const article = highlightSourceEvent.current;
-		if (article?.kind !== kinds.LongFormArticle) return highlightSources;
-		const articleEntity = neventEncode({ id: article.id });
-		return highlightSources.filter(
-			(source) => source.type !== 'nostr' || !!source.pointer || source.entity !== articleEntity
-		);
-	});
 	const highlightContextParts = $derived(
 		event.current && isHighlight
 			? splitHighlightContext(highlightContext, event.current.content)
@@ -325,9 +312,9 @@
 					<span class={cn('mt-1 block text-xs leading-4', metaClass)}>{highlightContext}</span>
 				{/if}
 			{/if}
-			{#if visibleHighlightSources.length}
+			{#if highlightSources.length}
 				<span class={cn('mt-1 flex min-w-0 flex-col gap-0.5 text-xs leading-4', metaClass)}>
-					{#each visibleHighlightSources as source, index (source.type + ':' + index)}
+					{#each highlightSources as source, index (source.type + ':' + index)}
 						<span class={cn('flex min-w-0 items-center gap-1', index > 0 && 'pl-4')}>
 							{#if index === 0}<span class="shrink-0">Source:</span>{/if}
 							{#if source.type === 'text'}
