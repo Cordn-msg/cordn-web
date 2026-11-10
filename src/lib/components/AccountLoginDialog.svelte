@@ -4,8 +4,10 @@
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import SecretKeyReveal from '$lib/components/chat/SecretKeyReveal.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
+	import { eventStore } from '$lib/services/eventStore';
+	import { metadataRelays, relayPool } from '$lib/services/relay-pool';
 	import {
 		getInstalledSignerApps,
 		connectAndroidSigner,
@@ -19,32 +21,33 @@
 		PrivateKeyAccount
 	} from 'applesauce-accounts/accounts';
 	import QrCode from '$lib/components/QrCode.svelte';
-	import { generateSecretKey } from 'nostr-tools';
-	import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
-	import { nsecEncode } from 'nostr-tools/nip19';
-	import { Metadata } from 'nostr-tools/kinds';
 	import { DIALOG_IDS, dialogState } from '$lib/stores/dialog-state.svelte';
-	import { relayPool, metadataRelays } from '$lib/services/relay-pool';
-	import { eventStore } from '$lib/services/eventStore';
-	import { cn, copyToClipboard } from '$lib/utils';
+	import { cn } from '$lib/utils';
 	import { publicWebOrigin } from '$lib/utils/appOrigin';
 	import { toast } from 'svelte-sonner';
-	import Eye from '@lucide/svelte/icons/eye';
-	import EyeOff from '@lucide/svelte/icons/eye-off';
-	import Copy from '@lucide/svelte/icons/copy';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { Metadata } from 'nostr-tools/kinds';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Gem from '@lucide/svelte/icons/gem';
+	import KeyRound from '@lucide/svelte/icons/key-round';
+	import Puzzle from '@lucide/svelte/icons/puzzle';
+	import Shield from '@lucide/svelte/icons/shield';
+	import UserPlus from '@lucide/svelte/icons/user-plus';
 
 	let open = $state(false);
 
 	let {
 		triggerLabel = 'Login',
 		triggerVariant = 'outline',
-		triggerClass = ''
+		triggerClass = '',
+		context = '',
+		onOpenChange = () => {}
 	}: {
 		triggerLabel?: string;
 		triggerVariant?: 'outline' | 'default' | 'ghost';
 		triggerClass?: string;
+		/** One line about why the dialog opened (e.g. a pending group invitation). */
+		context?: string;
+		onOpenChange?: (open: boolean) => void;
 	} = $props();
 
 	const triggerClasses = $derived(cn(buttonVariants({ variant: triggerVariant }), triggerClass));
@@ -55,22 +58,42 @@
 		}
 	});
 
-	let selectedTab = $state<'extension' | 'simple' | 'remote' | 'signer'>('extension');
-	let privateKey = $state('');
+	type View = 'choose' | 'created' | 'import' | 'remote';
+
+	let view = $state<View>('choose');
+	let importKey = $state('');
+	let createdAccount = $state<PrivateKeyAccount | null>(null);
+	let displayName = $state('');
 	let bunkerUri = $state('');
 	let nostrConnectUri = $state('');
 	let loading = $state(false);
 	let error = $state('');
 	let remoteSignerStep = $state<'generate' | 'connecting' | 'manual'>('generate');
-	let showPrivateKey = $state(false);
-	let displayName = $state('');
 	let androidSignerApps = $state<InstalledSignerApp[] | null>(null);
 	let connectingPkg = $state<string | null>(null);
 	let androidSignerError = $state('');
-	let username = $state('');
-	let about = $state('');
-	let profileExpanded = $state(false);
-	let pasteExpanded = $state(false);
+
+	// The dialog is a sequence of small goal screens, not a tab bar: each view
+	// owns its primary action, so "Sign up" and "paste a key" can't be confused.
+	$effect(() => {
+		if (open) resetDialog();
+	});
+
+	function resetDialog() {
+		view = 'choose';
+		error = '';
+		importKey = '';
+		createdAccount = null;
+		displayName = '';
+		bunkerUri = '';
+		androidSignerError = '';
+		resetRemoteSignerState();
+	}
+
+	function closeDialog() {
+		open = false;
+		resetDialog();
+	}
 
 	async function connectExtension() {
 		try {
@@ -84,7 +107,7 @@
 			manager.addAccount(account);
 			manager.setActive(account);
 
-			open = false;
+			closeDialog();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect extension';
 		} finally {
@@ -92,18 +115,8 @@
 		}
 	}
 
-	function resetSimpleState() {
-		privateKey = '';
-		showPrivateKey = false;
-		displayName = '';
-		username = '';
-		about = '';
-		profileExpanded = false;
-		pasteExpanded = false;
-	}
-
-	async function connectSimple() {
-		if (!privateKey.trim()) {
+	async function signInWithKey(key: string) {
+		if (!key.trim()) {
 			error = 'Please enter a private key';
 			return;
 		}
@@ -112,59 +125,11 @@
 			loading = true;
 			error = '';
 
-			const signer = PrivateKeyAccount.fromKey(privateKey.trim());
-			const account = new PrivateKeyAccount(signer.pubkey, signer.signer);
-
+			const account = PrivateKeyAccount.fromKey(key.trim());
 			manager.addAccount(account);
 			manager.setActive(account);
-
-			const name = username.trim();
-			const displayNameTrimmed = displayName.trim();
-			const aboutTrimmed = about.trim();
-
-			if (name || displayNameTrimmed || aboutTrimmed) {
-				try {
-					const content = JSON.stringify({
-						name: name || undefined,
-						display_name: displayNameTrimmed || undefined,
-						about: aboutTrimmed || undefined
-					});
-
-					const unsignedEvent = {
-						kind: Metadata,
-						created_at: Math.floor(Date.now() / 1000),
-						tags: [],
-						content,
-						pubkey: account.pubkey
-					};
-
-					const accountSigner = (
-						account as unknown as {
-							signer?: {
-								signEvent?: (
-									event: typeof unsignedEvent
-								) => Promise<typeof unsignedEvent & { id: string; sig: string }>;
-							};
-						}
-					).signer;
-
-					if (accountSigner?.signEvent) {
-						const nextEvent = await accountSigner.signEvent(unsignedEvent);
-
-						for (const relay of metadataRelays) {
-							await relayPool.relay(relay).publish(nextEvent);
-						}
-
-						eventStore.add(nextEvent);
-					}
-				} catch {
-					// Profile publishing is best-effort; don't block login on metadata failure.
-				}
-			}
-
-			toast.success('Account created');
-			open = false;
-			resetSimpleState();
+			toast.success('Signed in');
+			closeDialog();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect with private key';
 		} finally {
@@ -172,24 +137,68 @@
 		}
 	}
 
-	function generatePrivateKey() {
-		const secretKey = generateSecretKey();
-		privateKey = bytesToHex(secretKey);
-		showPrivateKey = false;
-	}
-
-	function toNsec(key: string): string {
-		if (!key || key.startsWith('nsec')) return key;
+	async function createIdentity() {
+		if (loading) return;
 		try {
-			return nsecEncode(hexToBytes(key));
-		} catch {
-			return key;
+			loading = true;
+			error = '';
+
+			const account = PrivateKeyAccount.generateNew();
+			manager.addAccount(account);
+			// Activate on Continue/close, not here: the chat home swaps to the
+			// logged-in branch as soon as the account goes active, which would
+			// unmount this dialog before the key is shown.
+			createdAccount = account;
+			view = 'created';
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to create an identity';
+		} finally {
+			loading = false;
 		}
 	}
 
-	async function copyPrivateKey() {
-		if (!privateKey) return;
-		await copyToClipboard(toNsec(privateKey));
+	// Safety net for a route change, reload, or tab close while the key is on
+	// screen: the generated account is already stored, so don't leave it inactive.
+	$effect(() => {
+		let activated = false;
+		const activate = () => {
+			if (activated) return;
+			activated = true;
+			if (view === 'created' && createdAccount) manager.setActive(createdAccount);
+		};
+		window.addEventListener('pagehide', activate);
+		return () => {
+			window.removeEventListener('pagehide', activate);
+			activate();
+		};
+	});
+
+	async function publishName(account: PrivateKeyAccount, name: string) {
+		const unsigned = {
+			kind: Metadata,
+			created_at: Math.floor(Date.now() / 1000),
+			tags: [],
+			content: JSON.stringify({ name }),
+			pubkey: account.pubkey
+		};
+		const signed = await account.signer.signEvent(unsigned);
+		for (const relay of metadataRelays) {
+			await relayPool.relay(relay).publish(signed);
+		}
+		eventStore.add(signed);
+	}
+
+	function finishCreated() {
+		if (view !== 'created') return;
+		const account = createdAccount;
+		const name = displayName.trim();
+		if (account) manager.setActive(account);
+		closeDialog();
+		if (account && name) {
+			void publishName(account, name).catch((error) => {
+				toast.error(error instanceof Error ? error.message : 'Could not publish your name');
+			});
+		}
 	}
 
 	async function generateRemoteSignerUri(openApp = false) {
@@ -227,7 +236,7 @@
 
 			// Reset state and close dialog
 			resetRemoteSignerState();
-			open = false;
+			closeDialog();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect remote signer';
 			remoteSignerStep = 'generate';
@@ -261,7 +270,7 @@
 			// Reset state and close dialog
 			resetRemoteSignerState();
 			bunkerUri = '';
-			open = false;
+			closeDialog();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to connect with bunker URI';
 		} finally {
@@ -276,52 +285,15 @@
 		error = '';
 	}
 
-	function handleSubmit() {
-		if (selectedTab === 'extension') {
-			connectExtension();
-		} else if (selectedTab === 'simple') {
-			connectSimple();
-		} else if (selectedTab === 'remote') {
-			if (remoteSignerStep === 'manual') {
-				connectWithBunkerUri();
-			} else {
-				generateRemoteSignerUri();
-			}
-		}
+	function goBack() {
+		if (view === 'remote') resetRemoteSignerState();
+		error = '';
+		view = 'choose';
 	}
 
-	// Reset remote signer state when tab changes
-	$effect(() => {
-		if (selectedTab !== 'remote') {
-			resetRemoteSignerState();
-		}
-	});
-
-	$effect(() => {
-		if (selectedTab !== 'simple') {
-			showPrivateKey = false;
-		}
-	});
-
-	// Auto-select the best login method when the dialog opens: installed signer app (Android,
-	// recommended) → browser extension → sign up. Re-evaluates if signer apps resolve after open
-	// (rare); it won't yank a manual choice because the deps (open, androidSignerApps) don't
-	// change once the user starts clicking tabs.
-	$effect(() => {
-		if (!open) return;
-		if (isAndroidNative() && androidSignerApps && androidSignerApps.length > 0) {
-			selectedTab = 'signer';
-		} else if (typeof window !== 'undefined' && 'nostr' in window) {
-			selectedTab = 'extension';
-		} else {
-			selectedTab = 'simple';
-		}
-	});
-
 	// Probe once for installed Android signer apps (Amber, etc.) via NIP-55 on mount of the native
-	// shell, so the result is resolved before the dialog opens — avoids a tab flash when the
-	// recommended signer tab becomes the default. Web/iOS never probe (-> null, tab hidden).
-	// Best-effort: a missing plugin or zero installed signers resolves to [] and the tab is hidden.
+	// shell, so the result is resolved before the dialog opens. Web/iOS never probe (-> null).
+	// Best-effort: a missing plugin or zero installed signers resolves to [] and the row is hidden.
 	$effect(() => {
 		if (!isAndroidNative()) return;
 		let cancelled = false;
@@ -338,236 +310,210 @@
 		androidSignerError = '';
 		try {
 			await connectAndroidSigner(app);
-			open = false;
+			closeDialog();
 		} catch (err) {
 			androidSignerError = err instanceof Error ? err.message : 'Failed to connect signer app';
 		} finally {
 			connectingPkg = null;
 		}
 	}
+
+	const hasExtension = $derived(typeof window !== 'undefined' && 'nostr' in window);
+	const title = $derived(
+		view === 'choose'
+			? 'Welcome to Cordn'
+			: view === 'import'
+				? 'Use an existing key'
+				: view === 'remote'
+					? 'Remote signer'
+					: "You're in."
+	);
+	const description = $derived(
+		view === 'choose'
+			? 'Create an identity, or use one you already have.'
+			: view === 'created'
+				? 'Your account lives in this browser.'
+				: 'You can go back at any point.'
+	);
+	const signerApps = $derived(
+		isAndroidNative() && androidSignerApps && androidSignerApps.length > 0 ? androidSignerApps : []
+	);
 </script>
 
-<Dialog.Root bind:open onOpenChange={() => (dialogState.dialogId = null)}>
+<Dialog.Root
+	bind:open
+	onOpenChange={(next) => {
+		onOpenChange(next);
+		if (!next) {
+			dialogState.dialogId = null;
+			if (view === 'created') finishCreated();
+		}
+	}}
+>
 	<Dialog.Trigger class={triggerClasses}>{triggerLabel}</Dialog.Trigger>
 	<Dialog.Content class="sm:max-w-[425px]">
 		<Dialog.Header>
-			<Dialog.Title>Connect Account</Dialog.Title>
-			<Dialog.Description>Choose how you want to connect to Nostr</Dialog.Description>
+			<Dialog.Title>{title}</Dialog.Title>
+			<Dialog.Description>{description}</Dialog.Description>
+			{#if context}
+				<p class="text-sm text-muted-foreground">{context}</p>
+			{/if}
 		</Dialog.Header>
 
 		<div class="grid gap-4 py-4">
-			<!-- Tab Navigation -->
-			<div class="flex space-x-1 rounded-lg bg-muted p-1">
-				{#if isAndroidNative() && androidSignerApps && androidSignerApps.length > 0}
+			{#if view === 'choose'}
+				<div class="grid gap-2">
 					<button
-						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
-						'signer'
-							? 'bg-background shadow-sm'
-							: 'hover:bg-muted-foreground/10'}"
-						onclick={() => (selectedTab = 'signer')}
+						type="button"
+						class="flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3 text-left transition-colors hover:bg-primary/10 disabled:opacity-50"
+						disabled={loading}
+						onclick={createIdentity}
 					>
-						Signer app
+						{#if loading}
+							<Spinner class="size-4 shrink-0" />
+						{:else}
+							<UserPlus class="size-4 shrink-0" aria-hidden="true" />
+						{/if}
+						<span class="min-w-0 flex-1">
+							<span class="block text-sm font-medium">Create a new identity</span>
+							<span class="block text-xs text-muted-foreground"
+								>No email, no phone. Takes a second.</span
+							>
+						</span>
+						<ChevronRight class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
 					</button>
-				{/if}
-				{#if typeof window !== 'undefined' && 'nostr' in window}
-					<button
-						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
-						'extension'
-							? 'bg-background shadow-sm'
-							: 'hover:bg-muted-foreground/10'}"
-						onclick={() => (selectedTab = 'extension')}
-					>
-						Extension
-					</button>
-				{/if}
-				<button
-					class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
-					'simple'
-						? 'bg-background shadow-sm'
-						: 'hover:bg-muted-foreground/10'}"
-					onclick={() => (selectedTab = 'simple')}
-				>
-					Sign up
-				</button>
-				<button
-					class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {selectedTab ===
-					'remote'
-						? 'bg-background shadow-sm'
-						: 'hover:bg-muted-foreground/10'}"
-					onclick={() => (selectedTab = 'remote')}
-				>
-					Remote Signer
-				</button>
-			</div>
 
-			<!-- Signer app Tab (Android NIP-55) -->
-			{#if selectedTab === 'signer'}
-				<div class="space-y-2">
-					<p class="text-sm text-muted-foreground">
-						Connect with an installed signer app via NIP-55 — your keys never leave the signer.
-					</p>
-					{#if androidSignerError}
-						<p class="text-sm text-destructive">{androidSignerError}</p>
-					{/if}
-					{#each androidSignerApps as app (app.packageName)}
-						<Button
-							class="w-full justify-start"
-							disabled={connectingPkg !== null}
-							onclick={() => handleAndroidSignerLogin(app)}
+					<button
+						type="button"
+						class="flex w-full items-center gap-3 rounded-xl border border-border p-3 text-left transition-colors hover:bg-muted/40 disabled:opacity-50"
+						disabled={loading}
+						onclick={() => (view = 'import')}
+					>
+						<KeyRound class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<span class="min-w-0 flex-1">
+							<span class="block text-sm font-medium">I already have a key</span>
+							<span class="block text-xs text-muted-foreground">Paste your nsec or hex key.</span>
+						</span>
+						<ChevronRight class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+					</button>
+
+					{#if hasExtension}
+						<button
+							type="button"
+							class="flex w-full items-center gap-3 rounded-xl border border-border p-3 text-left transition-colors hover:bg-muted/40 disabled:opacity-50"
+							disabled={loading}
+							onclick={connectExtension}
 						>
-							{#if connectingPkg === app.packageName}
-								<Spinner class="mr-2 size-4" />
-								Connecting…
+							{#if loading}
+								<Spinner class="size-4 shrink-0" />
 							{:else}
-								<Gem class="mr-2 size-4" />
-								Log in with {app.name}
+								<Puzzle class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
 							{/if}
-						</Button>
-					{/each}
-				</div>
-			{/if}
+							<span class="min-w-0 flex-1">
+								<span class="block text-sm font-medium">Use your browser extension</span>
+								<span class="block text-xs text-muted-foreground">Your key never leaves it.</span>
+							</span>
+							<ChevronRight class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+						</button>
+					{/if}
 
-			<!-- Extension Tab -->
-			{#if selectedTab === 'extension'}
-				<div class="space-y-4">
-					<p class="text-sm text-muted-foreground">
-						Connect using a browser extension like Nos2x or Alby.
-					</p>
-					{#if typeof window !== 'undefined' && !('nostr' in window)}
-						<p class="text-sm text-destructive">
-							No Nostr extension detected. Please install a Nostr extension first.
+					<button
+						type="button"
+						class="flex w-full items-center gap-3 rounded-xl border border-border p-3 text-left transition-colors hover:bg-muted/40 disabled:opacity-50"
+						disabled={loading}
+						onclick={() => (view = 'remote')}
+					>
+						<Shield class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<span class="min-w-0 flex-1">
+							<span class="block text-sm font-medium">Use a remote signer</span>
+							<span class="block text-xs text-muted-foreground">NIP-46 signer app or bunker.</span>
+						</span>
+						<ChevronRight class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+					</button>
+
+					{#if signerApps.length > 0}
+						<p
+							class="px-1 pt-2 text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase"
+						>
+							Signer apps
 						</p>
-					{/if}
-				</div>
-			{/if}
-
-			<!-- Sign up Tab -->
-			{#if selectedTab === 'simple'}
-				<div class="space-y-4">
-					{#if !privateKey}
-						<div class="space-y-3">
-							<p class="text-sm text-muted-foreground">
-								Create a new Nostr account — all you need to get started.
-							</p>
-							<Button class="w-full" onclick={generatePrivateKey} type="button">
-								Generate a new account
+						{#if androidSignerError}
+							<p class="text-sm text-destructive">{androidSignerError}</p>
+						{/if}
+						{#each signerApps as app (app.packageName)}
+							<Button
+								variant="outline"
+								class="w-full justify-start"
+								disabled={connectingPkg !== null || loading}
+								onclick={() => handleAndroidSignerLogin(app)}
+							>
+								{#if connectingPkg === app.packageName}
+									<Spinner class="mr-2 size-4" />
+									Connecting…
+								{:else}
+									<Gem class="mr-2 size-4" />
+									Log in with {app.name}
+								{/if}
 							</Button>
-						</div>
-
-						<!-- Already have a private key? collapsible -->
-						<div class="space-y-3">
-							<button
-								type="button"
-								onclick={() => (pasteExpanded = !pasteExpanded)}
-								class="flex items-center gap-1 text-sm font-medium"
-							>
-								Already have a private key?
-								<ChevronDown
-									class="ml-1 size-4 text-muted-foreground transition-transform duration-200 {pasteExpanded
-										? 'rotate-180'
-										: ''}"
-								/>
-							</button>
-							{#if pasteExpanded}
-								<div class="space-y-2">
-									<Label for="account-private-key-paste">Private key</Label>
-									<Input
-										id="account-private-key-paste"
-										placeholder="Paste your private key (hex or nsec)"
-										bind:value={privateKey}
-										class="font-mono"
-									/>
-									<p class="text-xs text-muted-foreground">
-										Your private key will be stored securely in your browser's local storage.
-									</p>
-								</div>
-							{/if}
-						</div>
-					{:else}
-						<div class="space-y-2">
-							<Label for="account-private-key">Your private key</Label>
-							<div class="flex gap-2">
-								<div class="relative flex-1">
-									<Input
-										id="account-private-key"
-										value={showPrivateKey ? toNsec(privateKey) : '••••••••••••••••••••••••••••'}
-										readonly
-										class="pr-10 font-mono"
-										type="text"
-									/>
-									<button
-										type="button"
-										onclick={() => (showPrivateKey = !showPrivateKey)}
-										class="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition-colors hover:text-foreground"
-										aria-label={showPrivateKey ? 'Hide private key' : 'Show private key'}
-									>
-										{#if showPrivateKey}
-											<EyeOff class="size-4" />
-										{:else}
-											<Eye class="size-4" />
-										{/if}
-									</button>
-								</div>
-								<Button
-									variant="outline"
-									size="icon"
-									onclick={copyPrivateKey}
-									type="button"
-									aria-label="Copy private key"
-								>
-									<Copy class="size-4" />
-								</Button>
-							</div>
-							<p class="text-xs text-muted-foreground">
-								Save this key somewhere safe — it's the only way to access your account.
-							</p>
-						</div>
-
-						<!-- Profile Details collapsible -->
-						<div class="space-y-3">
-							<button
-								type="button"
-								onclick={() => (profileExpanded = !profileExpanded)}
-								class="flex items-center gap-1 text-sm font-medium"
-							>
-								Customize your profile (optional)
-								<ChevronDown
-									class="ml-1 size-4 text-muted-foreground transition-transform duration-200 {profileExpanded
-										? 'rotate-180'
-										: ''}"
-								/>
-							</button>
-							{#if profileExpanded}
-								<div class="space-y-3">
-									<div class="space-y-2">
-										<Label for="signup-display-name">Display name</Label>
-										<Input
-											id="signup-display-name"
-											placeholder="How others will see you"
-											bind:value={displayName}
-										/>
-									</div>
-									<div class="space-y-2">
-										<Label for="signup-username">Username</Label>
-										<Input id="signup-username" placeholder="Your username" bind:value={username} />
-									</div>
-									<div class="space-y-2">
-										<Label for="signup-about">About</Label>
-										<Textarea
-											id="signup-about"
-											placeholder="Tell others about yourself"
-											bind:value={about}
-										/>
-									</div>
-								</div>
-							{/if}
-						</div>
+						{/each}
 					{/if}
 				</div>
-			{/if}
-
-			<!-- Remote Signer Tab -->
-			{#if selectedTab === 'remote'}
+			{:else if view === 'import'}
+				<div class="space-y-4">
+					<div class="space-y-2">
+						<Label for="account-import-key">Private key</Label>
+						<Input
+							id="account-import-key"
+							placeholder="nsec1… or 64-character hex"
+							bind:value={importKey}
+							class="font-mono"
+							autocomplete="off"
+							onkeydown={(event) => {
+								if (event.key === 'Enter' && importKey.trim() && !loading) signInWithKey(importKey);
+							}}
+						/>
+						<p class="text-xs text-muted-foreground">
+							Your key stays in this browser. Use an extension or signer app if you'd rather keep it
+							out.
+						</p>
+					</div>
+					<Button
+						class="w-full"
+						onclick={() => signInWithKey(importKey)}
+						disabled={loading || !importKey.trim()}
+					>
+						{#if loading}
+							<Spinner class="mr-2 size-4" />
+						{/if}
+						Sign in
+					</Button>
+				</div>
+			{:else if view === 'created'}
+				<div class="space-y-4">
+					<SecretKeyReveal account={createdAccount} />
+					<div class="space-y-2">
+						<Label for="created-name">
+							What should people call you?
+							<span class="font-normal text-muted-foreground">(optional)</span>
+						</Label>
+						<Input
+							id="created-name"
+							placeholder="Your name"
+							bind:value={displayName}
+							maxlength={64}
+							onkeydown={(event) => {
+								if (event.key === 'Enter') {
+									event.preventDefault();
+									finishCreated();
+								}
+							}}
+						/>
+						<p class="text-xs text-muted-foreground">
+							Anyone who can find you sees this. You can change it later.
+						</p>
+					</div>
+				</div>
+			{:else if view === 'remote'}
 				<div class="space-y-4">
 					{#if remoteSignerStep === 'generate'}
 						<div class="space-y-4">
@@ -576,14 +522,14 @@
 							</p>
 							<div class="flex flex-col gap-2">
 								<Button class="w-full" onclick={() => generateRemoteSignerUri(true)}>
-									Open Remote Signer
+									Open signer app
 								</Button>
 								<Button
 									variant="outline"
 									class="w-full"
 									onclick={() => (remoteSignerStep = 'manual')}
 								>
-									Enter Bunker URI
+									Enter bunker URI
 								</Button>
 							</div>
 						</div>
@@ -611,7 +557,7 @@
 								<p class="text-xs text-muted-foreground">Waiting for signer app to connect...</p>
 							</div>
 
-							<Button variant="outline" onclick={() => resetRemoteSignerState()}>Cancel</Button>
+							<Button variant="outline" onclick={resetRemoteSignerState}>Cancel</Button>
 						</div>
 					{:else if remoteSignerStep === 'manual'}
 						<div class="space-y-4">
@@ -622,13 +568,28 @@
 									placeholder="bunker://..."
 									bind:value={bunkerUri}
 									class="font-mono"
+									onkeydown={(event) => {
+										if (event.key === 'Enter' && bunkerUri.trim() && !loading) {
+											connectWithBunkerUri();
+										}
+									}}
 								/>
 								<p class="text-xs text-muted-foreground">
 									Enter the bunker URI provided by your signer app.
 								</p>
 							</div>
+							<Button
+								class="w-full"
+								onclick={connectWithBunkerUri}
+								disabled={loading || !bunkerUri.trim()}
+							>
+								{#if loading}
+									<Spinner class="mr-2 size-4" />
+								{/if}
+								Connect
+							</Button>
 							<Button variant="outline" onclick={() => (remoteSignerStep = 'generate')}>
-								Back to QR Code
+								Back to connection options
 							</Button>
 						</div>
 					{/if}
@@ -640,38 +601,16 @@
 			{/if}
 		</div>
 
-		<Dialog.Footer>
-			<Button
-				variant="outline"
-				onclick={() => {
-					open = false;
-					resetSimpleState();
-				}}
-				disabled={loading}
-			>
-				Cancel
-			</Button>
-			{#if (selectedTab === 'remote' && remoteSignerStep === 'connecting') || selectedTab === 'signer'}
-				<!-- No submit button: the signer-app tab uses direct per-app CTAs; remote-connecting
-				     waits for the signer. -->
+		<Dialog.Footer class={view === 'created' ? 'justify-end' : 'justify-between'}>
+			{#if view === 'created'}
+				<Button class="w-full sm:w-auto" onclick={finishCreated}>Continue</Button>
 			{:else}
-				<Button
-					onclick={handleSubmit}
-					disabled={loading || (selectedTab === 'simple' && !privateKey)}
-				>
-					{#if loading}
-						<Spinner class="mr-2 size-4" />
-					{/if}
-					{loading
-						? 'Connecting...'
-						: selectedTab === 'remote' && remoteSignerStep === 'manual'
-							? 'Connect with Bunker URI'
-							: selectedTab === 'remote'
-								? 'Generate QR Code'
-								: selectedTab === 'simple' && privateKey
-									? 'Sign up'
-									: 'Connect'}
-				</Button>
+				{#if view === 'choose'}
+					<span></span>
+				{:else}
+					<Button variant="ghost" onclick={goBack} disabled={loading}>Back</Button>
+				{/if}
+				<Button variant="outline" onclick={closeDialog} disabled={loading}>Cancel</Button>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>

@@ -457,7 +457,7 @@
 	<div class="flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
 		<div class="mx-auto flex max-w-5xl flex-col gap-6">
 			<div class="hidden">
-				<AccountLoginDialog />
+				<AccountLoginDialog context="After you sign in, we'll start the chat." />
 			</div>
 
 			{#if profileIdentifierError}

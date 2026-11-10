@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { goto } from '$app/navigation';
+	import { tick } from 'svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
@@ -14,10 +15,13 @@
 
 	let {
 		open = $bindable(false),
-		onNavigate = () => {}
+		onNavigate = () => {},
+		initialJoinOpen = false
 	}: {
 		open?: boolean;
 		onNavigate?: () => void;
+		/** Open the "Open link" section straight away (chat-home tile). */
+		initialJoinOpen?: boolean;
 	} = $props();
 
 	let startingRef = $state('');
@@ -27,10 +31,17 @@
 	// bits-ui dialog content unmounts after the close animation, so the directory
 	// (and its search state) remounts fresh each time the dialog opens.
 	$effect(() => {
-		if (open) {
-			error = '';
+		if (!open) return;
+		error = '';
+		if (!initialJoinOpen) {
 			joinOpen = false;
+			return;
 		}
+		// A Collapsible.Content that starts open on its first mount stays closed
+		// (bits-ui presence); opening it one tick later follows the click path.
+		void tick().then(() => {
+			if (open) joinOpen = true;
+		});
 	});
 
 	function handleCreateGroupClick() {

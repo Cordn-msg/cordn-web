@@ -18,6 +18,7 @@
 		type ImportResult
 	} from '$lib/services/chatBackup.svelte';
 	import { ensureGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { markBackupConfirmed } from '$lib/services/onboarding.svelte';
 	import { toast } from 'svelte-sonner';
 	import { nip19 } from 'nostr-tools';
 	import { isNativePlatform, saveBlob } from '$lib/services/nativeShims';
@@ -61,6 +62,7 @@
 
 	async function handleExport() {
 		if (!$activeAccount) return;
+		const pubkey = $activeAccount.pubkey;
 		if (exportEncrypted && !exportPassphrase) {
 			toast.error('Enter a passphrase to encrypt the backup');
 			return;
@@ -81,6 +83,8 @@
 				// anchor path always succeeds, so this is effectively native-only.
 				toast.error('Backup was not saved.');
 			} else {
+				// The file carries the account key, so the chat-home prompt can stop asking.
+				markBackupConfirmed(pubkey);
 				const detail = `${exportEncrypted ? ' (encrypted)' : ''}${exportMessages ? '' : ', messages excluded'}`;
 				toast.success(isNativePlatform() ? `Backup saved${detail}` : `Backup created${detail}`);
 			}
