@@ -163,7 +163,9 @@ function mergeFetchedWelcomes(coordinatorKey: string, welcomes: PendingWelcome[]
 }
 
 async function resolveWelcomePreview(entry: WelcomeNotificationEntry, assertActive: () => void) {
-	if (entry.preview) return entry.preview;
+	// gid, not the whole preview: previews persisted before gid was carried would
+	// otherwise stay forever unusable for join-request matching.
+	if (entry.preview?.gid) return entry.preview;
 
 	const record = getChatKeyPackage(entry.kpRef);
 	if (!record) return undefined;

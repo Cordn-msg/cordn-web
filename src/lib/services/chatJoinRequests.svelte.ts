@@ -16,7 +16,7 @@ import {
 } from '$lib/services/chatRuntime';
 import { throwIfCoordinatorInReadBackoff } from '$lib/services/coordinatorHealth.svelte';
 import { manager } from '$lib/services/accountManager.svelte';
-import { normalizePubKey } from '$lib/utils';
+import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 import type { IAccount } from 'applesauce-accounts';
 
 const STORAGE_KEY = 'cordn-chat-join-requests';
@@ -75,6 +75,8 @@ function getJoinRequestsStorageKey(ownerPubkey?: string) {
 
 export function loadJoinRequestsForOwner(ownerPubkey?: string) {
 	if (!browser) return;
+	// The requester's own sent requests ride the same account-change hook.
+	loadSentJoinRequestsForOwner(ownerPubkey);
 	activeNotificationsStorageKey = getJoinRequestsStorageKey(ownerPubkey);
 	try {
 		const raw =
@@ -396,47 +398,118 @@ function getSentStorageKey(ownerPubkey?: string): string {
 	return ownerPubkey ? `${SENT_STORAGE_KEY}:${ownerPubkey}` : SENT_STORAGE_KEY;
 }
 
-function loadSentJoinRequestIds(ownerPubkey?: string): string[] {
-	if (!browser) return [];
-	const raw = localStorage.getItem(getSentStorageKey(ownerPubkey));
+/**
+ * A join request this account sent and still waits on. `coordinatorKey` is '' for
+ * a record written before records carried one (the old `string[]` of gids); such
+ * a request still matches its Welcome by gid, it just cannot be polled for.
+ */
+export interface SentJoinRequestEntry {
+	gid: string;
+	coordinatorKey: string;
+	name?: string;
+	icon?: string;
+	at: number;
+}
+
+export const sentJoinRequestsStore = $state<{ entries: SentJoinRequestEntry[] }>({ entries: [] });
+
+let activeSentStorageKey = getSentStorageKey();
+
+/** Tolerant, and upgrades the old gid array: a malformed row is dropped, never thrown. */
+export function parseSentJoinRequests(raw: string | null): SentJoinRequestEntry[] {
 	if (!raw) return [];
+	let parsed: unknown;
 	try {
-		return JSON.parse(raw) as string[];
+		parsed = JSON.parse(raw);
 	} catch {
 		return [];
 	}
+	if (!Array.isArray(parsed)) return [];
+	const entries: SentJoinRequestEntry[] = [];
+	for (const item of parsed) {
+		if (typeof item === 'string') {
+			if (item) entries.push({ gid: item, coordinatorKey: '', at: 0 });
+			continue;
+		}
+		if (!item || typeof item !== 'object') continue;
+		const row = item as Partial<SentJoinRequestEntry>;
+		if (typeof row.gid !== 'string' || !row.gid) continue;
+		entries.push({
+			gid: row.gid,
+			// Normalized here so a hand-edited/corrupted record can never reach the
+			// share-link encoder (which throws on a non-hex key) during render.
+			coordinatorKey:
+				typeof row.coordinatorKey === 'string' ? safeNormalizePubKey(row.coordinatorKey) : '',
+			...(typeof row.name === 'string' && row.name ? { name: row.name } : {}),
+			...(typeof row.icon === 'string' && row.icon ? { icon: row.icon } : {}),
+			at: typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : 0
+		});
+	}
+	return entries;
+}
+
+function saveSentJoinRequests() {
+	if (!browser) return;
+	localStorage.setItem(activeSentStorageKey, JSON.stringify(sentJoinRequestsStore.entries));
+}
+
+/** Loaded with the admin-side requests (same account-change hook). */
+export function loadSentJoinRequestsForOwner(ownerPubkey?: string) {
+	if (!browser) return;
+	activeSentStorageKey = getSentStorageKey(ownerPubkey);
+	sentJoinRequestsStore.entries = parseSentJoinRequests(localStorage.getItem(activeSentStorageKey));
 }
 
 export function hasJoinRequestBeenSent(groupId: string): boolean {
-	return loadSentJoinRequestIds(manager.getActive()?.pubkey).includes(groupId);
+	return sentJoinRequestsStore.entries.some((entry) => entry.gid === groupId);
 }
 
-export function markJoinRequestSent(groupId: string): void {
+export function markJoinRequestSent(input: {
+	gid: string;
+	coordinatorKey: string;
+	name?: string;
+	icon?: string;
+}): void {
 	if (!browser) return;
 	const ownerPubkey = manager.getActive()?.pubkey;
 	if (!ownerPubkey) return;
-	const sent = loadSentJoinRequestIds(ownerPubkey);
-	if (!sent.includes(groupId)) {
-		sent.push(groupId);
-		localStorage.setItem(getSentStorageKey(ownerPubkey), JSON.stringify(sent));
-	}
+	const entry: SentJoinRequestEntry = {
+		gid: input.gid,
+		coordinatorKey: safeNormalizePubKey(input.coordinatorKey),
+		...(input.name ? { name: input.name } : {}),
+		...(input.icon ? { icon: input.icon } : {}),
+		at: Date.now()
+	};
+	sentJoinRequestsStore.entries = [
+		...sentJoinRequestsStore.entries.filter((existing) => existing.gid !== input.gid),
+		entry
+	];
+	saveSentJoinRequests();
+}
+
+/** The account's requests that are still waiting: newest first, minus any group already joined. */
+export function listPendingJoinRequests(): SentJoinRequestEntry[] {
+	const joinedGroupIds = new SvelteSet(listChatGroups().map((group) => group.id));
+	return [...sentJoinRequestsStore.entries]
+		.filter((entry) => !joinedGroupIds.has(entry.gid))
+		.sort((a, b) => b.at - a.at);
 }
 
 // Mirror of markJoinRequestSent: clears the advisory "sent" marker so the
 // user can re-request if a welcome never arrives or they leave the group.
-// Both writes (here + requestSent flip in the route) always travel as a pair.
 export function removeSentJoinRequest(groupId: string): void {
-	if (!browser) return;
-	const ownerPubkey = manager.getActive()?.pubkey;
-	if (!ownerPubkey) return;
-	const sent = loadSentJoinRequestIds(ownerPubkey);
-	const next = sent.filter((id) => id !== groupId);
-	if (next.length !== sent.length) {
-		localStorage.setItem(getSentStorageKey(ownerPubkey), JSON.stringify(next));
-	}
+	const next = sentJoinRequestsStore.entries.filter((entry) => entry.gid !== groupId);
+	if (next.length === sentJoinRequestsStore.entries.length) return;
+	sentJoinRequestsStore.entries = next;
+	saveSentJoinRequests();
 }
 
 export function deleteSentJoinRequestsForOwner(ownerPubkey: string): void {
 	if (!browser) return;
-	localStorage.removeItem(getSentStorageKey(ownerPubkey));
+	const storageKey = getSentStorageKey(ownerPubkey);
+	localStorage.removeItem(storageKey);
+	if (activeSentStorageKey === storageKey) {
+		activeSentStorageKey = getSentStorageKey();
+		sentJoinRequestsStore.entries = [];
+	}
 }
