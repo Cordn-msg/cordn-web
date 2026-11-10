@@ -214,7 +214,7 @@
 	<ChatShell groupId={group.id} title={group.metadata?.name || 'Chat'} />
 {:else}
 	<div class="hidden">
-		<AccountLoginDialog />
+		<AccountLoginDialog context="After you sign in, we'll ask the group's admins to let you in." />
 	</div>
 
 	<div class="flex h-full min-h-0 flex-col bg-background text-foreground">

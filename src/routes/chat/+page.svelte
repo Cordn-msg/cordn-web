@@ -3,18 +3,22 @@
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatSearchBar from '$lib/components/chat/ChatSearchBar.svelte';
+	import LoggedOutIntro from '$lib/components/chat/LoggedOutIntro.svelte';
+	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import { browser } from '$app/environment';
-	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import { isAndroidNative } from '$lib/services/nativeBridge';
+	import { hasConfirmedBackup, hasSeenIntro, markIntroSeen } from '$lib/services/onboarding.svelte';
+	import { hasJoinRequestBeenSent } from '$lib/services/chatJoinRequests.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { resolve } from '$app/paths';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 	import { migrationBannerStore } from '$lib/services/migrationBanner.svelte';
-	import { listChatGroups } from '$lib/services/chatGroups.svelte';
+	import { areChatGroupsLoaded, listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { getUnreadNewsCount, isNewsItemUnread } from '$lib/news/newsReadState.svelte';
 	import { getNewsFeedItems } from '$lib/news/feedItems';
 	import { maintainReachability, reachabilityStore } from '$lib/services/chatKeyPackages.svelte';
@@ -33,6 +37,10 @@
 	import { refreshChatFeedAction } from '$lib/services/chatUiActions.svelte';
 	import { appUpdateStore, reloadForUpdate } from '$lib/services/appUpdate.svelte';
 	import CheckCheck from '@lucide/svelte/icons/check-check';
+	import BookOpen from '@lucide/svelte/icons/book-open';
+	import LinkIcon from '@lucide/svelte/icons/link';
+	import UserRoundPlus from '@lucide/svelte/icons/user-round-plus';
+	import Users from '@lucide/svelte/icons/users';
 
 	// Pull-to-refresh on the chat list (native shell + standalone PWA only — a plain
 	// browser tab keeps the browser's own PTR as the emergency reload). When a web
@@ -113,6 +121,34 @@
 		storageDisclaimerDismissed = true;
 	}
 	const hasGroups = $derived.by(() => groups.length > 0);
+	// Do not flash the first-run hero while the account's groups are still loading.
+	const showEmptyState = $derived.by(() => {
+		void groups.length;
+		return hasAccount && areChatGroupsLoaded() && !hasGroups;
+	});
+	const backupConfirmed = $derived.by(() => hasConfirmedBackup($activeAccount?.pubkey));
+	const joinRequestSent = $derived.by(() => {
+		void $activeAccount?.pubkey;
+		return hasJoinRequestBeenSent(CORDN_GROUP_ID);
+	});
+	let introAuto = $state(!hasSeenIntro());
+	let introReplay = $state(false);
+
+	$effect(() => {
+		if (!hasAccount) introReplay = false;
+	});
+	let newConversationOpen = $state(false);
+	let newConversationInitialJoin = $state(false);
+
+	function dismissIntro() {
+		markIntroSeen();
+		introAuto = false;
+	}
+
+	function openNewConversation(joinOpen: boolean) {
+		newConversationInitialJoin = joinOpen;
+		newConversationOpen = true;
+	}
 	// Reachability callout: shown while any known coordinator VERIFIES that no
 	// key package for the active identity is published there — people on that
 	// coordinator cannot invite the user. Truth comes from the maintain pass's
@@ -223,35 +259,83 @@
 	>
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
-				{#if showStorageDisclaimer}
-					<Card.Root class="border-amber-500/40 bg-amber-500/5">
-						<Card.Header class="space-y-1.5">
-							<Card.Title class="flex items-center gap-2">
-								<TriangleAlert class="size-4 text-amber-500" />
-								Your chats live in this browser
-							</Card.Title>
-							<Card.Description>
-								Cordn on the web keeps your chats, contacts, and settings in this browser's storage.
-								Clearing browser data will delete them, and they won't show up in other browsers.
-								Back up from Settings, or use the Android app, which keeps your data in its own
-								storage.
-							</Card.Description>
-						</Card.Header>
-						<Card.Content class="flex flex-wrap items-center gap-3">
-							<Button href={resolve('/chat/config/backup')}>Back up your data</Button>
-							<a
-								href="https://zapstore.dev/apps/naddr1qqxk7un89e3k7unydchxzursqyv8wumn8ghj7un9d3shjtn6v9c8xar0wfjjuer9wcpzps7xmxansh7cyl8ak3wexws73n8jjpd7xpr8z50dtl34dgg22f0fqvzqqqr7pv6zvfm6"
-								target="_blank"
-								rel="noreferrer"
-								class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+				{#if showEmptyState}
+					<!-- The empty state is the onboarding: one action, three ways in,
+					     and a quiet reminder that a key without a copy is a lost key. -->
+					<div
+						class="flex flex-col items-center gap-6 rounded-2xl border border-border bg-card p-6 text-center md:p-8"
+					>
+						<div class="space-y-2">
+							<h2 class="text-xl font-semibold tracking-tight">No chats yet.</h2>
+							<p class="text-sm text-muted-foreground">
+								Start a conversation, or join the Cordn group to see how it feels.
+							</p>
+						</div>
+
+						{#if joinRequestSent}
+							<div class="flex flex-col items-center gap-2">
+								<p class="text-sm text-muted-foreground">
+									Request sent — an admin will let you in.
+								</p>
+								<Button href={cordnGroupHref} variant="outline">Open the Cordn group</Button>
+							</div>
+						{:else}
+							<div class="flex flex-col items-center gap-2">
+								<Button href={cordnGroupHref}>Join the Cordn group</Button>
+								<p class="text-xs text-muted-foreground">
+									An admin lets you in — you can keep going while you wait.
+								</p>
+							</div>
+						{/if}
+
+						<div class="grid w-full gap-2 sm:grid-cols-3">
+							<button
+								type="button"
+								class="flex flex-col items-center gap-1 rounded-xl border border-border px-3 py-4 transition-colors hover:bg-muted/40"
+								onclick={() => openNewConversation(false)}
 							>
-								Get the app
+								<UserRoundPlus class="mb-1 size-5 text-muted-foreground" aria-hidden="true" />
+								<span class="text-sm font-medium">Find people</span>
+								<span class="text-xs text-muted-foreground">Anyone you can reach</span>
+							</button>
+							<a
+								href={resolve('/chat/create-group')}
+								class="flex flex-col items-center gap-1 rounded-xl border border-border px-3 py-4 transition-colors hover:bg-muted/40"
+							>
+								<Users class="mb-1 size-5 text-muted-foreground" aria-hidden="true" />
+								<span class="text-sm font-medium">Create group</span>
+								<span class="text-xs text-muted-foreground">Invite people you know</span>
 							</a>
-							<Button variant="ghost" class="ml-auto" onclick={dismissStorageDisclaimer}>
-								Dismiss
-							</Button>
-						</Card.Content>
-					</Card.Root>
+							<button
+								type="button"
+								class="flex flex-col items-center gap-1 rounded-xl border border-border px-3 py-4 transition-colors hover:bg-muted/40"
+								onclick={() => openNewConversation(true)}
+							>
+								<LinkIcon class="mb-1 size-5 text-muted-foreground" aria-hidden="true" />
+								<span class="text-sm font-medium">Open a link</span>
+								<span class="text-xs text-muted-foreground">Paste a cordn1 link</span>
+							</button>
+						</div>
+
+						<div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm">
+							{#if $activeAccount?.type === 'nsec' && !backupConfirmed}
+								<a
+									href={resolve('/chat/config/backup')}
+									class="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+								>
+									Save a copy of your account
+								</a>
+							{/if}
+							<button
+								type="button"
+								class="inline-flex items-center gap-1.5 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+								onclick={() => (introReplay = true)}
+							>
+								<BookOpen class="size-3.5" aria-hidden="true" />
+								How Cordn works
+							</button>
+						</div>
+					</div>
 				{/if}
 				{#if showReachabilityCallout}
 					<Card.Root>
@@ -307,32 +391,46 @@
 						{/each}
 					</div>
 				{/if}
-				{#if !hasGroups}
-					<div
-						class="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground"
-					>
-						No chats yet. Create one or join the Cordn group to get started.
+				{#if hasGroups}
+					<div class="flex flex-wrap items-center gap-2">
+						<Button href={resolve('/chat/create-group')} variant="outline">Create group</Button>
+						{#if !inCordnGroup}
+							<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
+						{/if}
+						<a
+							href={resolve('/chat/config')}
+							class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+						>
+							Manage coordinators &amp; key packages →
+						</a>
 					</div>
 				{/if}
 
-				<div class="flex flex-wrap items-center gap-2">
-					<Button href={resolve('/chat/create-group')} variant={hasGroups ? 'outline' : 'default'}>
-						Create group
-					</Button>
-					{#if !inCordnGroup}
-						<Button href={cordnGroupHref} variant="outline">Join Cordn group</Button>
-					{/if}
-					<a
-						href={resolve('/chat/config')}
-						class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				{#if showStorageDisclaimer && hasGroups}
+					<p
+						class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-xs text-muted-foreground"
 					>
-						Manage coordinators &amp; key packages →
-					</a>
-				</div>
+						<span>
+							Chats are kept in this browser.
+							<a
+								href={resolve('/chat/config/backup')}
+								class="underline underline-offset-2 hover:text-foreground">Back up</a
+							>
+							to keep them.
+						</span>
+						<button
+							type="button"
+							class="underline underline-offset-2 hover:text-foreground"
+							onclick={dismissStorageDisclaimer}
+						>
+							Dismiss
+						</button>
+					</p>
+				{/if}
 			</div>
+		{:else if introAuto}
+			<LoggedOutIntro onSkip={dismissIntro} onStart={markIntroSeen} />
 		{:else}
-			<!-- Logged-out home is the last step of the landing page: one job (get an
-			     identity), zero dead ends. The login dialog pre-selects the best tab. -->
 			<div
 				class="mx-auto flex min-h-full w-full max-w-md flex-col items-center justify-center gap-6 py-8 text-center"
 			>
@@ -348,13 +446,39 @@
 					triggerVariant="default"
 					triggerClass="h-11 px-8 text-base"
 				/>
-				<a
-					href={resolve('/')}
-					class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-				>
-					What is Cordn?
-				</a>
+				<div class="flex flex-col items-center gap-2 text-sm">
+					<button
+						type="button"
+						class="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+						onclick={() => (introAuto = true)}
+					>
+						How Cordn works
+					</button>
+					<a
+						href={resolve('/')}
+						class="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+					>
+						What is Cordn?
+					</a>
+				</div>
 			</div>
 		{/if}
 	</div>
+
+	{#if hasAccount}
+		<Dialog.Root bind:open={introReplay}>
+			<Dialog.Content
+				aria-label="How Cordn works"
+				showCloseButton={false}
+				class="h-dvh max-h-none w-full max-w-none rounded-none p-0 pt-safe pb-safe sm:max-w-none"
+			>
+				<LoggedOutIntro replay onSkip={() => (introReplay = false)} />
+			</Dialog.Content>
+		</Dialog.Root>
+	{/if}
+
+	<NewConversationDialog
+		bind:open={newConversationOpen}
+		initialJoinOpen={newConversationInitialJoin}
+	/>
 </div>

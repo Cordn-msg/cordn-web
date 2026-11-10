@@ -3,6 +3,7 @@
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import SecretKeyReveal from '$lib/components/chat/SecretKeyReveal.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import DatabaseBackup from '@lucide/svelte/icons/database-backup';
@@ -105,6 +106,11 @@
 								showLogout={true}
 								logoutButtonVariant="destructive"
 							/>
+							{#if $activeAccount.type === 'nsec'}
+								<div class="mt-4 border-t border-border pt-4">
+									<SecretKeyReveal />
+								</div>
+							{/if}
 						{:else}
 							<div class="space-y-3">
 								<p class="text-sm text-muted-foreground">

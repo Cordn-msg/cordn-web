@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-10-first-launch',
+		createdAt: Date.UTC(2026, 10, 10),
+		version: 1,
+		title: 'A first launch that explains itself',
+		body: '- ✨ First time here? Cordn now introduces itself in three short pages — what end-to-end encryption means, that your identity is a key, and what a coordinator does — then gets out of the way. Skip it, or reopen it from the "How Cordn works" link on the chat home empty state.\n- ✨ Creating an identity is one step: reveal your recovery key, mark it saved, add a name if you like, then continue. No extra screen, no redirect.\n- ✨ The empty chat home now gives you something to do: join the Cordn group, find people, create a group, or paste an invite link — plus a quiet reminder to back up a locally held key.\n- 🔄 Signing in puts a remote signer alongside creating an identity, importing a key, or using an extension when one is available. Restoring a backup now lives in Settings → Backup & recovery, behind an active account.\n- 🔄 For local (nsec) accounts, Settings → Identity now lets you show, copy and hide your secret key. Extension and remote signer accounts never expose it.\n- 🐛 A fresh account no longer greets you with a false “New device detected” banner: the check now compares against every key package this device holds, including one published while the check was still running.'
+	},
+	{
 		id: 'cordn-news-2026-11-09-notification-previews',
 		createdAt: Date.UTC(2026, 10, 9),
 		version: 1,

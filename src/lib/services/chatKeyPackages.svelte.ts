@@ -417,29 +417,29 @@ function getOrMintLastResort(ownerPubkey: string): Promise<StoredKeyPackageRecor
 
 /**
  * Read-only probe for the new-device migration banner: does `coordinatorKey` hold ANY available key
- * package for the active identity that THIS device did not publish? That is the "you've used Cordn
+ * package for the active identity that THIS device does not hold? That is the "you've used Cordn
  * on another device" heuristic. Broader than ensureLastResortPublished's 'foreign' (which is
  * last-resort-only, since only last-resorts conflict by eviction): the banner is a friendly nudge,
- * not a conflict check, so any available key package you don't hold counts. Compares by kp_ref so
- * a package this device published itself never counts as foreign. Never publishes.
+ * not a conflict check, so any available key package you don't hold counts. Compares by kp_ref
+ * against every locally held package — a publish marker that has not caught up with a publish in
+ * flight must not make our own package look foreign. Never publishes.
  */
 export async function detectForeignKeyPackage(coordinatorKey: string): Promise<boolean> {
 	const ownerPubkey = normalizePubKey(getActivePubkey());
 	const normalizedCoordinator = normalizePubKey(coordinatorKey);
-	const heldRefs = new Set(
-		chatKeyPackagesStore.keyPackages
-			.filter(
-				(entry) =>
-					normalizePubKey(entry.ownerPubkey) === ownerPubkey &&
-					entry.publishedCoordinatorKeys.includes(normalizedCoordinator)
-			)
-			.map((entry) => entry.keyPackageRef)
-	);
+	await ensureKeyPackagesLoaded();
 	const available = await queryClient.fetchQuery({
 		queryKey: chatQueryKeys.availableKeyPackages(ownerPubkey, normalizedCoordinator),
 		queryFn: () => fetchCoordinatorAvailableKeyPackages(normalizedCoordinator),
 		staleTime: 30 * 1000
 	});
+	// Read after the query: an auto-publish may finish while it is in flight, and
+	// the coordinator can serve the package before its local marker is written.
+	const heldRefs = new Set(
+		chatKeyPackagesStore.keyPackages
+			.filter((entry) => normalizePubKey(entry.ownerPubkey) === ownerPubkey)
+			.map((entry) => entry.keyPackageRef)
+	);
 	return available.some(
 		(entry) => normalizePubKey(entry.pk) === ownerPubkey && !heldRefs.has(entry.kp_ref)
 	);
