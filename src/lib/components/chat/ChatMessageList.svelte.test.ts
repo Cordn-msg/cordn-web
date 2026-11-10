@@ -36,7 +36,6 @@ function synthMessage(cursor: number): ChatMessage {
 		kind: 9,
 		createdAt: 1_700_000_000 + cursor * 60,
 		timeLabel: '12:00',
-		dayLabel: 'Jan 1',
 		cursor
 	};
 }

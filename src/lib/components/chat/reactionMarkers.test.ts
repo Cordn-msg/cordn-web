@@ -15,7 +15,6 @@ function row(partial: Partial<ChatMessage>): ChatMessage {
 		kind: -1,
 		createdAt: 0,
 		timeLabel: '',
-		dayLabel: '',
 		...partial
 	};
 }
