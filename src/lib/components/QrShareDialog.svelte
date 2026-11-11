@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -9,9 +8,9 @@
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import GroupLinkInput from '$lib/components/chat/GroupLinkInput.svelte';
-	import { isAppOrigin } from '$lib/utils/appOrigin';
+	import { gotoShareTarget, parseShareTarget } from '$lib/utils/groupShareLink';
 	import type { ProfileShareHint } from '$lib/utils/profileShareHint';
-	import { copyText, openExternal } from '$lib/services/nativeShims';
+	import { copyText } from '$lib/services/nativeShims';
 	import Copy from '@lucide/svelte/icons/copy';
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import ScanLine from '@lucide/svelte/icons/scan-line';
@@ -99,23 +98,16 @@
 		if (!trimmed) return;
 		resolving = true;
 		try {
-			let target: URL;
-			try {
-				target = new URL(trimmed, window.location.origin);
-			} catch {
+			// Same routing as the paste box, so a scanned code follows the rules a
+			// pasted one does (including another client's group link).
+			const target = parseShareTarget(trimmed);
+			if (!target) {
 				toast.error('That QR code is not a valid link.');
 				return;
 			}
-
-			if (isAppOrigin(target.origin)) {
-				const path = target.pathname + target.search + target.hash;
-				closeAfterNavigate();
-				// Path comes from a scanned QR code at runtime, so resolve() cannot apply.
-				// eslint-disable-next-line svelte/no-navigation-without-resolve
-				await goto(path);
-			} else {
-				await openExternal(target.toString());
-			}
+			// External links leave the dialog open, so the code stays scannable.
+			if (target.kind === 'internal') closeAfterNavigate();
+			await gotoShareTarget(target);
 		} finally {
 			resolving = false;
 		}

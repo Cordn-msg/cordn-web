@@ -1,7 +1,11 @@
 import { decodeGroupRef, isGroupRef } from '@cordn/core';
 import { nip19 } from 'nostr-tools';
 import type { ChatMentionTextPart } from '$lib/services/chatMentions';
-import { decodeGroupMetadataQueryParam } from '$lib/utils/groupShareLink';
+import {
+	decodeGroupMetadataQueryParam,
+	groupRefFromUrl,
+	isCordnWebHost
+} from '$lib/utils/groupShareLink';
 
 /**
  * Cordn invite links inside a chat message — the Staircase pattern: an invite
@@ -12,8 +16,9 @@ import { decodeGroupMetadataQueryParam } from '$lib/utils/groupShareLink';
  *
  * Deliberately NOT invites: device connection strings (a one-tap path to the
  * multi-device write key must not sit in a bubble), app pages without a payload
- * (/chat/news, /chat/config/…), and anything on a host that does not serve
- * cordn-web.
+ * (/chat/news, /chat/config/…), and unchecksummed ids from foreign hosts. A
+ * checksummed `cordn1…` ref is self-describing (spec §6: only the embedded ref
+ * is normative), so another client's wrapper cards the same group.
  */
 
 export type ChatInviteTarget =
@@ -37,18 +42,8 @@ export type ChatInvite =
 
 export const MAX_CHAT_INVITES_PER_MESSAGE = 3;
 
-/** Hosts that serve cordn-web (Staircase's KNOWN_HOSTS) plus our own origin,
- * so self-hosted deployments card their own links. Unchecksummed forms (bare
- * gid paths) are only accepted from these. */
-const KNOWN_CHAT_HOSTS = new Set(['cordn.net', 'www.cordn.net', 'cordn.relay.tools']);
-
 /** /chat/ segments that are app pages, never a group id. */
 const RESERVED_CHAT_SEGMENTS = new Set(['coordinators', 'create-group', 'news', 'share', 'config']);
-
-function isKnownChatHost(hostname: string): boolean {
-	if (KNOWN_CHAT_HOSTS.has(hostname)) return true;
-	return typeof window !== 'undefined' && hostname === window.location.hostname;
-}
 
 function decodePubkeyParam(value: string): string | undefined {
 	try {
@@ -61,8 +56,19 @@ function decodePubkeyParam(value: string): string | undefined {
 	return undefined;
 }
 
+/** Card name/icon from a raw `m=` value; `{}` when absent or undecodable. */
+function metaFields(rawMeta: string | null | undefined): { name?: string; icon?: string } {
+	const meta = rawMeta ? decodeGroupMetadataQueryParam(rawMeta) : null;
+	return meta ? { name: meta.name, ...(meta.icon ? { icon: meta.icon } : {}) } : {};
+}
+
 /** Group from a bare `cordn1…` code (checksummed by isGroupRef upstream). */
-function groupFromRef(code: string, href: string, target: ChatInviteTarget): ChatInvite | null {
+function groupFromRef(
+	code: string,
+	href: string,
+	target: ChatInviteTarget,
+	rawMeta?: string | null
+): ChatInvite | null {
 	try {
 		const ref = decodeGroupRef(code);
 		return {
@@ -71,7 +77,8 @@ function groupFromRef(code: string, href: string, target: ChatInviteTarget): Cha
 			gid: ref.gid,
 			coordinatorPubkey: ref.coordinatorPubkey,
 			relays: ref.relays,
-			target
+			target,
+			...metaFields(rawMeta)
 		};
 	} catch {
 		return null;
@@ -90,19 +97,23 @@ export function classifyChatInviteHref(href: string): ChatInvite | null {
 	} catch {
 		return null;
 	}
-	if ((url.protocol !== 'https:' && url.protocol !== 'http:') || !isKnownChatHost(url.hostname)) {
-		return null;
+	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+
+	// A ref embedded by another client (or by one of our non-chat pages) names the
+	// group, but that wrapper's inner layout is unknowable — the card only opens
+	// the group, never `/e` or `/info`.
+	const embedded = groupRefFromUrl(url);
+	const embeddedCard = () =>
+		embedded ? groupFromRef(embedded.code, href, { type: 'chat' }, embedded.meta) : null;
+	if (!isCordnWebHost(url.hostname)) return embeddedCard();
+
+	// Our own routes are the destination: a `/e/<id>` or `/info` target must not be
+	// flattened, and app pages (/chat/news) stay pages.
+	if (!url.pathname.startsWith('/chat/') && !url.pathname.startsWith('/p/')) {
+		return embeddedCard();
 	}
 
 	const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-	const meta = (() => {
-		const m = url.searchParams.get('m');
-		if (!m) return null;
-		const decoded = decodeGroupMetadataQueryParam(m);
-		return decoded ? { name: decoded.name, icon: decoded.icon } : null;
-	})();
-	const withMeta = (invite: ChatInvite): ChatInvite =>
-		invite.kind === 'group' && meta ? { ...invite, name: meta.name, icon: meta.icon } : invite;
 
 	// /chat/coordinators?c=<nprofile> — the coordinator share form.
 	if (segments[0] === 'chat' && segments[1] === 'coordinators' && segments.length === 2) {
@@ -136,22 +147,20 @@ export function classifyChatInviteHref(href: string): ChatInvite | null {
 						: null;
 		if (!target) return null;
 		const id = segments[1];
-		if (isGroupRef(id)) {
-			const invite = groupFromRef(id, href, target);
-			return invite ? withMeta(invite) : null;
-		}
-		// Legacy bare-gid form: unchecksummed, so known hosts only (already
+		if (isGroupRef(id)) return groupFromRef(id, href, target, url.searchParams.get('m'));
+		// Legacy bare-gid form: unchecksummed, so cordn-web hosts only (already
 		// guaranteed above) and a plausible id.
 		if (!id || new TextEncoder().encode(id).length > 255) return null;
 		const c = url.searchParams.get('c');
 		const coordinatorPubkey = c ? decodePubkeyParam(c) : undefined;
-		return withMeta({
+		return {
 			kind: 'group',
 			href,
 			gid: id,
 			coordinatorPubkey,
-			target
-		});
+			target,
+			...metaFields(url.searchParams.get('m'))
+		};
 	}
 
 	return null;

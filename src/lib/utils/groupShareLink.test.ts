@@ -34,6 +34,14 @@ describe('groupShareLink metadata codec', () => {
 	it('returns null for empty name', () => {
 		expect(encodeGroupShareMetadata({ name: '' })).toBeNull();
 	});
+
+	it('decodes a legacy standard-base64 m= whose + became a space in a query', () => {
+		// btoa('{"name":"ab>"}') = eyJuYW1lIjoiYWI+In0= — the `+` arrives as a
+		// space through URLSearchParams when the producer did not percent-encode it.
+		const damaged = new URLSearchParams('m=eyJuYW1lIjoiYWI+In0=').get('m') ?? '';
+		expect(damaged).toContain(' ');
+		expect(decodeGroupMetadataQueryParam(damaged)).toEqual({ name: 'ab>' });
+	});
 });
 
 describe('parseShareTarget', () => {
@@ -194,5 +202,60 @@ describe('parseShareTarget cordn1 + bare host', () => {
 		if (!t || t.kind !== 'internal') throw new Error('expected internal');
 		expect(t.path).toBe(`/chat/${code}?m=eyJuYW1lIjoiQyJ9`);
 		expect(t.path).not.toMatch(/%3[FD]/);
+	});
+});
+
+describe('parseShareTarget foreign cordn links', () => {
+	const CODE = encodeGroupRef({
+		gid: 'cat-lovers',
+		coordinatorPubkey: COORD,
+		relays: ['wss://relay.example']
+	});
+	const META = encodeGroupShareMetadata({ name: 'Cat Lovers of Cordn' }) ?? '';
+
+	function internalPath(input: string): string {
+		const t = parseShareTarget(input);
+		if (!t || t.kind !== 'internal') throw new Error(`expected internal for ${input}`);
+		return t.path;
+	}
+
+	it("routes another client's fragment link (ref + ?m= inside the hash) in-app", () => {
+		// The reported Staircase shape: the wrapper page is foreign and the whole
+		// payload — ref AND metadata — lives in the fragment.
+		expect(internalPath(`https://staircase.chat/app/#${CODE}?m=${META}`)).toBe(
+			`/chat/${CODE}?m=${META}`
+		);
+	});
+
+	it('routes the spec §6 fragment and ?g= forms', () => {
+		expect(internalPath(`https://example.app/join#${CODE}`)).toBe(`/chat/${CODE}`);
+		expect(internalPath(`https://example.app/?g=${CODE}`)).toBe(`/chat/${CODE}`);
+	});
+
+	it('routes a ref inside a hash-router path', () => {
+		expect(internalPath(`https://example.app/#/chat/${CODE}`)).toBe(`/chat/${CODE}`);
+	});
+
+	it('opens our own root fragment instead of dead-ending on /#…', () => {
+		expect(internalPath(`https://cordn.net/#${CODE}`)).toBe(`/chat/${CODE}`);
+	});
+
+	it('keeps our own message and info permalinks intact', () => {
+		expect(internalPath(`https://cordn.net/chat/${CODE}/e/abc123?m=${META}`)).toBe(
+			`/chat/${CODE}/e/abc123?m=${META}`
+		);
+		expect(internalPath(`https://cordn.net/chat/${CODE}/info`)).toBe(`/chat/${CODE}/info`);
+	});
+
+	it('leaves foreign links without a valid ref external', () => {
+		// Shape-only `cordn1…` (bad checksum) must never be reinterpreted as a group.
+		expect(parseShareTarget('https://example.app/#cordn1garbage')).toEqual({
+			kind: 'external',
+			url: 'https://example.app/#cordn1garbage'
+		});
+		expect(parseShareTarget('https://example.app/chat/my-gid')).toEqual({
+			kind: 'external',
+			url: 'https://example.app/chat/my-gid'
+		});
 	});
 });
