@@ -11,6 +11,7 @@
  * IndexedDB's structured-clone semantics, which the in-memory backend hides.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { nip19 } from 'nostr-tools';
 import {
 	base64ToBytes,
 	bytesToBase64,
@@ -664,7 +665,9 @@ describe('notification preview isolation', () => {
 			state: carolState,
 			event: createUnsignedCordnMessageEvent({
 				pubkey: carolPubkey,
-				content: 'hello from carol',
+				// Mention token: the preview runtime has no profile store, so only the
+				// native name map can turn it into a name.
+				content: `hello from carol nostr:${nip19.npubEncode(carolPubkey)}`,
 				kind: 9,
 				tags: [],
 				createdAt: Math.floor(Date.now() / 1000)
@@ -688,10 +691,18 @@ describe('notification preview isolation', () => {
 
 		const previews = await generateNotificationPreviews({
 			accountPubkey: account.pubkey,
-			rows
+			rows,
+			// The cached label names the mention; it must NOT prefix the 1:1 line
+			// (the title already names the peer).
+			displayNames: { [group.id]: { [carolPubkey]: 'Carol' } }
 		});
 		expect(previews).toEqual([
-			expect.objectContaining({ gid: group.id, body: 'hello from carol', count: 1, cursor: 2 })
+			expect.objectContaining({
+				gid: group.id,
+				body: 'hello from carol @Carol',
+				count: 1,
+				cursor: 2
+			})
 		]);
 
 		// The clone must not advance the real ratchet or write any history.

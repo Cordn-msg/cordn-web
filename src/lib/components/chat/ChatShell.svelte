@@ -9,7 +9,11 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { page } from '$app/state';
-	import { formatChatMessagePreviewText, getChatGroupDisplayTitle } from './chatGroupDisplay';
+	import {
+		formatChatMessagePreviewText,
+		getChatGroupDisplayTitle,
+		getChatGroupTitlePersonPubkey
+	} from './chatGroupDisplay';
 	import type {
 		ChatMentionCandidate,
 		ChatMentionReference,
@@ -199,6 +203,16 @@
 					memberPubkeys: mentionCandidates.map((candidate) => candidate.pubkey)
 				})
 			: title
+	);
+	// The header title is a 1:1 peer's name in that case — mark it when it is a petname.
+	const titlePersonPubkey = $derived.by(() =>
+		group
+			? getChatGroupTitlePersonPubkey({
+					group,
+					activePubkey,
+					memberPubkeys: mentionCandidates.map((candidate) => candidate.pubkey)
+				})
+			: undefined
 	);
 	const unreadReferenceTargets = $derived.by(() =>
 		activePubkey ? listUnreadChatGroupReferenceTargets(groupId, activePubkey) : []
@@ -1223,7 +1237,7 @@
 			composerRef?.addFiles(Array.from(event.dataTransfer?.files ?? []));
 		}}
 	>
-		<ChatHeader {groupId} title={displayTitle} />
+		<ChatHeader {groupId} title={displayTitle} titlePubkey={titlePersonPubkey} />
 
 		{#if pinnedMessages.length > 0}
 			<ChatPinnedRibbon

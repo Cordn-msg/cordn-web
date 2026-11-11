@@ -631,6 +631,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Asking to join a group now puts that group in your chat list right away, as a card still on its way in — name, picture and all — instead of a status line you had to go and find.\n- ✨ When an admin lets you in, the card turns into the chat on its own: asking was already your yes, so there is no second Accept to press.\n- 🔄 While you wait, Cordn checks for the answer about once a minute, and only while the app is open — nothing keeps checking once you are in.\n- 🔄 Changed your mind? The × on the card (or “Request again” in the group) stops the wait. If an admin lets you in later, it still arrives as an ordinary invitation you can accept.'
 	},
 	{
+		id: 'cordn-news-2026-11-11-petnames',
+		createdAt: Date.UTC(2026, 10, 11),
+		version: 1,
+		title: 'Your own names, and notifications that say who',
+		body: "- ✨ You can now give anyone a petname — your own private label, saved only on this device. Set it from their profile with “Add petname”: it works even when they have no profile at all, so a bare npub can finally become “Mom” or “Work — John”.\n- 🔄 Petnames lead wherever a name has to be short — message bubbles, @mentions, chat titles — with a small paw mark wherever the name you see is your own label; the profile page still shows the name they picked for themselves, so you always know who is behind it.\n- ✨ Notifications now say who wrote: up to six recent messages read like “Mom: see you at 8”, and a mention resolves to a name instead of a string of letters.\n- ✨ Tapping a name in an @mention opens that person's profile, so a mention is also a way to find out who you are talking to.\n- 🔄 Those names come from a cache kept on the phone, so they still work while the app is closed — and when a name isn't known yet the message appears without one rather than with a raw npub.\n- 🔄 One-to-one chats are unchanged: the title already names the person, so the message text stays clean."
+	},
+	{
 		id: 'cordn-news-2026-10-28-snappy-switching',
 		createdAt: Date.UTC(2026, 9, 28),
 		version: 1,

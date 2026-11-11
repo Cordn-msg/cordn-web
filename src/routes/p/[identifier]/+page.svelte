@@ -8,6 +8,7 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import PetnameEditor from '$lib/components/PetnameEditor.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -50,6 +51,8 @@
 	import { nip19 } from 'nostr-tools';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
+	import { profileDisplayName as resolveProfileName } from '$lib/utils/profileName';
 
 	let { params } = $props();
 
@@ -125,10 +128,7 @@
 	});
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const npub = $derived.by(() => (profilePubkey ? nip19.npubEncode(profilePubkey) : ''));
-	const displayName = $derived.by(
-		() =>
-			$profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16) || 'Profile'
-	);
+	const displayName = $derived(resolveProfileName($profile, profilePubkey) ?? npub.slice(0, 16));
 	// Key-package availability is a remote read → Svelte Query (AGENTS.md): the
 	// same cached/deduped path the chat routes use, served by a registry client
 	// that participates in the coordinator keepalive/health/probe lifecycle.
@@ -201,6 +201,7 @@
 		relays: metadataRelays
 	});
 	let editingProfile = $state(false);
+	let editingPetname = $state(false);
 	let profileName = $state('');
 	let profileDisplayName = $state('');
 	let profileAbout = $state('');
@@ -216,6 +217,14 @@
 	let startChatError = $state('');
 	let startChatAfterLogin = $state(false);
 	let initializedEditorForPubkey = $state('');
+
+	// The petname form is transient like the profile editor: leaving this profile or
+	// switching identity closes it, so a save can never land on another subject.
+	$effect(() => {
+		void profilePubkey;
+		void $activeAccount?.id;
+		editingPetname = false;
+	});
 
 	// Deduped via Svelte Query: a repeat visit within the stale window does no
 	// network work and paints straight from the eventStore cache.
@@ -425,7 +434,7 @@
 </script>
 
 <svelte:head>
-	<title>{($profile?.name || $profile?.display_name || 'Profile') + ' | Cordn'}</title>
+	<title>{(resolveProfileName($profile, profilePubkey) ?? 'Profile') + ' | Cordn'}</title>
 	<meta name="description" content="Cordn profile page with shared local groups." />
 </svelte:head>
 
@@ -516,6 +525,13 @@
 										{logoutCleaning ? 'Cleaning…' : 'Log out and clean data'}
 									</Button>
 								</div>
+							{:else if $activeAccount && !editingPetname}
+								<!-- Same affordance as "Edit profile", one step smaller: your own label
+								     for somebody else never leaves this device. -->
+								<Button type="button" variant="outline" onclick={() => (editingPetname = true)}>
+									<Pencil class="mr-2 size-4" />
+									{getChatPetname(profilePubkey) ? 'Edit petname' : 'Add petname'}
+								</Button>
 							{/if}
 						</div>
 					</Card.Header>
@@ -630,6 +646,8 @@
 									</Button>
 								</div>
 							</form>
+						{:else if editingPetname && $activeAccount}
+							<PetnameEditor pubkey={profilePubkey} onClose={() => (editingPetname = false)} />
 						{:else}
 							<div class="flex w-full flex-col items-center gap-3">
 								<ProfileCard pubkey={profilePubkey} mode="extended" />

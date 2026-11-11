@@ -1,8 +1,9 @@
 <script lang="ts">
-	// Headless native-only component: keeps the native group-metadata cache (display title +
-	// rendered icon bytes) in sync so the key-less background worker can post rich notifications
-	// (roadmap §4.4). Profile data is reactive-only in this app, so the sync must live in a
-	// component (where `useProfileHints` works), not in the service layer.
+	// Headless native-only component: keeps the native group-metadata cache (display title,
+	// rendered icon bytes + resolved member display labels) in sync so the key-less background
+	// worker and its hidden preview can post rich, name-carrying notifications (roadmap §4.4).
+	// Profile data is reactive-only in this app, so the sync must live in a component (where
+	// `useProfileHints` works), not in the service layer.
 	import { syncGroupMeta } from '$lib/services/nativeBridge';
 	import { listChatGroups, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -15,6 +16,8 @@
 		getChatGroupNotificationIcon,
 		renderNotificationIconFromSrc
 	} from '$lib/components/chat/chatGroupDisplay';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
+	import { profileDisplayLabel } from '$lib/utils/profileName';
 
 	const groups = $derived(listChatGroups());
 	const activePubkey = $derived($activeAccount?.pubkey);
@@ -36,13 +39,17 @@
 
 	// Bridge-call dedup: skip a group whose (title, iconSignature) hasn't changed since last push.
 	const lastSent = new SvelteMap<string, string>();
+	// Account the dedup map belongs to. The native row's cached title/icon/names are
+	// cleared when the account changes (BackgroundStore.seedGroups) and wiped by
+	// "log out and clean data", so the map must not suppress the re-send that refills them.
+	let syncedOwner = '';
 	// Rasterization cache keyed by icon source (URL/data-URL) — avoids re-fetching image URLs.
 	const iconBytesBySrc = new SvelteMap<string, string | null>();
 
 	/**
 	 * Reactive dependency: a compact string that changes whenever ANY input the icon/title
 	 * computation reads actually changes — group membership, metadata (icon/name/imageUrl), any
-	 * member's loaded profile (picture/name/displayName), or the active identity.
+	 * member's loaded profile (picture/name/displayName/nip05), a petname, or the active identity.
 	 *
 	 * Reading these specific fields (not a coarse `void profileHints`) is what lets Svelte's
 	 * fine-grained reactivity track deep mutations on the `$state` proxies — so a profile that
@@ -72,6 +79,10 @@
 					(h?.name ?? '') +
 					',' +
 					(h?.displayName ?? '') +
+					',' +
+					(h?.nip05 ?? '') +
+					',' +
+					(getChatPetname(p) ?? '') +
 					';';
 			}
 		}
@@ -81,12 +92,18 @@
 	$effect(() => {
 		// Track the signature (a primitive string), so any deep mutation above re-runs this effect.
 		void metaSig;
+		const owner = activePubkey ?? '';
+		if (owner !== syncedOwner) {
+			syncedOwner = owner;
+			lastSent.clear();
+		}
 		// Debounce: collapse a burst of profile re-emits into one sync pass.
 		const t = setTimeout(() => void flush(), 400);
 		return () => clearTimeout(t);
 	});
 
 	async function flush() {
+		const owner = activePubkey ?? '';
 		for (const g of groups) {
 			const memberPubkeys = listChatGroupMembers(g.id)
 				.map((m) => normalizePubKey(m.stablePubkey))
@@ -110,10 +127,21 @@
 					iconBytesBySrc.set(src, iconBytes);
 				}
 			}
-			const sig = `${title}::${iconBytes ? iconBytes.length + ':' + iconBytes.slice(0, 24) : ''}`;
+			// Resolved labels for the background preview's sender names: petname → profile,
+			// with nothing for a member we know no name for (never an npub). Replaced
+			// wholesale on every sync so departed members and cleared petnames drop out.
+			const displayNames: Record<string, string> = {};
+			for (const pubkey of memberPubkeys) {
+				const label = profileDisplayLabel(profileHints[pubkey], pubkey);
+				if (label) displayNames[pubkey] = label;
+			}
+			// Rasterizing the icon above can straddle an account switch: these labels and
+			// title were resolved for [owner] and must never land on another account's row.
+			if ((activePubkey ?? '') !== owner) return;
+			const sig = `${title}::${iconBytes ? iconBytes.length + ':' + iconBytes.slice(0, 24) : ''}::${JSON.stringify(displayNames)}`;
 			if (lastSent.get(g.id) === sig) continue;
 			lastSent.set(g.id, sig);
-			void syncGroupMeta(g.id, title, iconBytes);
+			void syncGroupMeta(g.id, title, iconBytes, displayNames);
 		}
 	}
 </script>

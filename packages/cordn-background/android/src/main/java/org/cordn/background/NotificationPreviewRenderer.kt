@@ -207,6 +207,10 @@ internal object NotificationPreviewRenderer {
         fun getRequest(): String {
             val store = BackgroundStore.get(context)
             val rows = JSONArray()
+            // Resolved member labels per group, straight from the SQLite meta cache. This is
+            // the preview's ONLY name source (no network, no event store), so sender labels
+            // and mention names come from here.
+            val displayNames = JSONObject()
             for (row in store.peekSidecar(account)) {
                 rows.put(
                     JSONObject()
@@ -215,9 +219,20 @@ internal object NotificationPreviewRenderer {
                         .put("msg64", row.msg64)
                         .put("at", row.at)
                 )
+                if (!displayNames.has(row.gid)) {
+                    displayNames.put(
+                        row.gid,
+                        runCatching { JSONObject(store.getGroupDisplayNames(row.gid)) }
+                            .getOrElse { JSONObject() }
+                    )
+                }
             }
             android.util.Log.i("CordnBg", "preview: request rows=${rows.length()}")
-            return JSONObject().put("accountPubkey", account).put("rows", rows).toString()
+            return JSONObject()
+                .put("accountPubkey", account)
+                .put("rows", rows)
+                .put("displayNames", displayNames)
+                .toString()
         }
 
         @JavascriptInterface

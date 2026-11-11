@@ -12,6 +12,7 @@
 	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Sheet from '$lib/components/ui/sheet';
+	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import { resolve } from '$app/paths';
 	import {
 		chatHeaderActionsStore,
@@ -37,10 +38,13 @@
 
 	let {
 		groupId,
-		title = 'Cordn'
+		title = 'Cordn',
+		titlePubkey
 	}: {
 		groupId?: string;
 		title?: string;
+		/** The person the title is named after (1:1 peer), for the petname mark. */
+		titlePubkey?: string;
 	} = $props();
 
 	async function refreshAvailableKeyPackages() {
@@ -134,7 +138,10 @@
 				class="min-w-0 rounded-xl text-left transition-opacity outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 				aria-label={`Open ${title} group info`}
 			>
-				<h1 class="truncate text-lg font-semibold tracking-tight">{title}</h1>
+				<h1 class="flex min-w-0 items-center gap-1.5 text-lg font-semibold tracking-tight">
+					<span class="truncate">{title}</span>
+					<PetnameMark pubkey={titlePubkey} class="size-3.5" />
+				</h1>
 			</button>
 		</div>
 

@@ -19,6 +19,7 @@
 		TooltipTrigger
 	} from '$lib/components/ui/tooltip';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import Avatar from '$lib/components/Avatar.svelte';
 	import CustomEmoji from './CustomEmoji.svelte';
 	import EmojiPicker from './EmojiPicker.svelte';
@@ -204,9 +205,7 @@
 	});
 	const authorNpub = $derived(nip19.npubEncode(message.author));
 	const authorHref = $derived(resolve('/p/[identifier]', { identifier: authorNpub }));
-	const displayName = $derived.by(
-		() => profile?.name || profile?.display_name || profile?.nip05 || `${authorNpub.slice(0, 12)}…`
-	);
+	const displayName = $derived(profileDisplayName(profile, message.author) ?? authorNpub);
 	const replyParts = $derived.by(() =>
 		message.replyTo
 			? getCachedChatMessageParts(
@@ -929,9 +928,10 @@
 
 					{#if showAuthor}
 						<p
-							class="max-w-[12rem] truncate px-1 text-xs font-medium text-foreground/90 sm:max-w-[16rem]"
+							class="flex max-w-[12rem] items-center gap-1 px-1 text-xs font-medium text-foreground/90 sm:max-w-[16rem]"
 						>
-							{displayName}
+							<span class="min-w-0 truncate">{displayName}</span>
+							<PetnameMark pubkey={message.author} class="size-3" />
 						</p>
 					{/if}
 
