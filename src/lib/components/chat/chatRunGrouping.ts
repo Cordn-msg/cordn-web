@@ -20,10 +20,16 @@ export function isRunTail(message: ChatMessage, nextMessage: ChatMessage | undef
  * author, i.e. its author run continues below. Used for spacing: consecutive
  * same-author bubbles stack tightly, while author changes, system rows and the
  * run tail keep the normal gap.
+ *
+ * `nextStartsSection` breaks the tight gap even though the author is unchanged:
+ * a day separator or unread marker rendered at the top of the next row is a
+ * section boundary and needs the normal breathing room above it.
  */
 export function isRunContinuation(
 	message: ChatMessage,
-	nextMessage: ChatMessage | undefined
+	nextMessage: ChatMessage | undefined,
+	nextStartsSection = false
 ): boolean {
+	if (nextStartsSection) return false;
 	return !message.systemKind && !isRunTail(message, nextMessage);
 }

@@ -47,6 +47,12 @@ describe('isRunContinuation', () => {
 			)
 		).toBe(false);
 	});
+
+	test('a next row that starts a section (day label or unread marker) ends the run', () => {
+		expect(
+			isRunContinuation(row({ id: 'a1', author: 'A' }), row({ id: 'a2', author: 'A' }), true)
+		).toBe(false);
+	});
 });
 
 describe('isRunTail', () => {

@@ -866,9 +866,19 @@
 							and cached (loadedPictures paints it at full opacity instantly), so no fade replays.
 							Own messages omit the pfp entirely. -->
 						{@const runTail = isRunTail(message, nextMessage)}
+						{@const showDayLabel = previousMessage
+							? chatDayKey(previousMessage.createdAt) !== chatDayKey(message.createdAt)
+							: true}
+						{@const showUnreadMarker = message.id === focusMarkerId}
+						<!-- A day separator or unread marker on the next row starts a new section; the
+						     row above it keeps the normal gap even when the author is unchanged. -->
+						{@const nextStartsSection = nextMessage
+							? chatDayKey(message.createdAt) !== chatDayKey(nextMessage.createdAt) ||
+								nextMessage.id === focusMarkerId
+							: false}
 						<!-- Same-author runs stack tightly; a run tail (author change or next row is
 						     a system row) keeps the normal breathing room. -->
-						{@const runContinues = isRunContinuation(message, nextMessage)}
+						{@const runContinues = isRunContinuation(message, nextMessage, nextStartsSection)}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
@@ -882,10 +892,8 @@
 								{groupId}
 								showAuthor={runHead}
 								showAvatar={runTail}
-								showDayLabel={previousMessage
-									? chatDayKey(previousMessage.createdAt) !== chatDayKey(message.createdAt)
-									: true}
-								showUnreadMarker={message.id === focusMarkerId}
+								{showDayLabel}
+								{showUnreadMarker}
 								{onReply}
 								{onReact}
 								{onUnreact}
