@@ -2,7 +2,7 @@ import { mount, unmount, flushSync } from 'svelte';
 import { expect, test, vi } from 'vitest';
 import Avatar from './Avatar.svelte';
 import AvatarImage from './ui/avatar/avatar-image.svelte';
-import { AVATAR_STATUS_KEY } from './ui/avatar/avatar-context';
+import { AVATAR_STATUS_KEY, loadedAvatarPictures } from './ui/avatar/avatar-context';
 
 // 1×1 transparent GIF as a data URL — decodes without any network round trip.
 const PICTURE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
@@ -90,6 +90,30 @@ test('a picture another avatar component warmed does not fade in again', async (
 	});
 	flushSync();
 	expect(target.querySelector('img')!.className).toContain('opacity-100');
+	await unmount(bubble);
+	target.remove();
+});
+
+test('a picture failing elsewhere must not hide it where it already painted', async () => {
+	const target = document.createElement('div');
+	document.body.append(target);
+	const bubble = mount(Avatar, {
+		target,
+		props: { pubkey: 'ee'.repeat(32), picture: GROUP_PICTURE }
+	});
+	flushSync();
+	const bubbleImg = target.querySelector('img')!;
+	// The bitmap painted here (not merely warm in the shared cache), which latches it.
+	bubbleImg.dispatchEvent(new Event('load'));
+	flushSync();
+	expect(bubbleImg.className).toContain('opacity-100');
+
+	// Another avatar of the same person (sidebar, direct chat) errors and drops the
+	// src from the shared cache: the painted bubble must stay visible.
+	loadedAvatarPictures.delete(GROUP_PICTURE);
+	flushSync();
+	expect(bubbleImg.className).toContain('opacity-100');
+
 	await unmount(bubble);
 	target.remove();
 });

@@ -20,7 +20,12 @@
 	// Fade a never-seen picture in over the always-painted fallback color (the
 	// bitmap can't paint until fetched/decoded); already-loaded pictures skip
 	// the fade entirely via the session-wide set shared with `AvatarImage`.
-	const loaded = $derived(picture ? loadedAvatarPictures.has(picture) : false);
+	// `painted` also keeps this bubble's own picture visible after the cache
+	// evicts the src (an error on another copy of the same picture).
+	let painted = $state<string | null>(null);
+	const loaded = $derived(
+		picture ? painted === picture || loadedAvatarPictures.has(picture) : false
+	);
 </script>
 
 {#if picture && showImage}
@@ -41,7 +46,10 @@
 				// while its image is still loading, and the prop then belongs to a
 				// destroyed effect (Svelte's derived_inert warning).
 				const src = event.currentTarget.getAttribute('src');
-				if (src) loadedAvatarPictures.add(src);
+				if (src) {
+					painted = src;
+					loadedAvatarPictures.add(src);
+				}
 			}}
 		/>
 	</div>
