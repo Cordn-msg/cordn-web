@@ -33,10 +33,12 @@ function toBase64Url(bytes: Uint8Array): string {
 
 /**
  * Decode base64url OR legacy standard base64 (`+`/`/`/`=`), so links shared
- * before the base64url switch keep working.
+ * before the base64url switch keep working. A `+` arrives as a space whenever a
+ * legacy `m=` went through URLSearchParams without percent-encoding, so restore
+ * those before decoding.
  */
 function fromBase64Url(value: string): Uint8Array {
-	const standard = value.replace(/-/g, '+').replace(/_/g, '/');
+	const standard = value.replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
 	const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, '=');
 	return base64ToBytes(padded);
 }
@@ -240,6 +242,89 @@ const APP_HOST = (() => {
 	}
 })();
 
+/** Hosts that serve cordn-web: the public hosts share links point at, plus
+ * whichever origin is serving this build (dev, self-hosted). */
+const CORDN_WEB_HOSTS = new Set(['cordn.net', 'www.cordn.net', 'cordn.relay.tools']);
+
+export function isCordnWebHost(hostname: string): boolean {
+	if (CORDN_WEB_HOSTS.has(hostname)) return true;
+	return typeof window !== 'undefined' && hostname === window.location.hostname;
+}
+
+/**
+ * A group ref embedded in another client's link, wherever that client's own
+ * convention put it. Spec §6 makes only the embedded `cordn1…` normative — the
+ * outer host, path and onboarding are application-defined — so a checksummed
+ * ref is accepted from any host.
+ */
+export interface EmbeddedGroupRef {
+	/** The checksummed `cordn1…` code, verbatim. */
+	code: string;
+	/** Raw `m=` metadata value that travels with it, if any. */
+	meta?: string;
+}
+
+/** The ref in `value` when it also passes the checksum; null otherwise, so a
+ * shape-only `cordn1…` is never reinterpreted as a group. */
+function checksummedRef(value: string | null | undefined): string | null {
+	const code = value?.trim();
+	if (!code || !isGroupRef(code)) return null;
+	try {
+		decodeGroupRef(code);
+		return code;
+	} catch {
+		return null;
+	}
+}
+
+function refEmbedding(code: string, rawMeta: string | null | undefined): EmbeddedGroupRef {
+	const meta = rawMeta?.trim();
+	return meta ? { code, meta } : { code };
+}
+
+/** Last non-empty `/`-separated segment — the ref's slot in a path or fragment. */
+function lastPathSegment(value: string): string {
+	const segments = value.split('/').filter(Boolean);
+	return segments[segments.length - 1] ?? '';
+}
+
+/**
+ * The group ref a URL carries, in the three forms clients use (spec §6): a
+ * fragment (`#cordn1…`, preferred there), a path segment (`/chat/cordn1…`), or a
+ * query value (`?g=cordn1…`). A fragment carries its own `?m=` metadata (the
+ * Staircase shape), so each candidate is paired with the query that belongs to
+ * it.
+ */
+export function groupRefFromUrl(url: URL): EmbeddedGroupRef | null {
+	const fragment = url.hash.slice(1);
+	if (fragment) {
+		const queryAt = fragment.indexOf('?');
+		const path = queryAt === -1 ? fragment : fragment.slice(0, queryAt);
+		const code = checksummedRef(lastPathSegment(path));
+		if (code) {
+			const query = queryAt === -1 ? '' : fragment.slice(queryAt + 1);
+			return refEmbedding(code, new URLSearchParams(query).get('m'));
+		}
+	}
+
+	const pathCode = checksummedRef(lastPathSegment(url.pathname));
+	if (pathCode) return refEmbedding(pathCode, url.searchParams.get('m'));
+
+	// `?g=cordn1…` — any query value but the metadata one, which is never a ref.
+	for (const [key, value] of url.searchParams) {
+		if (key === 'm') continue;
+		const code = checksummedRef(value);
+		if (code) return refEmbedding(code, url.searchParams.get('m'));
+	}
+
+	return null;
+}
+
+/** App path for an embedded ref: its ref route plus the metadata that came with it. */
+function refSharePath({ code, meta }: EmbeddedGroupRef): string {
+	return meta ? `/chat/${code}?m=${encodeURIComponent(meta)}` : `/chat/${code}`;
+}
+
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -252,8 +337,9 @@ function looksLikeBareAppHostUrl(value: string): boolean {
 
 /**
  * A navigation target resolved from a user-entered share string.
- *  - `internal`: an app-relative path to goto() (cordn1 ref, relative link, or bare group id).
- *  - `external`: an absolute http(s) URL whose origin is resolved at goto time.
+ *  - `internal`: an app-relative path to goto() (cordn1 ref, relative link, bare group id,
+ *    an app-host page, or any URL carrying a checksummed group ref).
+ *  - `external`: an absolute http(s) URL that is not ours and carries no group ref.
  */
 export type ParsedShareTarget =
 	| { kind: 'internal'; path: string }
@@ -263,7 +349,10 @@ export type ParsedShareTarget =
  * Parse a pasted/typed string into a navigation target for the join/share flow.
  *
  * Accepts:
- *  - an absolute URL (https://host/path?…) → external, origin-resolved later;
+ *  - an absolute URL carrying a group ref anywhere (path, fragment, or `?g=`) →
+ *    internal /chat/<ref>, whoever hosts the wrapper page (spec §6);
+ *  - an app-host page (cordn.net/chat/…) → internal, path intact;
+ *  - any other absolute URL → external, origin-resolved later;
  *  - an app-relative path (/chat/<id>?…) → internal;
  *  - a bare group id → internal /chat/<id> on the default coordinator.
  *
@@ -288,17 +377,30 @@ export function parseShareTarget(raw: string): ParsedShareTarget | null {
 	}
 
 	if (/^https?:\/\//i.test(trimmed)) {
+		let url: URL;
 		try {
-			return { kind: 'external', url: new URL(trimmed).toString() };
+			url = new URL(trimmed);
 		} catch {
 			return null;
 		}
+		const path = `${url.pathname}${url.search}${url.hash}`;
+		// Our own routes are the destination: a `/e/<eventId>` or `/info` target
+		// must survive (generic ref extraction would flatten it) and app pages
+		// (/chat/news) stay pages.
+		const cordnHost = isCordnWebHost(url.hostname);
+		const ownGroupRoute = url.pathname.startsWith('/chat/') || url.pathname.startsWith('/p/');
+		if (cordnHost && ownGroupRoute) return { kind: 'internal', path };
+		// Anything else may be a wrapper page: a checksummed ref opens the group
+		// in-app regardless of who hosts it.
+		const embedded = groupRefFromUrl(url);
+		if (embedded) return { kind: 'internal', path: refSharePath(embedded) };
+		if (cordnHost) return { kind: 'internal', path };
+		return { kind: 'external', url: url.toString() };
 	}
 
 	// Bare app-host URL without a scheme (cordn.net/…) → internal, so pasting
 	// "cordn.net/chat/cordn1…" routes in-app instead of a new tab or a misrouted
-	// /chat/cordn.net/… path. Full https://cordn.net/… links are classified as
-	// external here and reconciled to internal by gotoShareTarget's origin check.
+	// /chat/cordn.net/… path.
 	if (looksLikeBareAppHostUrl(trimmed)) {
 		try {
 			const url = new URL(`https://${trimmed}`);
@@ -384,10 +486,10 @@ export async function gotoShareTarget(target: ParsedShareTarget): Promise<void> 
 
 /**
  * Open a link found in message text: internal targets (bare cordn1 ref, app-host
- * URL, or app-relative path) go through goto() in-app; everything else opens in a
- * new tab / system browser. Centralizes the decision so a cordn1 string or a
- * cordn.net/… link pasted into a chat navigates internally instead of spawning
- * a blank tab.
+ * URL, a URL carrying a group ref, or app-relative path) go through goto() in-app;
+ * everything else opens in a new tab / system browser. Centralizes the decision
+ * so a cordn1 string or another client's group link pasted into a chat navigates
+ * internally instead of spawning a blank tab.
  */
 export async function openMessageLink(href: string): Promise<void> {
 	const target = parseShareTarget(href);

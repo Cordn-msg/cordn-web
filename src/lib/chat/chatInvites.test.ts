@@ -8,6 +8,7 @@ import {
 	extractChatInvites,
 	tidyChatBodyText
 } from '$lib/chat/chatInvites';
+import { encodeGroupShareMetadata } from '$lib/utils/groupShareLink';
 
 const COORD = '92753cbe63e943d0c4a0c61d745437892af6e98f179ce04a7a863aad4e00b1a5';
 const CODE = encodeGroupRef({ gid: 'garden-1234', coordinatorPubkey: COORD });
@@ -51,6 +52,33 @@ describe('classifyChatInviteHref', () => {
 		expect(profile.pubkey).toBe(COORD);
 	});
 
+	it("cards another client's fragment group link", () => {
+		const meta = encodeGroupShareMetadata({ name: 'Cat Lovers of Cordn' });
+		const invite = classifyChatInviteHref(`https://staircase.chat/app/#${CODE}?m=${meta}`);
+		if (invite?.kind !== 'group') throw new Error('expected group invite');
+		expect(invite.gid).toBe('garden-1234');
+		expect(invite.coordinatorPubkey).toBe(COORD);
+		expect(invite.name).toBe('Cat Lovers of Cordn');
+		// Their inner layout is unknowable — the card opens the group, nothing deeper.
+		expect(invite.target).toEqual({ type: 'chat' });
+	});
+
+	it('cards a foreign ref in the path or ?g=, but not their deep permalinks', () => {
+		expect(classifyChatInviteHref(`https://example.com/join/${CODE}`)?.kind).toBe('group');
+		expect(classifyChatInviteHref(`https://example.com/?g=${CODE}`)?.kind).toBe('group');
+		expect(classifyChatInviteHref(`https://example.com/chat/${CODE}/e/abc`)).toBeNull();
+	});
+
+	it('cards an embedded ref on our own host outside the chat routes', () => {
+		const meta = encodeGroupShareMetadata({ name: 'Root link' });
+		const invite = classifyChatInviteHref(`https://cordn.net/#${CODE}?m=${meta}`);
+		if (invite?.kind !== 'group') throw new Error('expected group invite');
+		expect(invite.gid).toBe('garden-1234');
+		expect(invite.name).toBe('Root link');
+		// Our own app pages keep their route, so a ref in their hash is not the target.
+		expect(classifyChatInviteHref(`https://cordn.net/chat/news#${CODE}`)).toBeNull();
+	});
+
 	it('accepts the legacy bare-gid form on known hosts only', () => {
 		expect(classifyChatInviteHref('https://cordn.net/chat/my-gid-123')?.kind).toBe('group');
 		expect(classifyChatInviteHref('https://example.com/chat/my-gid-123')).toBeNull();
@@ -87,6 +115,16 @@ describe('extractChatInvites', () => {
 
 	it('returns nothing for cordn-free text', () => {
 		expect(linksOf('see https://example.com/chat/x and hi').invites).toEqual([]);
+	});
+
+	it("cards another client's group link from message text", () => {
+		const meta = encodeGroupShareMetadata({ name: 'Cat Lovers' });
+		const url = `https://staircase.chat/app/#${CODE}?m=${meta}`;
+		const { invites, linkTexts } = linksOf(`join us ${url}`);
+		// The tokenizer keeps the whole URL (fragment + ?m=) as one link.
+		expect(linkTexts).toEqual([url]);
+		if (invites[0]?.kind !== 'group') throw new Error('expected group invite');
+		expect(invites[0].name).toBe('Cat Lovers');
 	});
 });
 
