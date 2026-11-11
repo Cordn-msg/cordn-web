@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-11-floating-date',
+		createdAt: Date.UTC(2026, 10, 11),
+		version: 1,
+		title: 'A floating date, and cleaner highlight sources',
+		body: '- ✨ Scrolling back through a long chat now keeps the date in reach: a small chip at the top names the day of the message you are looking at, appears as you scroll up, and fades a moment after your hand stops.\n- ✨ Long messages stay put while the chip moves over them, and older history loading in above no longer makes it flash or vanish.\n- 🐛 A highlighted article that has been edited since no longer shows a redundant “Nostr event” line beneath its title — the article is the source, even when the highlighted revision is gone.'
+	},
+	{
 		id: 'cordn-news-2026-11-10-first-launch',
 		createdAt: Date.UTC(2026, 10, 10),
 		version: 1,
