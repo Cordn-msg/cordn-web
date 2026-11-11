@@ -192,6 +192,10 @@
 				name: targetMetadata?.name,
 				icon: targetMetadata?.icon
 			});
+			// Check right away as well as on the poll: an admin can answer in seconds.
+			if (targetGid === locator.gid) {
+				void refreshCoordinatorWelcomeNotificationsAction(targetCoordinator).catch(() => {});
+			}
 		} catch (error) {
 			if (targetGid === locator.gid) {
 				requestError = error instanceof Error ? error.message : 'Failed to request to join group';

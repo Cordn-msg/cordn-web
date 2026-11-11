@@ -87,9 +87,7 @@
 					Waiting for an admin to let you in…
 				</p>
 			</div>
-			{#if isSidebar}
-				<Spinner class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-			{/if}
+			<Spinner class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 		{/if}
 	</a>
 	<!-- eslint-enable svelte/no-navigation-without-resolve -->

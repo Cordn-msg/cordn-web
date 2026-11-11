@@ -135,9 +135,9 @@
 	});
 
 	// A join request is the one thing on this screen that resolves on somebody
-	// else's schedule. While one waits, ask its own coordinator for Welcomes; the
-	// per-coordinator query keeps its staleTime, so this is at most one
-	// welcome_take a minute, and it stops the moment the request does.
+	// else's schedule. While one waits, ask its own coordinator for Welcomes once
+	// a minute, hidden tabs excluded (the per-coordinator query keeps its own
+	// staleTime), and stop asking the moment the request does.
 	const pendingJoinPollKey = $derived.by(() =>
 		[...new Set(listPendingJoinRequests().map((entry) => entry.coordinatorKey))]
 			.filter(Boolean)
@@ -147,14 +147,21 @@
 	$effect(() => {
 		const keys = pendingJoinPollKey ? pendingJoinPollKey.split(',') : [];
 		if (keys.length === 0 || !$activeAccount) return;
-		const timer = setInterval(() => {
+		const check = () => {
+			if (document.visibilityState !== 'visible') return;
 			void untrack(async () => {
 				for (const key of keys) {
 					await loadWelcomeNotificationsAction(key).catch(() => {});
 				}
 			});
-		}, 30_000);
-		return () => clearInterval(timer);
+		};
+		// One check on return to the tab, so coming back never waits out the interval.
+		const timer = setInterval(check, 60_000);
+		document.addEventListener('visibilitychange', check);
+		return () => {
+			clearInterval(timer);
+			document.removeEventListener('visibilitychange', check);
+		};
 	});
 
 	// The request was the consent: the Welcome that answers it is accepted as soon
