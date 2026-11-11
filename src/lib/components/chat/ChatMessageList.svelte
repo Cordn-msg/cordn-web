@@ -82,6 +82,7 @@
 	let floatingDayFrame: number | null = null;
 	let floatingDayHideTimer: number | null = null;
 	let floatingDayRetryTimer: number | null = null;
+	let floatingDayRetries = 0;
 	// Accumulated scroll movement since the chip last acted on it: slow
 	// trackpad/momentum deltas are often < 2px per event, so per-event
 	// thresholds would never fire. Direction is decided once a whole gesture
@@ -124,6 +125,7 @@
 	const FLOATING_DAY_SUPPRESS_MS = 200;
 	const FLOATING_DAY_DIRECTION_PX = 8;
 	const FLOATING_DAY_RETRY_MS = 100;
+	const FLOATING_DAY_MAX_RETRIES = 10;
 
 	// The virtualizer must only see list changes when the messages effect
 	// applies them through setOptions. estimateSize/getItemKey closures reading
@@ -439,12 +441,15 @@
 	function hideFloatingDay() {
 		clearFloatingDayTimer();
 		clearFloatingDayRetry();
+		floatingDayRetries = 0;
 		floatingDayScrollDelta = 0;
 		floatingDayVisible = false;
 	}
 
 	function scheduleFloatingDayRetry(delayMs: number) {
-		if (!browser) return;
+		// A stranded programmatic scroll must not leave an idle retry loop running.
+		if (!browser || floatingDayRetries >= FLOATING_DAY_MAX_RETRIES) return;
+		floatingDayRetries += 1;
 		clearFloatingDayRetry();
 		floatingDayRetryTimer = window.setTimeout(() => {
 			floatingDayRetryTimer = null;
@@ -494,6 +499,8 @@
 		}
 		floatingDayLabel = formatChatDayLabel(message.createdAt);
 		floatingDayVisible = true;
+		clearFloatingDayRetry();
+		floatingDayRetries = 0;
 		clearFloatingDayTimer();
 		floatingDayHideTimer = window.setTimeout(() => {
 			floatingDayHideTimer = null;
@@ -521,6 +528,7 @@
 			if (floatingDayScrollDelta <= -FLOATING_DAY_DIRECTION_PX) {
 				// Moving toward older messages: reveal/advance the day chip.
 				floatingDayScrollDelta = 0;
+				floatingDayRetries = 0;
 				scheduleFloatingDayUpdate();
 			} else if (floatingDayScrollDelta >= FLOATING_DAY_DIRECTION_PX) {
 				// Moving toward newer messages: the chip slides away immediately.
