@@ -7,7 +7,17 @@
  * but the same class, and this avoids it entirely.) Cleanup detaches the
  * handlers so nothing fires after unmount.
  */
+import { SvelteSet } from 'svelte/reactivity';
+
 export const AVATAR_STATUS_KEY = 'avatar-loading-status';
+
+/**
+ * Pictures this session already painted, keyed by src and shared by every avatar
+ * implementation: profile bubbles use `Avatar`, group/list/hover avatars use
+ * `AvatarImage`. A remount then paints warm instead of replaying its load fade
+ * (or a detached-preload round trip) for a picture the browser already has.
+ */
+export const loadedAvatarPictures = new SvelteSet<string>();
 
 export type AvatarLoadingStatus = 'loading' | 'loaded' | 'error';
 
