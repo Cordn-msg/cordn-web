@@ -185,12 +185,25 @@ let overlayCloser: (() => boolean) | null = null;
 let backHandlerInitialized = false;
 
 /**
+ * Is an Escape-closable overlay open? Dialogs and sheets (bits-ui Dialog, the custom
+ * MediaLightbox) and open dropdown menus. Deliberately NOT every `[data-state="open"]`:
+ * an expanded Collapsible carries that attribute too but ignores Escape, so matching it
+ * swallowed Back on pages like create-group (advanced panel) or key packages.
+ */
+export function hasOpenEscapeOverlay(): boolean {
+	return Boolean(
+		document.querySelector(
+			'[role="dialog"], [data-slot="dropdown-menu-content"][data-state="open"]'
+		)
+	);
+}
+
+/**
  * Wire the Android hardware/gesture back button to a priority chain (native only; no-op on web):
  *  1. close the mobile sidebar drawer if open (explicit, via the layout's store),
- *  2. dismiss the topmost ESC-closable overlay — bits-ui Dialog/Sheet/Dropdown/Popover
- *     (`[data-state="open"]`) or the custom MediaLightbox (`[role="dialog"]`) — by dispatching
- *     one synthetic Escape, which reuses each component's existing close path instead of a
- *     per-overlay registry,
+ *  2. dismiss the topmost overlay (see `hasOpenEscapeOverlay`) by dispatching one synthetic
+ *     Escape, which reuses each component's existing close path instead of a per-overlay
+ *     registry,
  *  3. traverse the SvelteKit history stack (`canGoBack` → `window.history.back()`),
  *  4. at the root of history, `minimizeApp()` (backgrounds the app, keeps the process cached for
  *     fast relaunch — gentler than `exitApp()`).
@@ -205,7 +218,7 @@ export async function initBackButtonHandler(consumeOverlay?: () => boolean): Pro
 	try {
 		await App.addListener('backButton', ({ canGoBack }) => {
 			if (overlayCloser?.()) return; // hand-rolled drawer first
-			if (document.querySelector('[role="dialog"], [data-state="open"]')) {
+			if (hasOpenEscapeOverlay()) {
 				// One synthetic Escape closes the topmost overlay via its own handler: bits-ui listens on
 				// document, MediaLightbox on window — a bubbling keydown dispatched on document reaches both.
 				document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

@@ -10,7 +10,7 @@ overrides:
   minimatch: ^3.1.4
   uuid: ^11.1.1
   ws: ^8.21.0
-  fast-uri@>=3.0.0 <3.1.6: '>=3.1.6'
+  fast-uri@<4.2.3: '>=4.2.3'
   nanoid@>=4.0.0 <5.1.16: '>=5.1.16'
   devalue@<5.9.1: '>=5.9.2 <6'
 
@@ -36,38 +36,38 @@ importers:
   .:
     dependencies:
       '@capacitor/android':
-        specifier: ^8.4.2
-        version: 8.4.2(@capacitor/core@8.4.2)
+        specifier: ^8.4.3
+        version: 8.6.0(@capacitor/core@8.6.0)
       '@capacitor/app':
         specifier: ^8.1.1
-        version: 8.1.1(@capacitor/core@8.4.2)
+        version: 8.1.1(@capacitor/core@8.6.0)
       '@capacitor/browser':
         specifier: ^8.0.4
-        version: 8.0.4(@capacitor/core@8.4.2)
+        version: 8.0.4(@capacitor/core@8.6.0)
       '@capacitor/camera':
         specifier: ^8.2.2
-        version: 8.2.2(@capacitor/core@8.4.2)
+        version: 8.2.2(@capacitor/core@8.6.0)
       '@capacitor/clipboard':
         specifier: ^8.0.1
-        version: 8.0.1(@capacitor/core@8.4.2)
+        version: 8.0.1(@capacitor/core@8.6.0)
       '@capacitor/core':
-        specifier: ^8.4.2
-        version: 8.4.2
+        specifier: ^8.4.3
+        version: 8.6.0
       '@capacitor/keyboard':
         specifier: ^8.0.5
-        version: 8.0.5(@capacitor/core@8.4.2)
+        version: 8.0.5(@capacitor/core@8.6.0)
       '@capacitor/local-notifications':
         specifier: ^8.2.1
-        version: 8.2.1(@capacitor/core@8.4.2)
+        version: 8.2.1(@capacitor/core@8.6.0)
       '@capacitor/splash-screen':
         specifier: ^8.0.2
-        version: 8.0.2(@capacitor/core@8.4.2)
+        version: 8.0.2(@capacitor/core@8.6.0)
       '@capacitor/status-bar':
         specifier: ^8.0.3
-        version: 8.0.3(@capacitor/core@8.4.2)
+        version: 8.0.3(@capacitor/core@8.6.0)
       '@contextvm/mcp-sdk':
         specifier: ^1.30
-        version: 1.30.0(zod@4.6.2)
+        version: 1.30.0(zod@4.6.7)
       '@contextvm/sdk':
         specifier: ^0.14.3
         version: 0.14.3(typescript@6.0.3)
@@ -94,7 +94,7 @@ importers:
         version: 3.13.47(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       applesauce-accounts:
         specifier: ^6
-        version: 6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.6.0)(typescript@6.0.3)
       applesauce-common:
         specifier: ^6
         version: 6.0.2(typescript@6.0.3)
@@ -109,7 +109,7 @@ importers:
         version: 6.2.0(typescript@6.0.3)
       applesauce-signers:
         specifier: ^6
-        version: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
+        version: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.6.0)(typescript@6.0.3)
       cordn-background:
         specifier: workspace:*
         version: link:packages/cordn-background
@@ -121,7 +121,7 @@ importers:
         version: 1.1.0(svelte@5.56.6(@typescript-eslint/types@8.59.3))
       nostr-signer-capacitor-plugin:
         specifier: ^0.0.5
-        version: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
+        version: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.6.0)
       nostr-tools:
         specifier: ^2.23.9
         version: 2.23.9(typescript@6.0.3)
@@ -135,15 +135,15 @@ importers:
         specifier: 2.0.0-rc.13
         version: 2.0.0-rc.13(patch_hash=42686c9ca511f532bc8590f11dff7ecb60ea55a5420a373f2941ef910bbcbc55)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.6
+        version: 4.6.7
     devDependencies:
       '@capacitor/assets':
         specifier: ^3.0.5
         version: 3.0.5(@types/node@22.19.19)(typescript@6.0.3)
       '@capacitor/cli':
-        specifier: ^8.4.2
-        version: 8.4.2
+        specifier: ^8.4.3
+        version: 8.6.0
       '@eslint/compat':
         specifier: latest
         version: 2.1.1(eslint@10.3.0(jiti@2.7.0))
@@ -263,10 +263,10 @@ packages:
   '@blazediff/core@1.9.1':
     resolution: {integrity: sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA==}
 
-  '@capacitor/android@8.4.2':
-    resolution: {integrity: sha512-bzf8XZ9C+ePgOQ+e+T0fnhHGH4aCNY494vvSQIF5w4AY07RwEmkFqZs1678DDSMH0hLSQpxEwXGFNUVcXO6bBA==}
+  '@capacitor/android@8.6.0':
+    resolution: {integrity: sha512-6IJS0TCfV/F/8+324CCwYd3xL6r+TH0W7zzaxYzPz9IV3YWCNvsZDuCCPHUIBC5iASb9od827ddSJ6rz+9Pu1Q==}
     peerDependencies:
-      '@capacitor/core': ^8.4.0
+      '@capacitor/core': ^8.6.0
 
   '@capacitor/app@8.1.1':
     resolution: {integrity: sha512-xM2ZTX5jK60tFtmjsmJv+Cdj1Qsb6NcavkqmdEnCPQBeya9oKhamZJxYOnQNj1ZvcJM7sWfG6BEtSLx42pisbA==}
@@ -293,8 +293,8 @@ packages:
     engines: {node: '>=16.0.0'}
     hasBin: true
 
-  '@capacitor/cli@8.4.2':
-    resolution: {integrity: sha512-hE4HmpMdr5T8eQ++kGa1BKkdG2JLEvo1y1cj1kmFK78VB9dBp538oe1EZvzwupNGOl0ZueALotzL5wcXRD9w1Q==}
+  '@capacitor/cli@8.6.0':
+    resolution: {integrity: sha512-TyLo1v6AqK39inlB5Edm7eFc+dyk4r+Du5bbyD+cRm/u/3b+LkNIeyp5wwYp3ToO3rWiLs4T/PabXGADO0Rlxg==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -305,6 +305,9 @@ packages:
 
   '@capacitor/core@8.4.2':
     resolution: {integrity: sha512-fQPRb3JXRaU2pnufDUvqOjhsrYxDQeFRZyaj/sHydIUxD2NxOGHKMpmKUdI+U4OOmKuGZyvRpi7TSJU+7Bjbmg==}
+
+  '@capacitor/core@8.6.0':
+    resolution: {integrity: sha512-9F2zzuGYTJu+wqmQSEmqnFBfGrhC/njjMCfmxbvg9mq8xJT4wNh5pxbMFZxvW/yDhYJWPEBFQxeqzfo1gKrvxg==}
 
   '@capacitor/keyboard@8.0.5':
     resolution: {integrity: sha512-oFXygC4eKYA5l2MdpTR06L2M/4x6e2SLD5yS1T9+UBDKTkzyvhWKEhbYLUaTIBPpLKqlfGudJw1X73S1H9eUzQ==}
@@ -1792,8 +1795,8 @@ packages:
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
 
-  fast-uri@4.2.1:
-    resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
+  fast-uri@4.2.3:
+    resolution: {integrity: sha512-I1PXwP5eAhlNlcdpjt9CgB59op2ZvZfxw+BkqGFVIUOgNpCVTcTqp3HhTX7brxj5vsip+nSY4nTvff+eIA76hg==}
 
   fd-slicer@1.1.0:
     resolution: {integrity: sha512-cE1qsB/VwyQozZ+q1dGxR8LBYNZeofhEdUNGSMbQD3Gw2lAzX9Zb3uIU6Ebc/Fmyjo9AWWfnn0AUCHqtevs/8g==}
@@ -3415,6 +3418,10 @@ packages:
     resolution: {integrity: sha512-kCz5k7J7XbJtjABOvkc5lJmkiDh8VhjVCGNiqdKCscmVpdVUpEAyXv1xmCLkQJ5dsHqx3IPO4XW+NTDhU/fatA==}
     engines: {node: '>=10.0.0'}
 
+  xcode@4.0.0:
+    resolution: {integrity: sha512-dDaoWzc9EP2fp9FS9PVZUkyvFxY4y1TOV9pcKaKLk++Ei/qb97XDFEVP7GnW7Osii/TzVABJ0jq2F+9/lq0TVA==}
+    engines: {node: '>=14.17.0'}
+
   xml-js@1.6.11:
     resolution: {integrity: sha512-7rVi2KMfwfWFl+GpPg6m80IVMWXLRjO+PxTq7V2CDhoGak0wzYzFgUY2m4XJ47OGdXd8eLE8EmwfAmdjw7lC1g==}
     hasBin: true
@@ -3504,8 +3511,8 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.6.2:
-    resolution: {integrity: sha512-lh5RCAGFa1Cm2hjtNwLQhSs/AsqdWnTQaBER9fEwN/88pSh7KOtJavtBx/0VlkN/uFd61SwYmljLMDAsHlvzBQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -3519,13 +3526,13 @@ snapshots:
 
   '@blazediff/core@1.9.1': {}
 
-  '@capacitor/android@8.4.2(@capacitor/core@8.4.2)':
+  '@capacitor/android@8.6.0(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
-  '@capacitor/app@8.1.1(@capacitor/core@8.4.2)':
+  '@capacitor/app@8.1.1(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
   '@capacitor/assets@3.0.5(@types/node@22.19.19)(typescript@6.0.3)':
     dependencies:
@@ -3552,13 +3559,13 @@ snapshots:
       - supports-color
       - typescript
 
-  '@capacitor/browser@8.0.4(@capacitor/core@8.4.2)':
+  '@capacitor/browser@8.0.4(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
-  '@capacitor/camera@8.2.2(@capacitor/core@8.4.2)':
+  '@capacitor/camera@8.2.2(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
   '@capacitor/cli@5.7.8':
     dependencies:
@@ -3582,7 +3589,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@capacitor/cli@8.4.2':
+  '@capacitor/cli@8.6.0':
     dependencies:
       '@ionic/cli-framework-output': 2.2.8
       '@ionic/utils-subprocess': 3.0.1
@@ -3600,45 +3607,50 @@ snapshots:
       semver: 7.8.0
       tar: 7.5.20
       tslib: 2.8.1
+      xcode: 4.0.0
       xml2js: 0.6.2
     transitivePeerDependencies:
       - supports-color
 
-  '@capacitor/clipboard@8.0.1(@capacitor/core@8.4.2)':
+  '@capacitor/clipboard@8.0.1(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
   '@capacitor/core@8.4.2':
     dependencies:
       tslib: 2.8.1
 
-  '@capacitor/keyboard@8.0.5(@capacitor/core@8.4.2)':
+  '@capacitor/core@8.6.0':
     dependencies:
-      '@capacitor/core': 8.4.2
+      tslib: 2.8.1
 
-  '@capacitor/local-notifications@8.2.1(@capacitor/core@8.4.2)':
+  '@capacitor/keyboard@8.0.5(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
-  '@capacitor/splash-screen@8.0.2(@capacitor/core@8.4.2)':
+  '@capacitor/local-notifications@8.2.1(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
-  '@capacitor/status-bar@8.0.3(@capacitor/core@8.4.2)':
+  '@capacitor/splash-screen@8.0.2(@capacitor/core@8.6.0)':
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
-  '@contextvm/mcp-sdk@1.30.0(zod@4.6.2)':
+  '@capacitor/status-bar@8.0.3(@capacitor/core@8.6.0)':
+    dependencies:
+      '@capacitor/core': 8.6.0
+
+  '@contextvm/mcp-sdk@1.30.0(zod@4.6.7)':
     dependencies:
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       cross-spawn: 7.0.6
-      zod: 4.6.2
-      zod-to-json-schema: 3.25.2(zod@4.6.2)
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
 
   '@contextvm/sdk@0.14.3(typescript@6.0.3)':
     dependencies:
-      '@contextvm/mcp-sdk': 1.30.0(zod@4.6.2)
+      '@contextvm/mcp-sdk': 1.30.0(zod@4.6.7)
       '@noble/hashes': 2.4.0
       applesauce-relay: 6.2.1(typescript@6.0.3)
       canonicalize: 2.1.0
@@ -3646,7 +3658,7 @@ snapshots:
       pino: 10.3.1
       rxjs: 7.8.2
       ws: 8.21.1
-      zod: 4.6.2
+      zod: 4.6.7
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -3659,7 +3671,7 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@scure/base': 2.2.0
       ts-mls: 2.0.0-rc.12(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)
-      zod: 4.6.2
+      zod: 4.6.7
     transitivePeerDependencies:
       - '@hpke/chacha20poly1305'
       - '@hpke/dhkem-x448'
@@ -4522,7 +4534,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 4.2.1
+      fast-uri: 4.2.3
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -4536,14 +4548,14 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  applesauce-accounts@6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-accounts@6.0.0(patch_hash=c03be1923dd39aeaeaf61f5bb0ddd1608bc6d46cd44e6a8869852b3695cccfab)(@capacitor/core@8.6.0)(typescript@6.0.3):
     dependencies:
       applesauce-core: 6.2.0(typescript@6.0.3)
-      applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3)
+      applesauce-signers: 6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.6.0)(typescript@6.0.3)
       nanoid: 6.0.1
       rxjs: 7.8.2
     optionalDependencies:
-      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
+      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.6.0)
     transitivePeerDependencies:
       - '@capacitor/core'
       - supports-color
@@ -4604,7 +4616,7 @@ snapshots:
       - supports-color
       - typescript
 
-  applesauce-signers@6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.4.2)(typescript@6.0.3):
+  applesauce-signers@6.0.1(patch_hash=c7775426b52dfb3f0c22db512a48f782f65daafe3fc45d56ff68d3309c6bb545)(@capacitor/core@8.6.0)(typescript@6.0.3):
     dependencies:
       '@noble/secp256k1': 1.7.2
       applesauce-core: 6.2.0(typescript@6.0.3)
@@ -4612,7 +4624,7 @@ snapshots:
       nanoid: 6.0.1
       rxjs: 7.8.2
     optionalDependencies:
-      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2)
+      nostr-signer-capacitor-plugin: 0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.6.0)
     transitivePeerDependencies:
       - '@capacitor/core'
       - supports-color
@@ -5193,7 +5205,7 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
-  fast-uri@4.2.1: {}
+  fast-uri@4.2.3: {}
 
   fd-slicer@1.1.0:
     dependencies:
@@ -5675,9 +5687,9 @@ snapshots:
       semver: 7.8.0
       validate-npm-package-license: 3.0.4
 
-  nostr-signer-capacitor-plugin@0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.4.2):
+  nostr-signer-capacitor-plugin@0.0.5(patch_hash=fe778408ff077b52b55a34087deeb08c230fe4dfede29863e5dac846b98385e2)(@capacitor/core@8.6.0):
     dependencies:
-      '@capacitor/core': 8.4.2
+      '@capacitor/core': 8.6.0
 
   nostr-tools@2.23.9(typescript@6.0.3):
     dependencies:
@@ -6636,6 +6648,10 @@ snapshots:
       simple-plist: 1.3.1
       uuid: 11.1.1
 
+  xcode@4.0.0:
+    dependencies:
+      simple-plist: 1.3.1
+
   xml-js@1.6.11:
     dependencies:
       sax: 1.6.0
@@ -6722,8 +6738,8 @@ snapshots:
 
   zimmerframe@1.1.4: {}
 
-  zod-to-json-schema@3.25.2(zod@4.6.2):
+  zod-to-json-schema@3.25.2(zod@4.6.7):
     dependencies:
-      zod: 4.6.2
+      zod: 4.6.7
 
-  zod@4.6.2: {}
+  zod@4.6.7: {}
