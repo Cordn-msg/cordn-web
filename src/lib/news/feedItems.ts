@@ -98,6 +98,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Scrolling back through a long chat now keeps the date in reach: a small chip at the top names the day of the message you are looking at, appears as you scroll up, and fades a moment after your hand stops.\n- ✨ Long messages stay put while the chip moves over them, and older history loading in above no longer makes it flash or vanish.\n- 🐛 A highlighted article that has been edited since no longer shows a redundant “Nostr event” line beneath its title — the article is the source, even when the highlighted revision is gone.'
 	},
 	{
+		id: 'cordn-news-2026-11-11-foreign-group-links',
+		createdAt: Date.UTC(2026, 10, 11),
+		version: 1,
+		title: 'Group links from other Cordn apps open here',
+		body: '- 🐛 An invite link from another Cordn app used to open in your browser and leave you outside the group. It opens in Cordn now: the app finds the group wherever the other app put it in the link, however the link was wrapped.\n- ✨ In a message it arrives as the same invite card as our own links, with the group’s name — and pasting or scanning one starts the join right away instead of handing the link to the browser.'
+	},
+	{
 		id: 'cordn-news-2026-11-10-first-launch',
 		createdAt: Date.UTC(2026, 10, 10),
 		version: 1,
