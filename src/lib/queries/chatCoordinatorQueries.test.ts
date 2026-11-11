@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { QueryObserver } from '@tanstack/svelte-query';
 
-const { getActive, welcomeRead, joinRead } = vi.hoisted(() => ({
+const { getActive, welcomeRead, joinRead, keyPackageRead } = vi.hoisted(() => ({
 	getActive: vi.fn(),
 	welcomeRead: vi.fn(),
-	joinRead: vi.fn()
+	joinRead: vi.fn(),
+	keyPackageRead: vi.fn()
 }));
 vi.mock('$app/environment', () => ({ browser: true, dev: false }));
 vi.mock('$lib/services/accountManager.svelte', () => ({ manager: { getActive } }));
@@ -50,6 +51,7 @@ vi.mock('$lib/services/coordinatorClient', () => {
 		}
 		FetchPendingWelcomes = welcomeRead;
 		FetchManyPendingJoinRequests = joinRead;
+		ListAvailableKeyPackages = keyPackageRead;
 		async disconnect() {
 			this.lifecycle.abort(new Error('Connection closed'));
 		}
@@ -61,6 +63,7 @@ import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from './chatQueryKeys';
 import { welcomeNotificationsQueryOptions } from './chatWelcomeQueries';
 import { joinRequestsQueryOptions } from './chatJoinRequestQueries';
+import { fetchCoordinatorAvailableKeyPackages } from './chatKeyPackageQueries';
 import { chatWelcomeNotificationsStore } from '$lib/services/chatWelcomeNotifications.svelte';
 import { chatJoinRequestsStore } from '$lib/services/chatJoinRequests.svelte';
 import {
@@ -100,6 +103,9 @@ beforeEach(() => {
 	getActive.mockReturnValue(ACCOUNT);
 	welcomeRead.mockResolvedValue({ welcomes: [] });
 	joinRead.mockResolvedValue({ requests: [] });
+	keyPackageRead.mockResolvedValue({
+		keyPackages: [{ kp_ref: 'kp', pk: 'ee'.repeat(32), at: 1 }]
+	});
 	chatWelcomeNotificationsStore.entries = [{ ...oldWelcome }];
 	chatWelcomeNotificationsStore.lastFetchedAtByCoordinator = {};
 	chatJoinRequestsStore.entries = [];
@@ -119,6 +125,19 @@ afterEach(async () => {
 });
 
 describe('coordinator query recovery', () => {
+	test('the key-package fan-out caches rows that name their coordinator', async () => {
+		await fetchCoordinatorAvailableKeyPackages();
+
+		// The directory's per-coordinator observers read this exact key and never
+		// refetch on mount, so an untagged cached row reaches `getChatCoordinator`
+		// as undefined and takes the dialog down.
+		const cached = queryClient.getQueryData<{ coordinatorKey?: string }[]>(
+			chatQueryKeys.availableKeyPackages(OWNER, COORDINATOR)
+		);
+		expect(cached?.length).toBe(1);
+		expect(cached?.every((entry) => entry.coordinatorKey === COORDINATOR)).toBe(true);
+	});
+
 	test('a failed welcome refresh stays an error and retains local rows', async () => {
 		welcomeRead.mockRejectedValue(new Error('network failure'));
 		await expect(
