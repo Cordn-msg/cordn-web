@@ -10,7 +10,7 @@
 	import { estimateChatMessageHeight } from './chatMessageRenderCache';
 	import { shouldAnchorPrepend } from './chatListScrollAnchor';
 	import { chatDayKey, formatChatDayLabel } from './chatDayLabel';
-	import { isRunTail } from './chatRunGrouping';
+	import { isRunContinuation, isRunTail } from './chatRunGrouping';
 	import type { ChatMessage } from './chat.types';
 
 	let {
@@ -866,11 +866,14 @@
 							and cached (loadedPictures paints it at full opacity instantly), so no fade replays.
 							Own messages omit the pfp entirely. -->
 						{@const runTail = isRunTail(message, nextMessage)}
+						<!-- Same-author runs stack tightly; a run tail (author change or next row is
+						     a system row) keeps the normal breathing room. -->
+						{@const runContinues = isRunContinuation(message, nextMessage)}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
 							data-message-id={message.id}
-							class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
+							class={`absolute top-0 left-0 w-full ${runContinues ? 'pb-1 sm:pb-1.5 md:pb-2' : 'pb-4 sm:pb-5 md:pb-6'}`}
 							style={`transform: translateY(${virtualItem.start}px);`}
 							use:measureItem
 						>

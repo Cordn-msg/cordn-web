@@ -14,3 +14,16 @@ export function isRunTail(message: ChatMessage, nextMessage: ChatMessage | undef
 	if (message.systemKind) return false;
 	return Boolean(nextMessage?.systemKind) || nextMessage?.author !== message.author;
 }
+
+/**
+ * Whether a message row is followed by another real message from the same
+ * author, i.e. its author run continues below. Used for spacing: consecutive
+ * same-author bubbles stack tightly, while author changes, system rows and the
+ * run tail keep the normal gap.
+ */
+export function isRunContinuation(
+	message: ChatMessage,
+	nextMessage: ChatMessage | undefined
+): boolean {
+	return !message.systemKind && !isRunTail(message, nextMessage);
+}
