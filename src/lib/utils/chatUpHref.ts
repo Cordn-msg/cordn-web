@@ -8,8 +8,12 @@
  * from a cold-opened deep link instead of returning to the chat list.
  *
  * `null` means "no parent" — the chat home, where Back leaves the app.
+ *
+ * `search` is the URL's own query (`URL.search`, including the `?`). It is carried onto the
+ * conversation when going up from a conversation child: legacy links address the coordinator
+ * there (`/chat/<gid>?c=…`), and dropping it would resolve to the default coordinator instead.
  */
-export function chatUpHref(pathname: string): string | null {
+export function chatUpHref(pathname: string, search = ''): string | null {
 	const segments = pathname.replace(/\/+$/, '').split('/').filter(Boolean);
 	if (segments[0] !== 'chat') return '/chat'; // profile pages (and anything else) sit under Chat
 	const rest = segments.slice(1); // after the /chat prefix
@@ -23,5 +27,5 @@ export function chatUpHref(pathname: string): string | null {
 	}
 	if (rest.length === 1) return '/chat'; // chat | news | create-group | share
 	// Conversation children: /chat/<id>/info and /chat/<id>/e/<eventId>.
-	return `/chat/${rest[0]}`;
+	return `/chat/${rest[0]}${search}`;
 }

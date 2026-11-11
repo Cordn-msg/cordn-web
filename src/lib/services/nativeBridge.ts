@@ -249,7 +249,7 @@ export async function initBackButtonHandler(consumeOverlay?: () => boolean): Pro
 				return;
 			}
 
-			const up = chatUpHref(window.location.pathname);
+			const up = chatUpHref(window.location.pathname, window.location.search);
 			if (up) {
 				// Runtime path; resolve() cannot apply.
 				// eslint-disable-next-line svelte/no-navigation-without-resolve

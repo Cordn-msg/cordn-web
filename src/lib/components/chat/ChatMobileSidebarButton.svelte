@@ -24,7 +24,7 @@
 
 	// Hierarchical back: the same "up one level" map the Android hardware back
 	// button uses (chatUpHref), so the arrow and Back never disagree.
-	const backHref = $derived(chatUpHref(page.url.pathname) ?? resolve('/chat'));
+	const backHref = $derived(chatUpHref(page.url.pathname, page.url.search) ?? resolve('/chat'));
 
 	// Inside a chat, the back dot signals unread attention in OTHER groups (and
 	// welcomes/news): the open group is auto-marked read, so counting it would

@@ -12,6 +12,15 @@ test('conversation children go up to their conversation, conversations to the ch
 	expect(chatUpHref('/chat/cordn1abc/e/evt1')).toBe('/chat/cordn1abc');
 });
 
+test('the query survives only on the way back to a conversation', () => {
+	// Legacy and event links carry the coordinator (or metadata) in the query.
+	expect(chatUpHref('/chat/abc/info', '?c=nprofile1xyz')).toBe('/chat/abc?c=nprofile1xyz');
+	expect(chatUpHref('/chat/abc/e/evt1', '?m=meta')).toBe('/chat/abc?m=meta');
+	expect(chatUpHref('/chat/abc', '?c=nprofile1xyz')).toBe('/chat');
+	expect(chatUpHref('/chat/config/notifications', '?tab=x')).toBe('/chat/config');
+	expect(chatUpHref('/chat/news', '?tab=x')).toBe('/chat');
+});
+
 test('settings subsections go up one level, the settings root goes to the chat list', () => {
 	expect(chatUpHref('/chat/config/notifications')).toBe('/chat/config');
 	expect(chatUpHref('/chat/config')).toBe('/chat');
