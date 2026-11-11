@@ -17,9 +17,21 @@ import { getChatPetname } from '$lib/services/chatPetnames.svelte';
  * Hints objects in the app carry the deprecated camelCase `displayName` (see
  * `useProfileHints`), so both spellings are read.
  */
+const MAX_PROFILE_NAME_LENGTH = 64;
+
+/** Profile fields are peer-authored: collapse whitespace (a newline would add a
+ *  notification line) and cap the length before any of them becomes a label. */
+function cleanName(value: string | undefined): string | undefined {
+	const name = value?.replace(/\s+/g, ' ').trim().slice(0, MAX_PROFILE_NAME_LENGTH);
+	return name || undefined;
+}
+
 export function profileSelfName(profile: ProfileContent | undefined): string | undefined {
 	return (
-		profile?.name || profile?.display_name || profile?.displayName || profile?.nip05 || undefined
+		cleanName(profile?.name) ??
+		cleanName(profile?.display_name) ??
+		cleanName(profile?.displayName) ??
+		cleanName(profile?.nip05)
 	);
 }
 

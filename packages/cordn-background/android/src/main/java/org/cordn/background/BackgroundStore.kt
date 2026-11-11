@@ -159,7 +159,8 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
      * Upsert the seeded group set. For each gid: set routing + title + watermark, and set
      * native_cursor = max(existing native_cursor, watermark) — the watermark only ever moves
      * forward, so a foreground re-seed never causes the worker to re-poll already-staged rows.
-     * Preserves cached icon_bytes across the replace. Groups not in [groups] are dropped.
+     * Preserves cached title/icon_bytes/labels for the same account. Groups not in [groups]
+     * are dropped.
      */
     fun seedGroups(accountPubkey: String, groups: List<GroupSeed>) {
         val db = writableDatabase
@@ -202,8 +203,11 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                     put("relay_urls", encodeList(g.relayUrls))
                     // Preserve the meta-sync's (profile-aware) title across a re-seed; the seed's
                     // title is computed without profile hints, so only use it as a first-seed fallback.
-                    put("title", existing.title ?: g.title)
-                    put("icon_bytes", existing.iconBytes)
+                    // On an account change none of the previous account's cached meta may survive —
+                    // even a 1:1 title embeds that account's petnames — so fall back to the seed's
+                    // title, drop the icon and clear the labels until the meta sync refills them.
+                    put("title", if (accountChanged) g.title else (existing.title ?: g.title))
+                    put("icon_bytes", if (accountChanged) null else existing.iconBytes)
                     put("display_names", if (accountChanged) "{}" else (existing.displayNames ?: "{}"))
                     put("native_cursor", maxOf(existing.nativeCursor, g.fetchCursor))
                 }

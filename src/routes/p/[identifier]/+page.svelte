@@ -663,7 +663,11 @@
 									{/if}
 								</div>
 								{#if $activeAccount && !isSelf}
-									<PetnameEditor pubkey={profilePubkey} />
+									<!-- Keyed by account: the petname store is swapped on an account
+									     switch, and a stale draft would Save into the wrong owner. -->
+									{#key $activeAccount.id}
+										<PetnameEditor pubkey={profilePubkey} />
+									{/key}
 								{/if}
 							</div>
 						{/if}

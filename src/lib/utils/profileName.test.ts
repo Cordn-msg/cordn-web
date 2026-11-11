@@ -47,6 +47,14 @@ describe('profileDisplayName fallback order', () => {
 		expect(profileDisplayLabel({ name: 'Alice' }, PUBKEY)).toBe('Alice');
 	});
 
+	test('normalizes and caps peer-authored profile names', () => {
+		// A newline would add a line to the notification thread.
+		expect(profileSelfName({ name: '  Alice \n\n B.  ' })).toBe('Alice B.');
+		// Whitespace-only fields fall through to the next tier.
+		expect(profileDisplayName({ name: '   ', display_name: 'B' }, PUBKEY)).toBe('B');
+		expect(profileSelfName({ name: 'x'.repeat(200) })).toHaveLength(64);
+	});
+
 	test('keeps the self-declared name free of the petname', () => {
 		setChatPetname(PUBKEY, 'Mom');
 		expect(profileSelfName({ name: 'Alice' })).toBe('Alice');
