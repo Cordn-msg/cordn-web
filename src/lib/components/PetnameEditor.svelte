@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import * as InputGroup from '$lib/components/ui/input-group';
 	import {
 		clearChatPetname,
 		getChatPetname,
@@ -9,25 +9,17 @@
 	} from '$lib/services/chatPetnames.svelte';
 
 	/**
-	 * Local name ("petname") editor for somebody else's profile. Device-local on
-	 * purpose: it is the account holder's own label, never published, and it
+	 * Local name ("petname") editor for somebody else's profile, shown only while
+	 * editing — the same transient form the self-profile editor uses. Device-local
+	 * on purpose: it is the account holder's own label, never published, and it
 	 * keeps working for profiles with no metadata (where the app would otherwise
 	 * only ever show an npub).
 	 */
-	let { pubkey }: { pubkey: string } = $props();
+	let { pubkey, onClose }: { pubkey: string; onClose: () => void } = $props();
 
-	// Seeded at init (no first-paint flash of the placeholder) and re-seeded only
-	// when the editor switches subject; a save must not clobber what is being typed.
+	// Seeded at open (no first-paint flash of the placeholder).
 	let draft = $state(untrack(() => getChatPetname(pubkey) ?? ''));
-	let seededFor = untrack(() => pubkey);
 	const saved = $derived(getChatPetname(pubkey) ?? '');
-
-	$effect(() => {
-		if (seededFor === pubkey) return;
-		seededFor = pubkey;
-		draft = getChatPetname(pubkey) ?? '';
-	});
-
 	const normalizedDraft = $derived(draft.replace(/\s+/g, ' ').trim());
 	const dirty = $derived(normalizedDraft !== saved);
 
@@ -36,33 +28,37 @@
 		if (!dirty) return;
 		if (normalizedDraft) setChatPetname(pubkey, normalizedDraft);
 		else clearChatPetname(pubkey);
-		draft = normalizedDraft;
+		onClose();
 	}
 
 	function remove() {
 		clearChatPetname(pubkey);
-		draft = '';
+		onClose();
 	}
 </script>
 
-<form
-	class="w-full max-w-sm space-y-2 rounded-xl border border-border bg-card/40 p-3"
-	onsubmit={save}
->
-	<p class="text-xs text-muted-foreground">
-		Petname
-		<span class="text-muted-foreground/80">— only you see this, on this device.</span>
-	</p>
-	<div class="flex items-center gap-2">
-		<Input
+<form class="space-y-4" onsubmit={save}>
+	<InputGroup.Root>
+		<InputGroup.Input
 			bind:value={draft}
 			maxlength={64}
 			placeholder="A name you will recognize"
 			aria-label="Your petname for this profile"
 		/>
-		<Button type="submit" size="sm" disabled={!dirty}>{saved ? 'Update' : 'Save'}</Button>
+		<InputGroup.Addon>
+			<InputGroup.Text>Petname</InputGroup.Text>
+		</InputGroup.Addon>
+	</InputGroup.Root>
+
+	<p class="text-sm text-muted-foreground">
+		Only you see this name, on this device. It is never published or synced.
+	</p>
+
+	<div class="flex flex-wrap items-center justify-end gap-2">
 		{#if saved}
-			<Button type="button" size="sm" variant="ghost" onclick={remove}>Remove</Button>
+			<Button type="button" variant="ghost" class="mr-auto" onclick={remove}>Remove</Button>
 		{/if}
+		<Button type="button" variant="ghost" onclick={onClose}>Cancel</Button>
+		<Button type="submit" disabled={!dirty}>Save</Button>
 	</div>
 </form>

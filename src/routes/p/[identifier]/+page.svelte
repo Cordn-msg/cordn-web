@@ -51,6 +51,7 @@
 	import { nip19 } from 'nostr-tools';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
 	import { profileDisplayName as resolveProfileName } from '$lib/utils/profileName';
 
 	let { params } = $props();
@@ -200,6 +201,7 @@
 		relays: metadataRelays
 	});
 	let editingProfile = $state(false);
+	let editingPetname = $state(false);
 	let profileName = $state('');
 	let profileDisplayName = $state('');
 	let profileAbout = $state('');
@@ -215,6 +217,14 @@
 	let startChatError = $state('');
 	let startChatAfterLogin = $state(false);
 	let initializedEditorForPubkey = $state('');
+
+	// The petname form is transient like the profile editor: leaving this profile or
+	// switching identity closes it, so a save can never land on another subject.
+	$effect(() => {
+		void profilePubkey;
+		void $activeAccount?.id;
+		editingPetname = false;
+	});
 
 	// Deduped via Svelte Query: a repeat visit within the stale window does no
 	// network work and paints straight from the eventStore cache.
@@ -515,6 +525,13 @@
 										{logoutCleaning ? 'Cleaning…' : 'Log out and clean data'}
 									</Button>
 								</div>
+							{:else if $activeAccount && !editingPetname}
+								<!-- Same affordance as "Edit profile", one step smaller: your own label
+								     for somebody else never leaves this device. -->
+								<Button type="button" variant="outline" onclick={() => (editingPetname = true)}>
+									<Pencil class="mr-2 size-4" />
+									{getChatPetname(profilePubkey) ? 'Edit petname' : 'Add petname'}
+								</Button>
 							{/if}
 						</div>
 					</Card.Header>
@@ -629,6 +646,8 @@
 									</Button>
 								</div>
 							</form>
+						{:else if editingPetname && $activeAccount}
+							<PetnameEditor pubkey={profilePubkey} onClose={() => (editingPetname = false)} />
 						{:else}
 							<div class="flex w-full flex-col items-center gap-3">
 								<ProfileCard pubkey={profilePubkey} mode="extended" />
@@ -662,13 +681,6 @@
 										</p>
 									{/if}
 								</div>
-								{#if $activeAccount && !isSelf}
-									<!-- Keyed by account: the petname store is swapped on an account
-									     switch, and a stale draft would Save into the wrong owner. -->
-									{#key $activeAccount.id}
-										<PetnameEditor pubkey={profilePubkey} />
-									{/key}
-								{/if}
 							</div>
 						{/if}
 					</Card.Content>

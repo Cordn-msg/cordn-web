@@ -10,6 +10,7 @@
 	import { copyToClipboard } from '$lib/utils';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
+	import PetnameMark from './PetnameMark.svelte';
 	import { resolve } from '$app/paths';
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
 	import Avatar from './Avatar.svelte';
@@ -98,20 +99,21 @@
 				<div class="min-w-0 flex-1 pt-1">
 					<button
 						type="button"
-						class="block w-full cursor-pointer truncate text-left text-lg font-semibold"
+						class="flex w-full cursor-pointer items-center gap-1.5 text-left"
 						onclick={copyPubkey}
 					>
 						{#if profileLink}
 							<a
 								href={profileHref}
-								class="block truncate text-lg font-semibold hover:underline"
+								class="block min-w-0 truncate text-lg font-semibold hover:underline"
 								onclick={(event) => event.stopPropagation()}
 							>
 								{displayName}
 							</a>
 						{:else}
-							<span class="block truncate text-lg font-semibold">{displayName}</span>
+							<span class="block min-w-0 truncate text-lg font-semibold">{displayName}</span>
 						{/if}
+						<PetnameMark {pubkey} />
 					</button>
 					{#if petname && selfDeclaredName}
 						<p class="text-xs text-muted-foreground">also known as {selfDeclaredName}</p>
@@ -152,6 +154,7 @@
 		{:else}
 			<span class="min-w-0 truncate text-left">{displayName}</span>
 		{/if}
+		<PetnameMark {pubkey} class="size-3" />
 	</span>
 {:else}
 	<div class="flex items-center gap-2">
@@ -166,6 +169,7 @@
 					{:else}
 						<span class="block truncate text-lg font-semibold">{displayName}</span>
 					{/if}
+					<PetnameMark {pubkey} />
 				</div>
 				{#if profile?.nip05}
 					<p class="text-xs text-muted-foreground">{profile.nip05}</p>
