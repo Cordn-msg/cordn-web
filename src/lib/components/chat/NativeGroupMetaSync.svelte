@@ -1,8 +1,9 @@
 <script lang="ts">
-	// Headless native-only component: keeps the native group-metadata cache (display title +
-	// rendered icon bytes) in sync so the key-less background worker can post rich notifications
-	// (roadmap §4.4). Profile data is reactive-only in this app, so the sync must live in a
-	// component (where `useProfileHints` works), not in the service layer.
+	// Headless native-only component: keeps the native group-metadata cache (display title,
+	// rendered icon bytes + resolved member display labels) in sync so the key-less background
+	// worker and its hidden preview can post rich, name-carrying notifications (roadmap §4.4).
+	// Profile data is reactive-only in this app, so the sync must live in a component (where
+	// `useProfileHints` works), not in the service layer.
 	import { syncGroupMeta } from '$lib/services/nativeBridge';
 	import { listChatGroups, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -15,6 +16,8 @@
 		getChatGroupNotificationIcon,
 		renderNotificationIconFromSrc
 	} from '$lib/components/chat/chatGroupDisplay';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
+	import { profileDisplayLabel } from '$lib/utils/profileName';
 
 	const groups = $derived(listChatGroups());
 	const activePubkey = $derived($activeAccount?.pubkey);
@@ -72,6 +75,8 @@
 					(h?.name ?? '') +
 					',' +
 					(h?.displayName ?? '') +
+					',' +
+					(getChatPetname(p) ?? '') +
 					';';
 			}
 		}
@@ -110,10 +115,18 @@
 					iconBytesBySrc.set(src, iconBytes);
 				}
 			}
-			const sig = `${title}::${iconBytes ? iconBytes.length + ':' + iconBytes.slice(0, 24) : ''}`;
+			// Resolved labels for the background preview's sender names: petname → profile,
+			// with nothing for a member we know no name for (never an npub). Replaced
+			// wholesale on every sync so departed members and cleared petnames drop out.
+			const displayNames: Record<string, string> = {};
+			for (const pubkey of memberPubkeys) {
+				const label = profileDisplayLabel(profileHints[pubkey], pubkey);
+				if (label) displayNames[pubkey] = label;
+			}
+			const sig = `${title}::${iconBytes ? iconBytes.length + ':' + iconBytes.slice(0, 24) : ''}::${JSON.stringify(displayNames)}`;
 			if (lastSent.get(g.id) === sig) continue;
 			lastSent.set(g.id, sig);
-			void syncGroupMeta(g.id, title, iconBytes);
+			void syncGroupMeta(g.id, title, iconBytes, displayNames);
 		}
 	}
 </script>

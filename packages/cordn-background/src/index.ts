@@ -56,6 +56,13 @@ export interface CordnBackgroundMetaOptions {
 	title?: string;
 	/** Base64 PNG bytes of the rendered group icon (no data: prefix). null/undefined clears it. */
 	iconBytes?: string;
+	/**
+	 * Resolved display label per member pubkey (petname → profile name; pubkeys
+	 * with neither are omitted). The key-less background preview reads this to
+	 * label senders, and it is replaced wholesale on every sync — removing a
+	 * member or a name drops the stale entry.
+	 */
+	displayNames?: Record<string, string>;
 }
 
 export interface CordnBackgroundNotificationMessage {
@@ -137,7 +144,7 @@ export interface CordnBackgroundPlugin {
 	configureDelivery(options: CordnBackgroundDeliveryOptions): Promise<void>;
 	/** Push the group set + cursors + routing. Call on account/group change and backgrounding. */
 	seed(options: CordnBackgroundSeedOptions): Promise<void>;
-	/** Refresh one group's cached title + icon bytes (rendered by the WebView). */
+	/** Refresh one group's cached title, icon bytes and member display labels (rendered by the WebView). */
 	upsertGroupMeta(options: CordnBackgroundMetaOptions): Promise<void>;
 	/** Post a unified native message notification (title + body; icon from the native cache). */
 	postMessageNotification(options: CordnBackgroundPostNotificationOptions): Promise<void>;

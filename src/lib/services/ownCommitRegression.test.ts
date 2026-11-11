@@ -688,7 +688,9 @@ describe('notification preview isolation', () => {
 
 		const previews = await generateNotificationPreviews({
 			accountPubkey: account.pubkey,
-			rows
+			rows,
+			// A cached label must not prefix a 1:1 line: the title already names the peer.
+			displayNames: { [group.id]: { [carolPubkey]: 'Carol' } }
 		});
 		expect(previews).toEqual([
 			expect.objectContaining({ gid: group.id, body: 'hello from carol', count: 1, cursor: 2 })

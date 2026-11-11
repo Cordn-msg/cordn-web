@@ -606,24 +606,43 @@ export async function applyDeliveryConfig(): Promise<void> {
 // ───────────────────────────── group metadata cache (Phase 3A) ─────────────────────────────
 
 /**
- * Refresh one group's cached display title + icon bytes (rendered by the WebView) so the
- * key-less background worker can render a rich notification. Hash-gated by the caller
- * (NativeGroupMetaSync) to avoid spamming the bridge on profile re-emits.
+ * Refresh one group's cached display title, icon bytes and member display labels (rendered by
+ * the WebView) so the key-less background worker and the hidden preview can render a rich,
+ * name-carrying notification. Hash-gated by the caller (NativeGroupMetaSync) to avoid spamming
+ * the bridge on profile re-emits. The label map is the ONLY name source the hidden preview has:
+ * no network, no event store, just this cache.
  */
 export async function syncGroupMeta(
 	gid: string,
 	title: string | undefined,
-	iconBytes: string | null
+	iconBytes: string | null,
+	displayNames: Record<string, string>
 ): Promise<void> {
 	if (!isNativePlatform()) return;
 	try {
 		await CordnBackground.upsertGroupMeta({
 			gid,
 			title,
-			iconBytes: iconBytes ?? undefined
+			iconBytes: iconBytes ?? undefined,
+			displayNames
 		});
 	} catch {
 		// best-effort — a missed sync self-corrects on the next change
+	}
+}
+
+/**
+ * Wipe the native group cache (poll set + cached titles/icons/member labels) for an account whose
+ * local data is being cleaned up, so nothing outlives it into a later account. Native only;
+ * `seed({ groups: [] })` clears the table and records the account. Best-effort by design — the
+ * next seed rebuilds whatever is still wanted.
+ */
+export async function clearBackgroundGroups(accountPubkey: string): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.seed({ accountPubkey, groups: [] });
+	} catch {
+		// plugin unavailable — nothing else depends on the clear
 	}
 }
 

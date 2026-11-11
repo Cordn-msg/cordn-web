@@ -9,7 +9,7 @@ import {
 import {
 	getChatGroupDisplayTitle,
 	getChatGroupNotificationIcon,
-	formatChatNotificationBody,
+	formatChatNotificationLine,
 	getRepresentativeMemberPubkey,
 	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
@@ -247,8 +247,12 @@ export async function notifyForUnreadChatMessages() {
 		const previews = getNotificationPreviewsEnabled();
 		const memberPubkeys = listChatGroupMembers(group.id).map((member) => member.stablePubkey);
 		const representative = getRepresentativeMemberPubkey(group, { activePubkey, memberPubkeys });
+		// The title/icon need the 1:1 peer; the thread lines need every sender. All
+		// lookups read the in-memory event store and run in parallel, so the worst
+		// case stays the single 1.5s timeout rather than one per pubkey.
 		const profilePubkeys = new Set<string>();
 		if (representative) profilePubkeys.add(representative);
+		if (previews) for (const message of eligible.slice(-6)) profilePubkeys.add(message.sender);
 		const profileHints: ChatGroupProfileHints = {};
 		const hints = await Promise.all(
 			[...profilePubkeys].map(async (pubkey) => [pubkey, await resolveProfileHint(pubkey)] as const)
@@ -269,7 +273,10 @@ export async function notifyForUnreadChatMessages() {
 		for (const message of eligible) rememberNotifiedMessage(message.id);
 		const messages = previews
 			? eligible.slice(-6).map((message) => ({
-					text: formatChatNotificationBody(message, profileHints),
+					text: formatChatNotificationLine(message, {
+						representativePubkey: representative,
+						profileHints
+					}),
 					at: message.createdAt
 				}))
 			: undefined;

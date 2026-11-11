@@ -204,9 +204,7 @@
 	});
 	const authorNpub = $derived(nip19.npubEncode(message.author));
 	const authorHref = $derived(resolve('/p/[identifier]', { identifier: authorNpub }));
-	const displayName = $derived.by(
-		() => profile?.name || profile?.display_name || profile?.nip05 || `${authorNpub.slice(0, 12)}…`
-	);
+	const displayName = $derived(profileDisplayName(profile, message.author) ?? authorNpub);
 	const replyParts = $derived.by(() =>
 		message.replyTo
 			? getCachedChatMessageParts(

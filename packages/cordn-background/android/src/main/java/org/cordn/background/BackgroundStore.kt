@@ -9,7 +9,8 @@ import org.json.JSONArray
 /**
  * Native durable store for the background poller. Owns four concerns (roadmap §4.2, §5, §8):
  *  - kv config (poll interval, active account, delivery mode + interval),
- *  - per-group routing + the `nativeCursor` watermark + cached display title + icon bytes,
+ *  - per-group routing + the `nativeCursor` watermark + cached display title, icon bytes and
+ *    resolved member display labels (the key-less preview's only name source),
  *  - the sidecar (staged coordinator wire-format rows awaiting foreground drain).
  *
  * The sidecar is a replay buffer of the wire format — nothing here is decrypted, nothing
@@ -23,7 +24,7 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
 ) {
     companion object {
         private const val DB_NAME = "cordn-background.db"
-        private const val DB_VERSION = 3 // v3: dropped inert fetch_cursor (worker uses native_cursor only)
+        private const val DB_VERSION = 4 // v4: per-group resolved member display labels
 
         private const val T_CONFIG = "config" // key/value
         private const val T_GROUPS = "groups"
@@ -62,6 +63,7 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                 relay_urls                TEXT NOT NULL,
                 title                     TEXT,
                 icon_bytes                TEXT,
+                display_names             TEXT NOT NULL DEFAULT '{}',
                 native_cursor             INTEGER NOT NULL
             )
             """.trimIndent()
@@ -163,24 +165,36 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
         val db = writableDatabase
         db.beginTransaction()
         try {
+            // Cached titles/icons/member labels belong to the account that wrote them:
+            // they embed this account's petnames and its 1:1 peer names. A seed for a
+            // different account must not reuse them for a reused gid.
+            val previousAccount = getCurrentAccount()
+            val accountChanged = previousAccount != null && previousAccount != accountPubkey
             setCurrentAccount(accountPubkey)
             for (g in groups) {
-                // Preserve native_cursor + icon_bytes across the replace so the poller's
-                // high-watermark and cached icon never reset on a foreground re-seed.
+                // Preserve native_cursor + cached meta across the replace so the poller's
+                // high-watermark and rendered icon never reset on a foreground re-seed.
                 // SQLite < 3.24 on older Android (minSdk 24) lacks UPSERT, so a read-then-write
                 // inside this transaction is the safe clamp.
+                data class Existing(
+                    val nativeCursor: Long,
+                    val iconBytes: String?,
+                    val title: String?,
+                    val displayNames: String?
+                )
                 val existing = db.query(
                     T_GROUPS,
-                    arrayOf("native_cursor", "icon_bytes", "title"),
+                    arrayOf("native_cursor", "icon_bytes", "title", "display_names"),
                     "gid = ?",
                     arrayOf(g.gid),
                     null, null, null
                 ).use { c ->
-                    if (c.moveToFirst()) Triple(
+                    if (c.moveToFirst()) Existing(
                         c.getLong(0),
                         if (c.isNull(1)) null else c.getString(1),
-                        if (c.isNull(2)) null else c.getString(2)
-                    ) else Triple(0L, null, null)
+                        if (c.isNull(2)) null else c.getString(2),
+                        if (c.isNull(3)) null else c.getString(3)
+                    ) else Existing(0L, null, null, null)
                 }
                 val cv = ContentValues().apply {
                     put("gid", g.gid)
@@ -188,9 +202,10 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                     put("relay_urls", encodeList(g.relayUrls))
                     // Preserve the meta-sync's (profile-aware) title across a re-seed; the seed's
                     // title is computed without profile hints, so only use it as a first-seed fallback.
-                    put("title", existing.third ?: g.title)
-                    put("icon_bytes", existing.second)
-                    put("native_cursor", maxOf(existing.first, g.fetchCursor))
+                    put("title", existing.title ?: g.title)
+                    put("icon_bytes", existing.iconBytes)
+                    put("display_names", if (accountChanged) "{}" else (existing.displayNames ?: "{}"))
+                    put("native_cursor", maxOf(existing.nativeCursor, g.fetchCursor))
                 }
                 db.insertWithOnConflict(T_GROUPS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -213,25 +228,39 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
      * the worker used to get no title/icon). The worker skips the resulting meta-only rows until
      * seed() fills their routing.
      */
-    fun upsertMeta(gid: String, title: String?, iconBytes: String?) {
+    fun upsertMeta(gid: String, title: String?, iconBytes: String?, displayNames: String?) {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            data class Existing(val coord: String, val relays: String, val native: Long)
+            data class Existing(
+                val coord: String,
+                val relays: String,
+                val native: Long,
+                val displayNames: String?
+            )
             val existing = db.query(
                 T_GROUPS,
-                arrayOf("coordinator_server_pubkey", "relay_urls", "native_cursor"),
+                arrayOf("coordinator_server_pubkey", "relay_urls", "native_cursor", "display_names"),
                 "gid = ?",
                 arrayOf(gid),
                 null, null, null
             ).use { c ->
-                if (c.moveToFirst()) Existing(c.getString(0), c.getString(1), c.getLong(2)) else null
+                if (c.moveToFirst()) Existing(
+                    c.getString(0),
+                    c.getString(1),
+                    c.getLong(2),
+                    if (c.isNull(3)) null else c.getString(3)
+                ) else null
             }
             val cv = ContentValues().apply {
                 put("gid", gid)
                 put("title", title)
                 put("icon_bytes", iconBytes)
                 val e = existing
+                // A null map means the caller does not manage names (older caller / partial
+                // sync): keep what is cached instead of wiping it. An explicit map replaces
+                // the set wholesale, so departed members and cleared petnames drop out.
+                put("display_names", displayNames ?: e?.displayNames ?: "{}")
                 if (e != null) {
                     put("coordinator_server_pubkey", e.coord)
                     put("relay_urls", e.relays)
@@ -247,6 +276,16 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
         } finally {
             db.endTransaction()
         }
+    }
+
+    /** Cached member display labels for [gid] as JSON (`{}` when nothing is cached). */
+    fun getGroupDisplayNames(gid: String): String {
+        readableDatabase
+            .query(T_GROUPS, arrayOf("display_names"), "gid = ?", arrayOf(gid), null, null, null)
+            .use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) return c.getString(0)
+            }
+        return "{}"
     }
 
     /** One group's cached (title, iconBytes) — for the live native-notification poster. */

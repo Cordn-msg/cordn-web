@@ -9,6 +9,7 @@
 	import { nip19 } from 'nostr-tools';
 	import { copyToClipboard } from '$lib/utils';
 	import { profileDisplayName } from '$lib/utils/profileName';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
 	import { resolve } from '$app/paths';
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
 	import Avatar from './Avatar.svelte';
@@ -42,6 +43,13 @@
 	const profile = $derived(profileState.current);
 	const npub = $derived(nip19.npubEncode(pubkey));
 	const displayName = $derived(profileDisplayName(profile, pubkey) ?? pubkey);
+	// A petname is the label the account holder chose, so it leads; the profile's
+	// own name stays visible underneath so the card still says who this really is.
+	const petname = $derived(getChatPetname(pubkey));
+	const selfDeclaredName = $derived.by(() => {
+		const name = profile?.name || profile?.display_name;
+		return name && name !== petname ? name : undefined;
+	});
 	const showImages = $derived(getLoadAvatars());
 
 	async function copyPubkey() {
@@ -105,6 +113,9 @@
 							<span class="block truncate text-lg font-semibold">{displayName}</span>
 						{/if}
 					</button>
+					{#if petname && selfDeclaredName}
+						<p class="text-xs text-muted-foreground">also known as {selfDeclaredName}</p>
+					{/if}
 					{#if profile?.nip05}
 						<p class="text-xs text-muted-foreground">{profile.nip05}</p>
 					{/if}

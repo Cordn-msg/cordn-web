@@ -7,20 +7,24 @@ import type {
 import { ChatKinds, SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { findImetaTag, type MediaReference } from '$lib/services/chatMediaCipher';
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
-import { normalizePubKey } from '$lib/utils';
+import { normalizePubKey, samePubKey } from '$lib/utils';
+import { profileDisplayLabel, profileDisplayName } from '$lib/utils/profileName';
 import type { ProfileContent } from 'applesauce-core/helpers';
 
 export type ChatGroupProfileHints = Record<string, ProfileContent>;
 
 const DIRECT_CHAT_NAME_PREFIX = ':direct_chat:';
 
+/** Hint-based display name: petname → profile fields → short npub (one policy,
+ *  shared with every component-level resolver). */
 export function getProfileDisplayName(
 	pubkey: string,
 	profileHints?: ChatGroupProfileHints
 ): string {
-	const profile = profileHints?.[pubkey];
-	const npub = nip19.npubEncode(pubkey);
-	return profile?.name || profile?.displayName || profile?.nip05 || `${npub.slice(0, 12)}…`;
+	return (
+		profileDisplayName(profileHints?.[pubkey], pubkey) ??
+		`${nip19.npubEncode(pubkey).slice(0, 12)}…`
+	);
 }
 
 /**
@@ -78,6 +82,31 @@ export function formatChatNotificationBody(
 		profileHints
 	).trim();
 	return trimmed || 'New message';
+}
+
+export interface ChatNotificationLineContext {
+	/** The single other member of a 1:1 chat — their message needs no sender prefix. */
+	representativePubkey?: string;
+	profileHints?: ChatGroupProfileHints;
+}
+
+/**
+ * One notification line: `Name: text` in a group, bare text in a 1:1 chat, and
+ * bare text when the sender has no known name (a petname or a profile label).
+ * Never announces a raw pubkey — that was why sender labels were dropped once
+ * before. Both notification builders (live and background clone) use this, so
+ * the shade reads the same whichever built it.
+ */
+export function formatChatNotificationLine(
+	message: StoredChatMessage,
+	context: ChatNotificationLineContext = {}
+): string {
+	const text = formatChatNotificationBody(message, context.profileHints);
+	if (context.representativePubkey && samePubKey(message.sender, context.representativePubkey)) {
+		return text;
+	}
+	const sender = profileDisplayLabel(context.profileHints?.[message.sender], message.sender);
+	return sender ? `${sender}: ${text}` : text;
 }
 
 function getMediaPreviewLabel(media: MediaReference): string {

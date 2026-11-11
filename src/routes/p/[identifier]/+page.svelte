@@ -8,6 +8,7 @@
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import PetnameEditor from '$lib/components/PetnameEditor.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -50,6 +51,7 @@
 	import { nip19 } from 'nostr-tools';
 	import { Metadata } from 'nostr-tools/kinds';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
+	import { profileDisplayName as resolveProfileName } from '$lib/utils/profileName';
 
 	let { params } = $props();
 
@@ -125,10 +127,7 @@
 	});
 	const defaultCoordinator = $derived.by(() => getDefaultChatCoordinator());
 	const npub = $derived.by(() => (profilePubkey ? nip19.npubEncode(profilePubkey) : ''));
-	const displayName = $derived.by(
-		() =>
-			$profile?.name || $profile?.display_name || $profile?.nip05 || npub.slice(0, 16) || 'Profile'
-	);
+	const displayName = $derived(resolveProfileName($profile, profilePubkey) ?? npub.slice(0, 16));
 	// Key-package availability is a remote read → Svelte Query (AGENTS.md): the
 	// same cached/deduped path the chat routes use, served by a registry client
 	// that participates in the coordinator keepalive/health/probe lifecycle.
@@ -425,7 +424,7 @@
 </script>
 
 <svelte:head>
-	<title>{($profile?.name || $profile?.display_name || 'Profile') + ' | Cordn'}</title>
+	<title>{(resolveProfileName($profile, profilePubkey) ?? 'Profile') + ' | Cordn'}</title>
 	<meta name="description" content="Cordn profile page with shared local groups." />
 </svelte:head>
 
@@ -663,6 +662,9 @@
 										</p>
 									{/if}
 								</div>
+								{#if $activeAccount && !isSelf}
+									<PetnameEditor pubkey={profilePubkey} />
+								{/if}
 							</div>
 						{/if}
 					</Card.Content>

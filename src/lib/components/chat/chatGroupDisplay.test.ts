@@ -3,8 +3,10 @@ import { nip19 } from 'nostr-tools';
 import {
 	formatChatMessagePreviewText,
 	formatChatNotificationBody,
+	formatChatNotificationLine,
 	getChatMessagePreviewText
 } from '$lib/components/chat/chatGroupDisplay';
+import { clearChatPetname, setChatPetname } from '$lib/services/chatPetnames.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
@@ -50,6 +52,47 @@ describe('formatChatNotificationBody', () => {
 	it('never falls back to a raw pubkey', () => {
 		expect(formatChatNotificationBody(message({ content: 'hi' }))).toBe('hi');
 		expect(formatChatNotificationBody(message({ content: '   ' }))).toBe('New message');
+	});
+});
+
+describe('formatChatNotificationLine', () => {
+	const token = `nostr:${nip19.npubEncode(ALICE)}`;
+	const hints = { [ALICE]: { name: 'alice' } };
+
+	it('prefixes the sender in a group', () => {
+		expect(formatChatNotificationLine(message({ content: 'hey' }), { profileHints: hints })).toBe(
+			'alice: hey'
+		);
+	});
+
+	it('leaves a 1:1 line bare — the title already names the peer', () => {
+		expect(
+			formatChatNotificationLine(message({ content: 'hey' }), {
+				representativePubkey: ALICE,
+				profileHints: hints
+			})
+		).toBe('hey');
+	});
+
+	it('never labels an unknown sender with a raw pubkey', () => {
+		expect(formatChatNotificationLine(message({ content: 'hi' }))).toBe('hi');
+		// Mentions of unknown profiles keep the npub shorthand: no name is knowable.
+		expect(formatChatNotificationLine(message({ content: `hey ${token}` }))).toBe(
+			`hey @${nip19.npubEncode(ALICE).slice(0, 12)}…`
+		);
+	});
+
+	it('labels senders and mentions with a local petname', () => {
+		setChatPetname(ALICE, 'mom');
+		try {
+			expect(
+				formatChatNotificationLine(message({ content: `hey ${token}` }), {
+					profileHints: { [ALICE]: { name: 'alice' } }
+				})
+			).toBe('mom: hey @mom');
+		} finally {
+			clearChatPetname(ALICE);
+		}
 	});
 });
 

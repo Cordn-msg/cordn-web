@@ -18,7 +18,7 @@ import org.json.JSONArray
  * methods consumed by `nativeBridge.ts` (guarded there by `isNativePlatform()`):
  *  - `configureDelivery` → set mode + interval, then apply (start/stop service + reschedule WM),
  *  - `seed`              → push the group set + watermark + per-coordinator routing,
- *  - `upsertGroupMeta`   → refresh one group's cached title + icon bytes,
+ *  - `upsertGroupMeta`   → refresh one group's cached title, icon bytes and member labels,
  *  - `drain`             → pull+clear the sidecar for the foreground catch-up,
  *  - `isBatteryExempted` / `requestBatteryExemption` → Doze-exemption UX.
  */
@@ -82,7 +82,10 @@ class CordnBackgroundPlugin : Plugin() {
         }
         val title = call.getString("title") // nullable when absent
         val iconBytes = call.getString("iconBytes") // nullable
-        BackgroundStore.get(getContext()).upsertMeta(gid, title, iconBytes)
+        // Member display labels as a JSON object string. Absent = leave the cache alone;
+        // an explicit `{}` clears it (every label was removed).
+        val displayNames = call.getObject("displayNames")?.toString()
+        BackgroundStore.get(getContext()).upsertMeta(gid, title, iconBytes, displayNames)
         call.resolve()
     }
 

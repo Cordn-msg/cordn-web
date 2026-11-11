@@ -48,6 +48,7 @@
 		OutgoingMediaAttachment
 	} from './chat.types';
 	import { enterKeySends } from '$lib/services/chatComposerSettings.svelte';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
 	import { sanitizeImageFile } from '$lib/services/imageSanitize';
 	import { shortcodeQueryAt } from '$lib/chat/emoji';
 	import { packEmojiByName, type EmojiPackSource } from '$lib/services/chatEmojiPacks.svelte';
@@ -381,6 +382,7 @@
 				const profile = profileHints[candidate.pubkey];
 				const npub = nip19.npubEncode(candidate.pubkey);
 				const values = [
+					getChatPetname(candidate.pubkey),
 					candidate.name || profile?.name,
 					candidate.displayName || profile?.displayName,
 					candidate.nip05 || profile?.nip05,
@@ -401,6 +403,7 @@
 		const profile = profileHints[candidate.pubkey];
 		const npub = nip19.npubEncode(candidate.pubkey);
 		return (
+			getChatPetname(candidate.pubkey) ||
 			candidate.name ||
 			profile?.name ||
 			candidate.displayName ||

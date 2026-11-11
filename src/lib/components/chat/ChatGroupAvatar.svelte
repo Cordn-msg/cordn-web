@@ -7,6 +7,7 @@
 	import { getDirectChatTargetPubkey } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getLoadAvatars } from '$lib/services/chatMediaStorage.svelte';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
 	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 
 	let {
@@ -50,7 +51,10 @@
 
 	function getFallback(pubkey: string) {
 		const profile = getProfile(pubkey);
-		return (profile?.name || profile?.displayName || pubkey).slice(0, 1).toUpperCase();
+		// The initial follows the same label the chat shows (petname first).
+		return (getChatPetname(pubkey) || profile?.name || profile?.displayName || pubkey)
+			.slice(0, 1)
+			.toUpperCase();
 	}
 </script>
 
@@ -60,7 +64,7 @@
 		{#if profile?.picture && showImages}
 			<AvatarImage
 				src={profile.picture}
-				alt={profile.name || profile.displayName || pubkey}
+				alt={getChatPetname(pubkey) || profile.name || profile.displayName || pubkey}
 				class="object-cover"
 			/>
 		{/if}

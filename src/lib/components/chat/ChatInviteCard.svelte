@@ -11,6 +11,7 @@
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
 	import type { ChatInvite } from '$lib/chat/chatInvites';
+	import { getChatPetname } from '$lib/services/chatPetnames.svelte';
 
 	/**
 	 * A cordn invite inside a message (Staircase's InviteCard pattern): what the
@@ -51,7 +52,7 @@
 		}
 		if (invite.kind === 'coordinator') return invite.label ?? getCoordinatorLabel(invite.pubkey);
 		const profile = profileHints[invite.pubkey];
-		return profile?.name || profile?.displayName || shortKey;
+		return getChatPetname(invite.pubkey) || profile?.name || profile?.displayName || shortKey;
 	});
 
 	const detail = $derived.by(() => {

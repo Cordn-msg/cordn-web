@@ -2,8 +2,10 @@ import { clientStateDecoder } from 'ts-mls';
 import type { CordnBackgroundNotificationPreview, StagedMessage } from 'cordn-background';
 
 import {
-	formatChatNotificationBody,
-	getChatGroupDisplayTitle
+	formatChatNotificationLine,
+	getChatGroupDisplayTitle,
+	getRepresentativeMemberPubkey,
+	type ChatGroupProfileHints
 } from '$lib/components/chat/chatGroupDisplay';
 import { listGroupMembers } from '$lib/services/chatAdminPolicy';
 import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
@@ -25,6 +27,12 @@ interface PreviewMessage {
 interface ColdPreviewRequest {
 	accountPubkey: string;
 	rows: StagedMessage[];
+	/**
+	 * Per-group member display labels from the native meta cache (petnames already
+	 * folded in). This WebView has no event store and makes no requests, so this is
+	 * the only name source it has; a missing group simply yields unlabelled lines.
+	 */
+	displayNames?: Record<string, Record<string, string>>;
 }
 
 interface ColdPreviewBridge {
@@ -95,6 +103,7 @@ export async function runColdNotificationPreviews(): Promise<void> {
 export async function generateNotificationPreviews(input: {
 	accountPubkey: string;
 	rows: StagedMessage[];
+	displayNames?: Record<string, Record<string, string>>;
 }): Promise<CordnBackgroundNotificationPreview[]> {
 	const ownerPubkey = input.accountPubkey.trim().toLowerCase();
 	if (!ownerPubkey || input.rows.length === 0) return [];
@@ -177,19 +186,32 @@ export async function generateNotificationPreviews(input: {
 			);
 			if (!selected) continue;
 			const { count, thread } = selected;
-			const messages = thread.map((message) => ({
-				text: formatChatNotificationBody(message),
-				at: message.createdAt
-			}));
-			const latest = messages[messages.length - 1]!;
+			// Only id + metadata are read by the display helpers. Use the replayed
+			// metadata so a rename carried by this same batch is not lost.
+			const groupView = { id: data.id, metadata: working.metadata } as StoredChatGroup;
 			const memberPubkeys = listGroupMembers(working.state).map((member) => member.stablePubkey);
-			const title = getChatGroupDisplayTitle({
-				// Only id + metadata are read by the display helper. Use the replayed
-				// metadata so a rename carried by this same batch is not lost.
-				group: { id: data.id, metadata: working.metadata } as StoredChatGroup,
+			const profileHints: ChatGroupProfileHints = {};
+			for (const [pubkey, label] of Object.entries(input.displayNames?.[gid] ?? {})) {
+				if (label) profileHints[pubkey] = { name: label };
+			}
+			const representative = getRepresentativeMemberPubkey(groupView, {
 				activePubkey: ownerPubkey,
 				memberPubkeys
 			});
+			const title = getChatGroupDisplayTitle({
+				group: groupView,
+				activePubkey: ownerPubkey,
+				memberPubkeys,
+				profileHints
+			});
+			const messages = thread.map((message) => ({
+				text: formatChatNotificationLine(message, {
+					representativePubkey: representative,
+					profileHints
+				}),
+				at: message.createdAt
+			}));
+			const latest = messages[messages.length - 1]!;
 			previews.push({
 				gid,
 				title,
