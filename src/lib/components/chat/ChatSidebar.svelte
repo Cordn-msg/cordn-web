@@ -12,6 +12,7 @@
 	import { Metadata } from 'nostr-tools/kinds';
 	import ChatSearchResults from '$lib/components/chat/ChatSearchResults.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
+	import PendingJoinListItem from '$lib/components/chat/PendingJoinListItem.svelte';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
@@ -20,6 +21,10 @@
 		markAllChatGroupsRead
 	} from '$lib/services/chatGroupPresence.svelte';
 	import { listChatGroupMembers, listChatGroups } from '$lib/services/chatGroups.svelte';
+	import {
+		listPendingJoinRequests,
+		removeSentJoinRequest
+	} from '$lib/services/chatJoinRequests.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import { activeGroupId } from '$lib/utils/groupShareLink';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
@@ -74,6 +79,9 @@
 		{ relays: metadataRelays }
 	);
 	const allChats = $derived.by(() => listChatGroups());
+	// Groups this account asked to join and waits on: cards like any other, in their
+	// loading state (the request is the consent; the Welcome is accepted on arrival).
+	const pendingJoins = $derived.by(() => listPendingJoinRequests());
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
 	const resolvedSearchQuery = $derived.by(() =>
 		resolveSearchQuery(debouncedSearchQuery, $activeAccount?.pubkey, profileNames)
@@ -432,13 +440,26 @@
 				onSelectGroup={navigateToGroup}
 				onSelectMessage={(result) => navigateToMessage(result.groupId, result.messageKey)}
 			/>
-		{:else if chats.length === 0 && !collapsed}
+		{:else if chats.length === 0 && pendingJoins.length === 0 && !collapsed}
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>
 				No chats yet. Start a new conversation.
 			</div>
 		{:else}
+			{#if pendingJoins.length > 0}
+				<div class="mb-1 space-y-1">
+					{#each pendingJoins as entry (entry.gid)}
+						<PendingJoinListItem
+							{entry}
+							{collapsed}
+							variant="sidebar"
+							onclick={closeMobileSidebar}
+							onremove={() => removeSentJoinRequest(entry.gid)}
+						/>
+					{/each}
+				</div>
+			{/if}
 			<div class="space-y-1">
 				{#each chats as chat (chat.id)}
 					{@const summary = getChatSummary(chat.id)}

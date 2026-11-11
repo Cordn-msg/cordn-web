@@ -50,6 +50,12 @@ export interface CordnGroupMetadata {
 }
 
 export interface CordnGroupMetadataPreview {
+	/**
+	 * The group the Welcome opens into. Carried so a Welcome can be matched to the
+	 * group it belongs to without joining (a pending join request accepts the one
+	 * that answers it; see chatUiActions.autoAcceptJoinRequestWelcomesAction).
+	 */
+	gid: string;
 	name: string;
 	description?: string;
 	icon?: string;
@@ -430,16 +436,17 @@ export async function previewGroupMetadataFromWelcome(params: {
 		privateKeys: params.privateKeyPackage
 	});
 
+	// Not a guard on metadata: a Welcome without the Cordn extension still names
+	// its group, and its gid is what decides whether it answers a join request.
 	const metadata = getCordnGroupMetadataExtension(result.state);
-	if (!metadata) return undefined;
-
 	const memberPubkeys = listGroupMembers(result.state).map((m) => m.stablePubkey);
 
 	return {
-		name: metadata.name,
-		description: metadata.description,
-		icon: metadata.icon,
-		imageUrl: metadata.imageUrl,
+		gid: new TextDecoder().decode(result.state.groupContext.groupId),
+		name: metadata?.name ?? '',
+		description: metadata?.description,
+		icon: metadata?.icon,
+		imageUrl: metadata?.imageUrl,
 		memberPubkeys
 	};
 }

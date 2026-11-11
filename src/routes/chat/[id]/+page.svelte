@@ -70,18 +70,19 @@
 
 	let requesting = $state(false);
 	let requestError = $state('');
-	let requestSent = $state(untrack(() => hasJoinRequestBeenSent(locator.gid)));
+	// Sent requests live in one reactive store (the chat list renders the same
+	// records as pending cards), so this is derived, never a mirror to keep in step.
+	const requestSent = $derived.by(() => hasJoinRequestBeenSent(groupId));
 	let requestAfterLogin = $state(false);
 
 	// The [id] route component is reused across /chat/<param> changes (no {#key}),
 	// so the one-shot $state above would otherwise leak the previous group's
-	// requestSent / requestAfterLogin into the next group opened via a cordn1 link.
-	// Re-sync every ephemeral join-card flag to the currently resolved group.
+	// requestAfterLogin into the next group opened via a cordn1 link. Re-sync every
+	// ephemeral join-card flag to the currently resolved group.
 	$effect(() => {
 		const gid = locator.gid;
 		if (!gid) return;
 		untrack(() => {
-			requestSent = hasJoinRequestBeenSent(gid);
 			requestAfterLogin = false;
 			requesting = false;
 			requestError = '';
@@ -157,6 +158,7 @@
 		// mid-request navigation can't flip the new group's join-card flags.
 		const targetGid = groupId;
 		const targetCoordinator = coordinatorKey;
+		const targetMetadata = shareMetadata;
 
 		requesting = true;
 		requestError = '';
@@ -182,10 +184,17 @@
 			if (!keyPackageRef) return;
 
 			await storeJoinRequest(targetCoordinator, targetGid, keyPackageRef);
-			markJoinRequestSent(targetGid);
+			// The name/icon the link carried are what the pending card shows while
+			// the group itself is still unknown locally.
+			markJoinRequestSent({
+				gid: targetGid,
+				coordinatorKey: targetCoordinator,
+				name: targetMetadata?.name,
+				icon: targetMetadata?.icon
+			});
+			// Check right away as well as on the poll: an admin can answer in seconds.
 			if (targetGid === locator.gid) {
-				requestSent = true;
-				void refreshWelcomes();
+				void refreshCoordinatorWelcomeNotificationsAction(targetCoordinator).catch(() => {});
 			}
 		} catch (error) {
 			if (targetGid === locator.gid) {
@@ -199,10 +208,9 @@
 	}
 
 	// Manual escape hatch for stuck requests (welcome dismissed/expired,
-	// admin never answered). Mirrors markJoinRequestSent's pair in reverse.
+	// admin never answered). The store write drops the pending card too.
 	function handleRequestAgain() {
 		removeSentJoinRequest(groupId);
-		requestSent = false;
 	}
 </script>
 
@@ -262,9 +270,10 @@
 
 					{#if requestSent}
 						<div
-							class="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+							class="flex items-center gap-2 rounded-xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground"
 						>
-							Join request sent. A group admin will review your request.
+							<Spinner class="size-3.5 shrink-0" aria-hidden="true" />
+							Waiting for an admin to let you in…
 						</div>
 						<button
 							type="button"

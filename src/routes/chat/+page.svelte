@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AccountLoginDialog from '$lib/components/AccountLoginDialog.svelte';
 	import ChatGroupListItem from '$lib/components/chat/ChatGroupListItem.svelte';
+	import PendingJoinListItem from '$lib/components/chat/PendingJoinListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatSearchBar from '$lib/components/chat/ChatSearchBar.svelte';
 	import LoggedOutIntro from '$lib/components/chat/LoggedOutIntro.svelte';
@@ -11,7 +12,10 @@
 	import { browser } from '$app/environment';
 	import { isAndroidNative } from '$lib/services/nativeBridge';
 	import { hasConfirmedBackup, hasSeenIntro, markIntroSeen } from '$lib/services/onboarding.svelte';
-	import { hasJoinRequestBeenSent } from '$lib/services/chatJoinRequests.svelte';
+	import {
+		listPendingJoinRequests,
+		removeSentJoinRequest
+	} from '$lib/services/chatJoinRequests.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { resolve } from '$app/paths';
@@ -121,16 +125,14 @@
 		storageDisclaimerDismissed = true;
 	}
 	const hasGroups = $derived.by(() => groups.length > 0);
-	// Do not flash the first-run hero while the account's groups are still loading.
+	const pendingJoins = $derived.by(() => listPendingJoinRequests());
+	// Do not flash the first-run hero while the account's groups are still loading,
+	// and do not show "No chats yet" over a pending card: that card is the group.
 	const showEmptyState = $derived.by(() => {
 		void groups.length;
-		return hasAccount && areChatGroupsLoaded() && !hasGroups;
+		return hasAccount && areChatGroupsLoaded() && !hasGroups && pendingJoins.length === 0;
 	});
 	const backupConfirmed = $derived.by(() => hasConfirmedBackup($activeAccount?.pubkey));
-	const joinRequestSent = $derived.by(() => {
-		void $activeAccount?.pubkey;
-		return hasJoinRequestBeenSent(CORDN_GROUP_ID);
-	});
 	let introAuto = $state(!hasSeenIntro());
 	let introReplay = $state(false);
 
@@ -259,6 +261,18 @@
 	>
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
+				{#if pendingJoins.length > 0}
+					<div class="space-y-3">
+						{#each pendingJoins as entry (entry.gid)}
+							<PendingJoinListItem
+								{entry}
+								variant="card"
+								onremove={() => removeSentJoinRequest(entry.gid)}
+							/>
+						{/each}
+					</div>
+				{/if}
+
 				{#if showEmptyState}
 					<!-- The empty state is the onboarding: one action, three ways in,
 					     and a quiet reminder that a key without a copy is a lost key. -->
@@ -272,21 +286,12 @@
 							</p>
 						</div>
 
-						{#if joinRequestSent}
-							<div class="flex flex-col items-center gap-2">
-								<p class="text-sm text-muted-foreground">
-									Request sent — an admin will let you in.
-								</p>
-								<Button href={cordnGroupHref} variant="outline">Open the Cordn group</Button>
-							</div>
-						{:else}
-							<div class="flex flex-col items-center gap-2">
-								<Button href={cordnGroupHref}>Join the Cordn group</Button>
-								<p class="text-xs text-muted-foreground">
-									An admin lets you in — you can keep going while you wait.
-								</p>
-							</div>
-						{/if}
+						<div class="flex flex-col items-center gap-2">
+							<Button href={cordnGroupHref}>Join the Cordn group</Button>
+							<p class="text-xs text-muted-foreground">
+								An admin lets you in — you can keep going while you wait.
+							</p>
+						</div>
 
 						<div class="grid w-full gap-2 sm:grid-cols-3">
 							<button

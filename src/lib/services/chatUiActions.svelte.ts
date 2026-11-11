@@ -21,6 +21,8 @@ import {
 	chatWelcomeNotificationsStore,
 	clearWelcomeSubmitting,
 	getWelcomeNotification,
+	isWelcomeSubmitting,
+	listWelcomeNotifications,
 	markWelcomeDismissed,
 	setWelcomeSubmitting
 } from '$lib/services/chatWelcomeNotifications.svelte';
@@ -29,6 +31,8 @@ import {
 	chatJoinRequestsStore,
 	clearJoinRequestSubmitting,
 	getJoinRequest,
+	hasJoinRequestBeenSent,
+	listPendingJoinRequests,
 	markJoinRequestDismissed,
 	setJoinRequestSubmitting
 } from '$lib/services/chatJoinRequests.svelte';
@@ -339,9 +343,10 @@ export async function refreshWelcomeNotificationsAction() {
 	await fetchCoordinatorWelcomeNotifications(account.pubkey, undefined, { force: true });
 }
 
-export async function loadWelcomeNotificationsAction() {
+/** With no coordinator, every known one (startup); with one, just that leg (a pending join request's own coordinator). */
+export async function loadWelcomeNotificationsAction(coordinatorKey?: string) {
 	const account = requireActiveAccount('You must be logged in to fetch welcomes');
-	await fetchCoordinatorWelcomeNotifications(account.pubkey);
+	await fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey);
 }
 
 export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKey: string) {
@@ -349,7 +354,12 @@ export async function refreshCoordinatorWelcomeNotificationsAction(coordinatorKe
 	await fetchCoordinatorWelcomeNotifications(account.pubkey, coordinatorKey, { force: true });
 }
 
-export async function acceptWelcomeAction(welcomeId: string) {
+/**
+ * `navigate: false` accepts in place (the auto-accept of a requested join): the
+ * group appears in the lists on its own, and the reader is not pulled off whatever
+ * they were doing.
+ */
+export async function acceptWelcomeAction(welcomeId: string, options: { navigate?: boolean } = {}) {
 	chatWelcomeNotificationsStore.error = '';
 	setWelcomeSubmitting(welcomeId);
 	try {
@@ -358,7 +368,9 @@ export async function acceptWelcomeAction(welcomeId: string) {
 		// the `consumed` array on the next fetch) so other admins stop seeing it
 		// instead of waiting for the 5-min poll. Best-effort: the poll retries.
 		void refreshWelcomeNotificationsAction().catch(() => {});
-		await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
+		if (options.navigate !== false) {
+			await goto(resolve('/chat/[id]', { id: groupRouteId(group.id) }));
+		}
 		return true;
 	} catch (error) {
 		const notification = getWelcomeNotification(welcomeId);
@@ -369,6 +381,42 @@ export async function acceptWelcomeAction(welcomeId: string) {
 		return false;
 	} finally {
 		clearWelcomeSubmitting(welcomeId);
+	}
+}
+
+/**
+ * Accept the Welcomes that answer a join request this account sent. The request
+ * was already the consent, so the second confirmation the notifications dialog
+ * would ask for is the redundancy this removes. Everything else in the inbox
+ * (an invitation, a DM someone started) is left for the reader to accept.
+ *
+ * Matching is by the group id the Welcome opens into, never by key package: a
+ * last-resort package can carry an invitation to any group, so a kp_ref match
+ * would silently accept a group the reader never asked for. A Welcome that will
+ * not open here (its private material is held by another device) previews to
+ * nothing and simply stays a normal invitation.
+ *
+ * Sequential on purpose: two acceptances in one tick would both write group state
+ * and solve nothing by racing. A failed acceptance keeps the Welcome, so the
+ * reader still sees it and can accept by hand.
+ */
+export async function autoAcceptJoinRequestWelcomesAction(): Promise<void> {
+	const pending = new Map(listPendingJoinRequests().map((entry) => [entry.gid, entry]));
+	if (pending.size === 0) return;
+
+	for (const welcome of listWelcomeNotifications()) {
+		const gid = welcome.preview?.gid;
+		if (!gid || isWelcomeSubmitting(welcome.id)) continue;
+		const entry = pending.get(gid);
+		// Re-read: an earlier acceptance in this pass removes its own record.
+		if (!entry || !hasJoinRequestBeenSent(gid)) continue;
+		// A record written before records carried a coordinator matches on gid alone.
+		if (entry.coordinatorKey && entry.coordinatorKey !== welcome.coordinatorKey) continue;
+
+		const label = welcome.preview?.name || entry.name || 'the group';
+		if (await acceptWelcomeAction(welcome.id, { navigate: false })) {
+			toast.success('You are in', { description: label });
+		}
 	}
 }
 

@@ -624,6 +624,13 @@ const newsReleases: NewsRelease[] = [
 		body: "- ✨ Chats with thousands of messages no longer slow down the longer you use the app: history loads in small pages on demand, so switching between chats and scrolling back stays smooth no matter how far back the conversation goes.\n- ✨ Search now looks through a chat's entire history, not just what's on screen: older matches appear as they're found, and edited or deleted messages are handled correctly.\n- ✨ Unread and mention badges stay exact even with a big backlog — no more wrong counts when hundreds of messages piled up while you were away.\n- 🐛 A message that arrived while you were reading older history could stay invisible until the app was restarted.\n- 🔄 Opening a chat with unread messages lands on the first unread one even when the backlog goes back much further than what first loads.\n- 🔄 The app performs far fewer background checks and wake-ups, which means less battery drain and fewer stutters during long sessions."
 	},
 	{
+		id: 'cordn-news-2026-11-11-pending-joins',
+		createdAt: Date.UTC(2026, 10, 11),
+		version: 1,
+		title: 'A join request that waits like a chat',
+		body: '- ✨ Asking to join a group now puts that group in your chat list right away, as a card still on its way in — name, picture and all — instead of a status line you had to go and find.\n- ✨ When an admin lets you in, the card turns into the chat on its own: asking was already your yes, so there is no second Accept to press.\n- 🔄 While you wait, Cordn checks for the answer about once a minute, and only while the app is open — nothing keeps checking once you are in.\n- 🔄 Changed your mind? The × on the card (or “Request again” in the group) stops the wait. If an admin lets you in later, it still arrives as an ordinary invitation you can accept.'
+	},
+	{
 		id: 'cordn-news-2026-10-28-snappy-switching',
 		createdAt: Date.UTC(2026, 9, 28),
 		version: 1,

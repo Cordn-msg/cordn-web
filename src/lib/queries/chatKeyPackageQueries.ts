@@ -48,14 +48,20 @@ export async function fetchCoordinatorAvailableKeyPackages(
 
 	const results = await Promise.allSettled(
 		coordinatorKeys.map((key) =>
-			queryClient
-				.fetchQuery({
-					queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
-					queryFn: ({ signal }) =>
-						fetchSingleCoordinatorAvailableKeyPackages(key, { signal, force: options.force }),
-					staleTime: options.force ? 0 : 30 * 1000
-				})
-				.then((entries) => entries.map((entry) => ({ ...entry, coordinatorKey: key })))
+			queryClient.fetchQuery({
+				queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, key),
+				// Tagged inside the queryFn, not after it: this key is what the
+				// per-coordinator observers read, so the cache must hold the tagged
+				// rows — an untagged row crashes the directory on `entry.coordinatorKey`.
+				queryFn: async ({ signal }) =>
+					(
+						await fetchSingleCoordinatorAvailableKeyPackages(key, {
+							signal,
+							force: options.force
+						})
+					).map((entry) => ({ ...entry, coordinatorKey: key })),
+				staleTime: options.force ? 0 : 30 * 1000
+			})
 		)
 	);
 

@@ -34,10 +34,13 @@
 		shouldReconcilePublishedKeyPackages
 	} from '$lib/services/chatKeyPackages.svelte';
 	import {
+		autoAcceptJoinRequestWelcomesAction,
 		loadAvailableKeyPackagesAction,
 		loadWelcomeNotificationsAction,
 		loadJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
+	import { listPendingJoinRequests } from '$lib/services/chatJoinRequests.svelte';
+	import { listWelcomeNotifications } from '$lib/services/chatWelcomeNotifications.svelte';
 
 	let { children } = $props();
 	const chatLayout = setChatLayoutContext(createChatLayoutContext());
@@ -129,6 +132,53 @@
 				}
 			}
 		});
+	});
+
+	// A join request is the one thing on this screen that resolves on somebody
+	// else's schedule. While one waits, ask its own coordinator for Welcomes once
+	// a minute, hidden tabs excluded (the per-coordinator query keeps its own
+	// staleTime), and stop asking the moment the request does.
+	const pendingJoinPollKey = $derived.by(() =>
+		[...new Set(listPendingJoinRequests().map((entry) => entry.coordinatorKey))]
+			.filter(Boolean)
+			.sort()
+			.join(',')
+	);
+	$effect(() => {
+		const keys = pendingJoinPollKey ? pendingJoinPollKey.split(',') : [];
+		if (keys.length === 0 || !$activeAccount) return;
+		const check = () => {
+			if (document.visibilityState !== 'visible') return;
+			void untrack(async () => {
+				for (const key of keys) {
+					await loadWelcomeNotificationsAction(key).catch(() => {});
+				}
+			});
+		};
+		// One check on return to the tab, so coming back never waits out the interval.
+		const timer = setInterval(check, 60_000);
+		document.addEventListener('visibilitychange', check);
+		return () => {
+			clearInterval(timer);
+			document.removeEventListener('visibilitychange', check);
+		};
+	});
+
+	// The request was the consent: the Welcome that answers it is accepted as soon
+	// as its preview names the group, so the pending card becomes the chat with no
+	// second confirmation. Every other Welcome stays for the notifications dialog.
+	const pendingJoinAcceptKey = $derived.by(() => {
+		const pending = listPendingJoinRequests().map((entry) => entry.gid);
+		const previewed = listWelcomeNotifications()
+			.filter((welcome) => Boolean(welcome.preview?.gid))
+			.map((welcome) => welcome.id);
+		return pending.length === 0 || previewed.length === 0
+			? ''
+			: `${pending.join(',')}|${previewed.join(',')}`;
+	});
+	$effect(() => {
+		if (!pendingJoinAcceptKey || !$activeAccount) return;
+		void untrack(() => autoAcceptJoinRequestWelcomesAction());
 	});
 
 	$effect(() => {
