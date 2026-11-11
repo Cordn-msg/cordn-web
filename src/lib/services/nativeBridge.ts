@@ -2,11 +2,13 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+import { chatUpHref } from '$lib/utils/chatUpHref';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { toast } from 'svelte-sonner';
 import {
 	CordnBackground,
 	ShareTarget,
@@ -183,6 +185,17 @@ export async function initNativeShell(): Promise<void> {
  */
 let overlayCloser: (() => boolean) | null = null;
 let backHandlerInitialized = false;
+// Soft-keyboard state, from the Keyboard plugin. Usually the IME consumes the Back press itself,
+// but not on every device/gesture path — without this a Back while typing navigated away instead
+// of closing the keyboard, which is exactly the inconsistent behaviour users reported.
+let keyboardVisible = false;
+let hideKeyboard: (() => Promise<void>) | null = null;
+// Double-Back guard at the chat home: the first press hints, a second one within the window leaves.
+// shortcut: a fast detour into a chat and back (inside the 2 s window) keeps the hint armed — the
+// worst case is an unconfirmed minimize, which is the old behavior anyway; add a route-change reset
+// if that ever bites.
+const LEAVE_CONFIRM_MS = 2000;
+let leaveArmedAt = 0;
 
 /**
  * Is an Escape-closable overlay open? Dialogs and sheets (bits-ui Dialog, the custom
@@ -200,13 +213,16 @@ export function hasOpenEscapeOverlay(): boolean {
 
 /**
  * Wire the Android hardware/gesture back button to a priority chain (native only; no-op on web):
- *  1. close the mobile sidebar drawer if open (explicit, via the layout's store),
- *  2. dismiss the topmost overlay (see `hasOpenEscapeOverlay`) by dispatching one synthetic
- *     Escape, which reuses each component's existing close path instead of a per-overlay
- *     registry,
- *  3. traverse the SvelteKit history stack (`canGoBack` → `window.history.back()`),
- *  4. at the root of history, `minimizeApp()` (backgrounds the app, keeps the process cached for
- *     fast relaunch — gentler than `exitApp()`).
+ *  1. hide the soft keyboard if it is up (typing is never a reason to lose your place),
+ *  2. close the mobile sidebar drawer, then the topmost dialog/sheet/menu (see
+ *     `hasOpenEscapeOverlay`) via one synthetic Escape, which reuses each component's existing
+ *     close path instead of a per-overlay registry,
+ *  3. go up one level in the app's own hierarchy (`chatUpHref`) with a `replaceState` navigation —
+ *     not WebView history, which depends on how the screen was entered (tap, search, notification,
+ *     deep link, share) and exits the app from a cold-opened deep link,
+ *  4. at the chat home, arm the double-Back guard: the first press shows a hint, a second one
+ *     within `LEAVE_CONFIRM_MS` backgrounds the app (`minimizeApp`, which keeps the process cached
+ *     for fast relaunch and keeps background delivery alive — gentler than `exitApp`).
  *
  * Registering a `backButton` listener disables Capacitor's default, so this owns the whole flow.
  */
@@ -216,7 +232,15 @@ export async function initBackButtonHandler(consumeOverlay?: () => boolean): Pro
 	if (backHandlerInitialized) return;
 	backHandlerInitialized = true;
 	try {
-		await App.addListener('backButton', ({ canGoBack }) => {
+		await App.addListener('backButton', () => {
+			const armedAt = leaveArmedAt;
+			leaveArmedAt = 0; // any navigation or dismissal below disarms the exit hint
+
+			if (keyboardVisible && hideKeyboard) {
+				keyboardVisible = false; // optimistic: a second press must not be swallowed
+				void hideKeyboard().catch(() => {});
+				return;
+			}
 			if (overlayCloser?.()) return; // hand-rolled drawer first
 			if (hasOpenEscapeOverlay()) {
 				// One synthetic Escape closes the topmost overlay via its own handler: bits-ui listens on
@@ -224,12 +248,36 @@ export async function initBackButtonHandler(consumeOverlay?: () => boolean): Pro
 				document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 				return;
 			}
-			if (canGoBack) {
-				window.history.back();
+
+			const up = chatUpHref(window.location.pathname, window.location.search);
+			if (up) {
+				// Runtime path; resolve() cannot apply.
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				void goto(up, { replaceState: true });
 				return;
 			}
-			void App.minimizeApp();
+
+			if (Date.now() - armedAt <= LEAVE_CONFIRM_MS) {
+				void App.minimizeApp();
+				return;
+			}
+			leaveArmedAt = Date.now();
+			toast('Press back again to leave Cordn', { duration: LEAVE_CONFIRM_MS });
 		});
+
+		// Keyboard plugin: dynamic import keeps the native plugin out of the web bundle.
+		try {
+			const { Keyboard } = await import('@capacitor/keyboard');
+			hideKeyboard = () => Keyboard.hide();
+			await Keyboard.addListener('keyboardDidShow', () => {
+				keyboardVisible = true;
+			});
+			await Keyboard.addListener('keyboardDidHide', () => {
+				keyboardVisible = false;
+			});
+		} catch {
+			// Plugin unavailable — the IME's own Back handling still dismisses the keyboard first.
+		}
 	} catch {
 		backHandlerInitialized = false; // allow a retry on the next attempt
 	}

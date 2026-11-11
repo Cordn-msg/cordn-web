@@ -4,8 +4,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { hasUnreadChatAttention } from '$lib/services/chatAttention.svelte';
 	import { getChatLayoutContext } from '$lib/components/chat/chatLayoutContext';
-	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
-	import { activeGroupId, resolveGroupLocator } from '$lib/utils/groupShareLink';
+	import { activeGroupId } from '$lib/utils/groupShareLink';
+	import { chatUpHref } from '$lib/utils/chatUpHref';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import PanelLeft from '@lucide/svelte/icons/panel-left';
 
@@ -22,25 +22,9 @@
 	// one component, so all chat pages get back navigation for free.
 	const isHome = $derived(page.url.pathname === resolve('/chat'));
 
-	// Hierarchical back: a deterministic "up one level" link, independent of
-	// how this page was entered. history.back() meant "wherever you came from"
-	// — which exits to the home feed on cold-opened deep links and reloads.
-	const backHref = $derived.by(() => {
-		const routeId = page.route.id ?? '';
-		if (routeId === '/chat/[id]/info') {
-			const gid = page.params.id
-				? resolveGroupLocator(page.params.id, page.url.searchParams).gid
-				: undefined;
-			return gid ? resolve('/chat/[id]', { id: groupRouteId(gid) }) : resolve('/chat');
-		}
-		if (routeId === '/chat/coordinators/[coordinatorKey]') return resolve('/chat/coordinators');
-		// Coordinators lives outside /chat/config but its only entry is the
-		// settings card, so "up" is settings (matches user expectation).
-		if (routeId === '/chat/coordinators' || routeId.startsWith('/chat/config/')) {
-			return resolve('/chat/config');
-		}
-		return resolve('/chat');
-	});
+	// Hierarchical back: the same "up one level" map the Android hardware back
+	// button uses (chatUpHref), so the arrow and Back never disagree.
+	const backHref = $derived(chatUpHref(page.url.pathname, page.url.search) ?? resolve('/chat'));
 
 	// Inside a chat, the back dot signals unread attention in OTHER groups (and
 	// welcomes/news): the open group is auto-marked read, so counting it would

@@ -48,8 +48,9 @@
 	// Stale-notification hygiene: clear shown notifications when the tab is attended again.
 	onMount(initNotificationClearOnForeground);
 
-	// Android hardware back button: close the mobile sidebar / any open overlay first, else
-	// traverse SvelteKit history, else background the app. Native only (no-op inside the helper).
+	// Android hardware back button: close the keyboard / the mobile sidebar / any open overlay
+	// first, then go up one level in the app's own hierarchy (chatUpHref), then leave the app with
+	// a double-Back guard. Native only (no-op inside the helper).
 	onMount(() => {
 		void initBackButtonHandler(() => {
 			if (get(chatLayout.mobileSidebarOpen)) {
