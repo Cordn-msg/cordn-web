@@ -29,6 +29,7 @@
 	import { ensureProfileLoaded } from '$lib/queries/chatProfileQueries';
 	import * as Marker from '$lib/components/ui/marker/index.js';
 	import MarkerName from './MarkerName.svelte';
+	import { formatChatDayLabel } from './chatDayLabel';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
 	import Check from '@lucide/svelte/icons/check';
@@ -566,7 +567,7 @@
 	{/snippet}
 	{#if showDayLabel}
 		<Marker.Root variant="separator" class="px-2 py-1 text-[11px] font-medium">
-			<Marker.Content>{message.dayLabel}</Marker.Content>
+			<Marker.Content>{formatChatDayLabel(message.createdAt)}</Marker.Content>
 		</Marker.Root>
 	{/if}
 

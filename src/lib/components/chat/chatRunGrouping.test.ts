@@ -9,7 +9,6 @@ function row(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'author'
 		kind: 9,
 		createdAt: 0,
 		timeLabel: '',
-		dayLabel: '',
 		...overrides
 	};
 }

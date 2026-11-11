@@ -114,7 +114,6 @@ function outboxEntryToChatMessage(entry: StoredChatOutboxRecord): UiChatMessage 
 		kind: entry.kind ?? ChatKinds.Text,
 		createdAt: entry.createdAt,
 		timeLabel: formatUnixTimestamp(entry.createdAt, true, false),
-		dayLabel: formatUnixTimestamp(entry.createdAt, false, true),
 		isOwn: true,
 		deliveryState: entry.state === 'failed' ? 'error' : 'queued',
 		deliveryDetail: entry.lastError,

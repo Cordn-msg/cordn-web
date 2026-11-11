@@ -9,6 +9,7 @@
 	import ChatMessageItem from './ChatMessageItem.svelte';
 	import { estimateChatMessageHeight } from './chatMessageRenderCache';
 	import { shouldAnchorPrepend } from './chatListScrollAnchor';
+	import { chatDayKey, formatChatDayLabel } from './chatDayLabel';
 	import { isRunTail } from './chatRunGrouping';
 	import type { ChatMessage } from './chat.types';
 
@@ -72,6 +73,26 @@
 	let unreadReferenceFrame: number | null = null;
 	let wasAtBottom = true;
 	let showScrollToBottom = $state(false);
+	// Floating day chip (Telegram-style): the day of the topmost visible row,
+	// shown while scrolling up, hidden when scrolling down and after the scroll
+	// stops. Kept as state (not derived from virtualItems) so it only repaints on
+	// label/visibility changes, not on every scroll tick.
+	let floatingDayLabel = $state('');
+	let floatingDayVisible = $state(false);
+	let floatingDayFrame: number | null = null;
+	let floatingDayHideTimer: number | null = null;
+	let floatingDayRetryTimer: number | null = null;
+	let floatingDayRetries = 0;
+	// Accumulated scroll movement since the chip last acted on it: slow
+	// trackpad/momentum deltas are often < 2px per event, so per-event
+	// thresholds would never fire. Direction is decided once a whole gesture
+	// clears FLOATING_DAY_DIRECTION_PX.
+	let floatingDayScrollDelta = 0;
+	// Programmatic scroll corrections (prepend anchor restore, load-older height
+	// compensation) move scrollTop DOWNWARD while the user is scrolling UP —
+	// ignore their scroll events so they can't hide the chip mid-read.
+	let floatingDaySuppressUntil = 0;
+	let lastScrollTop = 0;
 	let suppressNextAutoScroll = false;
 	// Open-at-first-unread bookkeeping: the focus cursor already consumed, and a
 	// monotonic token so a newer programmatic scroll invalidates older in-flight
@@ -100,6 +121,11 @@
 
 	const ESTIMATED_MESSAGE_HEIGHT = 128;
 	const VIRTUAL_OVERSCAN = 8;
+	const FLOATING_DAY_HIDE_MS = 1000;
+	const FLOATING_DAY_SUPPRESS_MS = 200;
+	const FLOATING_DAY_DIRECTION_PX = 8;
+	const FLOATING_DAY_RETRY_MS = 100;
+	const FLOATING_DAY_MAX_RETRIES = 10;
 
 	// The virtualizer must only see list changes when the messages effect
 	// applies them through setOptions. estimateSize/getItemKey closures reading
@@ -338,6 +364,11 @@
 			container.getBoundingClientRect().top -
 			anchor.viewportOffset;
 		container.scrollTop += delta;
+		// This correction moves scrollTop downward while the reader scrolls up.
+		// Keep the day chip up and let the next real upward scroll take over.
+		lastScrollTop = container.scrollTop;
+		floatingDayScrollDelta = 0;
+		floatingDaySuppressUntil = performance.now() + FLOATING_DAY_SUPPRESS_MS;
 		settledRun = run;
 	}
 
@@ -393,10 +424,122 @@
 		showScrollToBottom = !wasAtBottom;
 	}
 
+	function clearFloatingDayTimer() {
+		if (floatingDayHideTimer !== null) {
+			window.clearTimeout(floatingDayHideTimer);
+			floatingDayHideTimer = null;
+		}
+	}
+
+	function clearFloatingDayRetry() {
+		if (floatingDayRetryTimer !== null) {
+			window.clearTimeout(floatingDayRetryTimer);
+			floatingDayRetryTimer = null;
+		}
+	}
+
+	function hideFloatingDay() {
+		clearFloatingDayTimer();
+		clearFloatingDayRetry();
+		floatingDayRetries = 0;
+		floatingDayScrollDelta = 0;
+		floatingDayVisible = false;
+	}
+
+	function scheduleFloatingDayRetry(delayMs: number) {
+		// A stranded programmatic scroll must not leave an idle retry loop running.
+		if (!browser || floatingDayRetries >= FLOATING_DAY_MAX_RETRIES) return;
+		floatingDayRetries += 1;
+		clearFloatingDayRetry();
+		floatingDayRetryTimer = window.setTimeout(() => {
+			floatingDayRetryTimer = null;
+			scheduleFloatingDayUpdate();
+		}, delayMs);
+	}
+
+	// The first virtual row whose wrapper still intersects the viewport top.
+	// DOM rects are truth here: virtual offsets are estimates for unmeasured rows.
+	function topVisibleMessage(): ChatMessage | null {
+		if (!container) return null;
+		const containerTop = container.getBoundingClientRect().top;
+		for (const virtualItem of virtualItems) {
+			const message = messageSnapshot[virtualItem.index];
+			if (!message) continue;
+			const element = container.querySelector<HTMLElement>(`[data-index="${virtualItem.index}"]`);
+			if (!element) continue;
+			if (element.getBoundingClientRect().bottom > containerTop + 1) return message;
+		}
+		return null;
+	}
+
+	function updateFloatingDay() {
+		if (!browser || !container) return;
+		// Skip programmatic flights and paging corrections: their transient
+		// windows/offsets don't describe what the reader is actually looking at.
+		// Retry instead of dropping the pass — the scroll event that revealed the
+		// chip is usually the one that also started the page load, so waiting for
+		// another event would leave the chip hidden while the reader sits parked.
+		if (scrollRun !== settledRun || loadOlderInFlight) {
+			scheduleFloatingDayRetry(FLOATING_DAY_RETRY_MS);
+			return;
+		}
+		const suppressionLeft = floatingDaySuppressUntil - performance.now();
+		if (suppressionLeft > 0) {
+			scheduleFloatingDayRetry(Math.max(suppressionLeft, FLOATING_DAY_RETRY_MS));
+			return;
+		}
+		if (isAtBottom()) {
+			hideFloatingDay();
+			return;
+		}
+		const message = topVisibleMessage();
+		if (!message) {
+			hideFloatingDay();
+			return;
+		}
+		floatingDayLabel = formatChatDayLabel(message.createdAt);
+		floatingDayVisible = true;
+		clearFloatingDayRetry();
+		floatingDayRetries = 0;
+		clearFloatingDayTimer();
+		floatingDayHideTimer = window.setTimeout(() => {
+			floatingDayHideTimer = null;
+			floatingDayVisible = false;
+		}, FLOATING_DAY_HIDE_MS);
+	}
+
+	function scheduleFloatingDayUpdate() {
+		if (!browser || floatingDayFrame !== null) return;
+		floatingDayFrame = window.requestAnimationFrame(() => {
+			floatingDayFrame = null;
+			updateFloatingDay();
+		});
+	}
+
 	function handleScroll() {
 		updateBottomState();
 		scheduleVisibleUnreadReferenceCheck();
-		if (container && container.scrollTop < 240) void handleLoadOlder();
+		if (!container) return;
+		const top = container.scrollTop;
+		const delta = top - lastScrollTop;
+		lastScrollTop = top;
+		if (performance.now() >= floatingDaySuppressUntil) {
+			floatingDayScrollDelta += delta;
+			if (floatingDayScrollDelta <= -FLOATING_DAY_DIRECTION_PX) {
+				// Moving toward older messages: reveal/advance the day chip.
+				floatingDayScrollDelta = 0;
+				floatingDayRetries = 0;
+				scheduleFloatingDayUpdate();
+			} else if (floatingDayScrollDelta >= FLOATING_DAY_DIRECTION_PX) {
+				// Moving toward newer messages: the chip slides away immediately.
+				hideFloatingDay();
+			}
+		} else {
+			// Compensation moves scrollTop, not the reader: start the next gesture
+			// from the corrected position rather than carrying its delta over.
+			floatingDayScrollDelta = 0;
+		}
+		if (top < 240) void handleLoadOlder();
 	}
 
 	// Composite message keys are `${eventId}:${cursor}` (raw event ids carry no
@@ -422,6 +565,11 @@
 			await tick();
 			if (container) {
 				container.scrollTop = beforeTop + (container.scrollHeight - beforeHeight);
+				// Compensating for prepended height looks like a downward scroll;
+				// don't let it dismiss the chip the reader opened by scrolling up.
+				lastScrollTop = container.scrollTop;
+				floatingDayScrollDelta = 0;
+				floatingDaySuppressUntil = performance.now() + FLOATING_DAY_SUPPRESS_MS;
 			}
 			measureVisibleItems();
 			if (!loaded) historyExhaustedForGroup = groupId;
@@ -502,6 +650,12 @@
 		const firstMessageId = messages[0]?.id ?? '';
 		const focusCursor = initialFocusCursor;
 		if (!browser || !container) return;
+		if (appliedGroupId !== groupId) {
+			hideFloatingDay();
+			floatingDayLabel = '';
+			floatingDaySuppressUntil = 0;
+			lastScrollTop = container.scrollTop;
+		}
 		// ALWAYS advance the render snapshot, before any gating: rows render from
 		// messageSnapshot only, and content-only updates (a reaction chip landing,
 		// a peer edit/pin/delete) change no row ids or count — the applied* gate
@@ -673,6 +827,11 @@
 			if (unreadReferenceFrame !== null) {
 				window.cancelAnimationFrame(unreadReferenceFrame);
 			}
+			if (floatingDayFrame !== null) {
+				window.cancelAnimationFrame(floatingDayFrame);
+			}
+			clearFloatingDayTimer();
+			clearFloatingDayRetry();
 			if (highlightTimeout) {
 				clearTimeout(highlightTimeout);
 			}
@@ -718,7 +877,9 @@
 								{groupId}
 								showAuthor={runHead}
 								showAvatar={runTail}
-								showDayLabel={previousMessage?.dayLabel !== message.dayLabel}
+								showDayLabel={previousMessage
+									? chatDayKey(previousMessage.createdAt) !== chatDayKey(message.createdAt)
+									: true}
 								showUnreadMarker={message.id === focusMarkerId}
 								{onReply}
 								{onReact}
@@ -737,6 +898,23 @@
 				{/each}
 			</div>
 		</div>
+	</div>
+
+	<!-- Floating scroll date: the day of the topmost visible row, like the
+	     translucent header in Telegram/WhatsApp. Decorative only — the same day
+	     label is still rendered inline between rows. -->
+	<div
+		class="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-2 transition-opacity duration-200 sm:pt-3"
+		class:opacity-0={!floatingDayVisible}
+		aria-hidden="true"
+	>
+		{#if floatingDayLabel}
+			<span
+				class="rounded-full border border-border/60 bg-background/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur"
+			>
+				{floatingDayLabel}
+			</span>
+		{/if}
 	</div>
 
 	{#if showScrollToBottom || unreadReferenceCount > 0}

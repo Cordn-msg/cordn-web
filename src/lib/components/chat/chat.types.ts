@@ -24,7 +24,6 @@ export interface ChatMessage {
 	kind: number;
 	createdAt: number;
 	timeLabel: string;
-	dayLabel: string;
 	isOwn?: boolean;
 	deliveryState?: 'sending' | 'sent' | 'error' | 'queued';
 	/** Why a pending bubble is stuck (held send, coordinator error) — the
