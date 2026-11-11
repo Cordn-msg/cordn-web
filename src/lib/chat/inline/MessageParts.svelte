@@ -74,7 +74,7 @@
 				isOwn ? 'bg-primary-foreground/15' : 'bg-muted text-foreground'
 			)}
 		>
-			@<ProfileCard pubkey={part.pubkey} mode="inline" profileLink={false} />
+			@<ProfileCard pubkey={part.pubkey} mode="inline" />
 		</span>
 	{:else if part.type === 'event'}
 		<!-- Block span inside the bubble <p>: a div here would be invalid nesting. -->

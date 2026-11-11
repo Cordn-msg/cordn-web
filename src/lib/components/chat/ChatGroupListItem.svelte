@@ -5,11 +5,13 @@
 	import {
 		formatChatMessagePreviewText,
 		getChatGroupDisplayTitle,
+		getChatGroupTitlePersonPubkey,
 		type ChatGroupProfileHints
 	} from './chatGroupDisplay';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import ChatGroupUnreadChips from './ChatGroupUnreadChips.svelte';
 	import ChatGroupActions from './ChatGroupActions.svelte';
+	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import {
 		getChatCoordinator,
@@ -67,6 +69,15 @@
 			group,
 			activePubkey: $activeAccount?.pubkey,
 			profileHints: hints,
+			memberPubkeys
+		})
+	);
+	// A 1:1 title is the peer's name, so a petname there needs the same mark as
+	// the bubbles; an explicit group name or a "Alice +2" summary has no owner.
+	const titlePersonPubkey = $derived(
+		getChatGroupTitlePersonPubkey({
+			group,
+			activePubkey: $activeAccount?.pubkey,
 			memberPubkeys
 		})
 	);
@@ -206,6 +217,7 @@
 							/>
 						{/if}
 						<span class="truncate">{title}</span>
+						<PetnameMark pubkey={titlePersonPubkey} class="size-3.5" />
 					</p>
 					{#if !isSidebar && group.metadata?.description}
 						<span class="hidden text-xs text-muted-foreground sm:inline">•</span>

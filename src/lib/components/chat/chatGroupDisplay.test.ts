@@ -4,11 +4,13 @@ import {
 	formatChatMessagePreviewText,
 	formatChatNotificationBody,
 	formatChatNotificationLine,
+	getChatGroupTitlePersonPubkey,
 	getChatMessagePreviewText
 } from '$lib/components/chat/chatGroupDisplay';
 import { clearChatPetname, setChatPetname } from '$lib/services/chatPetnames.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
+import type { StoredChatGroup } from '$lib/services/chatGroups.svelte';
 
 const ALICE = 'aa'.repeat(32);
 const BOB = 'bb'.repeat(32);
@@ -93,6 +95,44 @@ describe('formatChatNotificationLine', () => {
 		} finally {
 			clearChatPetname(ALICE);
 		}
+	});
+});
+
+describe('getChatGroupTitlePersonPubkey', () => {
+	const ME = 'cc'.repeat(32);
+
+	function group(name?: string): StoredChatGroup {
+		return { id: 'g1', metadata: name === undefined ? {} : { name } } as StoredChatGroup;
+	}
+
+	it('names the single other member of a 1:1', () => {
+		expect(
+			getChatGroupTitlePersonPubkey({ group: group(), activePubkey: ME, memberPubkeys: [ME, BOB] })
+		).toBe(BOB);
+		expect(
+			getChatGroupTitlePersonPubkey({
+				group: group(`:direct_chat:${BOB}`),
+				activePubkey: ME,
+				memberPubkeys: [ME, BOB]
+			})
+		).toBe(BOB);
+	});
+
+	it('has no single person for an explicit group name or a member summary', () => {
+		expect(
+			getChatGroupTitlePersonPubkey({
+				group: group('Team'),
+				activePubkey: ME,
+				memberPubkeys: [ME, BOB]
+			})
+		).toBeUndefined();
+		expect(
+			getChatGroupTitlePersonPubkey({
+				group: group(),
+				activePubkey: ME,
+				memberPubkeys: [ME, BOB, ALICE]
+			})
+		).toBeUndefined();
 	});
 });
 

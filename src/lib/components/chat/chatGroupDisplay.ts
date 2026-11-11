@@ -194,6 +194,25 @@ function resolveMemberDisplayName(
 	return undefined;
 }
 
+/**
+ * The pubkey whose name the title shows — the single other member of a 1:1, or
+ * the explicit direct-chat target — or undefined when the title is an explicit
+ * group name, a member summary ("Alice +2"), or the fallback id. Mirrors the
+ * precedence in `getChatGroupDisplayTitle`; used to mark a petnamed title.
+ */
+export function getChatGroupTitlePersonPubkey(input: {
+	group: StoredChatGroup;
+	activePubkey?: string;
+	memberPubkeys?: string[];
+}): string | undefined {
+	const explicitName = input.group.metadata?.name?.trim() ?? '';
+	if (explicitName && !explicitName.startsWith(DIRECT_CHAT_NAME_PREFIX)) return undefined;
+	const others = dedupeOtherMemberPubkeys(input.memberPubkeys ?? [], input.activePubkey ?? '');
+	if (others.length === 1) return others[0];
+	if (others.length > 1) return undefined;
+	return getDirectChatTargetPubkey(input.group) || undefined;
+}
+
 export function getChatGroupDisplayTitle(input: {
 	group: StoredChatGroup;
 	activePubkey?: string;

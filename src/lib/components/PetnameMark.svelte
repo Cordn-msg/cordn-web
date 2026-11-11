@@ -7,7 +7,8 @@
 	 * self-declared one. Renders nothing when there is no petname, so call sites
 	 * stay a single line and the "no label, no mark" rule lives here.
 	 */
-	let { pubkey, class: className = 'size-3.5' }: { pubkey: string; class?: string } = $props();
+	let { pubkey = '', class: className = 'size-3.5' }: { pubkey?: string; class?: string } =
+		$props();
 </script>
 
 {#if getChatPetname(pubkey)}
