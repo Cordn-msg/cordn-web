@@ -30,7 +30,7 @@
 	},
 	"devDependencies": {
 		"@capacitor/assets": "^3.0.5",
-		"@capacitor/cli": "^8.4.2",
+		"@capacitor/cli": "^8.4.3",
 		"@eslint/compat": "latest",
 		"@eslint/js": "latest",
 		"@internationalized/date": "^3.12.1",
@@ -66,12 +66,12 @@
 		"vitest": "^4.1.10"
 	},
 	"dependencies": {
-		"@capacitor/android": "^8.4.2",
+		"@capacitor/android": "^8.4.3",
 		"@capacitor/app": "^8.1.1",
 		"@capacitor/browser": "^8.0.4",
 		"@capacitor/camera": "^8.2.2",
 		"@capacitor/clipboard": "^8.0.1",
-		"@capacitor/core": "^8.4.2",
+		"@capacitor/core": "^8.4.3",
 		"@capacitor/keyboard": "^8.0.5",
 		"@capacitor/local-notifications": "^8.2.1",
 		"@capacitor/splash-screen": "^8.0.2",
@@ -99,7 +99,7 @@
 		"qr-scanner": "^1.4.2",
 		"svelte-sonner": "^1.1.1",
 		"ts-mls": "2.0.0-rc.13",
-		"zod": "^4.6.2"
+		"zod": "^4.6.6"
 	},
 	"packageManager": "pnpm@10.11.1"
 }

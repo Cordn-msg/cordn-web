@@ -12,7 +12,7 @@ overrides:
   # Security floors for prod-shipped transitives (pnpm audit --prod clean).
   # Ranged, not blanket: a bare nanoid override would force v3 (CJS) consumers
   # onto ESM-only v5 and break dev tooling.
-  'fast-uri@>=3.0.0 <3.1.6': '>=3.1.6'
+  'fast-uri@<4.2.3': '>=4.2.3'
   'nanoid@>=4.0.0 <5.1.16': '>=5.1.16'
   'devalue@<5.9.1': '>=5.9.2 <6'
 patchedDependencies:
