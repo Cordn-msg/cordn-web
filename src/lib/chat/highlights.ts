@@ -1,3 +1,4 @@
+import { kinds } from 'nostr-tools';
 import { naddrEncode, neventEncode } from 'nostr-tools/nip19';
 import type { AddressPointer } from 'nostr-tools/nip19';
 import { parseNostrAddress } from './nostrAddress';
@@ -118,7 +119,11 @@ export function getHighlightSources(tags: string[][]): ChatHighlightSource[] {
 	// revision that was highlighted. Once the article is updated, that event id
 	// is stale even though it still points at the same article, so the addressable
 	// source supersedes bare event sources.
-	if (sources.some((source) => source.type === 'nostr' && source.pointer?.kind === 30023)) {
+	if (
+		sources.some(
+			(source) => source.type === 'nostr' && source.pointer?.kind === kinds.LongFormArticle
+		)
+	) {
 		return sources.filter((source) => source.type !== 'nostr' || !!source.pointer);
 	}
 
