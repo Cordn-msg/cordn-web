@@ -9,6 +9,7 @@ import {
 	PrivateKeySigner,
 	type RelayHandler,
 	ApplesauceRelayPool,
+	type ApplesauceRelayPoolOptions,
 	GiftWrapMode
 } from '@contextvm/sdk';
 import type { ZodType } from 'zod';
@@ -112,6 +113,28 @@ export type coordinatorClient = {
 /** Includes local connect/signing and the response, not just MCP inactivity. */
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/**
+ * Pool whose sockets are the reachable subset of the configured relays.
+ *
+ * `getRelayUrls()` deliberately reports the configured set: the SDK reads it as
+ * "configuredRelayUrls" and treats an empty answer as "unspecified", swapping
+ * in its hints/discovery/fallback relays. A coordinator whose relays are all
+ * unopenable here must fail on its own route, not silently become relay-less.
+ */
+class ConfiguredRelayPool extends ApplesauceRelayPool {
+	constructor(
+		socketUrls: string[],
+		private readonly configuredUrls: readonly string[],
+		options: ApplesauceRelayPoolOptions
+	) {
+		super(socketUrls, options);
+	}
+
+	override getRelayUrls(): string[] {
+		return [...this.configuredUrls];
+	}
+}
+
 export class cordnClient implements coordinatorClient {
 	private stableClient: Client | null = null;
 	private stableTransport: NostrClientTransport | null = null;
@@ -191,10 +214,9 @@ export class cordnClient implements coordinatorClient {
 		// coordinator is a configured one with the tuned pool.
 		const relays = options.relays ? [...options.relays] : [];
 		this.relays = relays;
-		// Sockets skip URLs this page can never open (ws:// on https, off-localhost).
-		// `this.relays` keeps the configured set: it is the client's identity in the
-		// registry, and an empty list means "unspecified" → SDK discovery, which a
-		// configured-but-unreachable coordinator must not silently become.
+		// Sockets skip URLs this page can never open (ws:// on https, off-localhost);
+		// the pool still reports the configured set to the SDK (see
+		// ConfiguredRelayPool). `this.relays` is the client's identity in the registry.
 		const connectableRelays = relays.filter(isRelayReachableHere);
 		// Client replacement must replace sockets AND cancel old publishers.
 		// Only this client's stable/ephemeral transports share the pool.
@@ -204,7 +226,7 @@ export class cordnClient implements coordinatorClient {
 		// (default 20s) keeps attention-triggered probes snappy.
 		const relayHandler =
 			options.relayHandler ??
-			new ApplesauceRelayPool(connectableRelays, {
+			new ConfiguredRelayPool(connectableRelays, relays, {
 				pingFrequencyMs: 30_000,
 				pingTimeoutMs: 2_500
 			});

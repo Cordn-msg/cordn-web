@@ -118,7 +118,8 @@ function init(): void {
 
 /**
  * Put the persisted profile for `pubkey` back in the event store.
- * Returns true when it is fresh enough that a relay read would be discarded.
+ * Returns true when it is fresh enough that a relay read can be skipped
+ * (`ensureProfileLoaded` still reads when the caller supplies relay hints).
  */
 export function restoreCachedProfile(pubkey: string): boolean {
 	const key = safeNormalizePubKey(pubkey);

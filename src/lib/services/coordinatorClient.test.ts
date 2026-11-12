@@ -184,6 +184,16 @@ describe('coordinator client lifetime', () => {
 		expect(await instance.operationalRelayUrls()).toEqual(['wss://offline.invalid']);
 	});
 
+	test('a configured coordinator whose relays this page cannot open keeps them (no fallback to discovery)', async () => {
+		// ws:// off loopback is blocked on an https page, so the pool has no socket
+		// to open. The SDK reads getRelayUrls() as "configured": an empty answer
+		// means "unspecified" and would swap in discovery/fallback relays.
+		vi.stubGlobal('location', { protocol: 'https:' });
+		const instance = new cordnClient({ serverPubkey, relays: ['ws://newlay:7777'] });
+		clients.push(instance);
+		expect(instance.pool?.getRelayUrls()).toEqual(['ws://newlay:7777']);
+	});
+
 	test('one hung publication does not block another RPC on the same transport', async () => {
 		const { instance, relay } = client();
 		relay.stallPublish = true;
