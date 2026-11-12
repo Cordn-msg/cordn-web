@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { mediaLightbox, closeMediaLightbox } from '$lib/services/chatMediaLightbox.svelte';
+	import { collectEmojiFromUrl } from '$lib/services/chatEmojiCollection.svelte';
 	import { downloadObjectUrl } from '$lib/utils';
 	import Download from '@lucide/svelte/icons/download';
+	import SmilePlus from '@lucide/svelte/icons/smile-plus';
 	import Home from '@lucide/svelte/icons/home';
 	import X from '@lucide/svelte/icons/x';
 	import ZoomIn from '@lucide/svelte/icons/zoom-in';
@@ -23,6 +25,9 @@
 	let tx = $state(0);
 	let ty = $state(0);
 	let dragging = $state(false);
+	// "Add to collection" outcome, shown over the toolbar until the next image.
+	let collecting = $state(false);
+	let collectionNote = $state<{ ok: boolean; text: string } | null>(null);
 
 	// Gesture bookkeeping: pointers are tracked in a Map so two-finger pinch
 	// works alongside single-pointer pan. 1 pointer = pan, 2 = pinch-zoom
@@ -55,8 +60,42 @@
 		gestureStart = null;
 		panStart = null;
 		lastTap = null;
+		collectionNote = null;
 		void tick().then(() => backdrop?.focus());
 	});
+
+	const collectionErrorText = {
+		exists: 'Already in your collection',
+		full: 'Your collection is full — remove one first',
+		unsupported: 'Only PNG, JPEG, GIF and WebP can be collected',
+		'too-large': 'Too large for a custom emoji (512 KB max)',
+		unreadable: 'This image can’t be read here',
+		storage: 'Could not save to this device',
+		'signed-out': 'Log in to collect emoji'
+	} as const;
+
+	async function addToCollection() {
+		if (!current || collecting) return;
+		collecting = true;
+		collectionNote = null;
+		const result = await collectEmojiFromUrl({
+			url: current.url,
+			filename: current.filename,
+			name: current.name
+		});
+		collecting = false;
+		collectionNote =
+			'item' in result
+				? { ok: true, text: `Saved :${result.item.name}:` }
+				: {
+						ok: false,
+						// "unreadable" covers blocked, offline, HTTP and timeout: say which.
+						text:
+							result.error === 'unreadable' && result.detail
+								? `Can’t read this image — ${result.detail}.`
+								: collectionErrorText[result.error]
+					};
+	}
 
 	function onWindowKeydown(event: KeyboardEvent) {
 		if (current && event.key === 'Escape') closeMediaLightbox();
@@ -319,6 +358,16 @@
 			<button
 				type="button"
 				class="lightbox-btn"
+				disabled={collecting}
+				onclick={() => void addToCollection()}
+				aria-label="Add to collection"
+				title="Add to my emoji collection"
+			>
+				<SmilePlus class="size-5" />
+			</button>
+			<button
+				type="button"
+				class="lightbox-btn"
 				onclick={() => downloadObjectUrl(current.url, current.filename)}
 				aria-label="Download"
 			>
@@ -328,6 +377,15 @@
 				<X class="size-5" />
 			</button>
 		</div>
+
+		{#if collectionNote}
+			<p
+				class="pointer-events-none absolute inset-x-0 bottom-4 mx-auto w-fit max-w-[90vw] rounded-lg bg-black/70 px-3 py-1.5 text-center text-xs text-white/90"
+				role="status"
+			>
+				{collectionNote.text}
+			</p>
+		{/if}
 	</div>
 {/if}
 

@@ -9,6 +9,7 @@ import {
 	type EmojiPack
 } from '$lib/chat/emoji';
 import { manager } from '$lib/services/accountManager.svelte';
+import { listEmojiCollection } from '$lib/services/chatEmojiCollection.svelte';
 import { parseChatProfileMentions } from '$lib/services/chatMentions';
 import { safeNormalizePubKey } from '$lib/utils';
 
@@ -18,6 +19,9 @@ export interface EmojiPackSource {
 	name: string;
 	url: string;
 	coordinate: string;
+	/** A collected picture's own bytes: sending one never calls its old host. */
+	bytes?: Uint8Array;
+	mime?: string;
 }
 
 export type AddEmojiPackResult =
@@ -102,9 +106,24 @@ function save(packs: EmojiPack[]): void {
 	}
 }
 
-/** The emoji of every active pack by shortcode, first pack winning. */
+/** The emoji of every active pack plus the collected ones, by shortcode. A
+ *  collected emoji WINS a name collision: it is the one saved on purpose, and
+ *  it is the only one that can be sent without its original host. */
 export function packEmojiByName(): Map<string, EmojiPackSource> {
-	return emojiByName(listEmojiPacks());
+	const out = new Map<string, EmojiPackSource>();
+	for (const item of listEmojiCollection()) {
+		out.set(item.name, {
+			name: item.name,
+			url: item.url,
+			coordinate: 'collection',
+			bytes: item.bytes,
+			mime: item.mime
+		});
+	}
+	for (const [name, emoji] of emojiByName(listEmojiPacks())) {
+		if (!out.has(name)) out.set(name, emoji);
+	}
+	return out;
 }
 
 /** Plain `emoji` tags for a local preview of `content` (before emoji-media exists). */
@@ -136,7 +155,7 @@ export function emojiSourcesForContent(content: string): EmojiPackSource[] {
 		const emoji = byName.get(part.name);
 		if (!emoji) continue;
 		seen.add(part.name);
-		out.push({ name: emoji.name, url: emoji.url, coordinate: emoji.coordinate });
+		out.push({ ...emoji });
 	}
 	return out;
 }

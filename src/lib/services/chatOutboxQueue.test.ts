@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => {
 		refreshMock: vi.fn(),
 		removedMock: vi.fn(),
 		poisonedMock: vi.fn(),
-		confirmMock: vi.fn()
+		confirmMock: vi.fn(),
+		emojiMock: vi.fn()
 	};
 });
 
@@ -35,6 +36,13 @@ vi.mock('./accountManager.svelte', () => ({
 		getActive: () => ({ pubkey: mocks.pubkey }),
 		active$: { subscribe: () => ({ unsubscribe: () => {} }) }
 	}
+}));
+
+// Only the emoji preparation is swapped: the rest of the module (the failure
+// sentence) is the real one, so the projection shows what a person reads.
+vi.mock('./chatEmojiMedia', async (importOriginal) => ({
+	...(await importOriginal<typeof import('./chatEmojiMedia')>()),
+	emojiMediaTagsForContent: (...args: unknown[]) => mocks.emojiMock(...args)
 }));
 
 vi.mock('./chatGroups.svelte', () => ({
@@ -68,6 +76,8 @@ async function freshModules() {
 	mocks.listMessagesMock.mockReturnValue([]);
 	mocks.confirmMock.mockReset();
 	mocks.confirmMock.mockResolvedValue(true);
+	mocks.emojiMock.mockReset();
+	mocks.emojiMock.mockResolvedValue({ tags: [], failed: [] });
 	return {
 		queue: await import('./chatOutboxQueue'),
 		storage: await import('$lib/storage/chatStorage'),
@@ -537,5 +547,42 @@ describe('offline outbox queue', () => {
 		);
 		expect(await listEntries(storage)).toHaveLength(0);
 		expect(projection.getPendingEdits('g1')).toHaveLength(0);
+	});
+
+	test('an edit held back by its emoji offers both exits on its target', async () => {
+		const { queue, storage, projection } = await freshModules();
+		const blocked = [{ name: 'meow_dj', reason: 'its host blocked the download' }];
+		mocks.emojiMock.mockResolvedValue({ tags: [], failed: blocked });
+		const target = { id: 'evt-target', pubkey: mocks.pubkey, kind: 9 };
+
+		queue.enqueueEditMessage({ groupId: 'g1', target, content: ':meow_dj:', tags: [] });
+		await settleDrain(queue);
+
+		// Held, not posted as text, and the target carries the failure so the UI
+		// can offer "send without emoji" / "discard" (matching a pending bubble).
+		expect(mocks.sendMock).not.toHaveBeenCalled();
+		const [held] = projection.getPendingEdits('g1');
+		expect(held).toMatchObject({
+			targetId: 'evt-target',
+			deliveryState: 'error',
+			emojiBlocked: true
+		});
+		expect(held.deliveryDetail).toContain(':meow_dj:');
+
+		// "Send without emoji": the shortcode travels as text, no preparation.
+		queue.sendOutboxEntryWithoutEmoji(held.id);
+		await settleDrain(queue);
+		expect(mocks.sendMock).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: 1010, content: ':meow_dj:' })
+		);
+		expect(projection.getPendingEdits('g1')).toHaveLength(0);
+
+		// Same failure, discarded instead: the intent dies, the target survives.
+		queue.enqueueEditMessage({ groupId: 'g1', target, content: ':meow_dj:', tags: [] });
+		await settleDrain(queue);
+		const [again] = projection.getPendingEdits('g1');
+		queue.discardOutboxEntry(again.id);
+		expect(projection.getPendingEdits('g1')).toHaveLength(0);
+		expect(await listEntries(storage)).toHaveLength(0);
 	});
 });

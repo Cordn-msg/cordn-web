@@ -657,6 +657,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Faster chat switching, steadier titles',
 		body: '- ✨ Switching between chats — and typing right after — is dramatically faster: each group\u2019s members and status are figured out once per change instead of being re-derived over and over while you browse.\n- ✨ The tab title no longer flickers between the unread count and the page name while messages arrive, and the unread badge now shows consistently on every screen.\n- 🔄 The app does far less busywork in the background: group updates are saved in batches, quiet chats are checked less often, and poll countdowns share one clock — less memory, battery use, and stutter during long sessions.\n- 🐛 Deleting a chat while a message was still being saved no longer risks leaving that send stuck forever.'
+	},
+	{
+		id: 'cordn-news-2026-11-12-emoji-collection',
+		createdAt: Date.UTC(2026, 10, 12),
+		version: 1,
+		title: 'Custom emoji that actually arrive',
+		body: '- ✨ You can keep any picture as an emoji of your own: open it, tap the smiley in the lightbox, and it lands in My collection. The picture itself is saved on this device, so it still sends when the site it came from disappears or refuses to hand it over.\n- 🔄 My collection comes first in the emoji picker — for messages and for reactions — and lives in Settings → Emoji packs, where you can remove an item.\n- ✨ A pack whose pictures this browser cannot read now says “Can’t be sent” right on its card, with a tap to check again, and those packs sort below the ones that work.\n- 🔄 A message whose emoji could not be prepared no longer posts as a bare :shortcode: while you were shown a picture. It waits with the reason, and you choose: send it without the emoji, or discard it.\n- ✨ On Android, emoji from packs that block browser downloads send properly: the app reads the picture itself instead of asking the web view to.\n- 🐛 A reaction whose emoji could not be read now says why instead of failing silently, and a caption that lost its emoji says so instead of leaving a blank warning.'
 	}
 ];
 

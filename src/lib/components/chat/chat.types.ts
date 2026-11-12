@@ -29,6 +29,9 @@ export interface ChatMessage {
 	/** Why a pending bubble is stuck (held send, coordinator error) — the
 	 *  clock icon's tooltip. Absent for the plain offline-queued case. */
 	deliveryDetail?: string;
+	/** A send held back only by its custom emoji, so "send without emoji" can be
+	 *  offered on the failed bubble instead of the message arriving as bare text. */
+	emojiBlocked?: boolean;
 	edited?: boolean;
 	deleted?: boolean;
 	reactions?: ChatReaction[];

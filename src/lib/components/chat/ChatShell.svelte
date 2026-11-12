@@ -100,8 +100,10 @@
 		enqueueEditMessage,
 		enqueueTextMessage,
 		OUTBOX_ID_PREFIX,
-		retryOutboxEntry
+		retryOutboxEntry,
+		sendOutboxEntryWithoutEmoji
 	} from '$lib/services/chatOutboxQueue';
+	import { describeEmojiFailures } from '$lib/services/chatEmojiMedia';
 
 	let {
 		groupId = 'general',
@@ -481,6 +483,7 @@
 					...view,
 					deliveryState: pendingEdit?.deliveryState ?? view.deliveryState,
 					deliveryDetail: pendingEdit?.deliveryDetail,
+					emojiBlocked: pendingEdit?.emojiBlocked,
 					text: deleted ? '' : (pendingEdit?.content ?? edit?.content ?? message.content),
 					displayTags: pendingEdit
 						? emojiDisplayTags(pendingEdit.content)
@@ -720,9 +723,12 @@
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
-			.then(() => {
+			.then((result) => {
 				removeOptimisticMessage(optimisticId);
 				if (previewUrl) URL.revokeObjectURL(previewUrl);
+				if (result.emojiFailures.length > 0) {
+					chatComposerActionsStore.error = describeEmojiFailures(result.emojiFailures);
+				}
 				// The reply rode this message (first file): consume the chip now that
 				// it landed — identity compare so a reply re-armed meanwhile (a fresh
 				// object, even for the same parent) is never consumed. ponytail: a
@@ -800,9 +806,12 @@
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
-			.then(() => {
+			.then((result) => {
 				removeOptimisticMessage(optimisticId);
 				URL.revokeObjectURL(previewUrl);
+				if (result.emojiFailures.length > 0) {
+					chatComposerActionsStore.error = describeEmojiFailures(result.emojiFailures);
+				}
 				// The voice note carried the reply (first-and-only message): consume
 				// the chip now that it landed — identity compare, same rule as
 				// sendOneMedia.
@@ -865,6 +874,22 @@
 		// Queued text messages retry through the outbox (resets backoff, kicks
 		// the drain). The reply target is already persisted on the entry.
 		retryOutboxEntry(message.id);
+	}
+
+	/** The wedged edit behind a bubble: an edit has no bubble of its own, it is
+	 *  projected onto its target, so its exits act on the target's pending edit. */
+	function heldEmojiEdit(message: ChatMessage): PendingEdit | undefined {
+		if (!message.emojiBlocked) return undefined;
+		return getPendingEdits(groupId)
+			.filter((edit) => edit.targetId === message.eventId && edit.deliveryState === 'error')
+			.at(-1);
+	}
+
+	/** This send was held back only by its custom emoji: post the shortcodes as
+	 *  text, which is the trade the person just asked for. */
+	function handleSendWithoutEmoji(message: ChatMessage) {
+		const id = message.id.startsWith(OUTBOX_ID_PREFIX) ? message.id : heldEmojiEdit(message)?.id;
+		if (id) sendOutboxEntryWithoutEmoji(id);
 	}
 
 	function handleReply(message: ChatMessage) {
@@ -1054,6 +1079,14 @@
 		// (safe for ambiguous entries: a landed copy still arrives via ingest).
 		if (message.id.startsWith(OUTBOX_ID_PREFIX)) {
 			discardOutboxEntry(message.id);
+			return;
+		}
+
+		// Same rule for an edit held back by its emoji: discard the intent, keep
+		// the message it was editing.
+		const heldEdit = heldEmojiEdit(message);
+		if (heldEdit) {
+			discardOutboxEntry(heldEdit.id);
 			return;
 		}
 
@@ -1268,6 +1301,7 @@
 					onEdit={handleEdit}
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
+					onSendWithoutEmoji={handleSendWithoutEmoji}
 					onVisibleUnreadReference={handleVisibleUnreadReference}
 					onVisibleRead={handleVisibleRead}
 					onOpenRich={handleOpenRich}
@@ -1294,7 +1328,9 @@
 		{/if}
 
 		{#if sendError || chatComposerActionsStore.error}
-			<p class="px-3 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
+			<p class="px-3 pb-2 text-sm text-destructive md:px-6">
+				{sendError || chatComposerActionsStore.error}
+			</p>
 		{/if}
 
 		<ChatComposer

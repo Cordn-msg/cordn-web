@@ -83,6 +83,7 @@
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
+		onSendWithoutEmoji = () => {},
 		onNavigateToMessage = () => {},
 		onOpenRich = () => {},
 		onPin = () => {},
@@ -104,6 +105,8 @@
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
+		/** A send held back only by its custom emoji: send the text without them. */
+		onSendWithoutEmoji?: (message: ChatMessage) => void | Promise<void>;
 		onNavigateToMessage?: (messageId: string) => void;
 		onOpenRich?: (eventId: string) => void;
 		onPin?: (message: ChatMessage) => void;
@@ -1129,6 +1132,27 @@
 									>
 								{/if}
 							</div>
+
+							{#if message.isOwn && message.emojiBlocked && message.deliveryState === 'error'}
+								<div class="mt-1 flex items-center justify-end gap-1.5">
+									<button
+										type="button"
+										class="rounded-full border border-primary-foreground/30 px-2 py-0.5 text-[10px] font-medium text-primary-foreground/90 transition-colors hover:bg-primary-foreground/10 sm:text-[11px]"
+										title={message.deliveryDetail ?? 'Send without the custom emoji'}
+										onclick={() => onSendWithoutEmoji(message)}
+									>
+										Send without emoji
+									</button>
+									<button
+										type="button"
+										class="rounded-full px-2 py-0.5 text-[10px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground sm:text-[11px]"
+										title="Discard this message"
+										onclick={() => void onDelete(message)}
+									>
+										Discard
+									</button>
+								</div>
+							{/if}
 						</div>
 					</div>
 

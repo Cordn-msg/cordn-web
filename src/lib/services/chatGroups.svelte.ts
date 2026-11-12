@@ -2600,15 +2600,18 @@ export async function sendChatGroupMessage(input: {
 
 		const state = decodeStoredGroupState(group);
 		// A custom emoji blob is sealed under the epoch it was prepared at. If a
-		// catch-up moved the epoch between preparation and this seal, send the
-		// shortcode as text rather than a picture nobody can open.
+		// catch-up moved the epoch between preparation and this seal, the picture
+		// can never be opened. Refuse what stands alone instead of posting the
+		// shortcode as text: the outbox retries and re-seals under the new epoch.
+		// An attachment (imeta) is the message there, so its caption emoji still
+		// drop out — sendChatMediaMessage reports those.
 		let tags = outboundShape.tags;
-		if (input.mediaKeyBase64 && tags.some((tag) => tag[0] === 'emoji-media')) {
-			tags = dropStaleEmojiMediaTags(
-				tags,
-				input.mediaKeyBase64,
-				bytesToBase64(await deriveMediaKey(state))
-			);
+		if (input.mediaKeyBase64 && tags.some((tag) => tag[0] === EMOJI_MEDIA_TAG)) {
+			const currentKey = bytesToBase64(await deriveMediaKey(state));
+			if (input.mediaKeyBase64 !== currentKey && !tags.some((tag) => tag[0] === 'imeta')) {
+				throw new Error('The group key changed while the custom emoji was prepared');
+			}
+			tags = dropStaleEmojiMediaTags(tags, input.mediaKeyBase64, currentKey);
 		}
 		const outbound = await createApplicationMessageBase64({
 			state,

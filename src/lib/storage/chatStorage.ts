@@ -129,6 +129,22 @@ export interface StoredMessageLedgerRow {
 
 export const MESSAGE_LEDGER_BACKFILL_CURSOR = -1;
 
+/** One picture kept in this account's own emoji collection: the bytes, so an
+ *  emoji collected from a chat can be sent without its original host (which may
+ *  refuse browser downloads, or may be gone). Local to the account, never a
+ *  published NIP-30 set. */
+export interface StoredEmojiCollectionRecord {
+	ownerPubkey: string;
+	/** Lowercase hex sha256 of `bytes` — the same picture is collected once. */
+	id: string;
+	/** Shortcode name, unique within the account's collection. */
+	name: string;
+	mime: string;
+	filename: string;
+	bytes: Uint8Array;
+	addedAt: number;
+}
+
 export interface StoredChatKeyPackageRecord {
 	id: string;
 	ownerPubkey: string;
@@ -173,6 +189,12 @@ export interface StoredChatOutboxRecord {
 	 *  as the pending bubble's tooltip so a wedged clock explains itself. */
 	lastError?: string;
 	lastAttemptAt?: number;
+	/** The send was held back because its custom emoji could not be prepared
+	 *  (pack host unreadable, Blossom refused). Offers "send without emoji". */
+	emojiBlocked?: boolean;
+	/** Explicit "send without custom emoji": skip preparation and let the
+	 *  shortcodes travel as text. */
+	skipEmojiMedia?: boolean;
 }
 
 export interface ChatStorageCapabilities {
@@ -217,10 +239,14 @@ export interface ChatStorage {
 	replaceKeyPackages(records: StoredChatKeyPackageRecord[]): Promise<void>;
 	deleteKeyPackage(keyPackageRef: string): Promise<void>;
 	deleteKeyPackagesByOwner(ownerPubkey: string): Promise<void>;
+	listEmojiCollection(ownerPubkey: string): Promise<StoredEmojiCollectionRecord[]>;
+	putEmojiCollectionItem(item: StoredEmojiCollectionRecord): Promise<void>;
+	deleteEmojiCollectionItem(ownerPubkey: string, id: string): Promise<void>;
+	deleteEmojiCollectionByOwner(ownerPubkey: string): Promise<void>;
 }
 
 const DATABASE_NAME = 'cordn-web';
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 7;
 const GROUP_STORE = 'groups';
 const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
@@ -229,6 +255,7 @@ const KEY_PACKAGE_STORE = 'keyPackages';
 const SNAPSHOT_STORE = 'snapshots';
 const OUTBOX_STORE = 'outbox';
 const MESSAGE_LEDGER_STORE = 'messageLedger';
+const EMOJI_COLLECTION_STORE = 'emojiCollection';
 
 function cloneBytes(bytes: Uint8Array): Uint8Array {
 	return new Uint8Array(bytes);
@@ -351,6 +378,7 @@ class MemoryChatStorage implements ChatStorage {
 	protected keyPackages = new Map<string, StoredChatKeyPackageRecord>();
 	protected outboxEntries: StoredChatOutboxRecord[] = [];
 	protected messageLedgerRows = new Map<string, Map<number, StoredMessageLedgerRow>>();
+	protected emojiCollection = new Map<string, StoredEmojiCollectionRecord>();
 
 	constructor(capabilities: ChatStorageCapabilities) {
 		this.capabilities = capabilities;
@@ -506,6 +534,32 @@ class MemoryChatStorage implements ChatStorage {
 			}
 		}
 	}
+
+	async listEmojiCollection(ownerPubkey: string): Promise<StoredEmojiCollectionRecord[]> {
+		return [...this.emojiCollection.values()]
+			.filter((item) => item.ownerPubkey === ownerPubkey)
+			.map((item) => ({ ...item, bytes: cloneBytes(item.bytes) }))
+			.sort((a, b) => a.addedAt - b.addedAt);
+	}
+
+	async putEmojiCollectionItem(item: StoredEmojiCollectionRecord): Promise<void> {
+		this.emojiCollection.set(`${item.ownerPubkey}:${item.id}`, {
+			...item,
+			bytes: cloneBytes(item.bytes)
+		});
+	}
+
+	async deleteEmojiCollectionItem(ownerPubkey: string, id: string): Promise<void> {
+		this.emojiCollection.delete(`${ownerPubkey}:${id}`);
+	}
+
+	async deleteEmojiCollectionByOwner(ownerPubkey: string): Promise<void> {
+		for (const key of [...this.emojiCollection.keys()]) {
+			if (this.emojiCollection.get(key)?.ownerPubkey === ownerPubkey) {
+				this.emojiCollection.delete(key);
+			}
+		}
+	}
 }
 
 class IndexedDbChatStorage implements ChatStorage {
@@ -572,6 +626,12 @@ class IndexedDbChatStorage implements ChatStorage {
 						keyPath: ['groupId', 'cursor']
 					});
 					store.createIndex('groupId', 'groupId', { unique: false });
+				}
+				if (!db.objectStoreNames.contains(EMOJI_COLLECTION_STORE)) {
+					const store = db.createObjectStore(EMOJI_COLLECTION_STORE, {
+						keyPath: ['ownerPubkey', 'id']
+					});
+					store.createIndex('ownerPubkey', 'ownerPubkey', { unique: false });
 				}
 			};
 			request.onsuccess = () => resolve(request.result);
@@ -1044,6 +1104,46 @@ class IndexedDbChatStorage implements ChatStorage {
 			},
 			() => undefined
 		);
+	}
+
+	async listEmojiCollection(ownerPubkey: string): Promise<StoredEmojiCollectionRecord[]> {
+		const records = await this.runTransaction<StoredEmojiCollectionRecord[]>(
+			EMOJI_COLLECTION_STORE,
+			'readonly',
+			(store) =>
+				store.index('ownerPubkey').getAll(ownerPubkey) as IDBRequest<StoredEmojiCollectionRecord[]>
+		);
+		return (records ?? [])
+			.map((record) => ({ ...record, bytes: cloneBytes(record.bytes) }))
+			.sort((a, b) => a.addedAt - b.addedAt);
+	}
+
+	async putEmojiCollectionItem(item: StoredEmojiCollectionRecord): Promise<void> {
+		await this.runTransaction<void>(
+			EMOJI_COLLECTION_STORE,
+			'readwrite',
+			(store) => {
+				store.put({ ...item, bytes: cloneBytes(item.bytes) });
+			},
+			() => undefined
+		);
+	}
+
+	async deleteEmojiCollectionItem(ownerPubkey: string, id: string): Promise<void> {
+		await this.runTransaction<void>(
+			EMOJI_COLLECTION_STORE,
+			'readwrite',
+			(store) => {
+				store.delete([ownerPubkey, id]);
+			},
+			() => undefined
+		);
+	}
+
+	async deleteEmojiCollectionByOwner(ownerPubkey: string): Promise<void> {
+		for (const item of await this.listEmojiCollection(ownerPubkey)) {
+			await this.deleteEmojiCollectionItem(ownerPubkey, item.id);
+		}
 	}
 }
 

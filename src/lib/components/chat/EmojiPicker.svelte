@@ -3,8 +3,12 @@
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { Input } from '$lib/components/ui/input';
 	import CustomEmoji from './CustomEmoji.svelte';
-	import { emojiByName, shortcode } from '$lib/chat/emoji';
-	import { listEmojiPacks } from '$lib/services/chatEmojiPacks.svelte';
+	import { shortcode } from '$lib/chat/emoji';
+	import { listEmojiPacks, packEmojiByName } from '$lib/services/chatEmojiPacks.svelte';
+	import {
+		ensureEmojiCollectionLoaded,
+		listEmojiCollection
+	} from '$lib/services/chatEmojiCollection.svelte';
 
 	/**
 	 * The composer's custom emoji sheet: one section per active NIP-30 pack.
@@ -15,10 +19,19 @@
 		$props();
 
 	let query = $state('');
+	$effect(() => {
+		void ensureEmojiCollectionLoaded();
+	});
 	const packs = $derived(listEmojiPacks());
-	// Same first-pack-wins rule as sending: never show a duplicate the message
-	// would not use.
-	const winning = $derived(emojiByName(packs));
+	// Collected pictures come first: they are always sendable from this device.
+	const collection = $derived(
+		listEmojiCollection().filter((item) =>
+			query.trim() ? item.name.toLowerCase().includes(query.trim().toLowerCase()) : true
+		)
+	);
+	// Same resolution as sending (collection, then first pack): never show a
+	// duplicate the message would not use.
+	const winning = $derived(packEmojiByName());
 	const sections = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
 		return packs
@@ -52,7 +65,36 @@
 			/>
 		</Sheet.Header>
 		<div class="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
-			{#if packs.length === 0}
+			{#if collection.length > 0}
+				<section class="mb-5">
+					<h3
+						class="mb-2 truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+					>
+						My collection
+					</h3>
+					<div class="grid grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2">
+						{#each collection as item (item.id)}
+							<button
+								type="button"
+								class="flex min-w-0 flex-col items-center gap-1 rounded-xl border border-border bg-card p-2 transition-colors hover:bg-muted/50"
+								aria-label={`Insert :${item.name}:`}
+								title={`:${item.name}:`}
+								onclick={() => pick(item.name)}
+							>
+								<CustomEmoji
+									display={{ name: item.name, url: item.url }}
+									gateAutoLoad={false}
+									sizeClass="size-8"
+								/>
+								<span class="w-full truncate text-center text-[11px] text-muted-foreground">
+									{item.name}
+								</span>
+							</button>
+						{/each}
+					</div>
+				</section>
+			{/if}
+			{#if packs.length === 0 && collection.length === 0}
 				<div
 					class="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground"
 				>
@@ -61,7 +103,7 @@
 						Add a pack in settings
 					</a>
 				</div>
-			{:else if sections.length === 0}
+			{:else if sections.length === 0 && collection.length === 0}
 				<p class="py-8 text-center text-sm text-muted-foreground">No emoji match “{query}”.</p>
 			{:else}
 				<div class="space-y-5">

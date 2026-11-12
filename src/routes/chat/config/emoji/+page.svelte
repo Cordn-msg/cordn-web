@@ -1,6 +1,13 @@
 <script lang="ts">
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import EmojiPackPreview from '$lib/components/chat/EmojiPackPreview.svelte';
+	import EmojiPackCompatibility from '$lib/components/chat/EmojiPackCompatibility.svelte';
+	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
+	import {
+		ensureEmojiCollectionLoaded,
+		listEmojiCollection,
+		removeEmojiCollectionItem
+	} from '$lib/services/chatEmojiCollection.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -15,6 +22,7 @@
 		removeEmojiPack
 	} from '$lib/services/chatEmojiPacks.svelte';
 	import { emojiPackNaddr, parseEmojiSetAddress, type EmojiPack } from '$lib/chat/emoji';
+	import { packProbeRank } from '$lib/services/emojiPackProbe.svelte';
 	import { MESSAGE_AUTHOR_CHIP_CLASS } from '$lib/chat/messageTextClasses';
 	import {
 		EMOJI_DISCOVERY_RELAY_OPTIONS,
@@ -31,7 +39,13 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
 
-	const packs = $derived(listEmojiPacks());
+	// Packs whose host is known to refuse this browser go last: they can be
+	// looked at but not sent, so they should not lead the list.
+	const packs = $derived([...listEmojiPacks()].sort((a, b) => packProbeRank(a) - packProbeRank(b)));
+	const collection = $derived(listEmojiCollection());
+	$effect(() => {
+		void ensureEmojiCollectionLoaded();
+	});
 	const authorChipClass = cn(MESSAGE_AUTHOR_CHIP_CLASS, 'bg-muted text-foreground');
 	let input = $state('');
 	let busy = $state(false);
@@ -117,7 +131,11 @@
 				pack.emoji.some((emoji) => emoji.name.toLowerCase().includes(needle))
 		);
 	});
-	const visibleDiscovered = $derived(filteredDiscovered.slice(0, DISCOVERY_RESULT_LIMIT));
+	const visibleDiscovered = $derived(
+		filteredDiscovered
+			.slice(0, DISCOVERY_RESULT_LIMIT)
+			.sort((a, b) => packProbeRank(a) - packProbeRank(b))
+	);
 	const discoveryResultLabel = $derived.by(() => {
 		const shown = visibleDiscovered.length;
 		if (discoveryQuery.trim()) {
@@ -328,6 +346,7 @@
 												<p class="text-xs text-muted-foreground">
 													{pack.emoji.length} emoji
 												</p>
+												<EmojiPackCompatibility {pack} />
 											</div>
 											{#if addedCoordinates.has(pack.coordinate)}
 												<Button type="button" variant="outline" size="sm" disabled>Added</Button>
@@ -366,6 +385,49 @@
 				</Card.Content>
 			</Card.Root>
 
+			<Card.Root>
+				<Card.Header>
+					<Card.Title>My collection</Card.Title>
+					<Card.Description>
+						Pictures you saved from a chat with “Add to collection”. They are kept on this device,
+						so sending one never asks the host it came from.
+					</Card.Description>
+				</Card.Header>
+				<Card.Content class="space-y-3">
+					{#if collection.length === 0}
+						<p class="text-sm text-muted-foreground">
+							Open any image or custom emoji in the lightbox and tap the smiley button to save it
+							here.
+						</p>
+					{:else}
+						<div class="grid grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2">
+							{#each collection as item (item.id)}
+								<div
+									class="flex min-w-0 flex-col items-center gap-1 rounded-xl border border-border bg-card p-2"
+								>
+									<CustomEmoji
+										display={{ name: item.name, url: item.url }}
+										gateAutoLoad={false}
+										sizeClass="size-8"
+									/>
+									<span class="w-full truncate text-center text-[11px] text-muted-foreground">
+										{item.name}
+									</span>
+									<button
+										type="button"
+										class="text-[10px] text-muted-foreground underline hover:text-destructive"
+										aria-label={`Remove :${item.name}: from your collection`}
+										onclick={() => void removeEmojiCollectionItem(item.id)}
+									>
+										Remove
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+
 			{#if packs.length === 0}
 				<Card.Root>
 					<Card.Content class="py-8 text-center text-sm text-muted-foreground">
@@ -384,6 +446,7 @@
 										class="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-sm text-muted-foreground"
 									>
 										<span>{pack.emoji.length} emoji</span>
+										<EmojiPackCompatibility {pack} />
 										{#if author}
 											<span class={authorChipClass}>
 												<ProfileCard
