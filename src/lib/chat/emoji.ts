@@ -1,4 +1,9 @@
-import { nip19 } from 'nostr-tools';
+import {
+	EMOJI_PACK_KIND,
+	FAVORITE_EMOJI_PACKS_KIND,
+	getFavoriteEmojiPackPointers
+} from 'applesauce-common/helpers/emoji-pack';
+import { nip19, type NostrEvent } from 'nostr-tools';
 
 /**
  * NIP-30 emoji sets and the two custom-emoji wire forms Cordn understands.
@@ -6,8 +11,10 @@ import { nip19 } from 'nostr-tools';
  * Cordn sends Staircase's `emoji-media` tag (a picture re-encrypted to the
  * room) and reads both that and NIP-30's plain `emoji` tag. The set itself is
  * always a NIP-30 kind 30030 event, so packs are shared with other clients.
+ * A person's public pack list is NIP-51's kind 10030 emoji list.
  */
-export const EMOJI_SET_KIND = 30030;
+export const EMOJI_SET_KIND = EMOJI_PACK_KIND;
+export const EMOJI_LIST_KIND = FAVORITE_EMOJI_PACKS_KIND;
 export const EMOJI_MEDIA_TAG = 'emoji-media';
 export const MAX_EMOJI_NAME = 32;
 export const MAX_EMOJI_PER_PACK = 500;
@@ -252,6 +259,28 @@ export function parseEmojiSetEvent(event: {
 		title: title || identifier,
 		emoji
 	};
+}
+
+/**
+ * The kind 30030 sets a NIP-51 emoji list (kind 10030) points at, in its own
+ * order, the first copy of an address winning. Only the public tags are read:
+ * a list's encrypted items belong to its author's key, not to us.
+ */
+export function parseEmojiListEvent(event: NostrEvent): EmojiPackAddress[] {
+	if (event.kind !== EMOJI_LIST_KIND) return [];
+	const out = new Map<string, EmojiPackAddress>();
+	for (const pointer of getFavoriteEmojiPackPointers(event)) {
+		const pubkey = pointer.pubkey.toLowerCase();
+		const coordinate = `${EMOJI_SET_KIND}:${pubkey}:${pointer.identifier}`;
+		if (out.has(coordinate)) continue;
+		out.set(coordinate, {
+			pubkey,
+			identifier: pointer.identifier,
+			relays: (pointer.relays ?? []).filter(isEmojiRelayUrl),
+			coordinate
+		});
+	}
+	return [...out.values()];
 }
 
 /** Parse and dedupe pack events by coordinate, newest copy winning. */

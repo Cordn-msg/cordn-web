@@ -7,6 +7,12 @@ vi.mock('./accountManager.svelte', () => ({
 	manager: { getActive: () => active }
 }));
 
+const { fetchQuery } = vi.hoisted(() => ({ fetchQuery: vi.fn() }));
+vi.mock('$lib/query-client', () => ({ queryClient: { fetchQuery } }));
+vi.mock('$lib/queries/chatEmojiQueries', () => ({
+	emojiSetQueryOptions: (address: unknown) => ({ address })
+}));
+
 // The collection only needs to answer "which names does it own" for this file.
 const collected: Array<{ name: string; url: string }> = [];
 vi.mock('./chatEmojiCollection.svelte', async () => ({
@@ -21,10 +27,13 @@ vi.mock('./chatEmojiCollection.svelte', async () => ({
 		}))
 }));
 
+import { MAX_EMOJI_PACKS } from '$lib/chat/emoji';
 import {
 	addEmojiPackSnapshot,
 	deleteEmojiPacksForOwner,
 	emojiSourcesForContent,
+	fetchEmojiPacksFromList,
+	importEmojiPacksFromList,
 	listEmojiPacks,
 	loadEmojiPacksForOwner,
 	packEmojiByName,
@@ -56,9 +65,14 @@ const moreCats = pack(`30030:${owner}:more`, 'More', [
 	['cat', 'https://cdn.example/other-cat.png']
 ]);
 
+function address(pubkey: string, identifier: string, relays: string[] = []) {
+	return { pubkey, identifier, relays, coordinate: `30030:${pubkey}:${identifier}` };
+}
+
 describe('emoji packs', () => {
 	beforeEach(() => {
 		vi.stubGlobal('localStorage', localStorageStub);
+		fetchQuery.mockReset();
 		store.clear();
 		active.pubkey = owner;
 		deleteEmojiPacksForOwner(owner);
@@ -120,6 +134,58 @@ describe('emoji packs', () => {
 			}
 		]);
 		collected.length = 0;
+	});
+
+	test('resolves a published list through the shared set query, reporting misses', async () => {
+		fetchQuery.mockImplementation(
+			async ({ address: requested }: { address: { identifier: string } }) =>
+				requested.identifier === 'cats' ? cats : null
+		);
+		const hints = ['wss://relay.damus.io/'];
+		const result = await fetchEmojiPacksFromList(
+			[address(owner, 'cats', hints), address(other, 'gone')],
+			{ refresh: true }
+		);
+		expect(fetchQuery).toHaveBeenCalledTimes(2);
+		expect(fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 0 }));
+		expect(result.packs).toEqual([{ ...cats, relays: hints }]);
+		expect(result.missing).toBe(1);
+	});
+
+	test('imports each published pack once', async () => {
+		fetchQuery.mockResolvedValue(cats);
+		const first = await importEmojiPacksFromList([address(owner, 'cats')], owner);
+		expect(first).toEqual({ packs: [cats], missing: 0, blocked: 0 });
+		expect(listEmojiPacks().map((pack) => pack.coordinate)).toEqual([cats.coordinate]);
+
+		const again = await importEmojiPacksFromList([address(owner, 'cats')], owner);
+		expect(again.blocked).toBe(0);
+		expect(listEmojiPacks()).toHaveLength(1);
+	});
+
+	test('writes nothing when another account became active while the list resolved', async () => {
+		fetchQuery.mockImplementation(async () => {
+			active.pubkey = other;
+			return cats;
+		});
+		const result = await importEmojiPacksFromList([address(owner, 'cats')], owner);
+		expect(result.blocked).toBe(1);
+
+		// A write that ignored the guard would have landed on the new account.
+		loadEmojiPacksForOwner(other);
+		expect(listEmojiPacks()).toEqual([]);
+		expect(store.has(`cordn-chat-emoji-packs:${other}`)).toBe(false);
+	});
+
+	test('bounds a list at the pack limit and counts an unreadable set as missing', async () => {
+		fetchQuery.mockRejectedValue(new Error('relay down'));
+		const many = Array.from({ length: MAX_EMOJI_PACKS + 4 }, (_, index) =>
+			address(owner, `pack-${index}`)
+		);
+		const result = await fetchEmojiPacksFromList(many);
+		expect(fetchQuery).toHaveBeenCalledTimes(MAX_EMOJI_PACKS);
+		expect(result.packs).toEqual([]);
+		expect(result.missing).toBe(MAX_EMOJI_PACKS);
 	});
 
 	test('ignores corrupt or invalid stored rows', () => {

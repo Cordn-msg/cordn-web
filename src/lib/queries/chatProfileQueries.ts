@@ -115,8 +115,9 @@ function userRelayListQueryOptions(pubkey: string) {
 	};
 }
 
-/** Triggers a deduplicated NIP-65 relay-list fetch if not already fresh. */
-export function ensureUserRelayListLoaded(pubkey: string): void {
+/** Triggers a deduplicated NIP-65 relay-list fetch if not already fresh.
+ *  Awaiting it lets a read that depends on the outboxes wait for them. */
+export async function ensureUserRelayListLoaded(pubkey: string): Promise<void> {
 	if (!pubkey) return;
-	void queryClient.fetchQuery(userRelayListQueryOptions(pubkey));
+	await queryClient.fetchQuery(userRelayListQueryOptions(pubkey));
 }
