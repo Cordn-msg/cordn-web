@@ -1,6 +1,10 @@
 <script lang="ts">
 	import type { EmojiPack } from '$lib/chat/emoji';
-	import { emojiProbeState, probeEmojiUrl } from '$lib/services/emojiPackProbe.svelte';
+	import {
+		emojiProbeState,
+		packProbeUrl,
+		probeEmojiUrl
+	} from '$lib/services/emojiPackProbe.svelte';
 	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 	import { isNativePlatform } from '$lib/services/nativeShims';
 
@@ -16,7 +20,7 @@
 	 */
 	let { pack }: { pack: EmojiPack } = $props();
 
-	const probeUrl = $derived(pack.emoji[0]?.url ?? '');
+	const probeUrl = $derived(packProbeUrl(pack));
 	const probeState = $derived(probeUrl ? emojiProbeState(probeUrl) : undefined);
 	let visible = $state(false);
 

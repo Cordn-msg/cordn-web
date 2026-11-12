@@ -22,6 +22,7 @@
 		removeEmojiPack
 	} from '$lib/services/chatEmojiPacks.svelte';
 	import { emojiPackNaddr, parseEmojiSetAddress, type EmojiPack } from '$lib/chat/emoji';
+	import { packProbeRank } from '$lib/services/emojiPackProbe.svelte';
 	import { MESSAGE_AUTHOR_CHIP_CLASS } from '$lib/chat/messageTextClasses';
 	import {
 		EMOJI_DISCOVERY_RELAY_OPTIONS,
@@ -38,7 +39,9 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import Check from '@lucide/svelte/icons/check';
 
-	const packs = $derived(listEmojiPacks());
+	// Packs whose host is known to refuse this browser go last: they can be
+	// looked at but not sent, so they should not lead the list.
+	const packs = $derived([...listEmojiPacks()].sort((a, b) => packProbeRank(a) - packProbeRank(b)));
 	const collection = $derived(listEmojiCollection());
 	$effect(() => {
 		void ensureEmojiCollectionLoaded();
@@ -128,7 +131,11 @@
 				pack.emoji.some((emoji) => emoji.name.toLowerCase().includes(needle))
 		);
 	});
-	const visibleDiscovered = $derived(filteredDiscovered.slice(0, DISCOVERY_RESULT_LIMIT));
+	const visibleDiscovered = $derived(
+		filteredDiscovered
+			.slice(0, DISCOVERY_RESULT_LIMIT)
+			.sort((a, b) => packProbeRank(a) - packProbeRank(b))
+	);
 	const discoveryResultLabel = $derived.by(() => {
 		const shown = visibleDiscovered.length;
 		if (discoveryQuery.trim()) {

@@ -32,6 +32,18 @@ function originOf(url: string): string {
 }
 
 /** The state for the host behind [url]; undefined when this session never asked. */
+/** The picture a card probes and shows its badge for. */
+export function packProbeUrl(pack: { emoji: { url: string }[] }): string {
+	return pack.emoji[0]?.url ?? '';
+}
+
+/** 1 when this pack's host is known to refuse this browser, 0 otherwise — sorts
+ *  unsendable packs to the bottom of a list without disturbing the rest. */
+export function packProbeRank(pack: { emoji: { url: string }[] }): number {
+	const url = packProbeUrl(pack);
+	return url && emojiProbeState(url) === 'failed' ? 1 : 0;
+}
+
 export function emojiProbeState(url: string): EmojiProbeState | undefined {
 	return states.get(originOf(url))?.state;
 }

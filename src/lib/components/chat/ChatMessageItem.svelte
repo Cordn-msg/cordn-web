@@ -1134,7 +1134,7 @@
 							</div>
 
 							{#if message.isOwn && message.emojiBlocked && message.deliveryState === 'error'}
-								<div class="mt-1 flex justify-end">
+								<div class="mt-1 flex items-center justify-end gap-1.5">
 									<button
 										type="button"
 										class="rounded-full border border-primary-foreground/30 px-2 py-0.5 text-[10px] font-medium text-primary-foreground/90 transition-colors hover:bg-primary-foreground/10 sm:text-[11px]"
@@ -1142,6 +1142,14 @@
 										onclick={() => onSendWithoutEmoji(message)}
 									>
 										Send without emoji
+									</button>
+									<button
+										type="button"
+										class="rounded-full px-2 py-0.5 text-[10px] font-medium text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground sm:text-[11px]"
+										title="Discard this message"
+										onclick={() => void onDelete(message)}
+									>
+										Discard
 									</button>
 								</div>
 							{/if}
