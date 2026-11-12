@@ -6,7 +6,8 @@ import {
 	isEmojiUrl,
 	isValidEmojiName,
 	parseEmojiSetAddress,
-	type EmojiPack
+	type EmojiPack,
+	type EmojiPackAddress
 } from '$lib/chat/emoji';
 import { manager } from '$lib/services/accountManager.svelte';
 import { listEmojiCollection } from '$lib/services/chatEmojiCollection.svelte';
@@ -24,11 +25,20 @@ export interface EmojiPackSource {
 	mime?: string;
 }
 
-export type AddEmojiPackResult =
-	| { pack: EmojiPack }
-	| { error: 'address' | 'exists' | 'full' | 'missing' | 'signed-out' };
+export type EmojiPackError = 'address' | 'exists' | 'full' | 'missing' | 'signed-out';
+
+export type AddEmojiPackResult = { pack: EmojiPack } | { error: EmojiPackError };
 
 export type FetchEmojiPackResult = { pack: EmojiPack } | { error: 'address' | 'missing' };
+
+/** The copy shown when a pack cannot be added. */
+export const EMOJI_PACK_ERRORS: Record<EmojiPackError, string> = {
+	address: 'Paste an naddr or a 30030: coordinate.',
+	exists: 'That pack is already added.',
+	full: 'You have reached the pack limit. Remove one first.',
+	missing: 'The pack could not be found on the relays.',
+	'signed-out': 'Log in to add emoji packs.'
+};
 
 const store = $state<{ owner: string; packs: EmojiPack[] }>({ owner: '', packs: [] });
 
@@ -191,6 +201,72 @@ export function addEmojiPackSnapshot(pack: EmojiPack): AddEmojiPackResult {
 	if (packs.length >= MAX_EMOJI_PACKS) return { error: 'full' };
 	save([...packs, pack]);
 	return { pack };
+}
+
+export interface EmojiListPacks {
+	packs: EmojiPack[];
+	/** Pointers whose set could not be read from any relay. */
+	missing: number;
+}
+
+export interface EmojiListImport extends EmojiListPacks {
+	/** Resolved packs left unwritten: the pack limit, or another account became active. */
+	blocked: number;
+}
+
+/**
+ * Resolve a published list's pointers through the same per-set query the
+ * settings preview uses, so a pack already in hand costs no request. Pointers
+ * past the pack limit are left alone: the list could never be imported whole.
+ * `refresh` re-asks for sets already cached as missing (the retry affordance).
+ */
+export async function fetchEmojiPacksFromList(
+	addresses: EmojiPackAddress[],
+	{ refresh = false }: { refresh?: boolean } = {}
+): Promise<EmojiListPacks> {
+	const requested = addresses.slice(0, MAX_EMOJI_PACKS);
+	const [{ queryClient }, { emojiSetQueryOptions }] = await Promise.all([
+		import('$lib/query-client'),
+		import('$lib/queries/chatEmojiQueries')
+	]);
+	const results = await Promise.allSettled(
+		requested.map(async (address) => {
+			const options = emojiSetQueryOptions(address);
+			const pack = await queryClient.fetchQuery(refresh ? { ...options, staleTime: 0 } : options);
+			return pack
+				? { ...pack, ...(address.relays.length ? { relays: address.relays } : {}) }
+				: null;
+		})
+	);
+	const packs: EmojiPack[] = [];
+	let missing = 0;
+	for (const result of results) {
+		if (result.status === 'fulfilled' && result.value) packs.push(result.value);
+		else missing += 1;
+	}
+	return { packs, missing };
+}
+
+/**
+ * Resolve a published list and write it into the active account's packs, so
+ * its shortcodes work right away. A list belongs to the account it was read
+ * for: if that account changed while the relays answered, nothing is written.
+ */
+export async function importEmojiPacksFromList(
+	addresses: EmojiPackAddress[],
+	ownerPubkey: string,
+	{ refresh = false }: { refresh?: boolean } = {}
+): Promise<EmojiListImport> {
+	const result = await fetchEmojiPacksFromList(addresses, { refresh });
+	if (activeOwner() !== safeNormalizePubKey(ownerPubkey)) {
+		return { ...result, blocked: result.packs.length };
+	}
+	let blocked = 0;
+	for (const pack of result.packs) {
+		const imported = addEmojiPackSnapshot(pack);
+		if ('error' in imported && imported.error !== 'exists') blocked += 1;
+	}
+	return { ...result, blocked };
 }
 
 export async function addEmojiPack(input: string): Promise<AddEmojiPackResult> {

@@ -11,6 +11,7 @@ import {
 	isEmojiOnlyText,
 	matchEmojiShortcodes,
 	nameOfWholeShortcode,
+	parseEmojiListEvent,
 	parseEmojiMediaTag,
 	parseEmojiSetAddress,
 	parseEmojiSetEvent,
@@ -127,6 +128,61 @@ describe('emoji sets', () => {
 		).toBe('cats');
 		expect(parseEmojiSetEvent({ kind: 30030, pubkey: author, tags: [['d', 'empty']] })).toBeNull();
 		expect(parseEmojiSetEvent({ kind: 1, pubkey: author, tags: [] })).toBeNull();
+	});
+});
+
+describe('emoji lists', () => {
+	const other = 'b'.repeat(64);
+	const list = (tags: string[][], kind = 10030) => ({
+		id: 'c'.repeat(64),
+		pubkey: author,
+		created_at: 0,
+		kind,
+		tags,
+		content: '',
+		sig: 'd'.repeat(128)
+	});
+
+	it('reads public pack pointers in order, once each, with relay hints', () => {
+		expect(
+			parseEmojiListEvent(
+				list([
+					['a', `30030:${author}:cats`, 'wss://relay.damus.io'],
+					['emoji', 'cat', 'https://cdn.example/cat.png'],
+					['a', `30030:${other}:emoji set`],
+					['a', `30030:${author}:cats`],
+					['a', `30030:${author.toUpperCase()}:twitch`],
+					['a', `30023:${author}:post`],
+					['a', 'not-an-address']
+				])
+			)
+		).toEqual([
+			{
+				pubkey: author,
+				identifier: 'cats',
+				relays: ['wss://relay.damus.io/'],
+				coordinate: `30030:${author}:cats`
+			},
+			{
+				pubkey: other,
+				identifier: 'emoji set',
+				relays: [],
+				coordinate: `30030:${other}:emoji set`
+			},
+			{
+				pubkey: author,
+				identifier: 'twitch',
+				relays: [],
+				coordinate: `30030:${author}:twitch`
+			}
+		]);
+	});
+
+	it('is empty for another kind or a list with no pack pointers', () => {
+		expect(parseEmojiListEvent(list([['a', `30030:${author}:cats`]], 30030))).toEqual([]);
+		expect(parseEmojiListEvent(list([['emoji', 'cat', 'https://cdn.example/cat.png']]))).toEqual(
+			[]
+		);
 	});
 });
 

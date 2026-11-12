@@ -3,18 +3,21 @@
 	import EmojiPackPreview from '$lib/components/chat/EmojiPackPreview.svelte';
 	import EmojiPackCompatibility from '$lib/components/chat/EmojiPackCompatibility.svelte';
 	import CustomEmoji from '$lib/components/chat/CustomEmoji.svelte';
+	import PublishedEmojiPacks from '$lib/components/chat/PublishedEmojiPacks.svelte';
 	import {
 		ensureEmojiCollectionLoaded,
 		listEmojiCollection,
 		removeEmojiCollectionItem
 	} from '$lib/services/chatEmojiCollection.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
+	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import {
+		EMOJI_PACK_ERRORS,
 		addEmojiPack,
 		addEmojiPackSnapshot,
 		fetchEmojiPack,
@@ -54,14 +57,6 @@
 	let previewFor = $state('');
 	const previewMatches = $derived(preview !== null && previewFor === input.trim());
 
-	const errors = {
-		address: 'Paste an naddr or a 30030: coordinate.',
-		exists: 'That pack is already added.',
-		full: 'You have reached the pack limit. Remove one first.',
-		missing: 'The pack could not be found on the relays.',
-		'signed-out': 'Log in to add emoji packs.'
-	} as const;
-
 	function handleInput() {
 		preview = null;
 		previewFor = '';
@@ -80,7 +75,7 @@
 		if ('error' in result) {
 			preview = null;
 			previewFor = '';
-			message = { kind: 'error', text: errors[result.error] };
+			message = { kind: 'error', text: EMOJI_PACK_ERRORS[result.error] };
 			return;
 		}
 		preview = result.pack;
@@ -96,7 +91,7 @@
 			previewMatches && preview ? addEmojiPackSnapshot(preview) : await addEmojiPack(requested);
 		busy = false;
 		if ('error' in result) {
-			message = { kind: 'error', text: errors[result.error] };
+			message = { kind: 'error', text: EMOJI_PACK_ERRORS[result.error] };
 			return;
 		}
 		if (input.trim() === requested) input = '';
@@ -186,7 +181,7 @@
 	function addDiscovered(pack: EmojiPack) {
 		const result = addEmojiPackSnapshot(pack);
 		if ('error' in result) {
-			discoveryMessage = { kind: 'error', text: errors[result.error] };
+			discoveryMessage = { kind: 'error', text: EMOJI_PACK_ERRORS[result.error] };
 			return;
 		}
 		discoveryMessage = { kind: 'ok', text: `Added ${result.pack.title}.` };
@@ -427,6 +422,12 @@
 					{/if}
 				</Card.Content>
 			</Card.Root>
+
+			{#if $activeAccount}
+				{#key $activeAccount.pubkey}
+					<PublishedEmojiPacks pubkey={$activeAccount.pubkey} />
+				{/key}
+			{/if}
 
 			{#if packs.length === 0}
 				<Card.Root>
