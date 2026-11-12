@@ -28,7 +28,8 @@ import {
 } from '$lib/services/chatMediaCrypto';
 import { EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
 import { emojiSourcesForContent } from '$lib/services/chatEmojiPacks.svelte';
-import { fetchEmojiImage } from '$lib/services/chatEmojiImage';
+import { emojiImageFailureText, fetchEmojiImage } from '$lib/services/chatEmojiImage';
+import { noteEmojiSendFailure, noteEmojiSendSuccess } from '$lib/services/emojiPackProbe.svelte';
 import { mediaExtFromMime } from '$lib/services/mediaSniff';
 import {
 	decodeStoredGroupState,
@@ -327,7 +328,7 @@ export async function sendChatMediaMessage(params: {
 	/** Voice-note metadata to carry in the `imeta` as display hints
 	 *  (`duration` + `waveform`). Omitted for non-voice media. */
 	voice?: { durationMs: number; waveform: number[] };
-}): Promise<void> {
+}): Promise<{ emojiFailures: EmojiMediaFailure[] }> {
 	const { groupId, file, text, tags, replyTo, onProgress, signal, voice } = params;
 	// Fail fast before the upload: the final MLS send needs an account, and
 	// surfacing it here beats encrypting + uploading first.
@@ -389,7 +390,7 @@ export async function sendChatMediaMessage(params: {
 	const mediaKeyBase64 = bytesToBase64(key);
 	const captionEmoji = text
 		? await prepareEmojiMediaTags(groupId, emojiSourcesForContent(text))
-		: { tags: [] };
+		: { tags: [], failed: [] };
 	const captionTags = captionEmoji.mediaKeyBase64 === mediaKeyBase64 ? captionEmoji.tags : [];
 
 	// Thread the exact encryption key so the sender's stashed copy decrypts the
@@ -402,6 +403,9 @@ export async function sendChatMediaMessage(params: {
 		replyTo,
 		mediaKeyBase64
 	});
+	// The attachment is the message here: it lands either way, but the caller says
+	// which caption emoji it could not carry rather than dropping them in silence.
+	return { emojiFailures: captionEmoji.failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +560,16 @@ export async function resolveEmojiMedia(
 export interface EmojiImageSource {
 	name: string;
 	url: string;
+	/** Present for a collected picture: its bytes, so no host is contacted. */
+	bytes?: Uint8Array;
+	mime?: string;
+}
+
+/** A custom emoji this message asked for and could not carry as a picture. */
+export interface EmojiMediaFailure {
+	name: string;
+	/** One clause a person can read, e.g. "its host blocked the download". */
+	reason: string;
 }
 
 const MAX_EMOJI_MEMOS = 200;
@@ -564,13 +578,13 @@ const emojiMediaMemo = new Map<string, string[]>();
 
 /**
  * Encrypt and upload the pictures for a message's custom emoji, returning the
- * `emoji-media` tags and the key they were sealed under. A source that cannot
- * be fetched or uploaded is skipped: the message still sends.
+ * `emoji-media` tags and the key they were sealed under, plus the emoji whose
+ * picture could not be had — the caller decides whether to send anyway.
  */
 export async function prepareEmojiMediaTags(
 	groupId: string,
 	sources: EmojiImageSource[]
-): Promise<{ tags: string[][]; mediaKeyBase64?: string }> {
+): Promise<{ tags: string[][]; mediaKeyBase64?: string; failed: EmojiMediaFailure[] }> {
 	const unique = sources
 		.filter(
 			(source, index) =>
@@ -579,17 +593,26 @@ export async function prepareEmojiMediaTags(
 				) === index
 		)
 		.slice(0, MAX_EMOJI_TAGS_PER_MESSAGE);
-	if (unique.length === 0) return { tags: [] };
+	if (unique.length === 0) return { tags: [], failed: [] };
+
+	const failed: EmojiMediaFailure[] = [];
 
 	// Fetch in parallel: one dead pack host must cost one timeout, not one per
 	// emoji in the message. Uploads then stay sequential per try/pass.
 	const fetched = (
 		await Promise.all(
 			unique.map(async (source) => {
+				if (source.bytes && source.mime) {
+					return { source, image: { mime: source.mime, bytes: source.bytes } };
+				}
 				try {
-					return { source, image: await fetchEmojiImage(source.url) };
+					const image = await fetchEmojiImage(source.url);
+					noteEmojiSendSuccess(source.url);
+					return { source, image };
 				} catch (error) {
+					noteEmojiSendFailure(source.url);
 					console.warn(`Could not prepare custom emoji :${source.name}:`, error);
+					failed.push({ name: source.name, reason: emojiImageFailureText(error) });
 					return null;
 				}
 			})
@@ -598,18 +621,20 @@ export async function prepareEmojiMediaTags(
 		(entry): entry is { source: EmojiImageSource; image: { mime: string; bytes: Uint8Array } } =>
 			entry !== null
 	);
-	if (fetched.length === 0) return { tags: [] };
+	if (fetched.length === 0) return { tags: [], failed };
 
 	// An epoch can move while the uploads run; one retry re-seals under the new key.
 	for (let pass = 0; pass < 2; pass++) {
 		const group = getChatGroup(groupId);
-		if (!group) return { tags: [] };
+		if (!group) return { tags: [], failed };
 		const state = decodeStoredGroupState(group);
 		const key = await deriveMediaKey(state);
 		const keyBase64 = bytesToBase64(key);
 		const epoch = String(state.groupContext.epoch);
 		const signer = ephemeralBlossomSigner();
 		const tags: string[][] = [];
+		// Upload failures are collected once, even if the epoch retry runs.
+		const uploadFailures = new Map<string, EmojiMediaFailure>();
 
 		for (const { source, image } of fetched) {
 			const memoKey = `${groupId}:${epoch}:${source.name}:${source.url}`;
@@ -645,15 +670,30 @@ export async function prepareEmojiMediaTags(
 				tags.push(tag);
 			} catch (error) {
 				console.warn(`Could not prepare custom emoji :${source.name}:`, error);
+				uploadFailures.set(source.name, {
+					name: source.name,
+					reason: 'it could not be uploaded to a Blossom server'
+				});
 			}
 		}
 
 		const latest = getChatGroup(groupId);
 		if (!latest || decodeStoredGroupState(latest).groupContext.epoch === state.groupContext.epoch) {
-			return tags.length > 0 ? { tags, mediaKeyBase64: keyBase64 } : { tags: [] };
+			const missed = [...failed, ...uploadFailures.values()];
+			return tags.length > 0
+				? { tags, mediaKeyBase64: keyBase64, failed: missed }
+				: { tags: [], failed: missed };
 		}
 	}
-	return { tags: [] };
+	// The epoch moved under both passes: nothing prepared here is openable now,
+	// and the caller must not post the shortcodes as if it were.
+	return {
+		tags: [],
+		failed: fetched.map(({ source }) => ({
+			name: source.name,
+			reason: 'the group key changed while it was uploaded'
+		}))
+	};
 }
 
 /** Extract the imeta reference for rendering (without fetching). Used by the

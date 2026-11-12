@@ -8,6 +8,7 @@ import { deleteChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte'
 import { deleteChatPetnamesForOwner } from '$lib/services/chatPetnames.svelte';
 import { clearBackgroundGroups } from '$lib/services/nativeBridge';
 import { deleteEmojiPacksForOwner } from '$lib/services/chatEmojiPacks.svelte';
+import { deleteEmojiCollectionForOwner } from '$lib/services/chatEmojiCollection.svelte';
 import {
 	deleteJoinRequestsForOwner,
 	deleteSentJoinRequestsForOwner
@@ -37,6 +38,7 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 		// account's notifications.
 		clearBackgroundGroups(ownerPubkey),
 		Promise.resolve(deleteEmojiPacksForOwner(ownerPubkey)),
+		deleteEmojiCollectionForOwner(ownerPubkey),
 		Promise.resolve(deleteWelcomeNotificationsForOwner(ownerPubkey)),
 		Promise.resolve(deleteJoinRequestsForOwner(ownerPubkey)),
 		Promise.resolve(deleteSentJoinRequestsForOwner(ownerPubkey)),

@@ -87,7 +87,7 @@
 
 	function openLightbox() {
 		if (!src) return;
-		openMediaLightbox({ url: src, filename: display.name, mime: 'image/*' });
+		openMediaLightbox({ url: src, filename: display.name, mime: 'image/*', name: display.name });
 	}
 </script>
 

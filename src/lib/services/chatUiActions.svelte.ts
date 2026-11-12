@@ -53,7 +53,7 @@ import { getDefaultChatCoordinator } from '$lib/services/chatCoordinators.svelte
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import { toast } from 'svelte-sonner';
 import type { ChatMessageReplyTarget, MessageTarget, PinOp } from '$lib/chat/references';
-import { emojiMediaTagsForContent } from '$lib/services/chatEmojiMedia';
+import { describeEmojiFailures, emojiMediaTagsForContent } from '$lib/services/chatEmojiMedia';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
@@ -259,6 +259,9 @@ export async function sendGroupMessageAction(
 	return runSend(async () => {
 		const messageContent = reactionTo ? content : text;
 		const emojiMedia = await emojiMediaTagsForContent(groupId, messageContent);
+		// Direct sends have no pending bubble to offer a choice on: refuse rather
+		// than turn a custom emoji into the bare shortcode behind the person's back.
+		if (emojiMedia.failed.length > 0) throw new Error(describeEmojiFailures(emojiMedia.failed));
 		return sendChatGroupMessage({
 			groupId,
 			content: messageContent,

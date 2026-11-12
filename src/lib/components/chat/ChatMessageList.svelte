@@ -25,6 +25,7 @@
 		onEdit = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
+		onSendWithoutEmoji = () => {},
 		onVisibleUnreadReference = () => {},
 		onVisibleRead = () => {},
 		onOpenRich = () => {},
@@ -56,6 +57,7 @@
 		onEdit?: (message: ChatMessage) => void;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
+		onSendWithoutEmoji?: (message: ChatMessage) => void | Promise<void>;
 		onVisibleUnreadReference?: (message: ChatMessage) => void;
 		/** Visibility-based read marking: reports the highest message cursor
 		 *  actually on screen (plus whether the viewport sits at the bottom, where
@@ -887,6 +889,7 @@
 								{onEdit}
 								{onDelete}
 								{onRetrySend}
+								{onSendWithoutEmoji}
 								onNavigateToMessage={navigateToMessage}
 								{onOpenRich}
 								{onPin}

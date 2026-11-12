@@ -44,7 +44,8 @@ vi.mock('$lib/services/chatEmojiImage', () => ({
 	fetchEmojiImage: vi.fn(async () => ({
 		mime: 'image/png',
 		bytes: new Uint8Array([1, 2, 3])
-	}))
+	})),
+	emojiImageFailureText: () => 'its host blocked the download'
 }));
 
 import { prepareEmojiMediaTags } from './chatMediaStorage.svelte';
@@ -74,5 +75,28 @@ describe('prepareEmojiMediaTags', () => {
 		]);
 		expect(uploadBlob).toHaveBeenCalledTimes(2);
 		expect(again.tags).toEqual(result.tags);
+	});
+
+	it('reports an emoji it could not read instead of dropping it silently', async () => {
+		vi.mocked(fetchEmojiImage).mockRejectedValueOnce(new Error('CORS blocked'));
+
+		const result = await prepareEmojiMediaTags('group-fail-test', [
+			{ name: 'meow_dj', url: 'https://cdn.example/meow_dj.png' }
+		]);
+
+		expect(result.tags).toEqual([]);
+		expect(result.failed).toEqual([{ name: 'meow_dj', reason: expect.any(String) }]);
+		expect(uploadBlob).not.toHaveBeenCalled();
+	});
+
+	it('seals a collected picture from its own bytes, without any host', async () => {
+		const bytes = new Uint8Array([9, 8, 7]);
+		const result = await prepareEmojiMediaTags('group-collected-test', [
+			{ name: 'mine', url: 'blob:collected', mime: 'image/png', bytes }
+		]);
+
+		expect(fetchEmojiImage).not.toHaveBeenCalled();
+		expect(result.tags).toHaveLength(1);
+		expect(result.failed).toEqual([]);
 	});
 });

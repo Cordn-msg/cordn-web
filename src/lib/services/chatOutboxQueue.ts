@@ -30,7 +30,7 @@ import {
 	type ChatMessageReplyTarget,
 	type MessageTarget
 } from '$lib/chat/references';
-import { emojiMediaTagsForContent } from './chatEmojiMedia';
+import { describeEmojiFailures, emojiMediaTagsForContent } from './chatEmojiMedia';
 import { emojiDisplayTags } from './chatEmojiPacks.svelte';
 import { buildReplyQuote } from '$lib/chat/replyQuote';
 import type { ChatMessage as UiChatMessage } from '$lib/components/chat/chat.types';
@@ -122,6 +122,7 @@ function outboxEntryToChatMessage(entry: StoredChatOutboxRecord): UiChatMessage 
 		// The queued bubble can draw its pack emoji from the local pack list; the
 		// sent event carries only the encrypted `emoji-media` tags.
 		displayTags: emojiDisplayTags(entry.content),
+		emojiBlocked: entry.emojiBlocked,
 		replyTo: entry.replyTo
 			? buildReplyQuote({
 					id: entry.replyTo.id,
@@ -172,7 +173,11 @@ function projectDeliveryState(
 		}));
 		return;
 	}
-	updatePendingMessage(entry.groupId, bubbleId(entry), (message) => ({ ...message, ...patch }));
+	updatePendingMessage(entry.groupId, bubbleId(entry), (message) => ({
+		...message,
+		...patch,
+		emojiBlocked: Boolean(entry.emojiBlocked)
+	}));
 }
 
 function dropProjection(entry: StoredChatOutboxRecord) {
@@ -296,6 +301,23 @@ export function retryOutboxEntry(id: string): void {
 	entry.attempts = 0;
 	entry.lastAttemptAt = undefined;
 	entry.lastError = undefined;
+	entry.emojiBlocked = undefined;
+	projectDeliveryState(entry, { deliveryState: 'queued', deliveryDetail: undefined });
+	void persistEntry(entry).then(() => requestDrain());
+}
+
+/** Send a bubble that was held back only by its custom emoji: the shortcodes
+ *  travel as text, which is the choice the person just made explicitly. */
+export function sendOutboxEntryWithoutEmoji(id: string): void {
+	if (!id.startsWith(OUTBOX_ID_PREFIX)) return;
+	const entry = entriesBySeq.get(Number(id.slice(OUTBOX_ID_PREFIX.length)));
+	if (!entry) return;
+	entry.skipEmojiMedia = true;
+	entry.state = 'queued';
+	entry.attempts = 0;
+	entry.lastAttemptAt = undefined;
+	entry.lastError = undefined;
+	entry.emojiBlocked = undefined;
 	projectDeliveryState(entry, { deliveryState: 'queued', deliveryDetail: undefined });
 	void persistEntry(entry).then(() => requestDrain());
 }
@@ -321,7 +343,23 @@ async function attemptEntry(entry: StoredChatOutboxRecord): Promise<AttemptOutco
 		// shortcut: a retry after an epoch change makes a new tag and therefore a
 		// new event id; confirm-before-retry covers the ordinary ambiguous case.
 		// Persist the prepared tags on the entry if a duplicate ever shows up.
-		const emojiMedia = await emojiMediaTagsForContent(entry.groupId, entry.content);
+		const emojiMedia = entry.skipEmojiMedia
+			? { tags: [], mediaKeyBase64: undefined, failed: [] }
+			: await emojiMediaTagsForContent(entry.groupId, entry.content);
+		// Held back rather than posted as bare text: the bubble showed a picture, and
+		// sending the shortcode instead would be a different message. The person can
+		// retry, or choose "send without emoji" on the failed bubble.
+		if (emojiMedia.failed.length > 0) {
+			entry.state = 'failed';
+			entry.emojiBlocked = true;
+			entry.lastError = describeEmojiFailures(emojiMedia.failed);
+			await persistEntry(entry);
+			projectDeliveryState(entry, {
+				deliveryState: 'error',
+				deliveryDetail: entry.lastError
+			});
+			return 'definitive';
+		}
 		await sendChatGroupMessage({
 			groupId: entry.groupId,
 			content: entry.content,

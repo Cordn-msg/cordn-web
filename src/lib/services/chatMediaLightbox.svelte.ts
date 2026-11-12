@@ -9,6 +9,8 @@ export interface LightboxMedia {
 	url: string;
 	filename: string;
 	mime: string;
+	/** A custom emoji's shortcode name, kept when it is collected. */
+	name?: string;
 }
 
 export const mediaLightbox = $state<{ current: LightboxMedia | null }>({ current: null });

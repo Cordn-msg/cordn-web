@@ -50,6 +50,7 @@ import {
 import { loadChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
 import { loadChatPetnamesForOwner } from '$lib/services/chatPetnames.svelte';
 import { loadEmojiPacksForOwner } from '$lib/services/chatEmojiPacks.svelte';
+import { ensureEmojiCollectionLoaded } from '$lib/services/chatEmojiCollection.svelte';
 import { loadWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
 import { loadJoinRequestsForOwner } from '$lib/services/chatJoinRequests.svelte';
 import {
@@ -1191,6 +1192,7 @@ if (browser) {
 		loadChatGroupPinsForOwner(nextOwnerPubkey);
 		loadChatPetnamesForOwner(nextOwnerPubkey);
 		loadEmojiPacksForOwner(nextOwnerPubkey);
+		void ensureEmojiCollectionLoaded();
 		loadWelcomeNotificationsForOwner(nextOwnerPubkey);
 		loadJoinRequestsForOwner(nextOwnerPubkey);
 		clearAllCoordinatorBackoff();

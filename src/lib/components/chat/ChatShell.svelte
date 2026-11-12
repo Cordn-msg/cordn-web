@@ -100,8 +100,10 @@
 		enqueueEditMessage,
 		enqueueTextMessage,
 		OUTBOX_ID_PREFIX,
-		retryOutboxEntry
+		retryOutboxEntry,
+		sendOutboxEntryWithoutEmoji
 	} from '$lib/services/chatOutboxQueue';
+	import { describeEmojiFailures } from '$lib/services/chatEmojiMedia';
 
 	let {
 		groupId = 'general',
@@ -720,9 +722,12 @@
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
-			.then(() => {
+			.then((result) => {
 				removeOptimisticMessage(optimisticId);
 				if (previewUrl) URL.revokeObjectURL(previewUrl);
+				if (result.emojiFailures.length > 0) {
+					chatComposerActionsStore.error = describeEmojiFailures(result.emojiFailures);
+				}
 				// The reply rode this message (first file): consume the chip now that
 				// it landed — identity compare so a reply re-armed meanwhile (a fresh
 				// object, even for the same parent) is never consumed. ponytail: a
@@ -800,9 +805,12 @@
 			onProgress: (percent, phase) => reportMediaUpload(optimisticId, percent, phase),
 			signal: controller.signal
 		})
-			.then(() => {
+			.then((result) => {
 				removeOptimisticMessage(optimisticId);
 				URL.revokeObjectURL(previewUrl);
+				if (result.emojiFailures.length > 0) {
+					chatComposerActionsStore.error = describeEmojiFailures(result.emojiFailures);
+				}
 				// The voice note carried the reply (first-and-only message): consume
 				// the chip now that it landed — identity compare, same rule as
 				// sendOneMedia.
@@ -865,6 +873,13 @@
 		// Queued text messages retry through the outbox (resets backoff, kicks
 		// the drain). The reply target is already persisted on the entry.
 		retryOutboxEntry(message.id);
+	}
+
+	/** This send was held back only by its custom emoji: post the shortcodes as
+	 *  text, which is the trade the person just asked for. */
+	function handleSendWithoutEmoji(message: ChatMessage) {
+		if (!message.id.startsWith(OUTBOX_ID_PREFIX)) return;
+		sendOutboxEntryWithoutEmoji(message.id);
 	}
 
 	function handleReply(message: ChatMessage) {
@@ -1268,6 +1283,7 @@
 					onEdit={handleEdit}
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
+					onSendWithoutEmoji={handleSendWithoutEmoji}
 					onVisibleUnreadReference={handleVisibleUnreadReference}
 					onVisibleRead={handleVisibleRead}
 					onOpenRich={handleOpenRich}
