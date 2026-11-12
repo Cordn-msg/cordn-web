@@ -144,10 +144,14 @@
 		count: 0,
 		getScrollElement: () => container,
 		// Shape-aware estimates shrink the estimate→measure deltas that make
-		// first-pass scrolls jump; measured rows keep their real heights.
+		// first-pass scrolls jump; measured rows keep their real heights. Run
+		// continuation is read from the snapshot (never the reactive messages prop)
+		// so estimateSize can't re-enter the virtualizer mid-flush.
 		estimateSize: (index) => {
 			const message = messageSnapshot[index];
-			return message ? estimateChatMessageHeight(message) : ESTIMATED_MESSAGE_HEIGHT;
+			return message
+				? estimateChatMessageHeight(message, isRunContinuation(message, messageSnapshot[index + 1]))
+				: ESTIMATED_MESSAGE_HEIGHT;
 		},
 		overscan: VIRTUAL_OVERSCAN,
 		getItemKey: (index) => messageSnapshot[index]?.id ?? index

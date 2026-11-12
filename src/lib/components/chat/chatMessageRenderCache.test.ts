@@ -32,6 +32,16 @@ describe('estimateChatMessageHeight', () => {
 		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(240) }))).toBe(202);
 		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(2000) }))).toBe(642);
 	});
+
+	it('shrinks continuation rows by the tight run gap', () => {
+		expect(estimateChatMessageHeight(msg({ text: 'hi' }), true)).toBe(50);
+		expect(estimateChatMessageHeight(msg({ text: 'x'.repeat(240) }), true)).toBe(190);
+		expect(
+			estimateChatMessageHeight(msg({ media: { mime: 'image/png', filename: 'a.png' } }), true)
+		).toBe(252);
+		// System rows never take the tight gap (and carry no run of their own).
+		expect(estimateChatMessageHeight(msg({ systemKind: 'member-added' }), true)).toBe(48);
+	});
 });
 
 describe('cached message parts', () => {
