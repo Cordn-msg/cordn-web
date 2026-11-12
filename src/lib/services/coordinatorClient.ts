@@ -14,6 +14,7 @@ import {
 import type { ZodType } from 'zod';
 import { ExtensionMissingError, ExtensionSigner } from 'applesauce-signers/signers';
 import { defaultRelays } from './relay-pool';
+import { isRelayReachableHere } from '$lib/utils/relayUrl';
 import { errorMessage } from '$lib/utils';
 import {
 	type ConsumeKeyPackageInput,
@@ -190,6 +191,11 @@ export class cordnClient implements coordinatorClient {
 		// coordinator is a configured one with the tuned pool.
 		const relays = options.relays ? [...options.relays] : [];
 		this.relays = relays;
+		// Sockets skip URLs this page can never open (ws:// on https, off-localhost).
+		// `this.relays` keeps the configured set: it is the client's identity in the
+		// registry, and an empty list means "unspecified" → SDK discovery, which a
+		// configured-but-unreachable coordinator must not silently become.
+		const connectableRelays = relays.filter(isRelayReachableHere);
 		// Client replacement must replace sockets AND cancel old publishers.
 		// Only this client's stable/ephemeral transports share the pool.
 		// Ping cadence 30s (default 120s) so an ambient zombie socket — half-dead
@@ -198,7 +204,7 @@ export class cordnClient implements coordinatorClient {
 		// (default 20s) keeps attention-triggered probes snappy.
 		const relayHandler =
 			options.relayHandler ??
-			new ApplesauceRelayPool(relays, {
+			new ApplesauceRelayPool(connectableRelays, {
 				pingFrequencyMs: 30_000,
 				pingTimeoutMs: 2_500
 			});

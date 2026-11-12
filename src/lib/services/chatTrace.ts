@@ -4,6 +4,8 @@
  * Off by default and free when off (one `localStorage` read per call site,
  * nothing else). Turn it on with `localStorage.setItem('cordn.traceChat', '1')`
  * and reload: each hook then logs its label, so a repeated line names the loop.
+ * Startup hooks (`loadGroups`, `watch tick`, `watch backlog`) split boot cost
+ * between IndexedDB hydration, relay round trip and decrypt/apply.
  *
  * This exists because the open-group CPU burn had no visible cause: main-thread
  * JavaScript looked idle, and the cost was thousands of tiny IndexedDB callbacks

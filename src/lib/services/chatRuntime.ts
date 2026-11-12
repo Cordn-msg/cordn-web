@@ -19,6 +19,7 @@ import { cordnClient, type coordinatorClient } from '$lib/services/coordinatorCl
 import { createUserRelayListByPubkeyLoader } from '$lib/services/loaders.svelte';
 import { eventStore } from '$lib/services/eventStore';
 import { defaultRelays, metadataRelays } from '$lib/services/relay-pool';
+import { isRelayReachableHere } from '$lib/utils/relayUrl';
 import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { errorMessage, normalizePubKey } from '$lib/utils';
@@ -227,10 +228,17 @@ const RELAY_LIST_READ_TIMEOUT_MS = 10_000;
 
 /** Where a coordinator's kind:10002 announcement can live: its own stored
  *  relays (self-hosted announcements), the app defaults, the metadata set,
- *  and the SDK bootstrap relays operators commonly publish to. */
+ *  and the SDK bootstrap relays operators commonly publish to. Stored relays
+ *  are filtered to the ones this page can open — an announcement read sent to
+ *  a mixed-content ws:// URL can only produce a console error. */
 function announcementSearchRelays(stored: string[]): string[] {
 	return [
-		...new Set([...stored, ...defaultRelays, ...metadataRelays, ...DEFAULT_BOOTSTRAP_RELAY_URLS])
+		...new Set([
+			...stored.filter(isRelayReachableHere),
+			...defaultRelays,
+			...metadataRelays,
+			...DEFAULT_BOOTSTRAP_RELAY_URLS
+		])
 	];
 }
 

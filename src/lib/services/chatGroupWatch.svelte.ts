@@ -28,6 +28,7 @@ import {
 	failChatReconnectStatus,
 	setChatReconnectStatus
 } from '$lib/services/chatReconnectStatus.svelte';
+import { traceChat } from '$lib/services/chatTrace';
 import {
 	getCoordinatorHealthTone,
 	markCoordinatorDegraded
@@ -630,6 +631,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 	client: coordinatorClient;
 	groups: WatchableGroup[];
 }): Promise<{ failedGroupIds: Set<string>; ingestedCount: number }> {
+	const startedAt = performance.now();
 	const groupsByGid = new Map(input.groups.map((group) => [group.gid, group]));
 	const result = await input.client.FetchManyGroupMessages(
 		{
@@ -647,7 +649,7 @@ async function fetchCoordinatorGroupBacklog(input: {
 		throw new Error('Connection closed during backlog fetch');
 	}
 	if (result.messages.length === 0) return { failedGroupIds: new Set(), ingestedCount: 0 };
-
+	const fetchMs = Math.round(performance.now() - startedAt);
 	const failedGroupIds = await ingestGroupMessagesFromCoordinatorFetch(
 		groupsByGid,
 		result.messages.map((message) => ({
@@ -658,6 +660,14 @@ async function fetchCoordinatorGroupBacklog(input: {
 		})),
 		input.account
 	);
+	// Boot cost split: relay round trip vs decrypt/apply (see docs/long-history.md).
+	traceChat('watch backlog', {
+		coordinatorKey: input.groups[0].coordinatorKey,
+		groups: input.groups.length,
+		messages: result.messages.length,
+		fetchMs,
+		ingestMs: Math.round(performance.now() - startedAt) - fetchMs
+	});
 	return { failedGroupIds, ingestedCount: result.messages.length };
 }
 
@@ -1091,7 +1101,13 @@ async function runTick(reason: string, options: TickOptions): Promise<void> {
 		// No global deadline: the tick awaits only the bounded gates in
 		// tickBody, and every detached phase owns its recovery (client swap +
 		// backoff + the next trigger's re-ensure).
+		const startedAt = performance.now();
 		await tickBody(account, options);
+		traceChat('watch tick', {
+			reason,
+			catchUp: options.catchUp === true,
+			ms: Math.round(performance.now() - startedAt)
+		});
 		chatGroupWatchStore.startup = 'ready';
 		clearBannerTimer();
 		clearChatReconnectStatus();

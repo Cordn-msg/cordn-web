@@ -14,6 +14,7 @@ import {
 	deleteSentJoinRequestsForOwner
 } from '$lib/services/chatJoinRequests.svelte';
 import { deleteWelcomeNotificationsForOwner } from '$lib/services/chatWelcomeNotifications.svelte';
+import { clearProfileCache } from '$lib/services/profileCache';
 import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { disconnectCoordinatorClients } from '$lib/services/chatRuntime';
 import { clearMultiDeviceConfig } from '$lib/services/multiDevice.svelte';
@@ -30,6 +31,8 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 	await Promise.all([
 		deleteChatGroupsForOwner(ownerPubkey),
 		deleteChatKeyPackagesForOwner(ownerPubkey),
+		// Names are public, but the cached set still describes this account's graph.
+		Promise.resolve(clearProfileCache()),
 		Promise.resolve(deleteChatGroupPresenceForOwner(ownerPubkey)),
 		Promise.resolve(deleteChatGroupPinsForOwner(ownerPubkey)),
 		Promise.resolve(deleteChatPetnamesForOwner(ownerPubkey)),

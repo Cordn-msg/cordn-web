@@ -39,7 +39,7 @@
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { isSignerUnavailableError } from '$lib/services/chatRuntime';
-	import { normalizePubKey } from '$lib/utils';
+	import { errorMessage as errorText, normalizePubKey } from '$lib/utils';
 	import { metadataRelays } from '$lib/services/relay-pool';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
@@ -96,7 +96,7 @@
 						// layout already shows its waiting hint; the next poll recovers) —
 						// it is not coordinator noise.
 						result.status === 'rejected' && !isSignerUnavailableError(result.reason)
-							? `${getCoordinatorLabel(coordinatorKeys[index])}: ${String(result.reason).replace(/^Error:\s*/, '')}`
+							? `${getCoordinatorLabel(coordinatorKeys[index])}: ${errorText(result.reason)}`
 							: ''
 					)
 					.filter(Boolean)

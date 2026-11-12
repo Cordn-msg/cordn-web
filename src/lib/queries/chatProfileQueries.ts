@@ -3,6 +3,7 @@ import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { addressLoader, createUserRelayListByPubkeyLoader } from '$lib/services/loaders.svelte';
 import { eventStore } from '$lib/services/eventStore';
 import { metadataRelays } from '$lib/services/relay-pool';
+import { markProfileChecked, restoreCachedProfile } from '$lib/services/profileCache';
 import { MailboxesModel, ProfileModel } from 'applesauce-core/models';
 import { Metadata } from 'nostr-tools/kinds';
 import { normalizePubKey } from '$lib/utils';
@@ -46,6 +47,8 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 					if (handles.timer) clearTimeout(handles.timer);
 					handles.loader?.unsubscribe();
 					handles.store?.unsubscribe();
+					// Relays were asked (or the copy was already verified this session).
+					markProfileChecked(normalizedPubkey);
 					resolve(true);
 				};
 
@@ -68,6 +71,8 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 /** Triggers a deduplicated profile metadata fetch if not already fresh. */
 export function ensureProfileLoaded(pubkey: string, hints: readonly string[] = []): void {
 	if (!pubkey) return;
+	// A profile persisted by a recent session renders now and costs no relay read.
+	if (restoreCachedProfile(pubkey)) return;
 	void queryClient.fetchQuery(profileQueryOptions(pubkey, hints));
 }
 
