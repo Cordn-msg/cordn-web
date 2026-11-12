@@ -50,7 +50,7 @@
 			type="button"
 			class="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400"
 			title={isNativePlatform()
-				? 'Some pictures from this host could not be read here. Emoji from this pack may arrive as text.'
+				? 'This host could not be read from here, so sending one of its emoji is held back. Saving one to your collection from the lightbox keeps it locally, and that copy sends.'
 				: 'This host blocks browser downloads, so its emoji can be shown but not sent as encrypted pictures from the web app. Adding one to your collection from the lightbox saves it locally so it can be sent.'}
 			onclick={() => probeEmojiUrl(probeUrl, { force: true })}
 		>

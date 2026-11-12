@@ -1,3 +1,4 @@
+import { ensureEmojiCollectionLoaded } from '$lib/services/chatEmojiCollection.svelte';
 import { emojiSourcesForContent } from '$lib/services/chatEmojiPacks.svelte';
 import type { EmojiMediaFailure } from '$lib/services/chatMediaStorage.svelte';
 
@@ -14,6 +15,11 @@ export async function emojiMediaTagsForContent(
 	groupId: string,
 	content: string
 ): Promise<{ tags: string[][]; mediaKeyBase64?: string; failed: EmojiMediaFailure[] }> {
+	// A collected shortcode only resolves once the collection is loaded. Without
+	// this wait, a drain that starts before the read finishes sees no source and
+	// would post the shortcode as text — the exact silent downgrade this module
+	// exists to prevent.
+	await ensureEmojiCollectionLoaded();
 	const sources = emojiSourcesForContent(content);
 	if (sources.length === 0) return { tags: [], failed: [] };
 	try {

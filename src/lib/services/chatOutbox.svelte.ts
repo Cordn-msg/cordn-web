@@ -64,6 +64,9 @@ export interface PendingEdit {
 	content: string;
 	deliveryState: ChatMessage['deliveryState'];
 	deliveryDetail?: string;
+	/** Held back only by its custom emoji: the target offers the same
+	 *  send-without-emoji / discard exits a pending bubble does. */
+	emojiBlocked?: boolean;
 }
 
 const pendingEdits = $state<Record<string, PendingEdit[]>>({});

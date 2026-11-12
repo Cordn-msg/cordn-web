@@ -30,6 +30,7 @@ import {
 	type ChatMessageReplyTarget,
 	type MessageTarget
 } from '$lib/chat/references';
+import { ensureEmojiCollectionLoaded } from '$lib/services/chatEmojiCollection.svelte';
 import { describeEmojiFailures, emojiMediaTagsForContent } from './chatEmojiMedia';
 import { emojiDisplayTags } from './chatEmojiPacks.svelte';
 import { buildReplyQuote } from '$lib/chat/replyQuote';
@@ -151,7 +152,8 @@ function outboxEntryToPendingEdit(entry: StoredChatOutboxRecord): PendingEdit {
 		targetId: editTargetOf(entry),
 		content: entry.content,
 		deliveryState: entry.state === 'failed' ? 'error' : 'queued',
-		deliveryDetail: entry.lastError
+		deliveryDetail: entry.lastError,
+		emojiBlocked: entry.emojiBlocked
 	};
 }
 
@@ -169,7 +171,8 @@ function projectDeliveryState(
 		updatePendingEdit(entry.groupId, bubbleId(entry), (edit) => ({
 			...edit,
 			deliveryState: patch.deliveryState,
-			deliveryDetail: patch.deliveryDetail
+			deliveryDetail: patch.deliveryDetail,
+			emojiBlocked: Boolean(entry.emojiBlocked)
 		}));
 		return;
 	}
@@ -598,6 +601,9 @@ export function requestDrain(): Promise<void> {
  *  load, account change, and regaining focus (another tab may have drained). */
 export async function hydrateOutbox(): Promise<void> {
 	if (draining) return; // the drain keeps the projection in sync
+	// A queued bubble draws its pictures from the local collection, so the
+	// projection must not render before that collection is ready to answer.
+	await ensureEmojiCollectionLoaded();
 	const ownerPubkey = activePubkey();
 	const storage = await getChatStorage();
 	if (!ownerPubkey) {

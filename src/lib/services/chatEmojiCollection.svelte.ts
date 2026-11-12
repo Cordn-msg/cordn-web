@@ -131,7 +131,7 @@ export function ensureEmojiCollectionLoaded(): Promise<void> {
 }
 
 /** `:name:` spelling of a title or filename: NIP-30 legal, one collision suffix. */
-function collectionName(candidate: string, taken: Set<string>): string {
+export function collectionName(candidate: string, taken: Set<string>): string {
 	const cleaned = candidate
 		.replace(/\.[^.]+$/, '')
 		.replace(/[^A-Za-z0-9_+-]+/g, '_')
@@ -139,7 +139,7 @@ function collectionName(candidate: string, taken: Set<string>): string {
 		.slice(0, MAX_EMOJI_NAME);
 	const base = cleaned && isValidEmojiName(cleaned) ? cleaned : 'emoji';
 	if (!taken.has(base)) return base;
-	for (let suffix = 2; suffix < 100; suffix++) {
+	for (let suffix = 2; suffix <= MAX_COLLECTION_ITEMS; suffix++) {
 		const name = `${base.slice(0, MAX_EMOJI_NAME - String(suffix).length - 1)}_${suffix}`;
 		if (!taken.has(name)) return name;
 	}
@@ -155,9 +155,6 @@ export async function collectEmojiFromUrl(params: {
 	url: string;
 	filename?: string;
 	name?: string;
-	/** Bytes already in hand (a decrypted attachment, a local preview). */
-	bytes?: Uint8Array;
-	mime?: string;
 }): Promise<CollectResult> {
 	const owner = activeOwner();
 	if (!owner) return { error: 'signed-out' };
@@ -165,24 +162,21 @@ export async function collectEmojiFromUrl(params: {
 	if (store.owner !== owner) return { error: 'signed-out' };
 	if (store.items.length >= MAX_COLLECTION_ITEMS) return { error: 'full' };
 
-	let bytes = params.bytes;
-	let mime = params.mime;
-	if (!bytes) {
-		try {
-			const image = await fetchEmojiImage(params.url);
-			bytes = image.bytes;
-			mime = image.mime;
-		} catch (error) {
-			if (error instanceof EmojiImageError && error.reason === 'unsupported') {
-				return { error: 'unsupported' };
-			}
-			if (error instanceof EmojiImageError && error.reason === 'too-large') {
-				return { error: 'too-large' };
-			}
-			return { error: 'unreadable', detail: emojiImageFailureText(error) };
+	let bytes: Uint8Array;
+	let mime: string;
+	try {
+		const image = await fetchEmojiImage(params.url);
+		bytes = image.bytes;
+		mime = image.mime;
+	} catch (error) {
+		if (error instanceof EmojiImageError && error.reason === 'unsupported') {
+			return { error: 'unsupported' };
 		}
+		if (error instanceof EmojiImageError && error.reason === 'too-large') {
+			return { error: 'too-large' };
+		}
+		return { error: 'unreadable', detail: emojiImageFailureText(error) };
 	}
-	if (!bytes || !mime) return { error: 'unreadable' };
 
 	const id = bytesToHex(sha256(bytes));
 	if (store.items.some((item) => item.id === id)) return { error: 'exists' };
@@ -199,13 +193,19 @@ export async function collectEmojiFromUrl(params: {
 		bytes,
 		addedAt: Date.now()
 	};
+	const storage = await getChatStorage();
 	try {
-		await (await getChatStorage()).putEmojiCollectionItem(record);
+		await storage.putEmojiCollectionItem(record);
 	} catch {
 		return { error: 'storage' };
 	}
+	// The read above can outlast a logout or "log out and clean data". Writing the
+	// record back after that cleanup would resurrect wiped data, so undo it.
+	if (activeOwner() !== owner) {
+		await storage.deleteEmojiCollectionItem(owner, id);
+		return { error: 'signed-out' };
+	}
 	const item = itemFromRecord(record);
-	if (store.owner !== owner) return { item };
 	store.items = [...store.items, item];
 	return { item };
 }

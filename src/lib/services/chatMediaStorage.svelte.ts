@@ -26,7 +26,7 @@ import {
 	type MediaDecryptRequest,
 	type MediaWorkerResponse
 } from '$lib/services/chatMediaCrypto';
-import { EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
+import { EMOJI_MEDIA_TAG, parseEmojiMediaTag } from '$lib/chat/emoji';
 import { emojiSourcesForContent } from '$lib/services/chatEmojiPacks.svelte';
 import { emojiImageFailureText, fetchEmojiImage } from '$lib/services/chatEmojiImage';
 import { noteEmojiSendFailure, noteEmojiSendSuccess } from '$lib/services/emojiPackProbe.svelte';
@@ -385,13 +385,25 @@ export async function sendChatMediaMessage(params: {
 	});
 
 	// A caption can carry custom emoji too. They must be sealed under the same
-	// epoch as the attachment; if the epoch moved while they were prepared, send
-	// them as text rather than making one row carry two undecryptable keys.
+	// epoch as the attachment, so emoji prepared under a moved epoch cannot ride
+	// this message — drop them and SAY so, rather than posting the shortcodes.
 	const mediaKeyBase64 = bytesToBase64(key);
 	const captionEmoji = text
 		? await prepareEmojiMediaTags(groupId, emojiSourcesForContent(text))
 		: { tags: [], failed: [] };
-	const captionTags = captionEmoji.mediaKeyBase64 === mediaKeyBase64 ? captionEmoji.tags : [];
+	const staleCaption = Boolean(
+		captionEmoji.mediaKeyBase64 && captionEmoji.mediaKeyBase64 !== mediaKeyBase64
+	);
+	const captionTags = staleCaption ? [] : captionEmoji.tags;
+	const emojiFailures = staleCaption
+		? [
+				...captionEmoji.failed,
+				...captionEmoji.tags
+					.map((tag) => parseEmojiMediaTag(tag)?.name)
+					.filter((name): name is string => Boolean(name))
+					.map((name) => ({ name, reason: 'the group key changed while it was uploaded' }))
+			]
+		: captionEmoji.failed;
 
 	// Thread the exact encryption key so the sender's stashed copy decrypts the
 	// media too (receivers derive their own key at the seal epoch, which the
@@ -405,7 +417,7 @@ export async function sendChatMediaMessage(params: {
 	});
 	// The attachment is the message here: it lands either way, but the caller says
 	// which caption emoji it could not carry rather than dropping them in silence.
-	return { emojiFailures: captionEmoji.failed };
+	return { emojiFailures };
 }
 
 // ---------------------------------------------------------------------------

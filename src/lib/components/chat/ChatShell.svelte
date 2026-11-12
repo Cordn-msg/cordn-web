@@ -483,6 +483,7 @@
 					...view,
 					deliveryState: pendingEdit?.deliveryState ?? view.deliveryState,
 					deliveryDetail: pendingEdit?.deliveryDetail,
+					emojiBlocked: pendingEdit?.emojiBlocked,
 					text: deleted ? '' : (pendingEdit?.content ?? edit?.content ?? message.content),
 					displayTags: pendingEdit
 						? emojiDisplayTags(pendingEdit.content)
@@ -875,11 +876,20 @@
 		retryOutboxEntry(message.id);
 	}
 
+	/** The wedged edit behind a bubble: an edit has no bubble of its own, it is
+	 *  projected onto its target, so its exits act on the target's pending edit. */
+	function heldEmojiEdit(message: ChatMessage): PendingEdit | undefined {
+		if (!message.emojiBlocked) return undefined;
+		return getPendingEdits(groupId)
+			.filter((edit) => edit.targetId === message.eventId && edit.deliveryState === 'error')
+			.at(-1);
+	}
+
 	/** This send was held back only by its custom emoji: post the shortcodes as
 	 *  text, which is the trade the person just asked for. */
 	function handleSendWithoutEmoji(message: ChatMessage) {
-		if (!message.id.startsWith(OUTBOX_ID_PREFIX)) return;
-		sendOutboxEntryWithoutEmoji(message.id);
+		const id = message.id.startsWith(OUTBOX_ID_PREFIX) ? message.id : heldEmojiEdit(message)?.id;
+		if (id) sendOutboxEntryWithoutEmoji(id);
 	}
 
 	function handleReply(message: ChatMessage) {
@@ -1069,6 +1079,14 @@
 		// (safe for ambiguous entries: a landed copy still arrives via ingest).
 		if (message.id.startsWith(OUTBOX_ID_PREFIX)) {
 			discardOutboxEntry(message.id);
+			return;
+		}
+
+		// Same rule for an edit held back by its emoji: discard the intent, keep
+		// the message it was editing.
+		const heldEdit = heldEmojiEdit(message);
+		if (heldEdit) {
+			discardOutboxEntry(heldEdit.id);
 			return;
 		}
 
@@ -1310,7 +1328,9 @@
 		{/if}
 
 		{#if sendError || chatComposerActionsStore.error}
-			<p class="px-3 pb-2 text-sm text-destructive md:px-6">{sendError}</p>
+			<p class="px-3 pb-2 text-sm text-destructive md:px-6">
+				{sendError || chatComposerActionsStore.error}
+			</p>
 		{/if}
 
 		<ChatComposer

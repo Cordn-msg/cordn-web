@@ -7,6 +7,20 @@ vi.mock('./accountManager.svelte', () => ({
 	manager: { getActive: () => active }
 }));
 
+// The collection only needs to answer "which names does it own" for this file.
+const collected: Array<{ name: string; url: string }> = [];
+vi.mock('./chatEmojiCollection.svelte', async () => ({
+	listEmojiCollection: () =>
+		collected.map((item) => ({
+			...item,
+			id: item.name,
+			mime: 'image/png',
+			filename: item.name,
+			bytes: new Uint8Array(),
+			addedAt: 0
+		}))
+}));
+
 import {
 	addEmojiPackSnapshot,
 	deleteEmojiPacksForOwner,
@@ -88,6 +102,24 @@ describe('emoji packs', () => {
 		deleteEmojiPacksForOwner(owner);
 		expect(listEmojiPacks()).toEqual([]);
 		expect(store.has(`cordn-chat-emoji-packs:${owner}`)).toBe(false);
+	});
+
+	test('sends the collected picture when a pack has the same shortcode', () => {
+		store.set(`cordn-chat-emoji-packs:${owner}`, JSON.stringify([cats]));
+		loadEmojiPacksForOwner(owner);
+		collected.push({ name: 'cat', url: 'blob:collected' });
+
+		expect(packEmojiByName().get('cat')?.coordinate).toBe('collection');
+		expect(emojiSourcesForContent(':cat:')).toEqual([
+			{
+				name: 'cat',
+				url: 'blob:collected',
+				coordinate: 'collection',
+				bytes: new Uint8Array(),
+				mime: 'image/png'
+			}
+		]);
+		collected.length = 0;
 	});
 
 	test('ignores corrupt or invalid stored rows', () => {

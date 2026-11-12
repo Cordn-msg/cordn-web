@@ -106,13 +106,12 @@ function save(packs: EmojiPack[]): void {
 	}
 }
 
-/** The emoji of every active pack plus the collected ones, by shortcode; a
- *  pack wins over a collected emoji with the same name (stable, and the pack is
- *  what the picker shows first). */
+/** The emoji of every active pack plus the collected ones, by shortcode. A
+ *  collected emoji WINS a name collision: it is the one saved on purpose, and
+ *  it is the only one that can be sent without its original host. */
 export function packEmojiByName(): Map<string, EmojiPackSource> {
-	const out = new Map<string, EmojiPackSource>(emojiByName(listEmojiPacks()));
+	const out = new Map<string, EmojiPackSource>();
 	for (const item of listEmojiCollection()) {
-		if (out.has(item.name)) continue;
 		out.set(item.name, {
 			name: item.name,
 			url: item.url,
@@ -120,6 +119,9 @@ export function packEmojiByName(): Map<string, EmojiPackSource> {
 			bytes: item.bytes,
 			mime: item.mime
 		});
+	}
+	for (const [name, emoji] of emojiByName(listEmojiPacks())) {
+		if (!out.has(name)) out.set(name, emoji);
 	}
 	return out;
 }

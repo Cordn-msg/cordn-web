@@ -3,8 +3,8 @@
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { Input } from '$lib/components/ui/input';
 	import CustomEmoji from './CustomEmoji.svelte';
-	import { emojiByName, shortcode } from '$lib/chat/emoji';
-	import { listEmojiPacks } from '$lib/services/chatEmojiPacks.svelte';
+	import { shortcode } from '$lib/chat/emoji';
+	import { listEmojiPacks, packEmojiByName } from '$lib/services/chatEmojiPacks.svelte';
 	import {
 		ensureEmojiCollectionLoaded,
 		listEmojiCollection
@@ -29,9 +29,9 @@
 			query.trim() ? item.name.toLowerCase().includes(query.trim().toLowerCase()) : true
 		)
 	);
-	// Same first-pack-wins rule as sending: never show a duplicate the message
-	// would not use.
-	const winning = $derived(emojiByName(packs));
+	// Same resolution as sending (collection, then first pack): never show a
+	// duplicate the message would not use.
+	const winning = $derived(packEmojiByName());
 	const sections = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
 		return packs

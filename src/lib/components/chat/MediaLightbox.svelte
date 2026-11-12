@@ -69,7 +69,7 @@
 		full: 'Your collection is full — remove one first',
 		unsupported: 'Only PNG, JPEG, GIF and WebP can be collected',
 		'too-large': 'Too large for a custom emoji (512 KB max)',
-		unreadable: 'This image can’t be read here — its host blocks downloads',
+		unreadable: 'This image can’t be read here',
 		storage: 'Could not save to this device',
 		'signed-out': 'Log in to collect emoji'
 	} as const;
@@ -81,14 +81,20 @@
 		const result = await collectEmojiFromUrl({
 			url: current.url,
 			filename: current.filename,
-			name: current.name,
-			mime: current.mime
+			name: current.name
 		});
 		collecting = false;
 		collectionNote =
 			'item' in result
 				? { ok: true, text: `Saved :${result.item.name}:` }
-				: { ok: false, text: collectionErrorText[result.error] };
+				: {
+						ok: false,
+						// "unreadable" covers blocked, offline, HTTP and timeout: say which.
+						text:
+							result.error === 'unreadable' && result.detail
+								? `Can’t read this image — ${result.detail}.`
+								: collectionErrorText[result.error]
+					};
 	}
 
 	function onWindowKeydown(event: KeyboardEvent) {
