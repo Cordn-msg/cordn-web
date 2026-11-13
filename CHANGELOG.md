@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.7.0 — 2026-11-13
+
+### Features
+
+- **chat:** import published NIP-51 emoji lists
+- **chat:** keep unsendable packs last, discard a held message
+- **chat:** emoji collection, pack compatibility probes, honest emoji sends
+- **native:** drive Android Back from the app hierarchy, keyboard first
+- **chat:** petname mark on 1:1 titles and clickable mentions
+- **petnames:** edit-only form and a paw mark for local names
+- **chat:** local petnames and named notification lines
+- **chat:** show pending join requests as loading group cards and auto-accept their welcome
+- **chat:** add floating day label while scrolling
+- **onboarding:** guide first-time users from intro to first chat
+- **notifications:** stack recent messages in a thread
+- **notifications:** decrypt background message previews
+- **chat:** draw emoji-only messages larger
+- refine emoji rendering and pack discovery
+- add custom emoji pickers and pack previews
+- add NIP-30 custom emoji interop
+- **chat:** omit own profile avatars from message rows
+- **chat:** move message metadata inside the bubble
+- **chat:** render NIP-34 pull request embeds
+- **chat:** enrich NIP-84 highlight embeds
+
+### Fixes
+
+- **startup:** keep stale profile refreshes and configured relays honest
+- **chat:** close the holes the emoji review found
+- **native:** keep the query when Back goes up from a conversation child
+- **ui:** keep a painted avatar visible when the shared cache evicts
+- **native:** keep Back working while a collapsible is expanded
+- **ui:** share avatar warmth across avatar components
+- **deps:** upgrade Capacitor past the WebView proxy flaw
+- **chat:** open group links from any client in-app
+- **chat:** use absolute dates and bound day-label retries
+- **chat:** keep petname labels scoped to their account
+- **chat:** cache key packages with their coordinator
+- **chat:** wait for a pending join without a busy poll
+- **chat:** retain base epoch key for invite catch-up
+- **chat:** stabilize floating day label scroll tracking
+- **onboarding:** polish first-launch flow
+- **migration:** ignore locally held key packages in the new-device probe
+- **chat:** drop stale highlight event source beside article
+- **notifications:** keep locked-screen taps and opt-out consistent
+- **notifications:** show message text without sender labels
+- **notifications:** keep chat image with stacked message lines
+- **notifications:** preserve thread timestamps and drop stale previews
+- **notifications:** render previews in hidden WebView
+- **notifications:** honor preview opt-out on live path
+- **notifications:** harden preview isolation and ordering
+- **chat:** open legacy emoji-media rows with the current epoch key
+- **chat:** avoid stale avatar reads and size underscore emoji
+- **chat:** guard emoji pack requests against stale replies
+- **chat:** cap long message bubbles at 90% of the message column
+- **chat:** stop the open-group window read/write loop
+- **chat:** hide duplicate highlight article source rows
+
+### Performance
+
+- **startup:** cache profiles across sessions, skip unopenable relays
+
+### Docs
+
+- **news:** announce Back hierarchy, published emoji packs and faster launches
+- **news:** announce custom emoji collection and pack compatibility
+- **news:** release note for links from other Cordn apps
+- **news:** release note for the floating chat date
+- **news:** announce pending join request cards
+- **news:** announce the new onboarding flow
+- **news:** announce custom emoji packs
+- note the chat read trace flag for profiling
+- **news:** one card for 2026-11-08 including the chat CPU fix
+- document stacked ngit PR merge fallback
+- **news:** announce in-bubble message metadata
+- **news:** announce highlight sources and nostr pull request cards
+
+### Refactor
+
+- **chat:** name the article kind in highlight source filtering
+- **chat:** drop unused dayLabel from chat messages
+- **chat:** reuse the emoji-media tag constant
+- **chat:** trim highlight and PR embed parsing to what renders
+
+### Chore
+
+- **chat:** chat read tracing and window memo reset
+
+### Other
+
+- **chat:** warm the group module to stop the timeout flake
+- **chat:** bump emoji-only cap to 80px
+- **chat:** cover emoji media resealing after an epoch change
+- **chat:** drop tautological parser tests
+
 ## 0.6.1 — 2026-10-30
 
 ### Features
