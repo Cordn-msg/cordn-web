@@ -3,6 +3,7 @@ import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { addressLoader, createUserRelayListByPubkeyLoader } from '$lib/services/loaders.svelte';
 import { eventStore } from '$lib/services/eventStore';
 import { metadataRelays } from '$lib/services/relay-pool';
+import { markProfileChecked, restoreCachedProfile } from '$lib/services/profileCache';
 import { MailboxesModel, ProfileModel } from 'applesauce-core/models';
 import { Metadata } from 'nostr-tools/kinds';
 import { normalizePubKey } from '$lib/utils';
@@ -27,6 +28,10 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 		queryKey: chatQueryKeys.profile(pubkey, hints),
 		queryFn: () =>
 			new Promise<boolean>((resolve) => {
+				// A restored cache copy may already be in the store. Only the loader's own
+				// answer (or an event newer than that copy) may finish this query, or the
+				// stale event would satisfy the very refresh meant to replace it.
+				const restoredId = eventStore.getReplaceable(Metadata, normalizedPubkey)?.id;
 				// Cleanup handles live on a single const holder so `done` (which closes
 				// over them) can be declared before the assignments without a TDZ
 				// hazard: eventStore.model().subscribe(cb) can invoke cb synchronously
@@ -40,12 +45,15 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 				} = {};
 				let settled = false;
 
-				const done = () => {
+				// `checked` means a relay answered. A timeout must not stamp the cache
+				// fresh, or one outage would freeze the stale copy for another window.
+				const done = (checked: boolean) => {
 					if (settled) return;
 					settled = true;
 					if (handles.timer) clearTimeout(handles.timer);
 					handles.loader?.unsubscribe();
 					handles.store?.unsubscribe();
+					if (checked) markProfileChecked(normalizedPubkey);
 					resolve(true);
 				};
 
@@ -53,13 +61,17 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 					kind: Metadata,
 					pubkey: normalizedPubkey,
 					relays
-				}).subscribe();
-
-				handles.store = eventStore.model(ProfileModel, normalizedPubkey).subscribe((profile) => {
-					if (profile) done();
+				}).subscribe({
+					// Completion is the relay round trip ending, even with nothing new.
+					complete: () => done(true),
+					error: () => done(false)
 				});
 
-				handles.timer = setTimeout(done, PROFILE_FETCH_TIMEOUT_MS);
+				handles.store = eventStore.model(ProfileModel, normalizedPubkey).subscribe(() => {
+					if (eventStore.getReplaceable(Metadata, normalizedPubkey)?.id !== restoredId) done(true);
+				});
+
+				handles.timer = setTimeout(() => done(false), PROFILE_FETCH_TIMEOUT_MS);
 			}),
 		staleTime: PROFILE_STALE_TIME
 	};
@@ -68,6 +80,10 @@ function profileQueryOptions(pubkey: string, hints: readonly string[] = []) {
 /** Triggers a deduplicated profile metadata fetch if not already fresh. */
 export function ensureProfileLoaded(pubkey: string, hints: readonly string[] = []): void {
 	if (!pubkey) return;
+	// A profile persisted by a recent session renders now and costs no relay read;
+	// a caller-supplied hint (the profile may only live there) still gets its read.
+	const fresh = restoreCachedProfile(pubkey);
+	if (fresh && hints.length === 0) return;
 	void queryClient.fetchQuery(profileQueryOptions(pubkey, hints));
 }
 

@@ -546,6 +546,7 @@ async function loadAndNormalizeChatGroup(
 }
 
 async function loadGroups(ownerPubkey?: string) {
+	const startedAt = performance.now();
 	await persistGroupsPromise;
 	// Re-baseline the in-memory pending store for this owner: every group record
 	// carries its own not-yet-finalized ops, so a reload no longer strands a
@@ -588,6 +589,11 @@ async function loadGroups(ownerPubkey?: string) {
 		void persistGroups(chatGroupsStore.groups);
 	}
 	groupsLoaded = true;
+	traceChat('loadGroups', {
+		groups: loaded.length,
+		rows: loaded.reduce((total, entry) => total + entry.group.messages.length, 0),
+		ms: Math.round(performance.now() - startedAt)
+	});
 	// Unread ledger read model: durable rows per group, with the one-time
 	// backfill for histories that predate the ledger.
 	void refreshMessageLedgersForGroups(
