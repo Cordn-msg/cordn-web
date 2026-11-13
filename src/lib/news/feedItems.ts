@@ -664,6 +664,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Custom emoji that actually arrive',
 		body: '- ✨ You can keep any picture as an emoji of your own: open it, tap the smiley in the lightbox, and it lands in My collection. The picture itself is saved on this device, so it still sends when the site it came from disappears or refuses to hand it over.\n- 🔄 My collection comes first in the emoji picker — for messages and for reactions — and lives in Settings → Emoji packs, where you can remove an item.\n- ✨ A pack whose pictures this browser cannot read now says “Can’t be sent” right on its card, with a tap to check again, and those packs sort below the ones that work.\n- 🔄 A message whose emoji could not be prepared no longer posts as a bare :shortcode: while you were shown a picture. It waits with the reason, and you choose: send it without the emoji, or discard it.\n- ✨ On Android, emoji from packs that block browser downloads send properly: the app reads the picture itself instead of asking the web view to.\n- 🐛 A reaction whose emoji could not be read now says why instead of failing silently, and a caption that lost its emoji says so instead of leaving a blank warning.'
+	},
+	{
+		id: 'cordn-news-2026-11-13-back-packs-and-startup',
+		createdAt: Date.UTC(2026, 10, 13),
+		version: 1,
+		title: 'A Back button that knows the way, and faster launches',
+		body: '- 🔄 On Android, Back now behaves the same every time, however you got here: it hides the keyboard, then closes an open sheet or menu, then goes up one screen — and from chat home it asks for a second press before the app drops to the background, so an accidental swipe no longer ends a conversation.\n- ✨ Packs you keep in your Nostr emoji list now come along on their own: open Settings → Emoji packs and the packs your account publishes are added and ready to use in chat, instead of being added one by one.\n- 🔄 The app opens faster: profiles are remembered between sessions instead of being fetched again on every launch, and relays that refuse a connection are skipped rather than retried.'
 	}
 ];
 
