@@ -103,7 +103,9 @@ internal object NotificationPreviewRenderer {
         val store = BackgroundStore.get(context)
         if (!store.getNotificationPreviews()) return null
         val account = store.getCurrentAccount() ?: return null
-        val rows = store.peekSidecar(account)
+        // Never decrypt a muted group's backlog just to keep a notification it may not
+        // have (and must not get). Rows stay in the sidecar for the foreground drain.
+        val rows = store.notificationSidecar(account)
         // Foreground notifications are suppressed entirely; the live path owns text there.
         if (rows.isEmpty() || CordnBackgroundPlugin.appForegrounded) return null
         return PreviewRequest(account, rows)
@@ -211,7 +213,7 @@ internal object NotificationPreviewRenderer {
             // the preview's ONLY name source (no network, no event store), so sender labels
             // and mention names come from here.
             val displayNames = JSONObject()
-            for (row in store.peekSidecar(account)) {
+            for (row in store.notificationSidecar(account)) {
                 rows.put(
                     JSONObject()
                         .put("gid", row.gid)

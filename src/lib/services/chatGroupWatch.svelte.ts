@@ -49,6 +49,7 @@ import {
 	pruneChatGroupPresence
 } from '$lib/services/chatGroupPresence.svelte';
 import { loadChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
+import { loadChatGroupMutesForOwner } from '$lib/services/chatGroupMutes.svelte';
 import { loadChatPetnamesForOwner } from '$lib/services/chatPetnames.svelte';
 import { loadEmojiPacksForOwner } from '$lib/services/chatEmojiPacks.svelte';
 import { ensureEmojiCollectionLoaded } from '$lib/services/chatEmojiCollection.svelte';
@@ -1206,6 +1207,7 @@ if (browser) {
 		const groupLoadPromise = reloadChatGroupsForOwner(nextOwnerPubkey);
 		loadChatGroupPresenceForOwner(nextOwnerPubkey);
 		loadChatGroupPinsForOwner(nextOwnerPubkey);
+		loadChatGroupMutesForOwner(nextOwnerPubkey);
 		loadChatPetnamesForOwner(nextOwnerPubkey);
 		loadEmojiPacksForOwner(nextOwnerPubkey);
 		void ensureEmojiCollectionLoaded();

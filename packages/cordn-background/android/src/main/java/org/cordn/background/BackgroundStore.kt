@@ -24,7 +24,7 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
 ) {
     companion object {
         private const val DB_NAME = "cordn-background.db"
-        private const val DB_VERSION = 4 // v4: per-group resolved member display labels
+        private const val DB_VERSION = 5 // v5: per-group notification mute cutoff
 
         private const val T_CONFIG = "config" // key/value
         private const val T_GROUPS = "groups"
@@ -64,6 +64,7 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                 title                     TEXT,
                 icon_bytes                TEXT,
                 display_names             TEXT NOT NULL DEFAULT '{}',
+                muted_until               INTEGER NOT NULL DEFAULT 0,
                 native_cursor             INTEGER NOT NULL
             )
             """.trimIndent()
@@ -209,6 +210,9 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                     put("title", if (accountChanged) g.title else (existing.title ?: g.title))
                     put("icon_bytes", if (accountChanged) null else existing.iconBytes)
                     put("display_names", if (accountChanged) "{}" else (existing.displayNames ?: "{}"))
+                    // The WebView owns mute state; a seed is authoritative for it. The change
+                    // itself travels via the small setGroupMuted bridge call, not a re-seed.
+                    put("muted_until", g.mutedUntil)
                     put("native_cursor", maxOf(existing.nativeCursor, g.fetchCursor))
                 }
                 db.insertWithOnConflict(T_GROUPS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
@@ -240,11 +244,15 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                 val coord: String,
                 val relays: String,
                 val native: Long,
-                val displayNames: String?
+                val displayNames: String?,
+                val mutedUntil: Long
             )
             val existing = db.query(
                 T_GROUPS,
-                arrayOf("coordinator_server_pubkey", "relay_urls", "native_cursor", "display_names"),
+                arrayOf(
+                    "coordinator_server_pubkey", "relay_urls", "native_cursor",
+                    "display_names", "muted_until"
+                ),
                 "gid = ?",
                 arrayOf(gid),
                 null, null, null
@@ -253,7 +261,8 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                     c.getString(0),
                     c.getString(1),
                     c.getLong(2),
-                    if (c.isNull(3)) null else c.getString(3)
+                    if (c.isNull(3)) null else c.getString(3),
+                    c.getLong(4)
                 ) else null
             }
             val cv = ContentValues().apply {
@@ -265,6 +274,7 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                 // sync): keep what is cached instead of wiping it. An explicit map replaces
                 // the set wholesale, so departed members and cleared petnames drop out.
                 put("display_names", displayNames ?: e?.displayNames ?: "{}")
+                put("muted_until", e?.mutedUntil ?: 0L)
                 if (e != null) {
                     put("coordinator_server_pubkey", e.coord)
                     put("relay_urls", e.relays)
@@ -310,7 +320,8 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
             .query(
                 T_GROUPS,
                 arrayOf(
-                    "gid", "coordinator_server_pubkey", "relay_urls", "title", "icon_bytes", "native_cursor"
+                    "gid", "coordinator_server_pubkey", "relay_urls", "title", "icon_bytes",
+                    "native_cursor"
                 ),
                 null, null, null, null, null
             )
@@ -327,6 +338,23 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
                 }
             }
         return out
+    }
+
+    /** 0 = not muted, -1 = always, positive = notification cutoff timestamp. */
+    fun getGroupMutedUntil(gid: String): Long {
+        readableDatabase
+            .query(T_GROUPS, arrayOf("muted_until"), "gid = ?", arrayOf(gid), null, null, null)
+            .use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0)
+            }
+        return 0L
+    }
+
+    fun setGroupMuted(gid: String, mutedUntil: Long) {
+        writableDatabase.execSQL(
+            "UPDATE $T_GROUPS SET muted_until = ? WHERE gid = ?",
+            arrayOf<Any>(mutedUntil, gid)
+        )
     }
 
     fun advanceNativeCursor(gid: String, cursor: Long) {
@@ -400,6 +428,19 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
     fun peekSidecar(accountPubkey: String): List<StagedRow> =
         readSidecar(readableDatabase, accountPubkey)
 
+    /**
+     * Staged rows a notification may be built from: muted groups are dropped, and a
+     * group past its cutoff keeps only messages sent after it. The sidecar itself is
+     * untouched — the foreground drain still delivers every row.
+     */
+    fun notificationSidecar(accountPubkey: String): List<StagedRow> {
+        val mutedByGid = HashMap<String, Long>()
+        return peekSidecar(accountPubkey).filter { row ->
+            val mutedUntil = mutedByGid.getOrPut(row.gid) { getGroupMutedUntil(row.gid) }
+            !notificationsMuted(mutedUntil) && (mutedUntil <= 0 || row.at >= mutedUntil)
+        }
+    }
+
     /** Return all staged rows for the active account and clear them (foreground drain). */
     fun drainSidecar(accountPubkey: String): List<StagedRow> {
         val db = writableDatabase
@@ -422,7 +463,8 @@ internal class BackgroundStore private constructor(context: Context) : SQLiteOpe
         val coordinatorServerPubkey: String,
         val relayUrls: List<String>,
         val title: String?,
-        val fetchCursor: Long
+        val fetchCursor: Long,
+        val mutedUntil: Long = 0L
     )
 
     private fun encodeList(list: List<String>): String {
@@ -448,3 +490,11 @@ private const val KV_DELIVERY_MODE = "delivery_mode"
 private const val KV_DELIVERY_INTERVAL = "delivery_interval_minutes"
 private const val KV_NOTIFICATION_PREVIEWS = "notification_previews"
 private const val KV_NOTIFIED_GIDS = "notified_gids"
+
+/**
+ * Whether a notification cutoff is suppressing alerts right now. Kept as a
+ * top-level helper so the fetcher, the preview renderer and the poster all
+ * agree on the -1 "always" sentinel.
+ */
+internal fun notificationsMuted(mutedUntil: Long, now: Long = System.currentTimeMillis()): Boolean =
+    mutedUntil < 0 || mutedUntil > now

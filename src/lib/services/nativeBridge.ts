@@ -23,6 +23,7 @@ import {
 import type { AppInfo } from 'nostr-signer-capacitor-plugin';
 import { manager } from '$lib/services/accountManager.svelte';
 import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
+import { getChatGroupMuteCutoff } from '$lib/services/chatGroupMutes.svelte';
 import {
 	areChatGroupsLoaded,
 	ensureGroupsLoaded,
@@ -608,7 +609,8 @@ function gatherPollGroups(): PollGroup[] {
 			fetchCursor: groupFetchWatermark(group),
 			title: getChatGroupDisplayTitle({ group, activePubkey, memberPubkeys }),
 			coordinatorServerPubkey: group.coordinatorKey, // the coordinatorKey *is* the server pubkey
-			relayUrls
+			relayUrls,
+			mutedUntil: getChatGroupMuteCutoff(group.id)
 		};
 	});
 }
@@ -662,6 +664,22 @@ export async function setDeliveryConfig(cfg: DeliveryConfig): Promise<void> {
 export async function applyDeliveryConfig(): Promise<void> {
 	if (!isNativePlatform()) return;
 	await setDeliveryConfig(getDeliveryConfig());
+}
+
+// ───────────────────────────── group notification mutes ─────────────────────────────
+
+/**
+ * Push one group's notification cutoff to the native worker so closed-app polling
+ * honors it. Small dedicated call (not a re-seed): seeding also schedules an
+ * immediate poll, which a mute toggle has no reason to trigger.
+ */
+export async function setGroupMuted(gid: string, mutedUntil: number): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.setGroupMuted({ gid, mutedUntil });
+	} catch {
+		// best-effort — the next seed carries the stored cutoff
+	}
 }
 
 // ───────────────────────────── group metadata cache (Phase 3A) ─────────────────────────────

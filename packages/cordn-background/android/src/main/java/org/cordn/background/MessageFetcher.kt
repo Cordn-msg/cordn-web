@@ -128,6 +128,11 @@ internal object MessageFetcher {
             val maxCursorByGid = HashMap<String, Long>()
             val countByGid = HashMap<String, Int>()
             val freshCursorByGid = HashMap<String, Long>()
+            // Fresh reads at parse time: the request above can take 30s, long enough for
+            // a mute/unmute to land. The seed's snapshot would notify against stale state.
+            val mutedUntilByGid = HashMap<String, Long>()
+            val groupByGid = groups.associateBy({ it.gid }, { it })
+            val now = System.currentTimeMillis()
 
             for (i in 0 until messages.length()) {
                 val m = messages.optJSONObject(i) ?: continue
@@ -142,15 +147,22 @@ internal object MessageFetcher {
                 // ponytail: one read per gid at parse time; a concurrent advance during parsing
                 // is a ms-wide window, shrunk further by the foreground suppression.
                 if (cursor <= freshCursorByGid.getOrPut(gid) { store.getNativeCursor(gid) }) continue
-                toStage += BackgroundStore.StagedRow(gid, cursor, msg64, m.optLong("at", 0L))
+                val at = m.optLong("at", 0L)
+                toStage += BackgroundStore.StagedRow(gid, cursor, msg64, at)
                 maxCursorByGid.merge(gid, cursor) { a, b -> maxOf(a, b) }
+                // Mute gates the notification only: staging and the watermark above are
+                // unchanged, so the message still reaches the WebView as unread.
+                val mutedUntil = mutedUntilByGid.getOrPut(gid) { store.getGroupMutedUntil(gid) }
+                if (notificationsMuted(mutedUntil, now)) continue
+                // A poll straddling expiry can include the muted backlog; only messages
+                // sent after the cutoff are notification-worthy.
+                if (mutedUntil > 0 && at < mutedUntil) continue
                 countByGid.merge(gid, 1) { a, b -> a + b }
             }
 
             if (toStage.isNotEmpty()) {
                 store.stageSidecar(accountPubkey, toStage)
                 for ((gid, maxCursor) in maxCursorByGid) store.advanceNativeCursor(gid, maxCursor)
-                val groupByGid = groups.associateBy({ it.gid }, { it })
                 android.util.Log.i(
                     "CordnBg",
                     "staged ${toStage.size} rows across ${countByGid.size} group(s); notifying"

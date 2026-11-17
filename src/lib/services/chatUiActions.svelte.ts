@@ -17,6 +17,7 @@ import {
 } from '$lib/services/chatGroups.svelte';
 import { removeChatGroupPresence } from '$lib/services/chatGroupPresence.svelte';
 import { removeChatGroupPin } from '$lib/services/chatGroupPins.svelte';
+import { removeChatGroupMute } from '$lib/services/chatGroupMutes.svelte';
 import {
 	chatWelcomeNotificationsStore,
 	clearWelcomeSubmitting,
@@ -157,6 +158,7 @@ export async function deleteGroupAction(groupId: string | undefined) {
 		}
 		removeChatGroupPresence(groupId);
 		removeChatGroupPin(groupId);
+		removeChatGroupMute(groupId);
 		await goto(resolve('/chat'));
 		return true;
 	} catch (error) {

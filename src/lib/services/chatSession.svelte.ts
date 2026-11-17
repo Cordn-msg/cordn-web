@@ -5,6 +5,7 @@ import { deleteChatGroupsForOwner } from '$lib/services/chatGroups.svelte';
 import { deleteChatKeyPackagesForOwner } from '$lib/services/chatKeyPackages.svelte';
 import { deleteChatGroupPresenceForOwner } from '$lib/services/chatGroupPresence.svelte';
 import { deleteChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
+import { deleteChatGroupMutesForOwner } from '$lib/services/chatGroupMutes.svelte';
 import { deleteChatPetnamesForOwner } from '$lib/services/chatPetnames.svelte';
 import { clearBackgroundGroups } from '$lib/services/nativeBridge';
 import { deleteEmojiPacksForOwner } from '$lib/services/chatEmojiPacks.svelte';
@@ -35,6 +36,7 @@ export async function cleanupActiveAccountChatData(): Promise<void> {
 		Promise.resolve(clearProfileCache()),
 		Promise.resolve(deleteChatGroupPresenceForOwner(ownerPubkey)),
 		Promise.resolve(deleteChatGroupPinsForOwner(ownerPubkey)),
+		Promise.resolve(deleteChatGroupMutesForOwner(ownerPubkey)),
 		Promise.resolve(deleteChatPetnamesForOwner(ownerPubkey)),
 		// The native group cache (titles, icons, member labels) outlives the
 		// WebView store; a cleaned account must not leak names into a later
