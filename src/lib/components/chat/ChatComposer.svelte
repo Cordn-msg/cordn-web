@@ -35,6 +35,8 @@
 	import GifPicker from './GifPicker.svelte';
 	import EmojiPicker from './EmojiPicker.svelte';
 	import PollComposerDialog from './PollComposerDialog.svelte';
+	import CalendarEventComposerDialog from './CalendarEventComposerDialog.svelte';
+	import type { CalendarEventDraft } from '$lib/chat/calendar';
 	import type { PollDraft } from '$lib/chat/polls';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { isHeicMime } from '$lib/services/mediaSniff';
@@ -72,7 +74,8 @@
 		selectedMentions = $bindable([]),
 		onSendMedia = () => {},
 		onSendVoice = () => {},
-		onSendPoll = () => {}
+		onSendPoll = () => {},
+		onSendEvent = () => {}
 	}: {
 		value?: string;
 		onSubmit: () => void;
@@ -93,6 +96,8 @@
 		onSendVoice?: (result: RecordingResult) => void;
 		/** Send a poll created in the poll composer dialog. */
 		onSendPoll?: (draft: PollDraft) => void;
+		/** Create a calendar event from the event composer dialog. */
+		onSendEvent?: (input: { d: string; draft: CalendarEventDraft }) => void;
 	} = $props();
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -717,6 +722,7 @@
 	let gifPickerOpen = $state(false);
 	let emojiPickerOpen = $state(false);
 	let pollDialogOpen = $state(false);
+	let eventDialogOpen = $state(false);
 
 	/** Insert picked text at the caret, with a separating space when needed. */
 	function insertAtCaret(text: string) {
@@ -1126,10 +1132,12 @@
 					onPickGif={() => (gifPickerOpen = true)}
 					onPickEmoji={() => (emojiPickerOpen = true)}
 					onCreatePoll={() => (pollDialogOpen = true)}
+					onCreateEvent={() => (eventDialogOpen = true)}
 				/>
 				<GifPicker bind:open={gifPickerOpen} onPick={insertGifUrl} />
 				<EmojiPicker bind:open={emojiPickerOpen} onPick={insertEmojiShortcode} />
 				<PollComposerDialog bind:open={pollDialogOpen} onCreate={onSendPoll} />
+				<CalendarEventComposerDialog bind:open={eventDialogOpen} onSave={onSendEvent} />
 				<ChatAttachmentCaptionSheet
 					bind:open={captionSheetOpen}
 					attachment={captionSheetAttachment}

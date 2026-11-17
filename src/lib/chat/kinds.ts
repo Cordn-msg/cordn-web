@@ -24,7 +24,16 @@ export const ChatKinds = {
 	Poll: 1068,
 	/** NIP-88 poll response: `response` tags select option ids of the poll in
 	 *  its `e` tag. Never renders as a row — it is the poll's sparse aggregate. */
-	PollResponse: 1018
+	PollResponse: 1018,
+	/** NIP-52 date-based calendar event (all-day / multi-day). Addressable by
+	 *  `(kind, author, d)`: a newer revision replaces the older one. See
+	 *  `src/lib/chat/calendar.ts`. */
+	CalendarDate: 31922,
+	/** NIP-52 time-based calendar event. */
+	CalendarTime: 31923,
+	/** NIP-52 RSVP: the calendar event's sparse aggregate, like a poll response.
+	 *  Never renders as a row. */
+	CalendarRsvp: 31925
 } as const;
 
 /** Annotation kinds never render as a row — they mutate a primary message
@@ -45,8 +54,10 @@ export function isSystemKind(kind: number): boolean {
 }
 
 /** Kinds that never render as a stream row: annotation kinds plus
- *  kind-specific sparse aggregates (poll responses) that only feed their
- *  owning kind's renderer via a self-query. */
+ *  kind-specific sparse aggregates (poll responses, calendar RSVPs) that only
+ *  feed their owning kind's renderer via a self-query. */
 export function isStreamHiddenKind(kind: number): boolean {
-	return isAnnotationKind(kind) || kind === ChatKinds.PollResponse;
+	return (
+		isAnnotationKind(kind) || kind === ChatKinds.PollResponse || kind === ChatKinds.CalendarRsvp
+	);
 }

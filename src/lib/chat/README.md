@@ -78,6 +78,16 @@ O(N²) and fights the virtualizer's measurement budget).
 Never extend the shell fold with a new kind's aggregation. The shell is not a
 god-object; new kinds own their own sparse aggregates.
 
+### Addressable kinds — one row per event
+
+Calendar events (NIP-52 kinds 31922/31923) are addressable by
+`(kind, author, d)`: a revision replaces the earlier one. The calendar
+projection (`calendar.ts`) keeps the newest revision per coordinate, and the
+chat stream renders only that revision's row — otherwise every edit would
+duplicate the card. RSVPs (31925) are the event's sparse aggregate and never
+render as rows. Editing goes through the event composer (same `d`), never the
+text-edit path; cancelling is the author's kind-5 carrying the `a` coordinate.
+
 ## Rich context — self-contained
 
 Rich renderers take `(groupId, eventId)` and self-query storage. This gives

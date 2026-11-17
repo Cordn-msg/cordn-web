@@ -5,6 +5,7 @@
 	import ChatMessageList from './ChatMessageList.svelte';
 	import ChatPinnedRibbon from './ChatPinnedRibbon.svelte';
 	import ChatDetailSidebar from './ChatDetailSidebar.svelte';
+	import GroupSectionNav from './GroupSectionNav.svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -59,6 +60,15 @@
 		getMessagePollDefinition,
 		type PollDraft
 	} from '$lib/chat/polls';
+	import {
+		calendarCoordinate,
+		getCalendarEventDefinition,
+		isCalendarEventKind,
+		viewerTimeZone,
+		type CalendarEventDraft
+	} from '$lib/chat/calendar';
+	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
+	import { groupCalendarCards, loadGroupCalendar } from '$lib/services/chatCalendar.svelte';
 	import { foldReactionMarkers } from './reactionMarkers';
 	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
@@ -331,6 +341,19 @@
 
 	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
 
+	const calendarCards = $derived(groupCalendarCards(groupId));
+	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
+	// The Chat/Calendar switch only earns its row once the group has an event:
+	// a group with no events keeps a clean header, and the first event (created
+	// from the composer's `+` menu) brings the switch in.
+	const hasCalendarEvents = $derived(calendarCards.some((card) => !card.cancelled));
+	$effect(() => {
+		void groupId;
+		// Kind-scoped durable read: events older than the loaded window still
+		// count, so the switch appears for a group whose history is long.
+		untrack(() => void loadGroupCalendar(groupId));
+	});
+
 	// Reaction/edit/delete maps are pure functions of the stored messages.
 	// Splitting them into their own $derived means Svelte only rebuilds them when
 	// messages actually change — not on every optimistic edit/delete/reply which
@@ -363,10 +386,39 @@
 		for (const pendingEdit of getPendingEdits(groupId)) {
 			pendingEditByTarget.set(pendingEdit.targetId, pendingEdit);
 		}
+		// Never render a pending bubble whose confirmed copy is already ingested.
+		const pending = getPendingMessages(groupId).filter(
+			(message) => !byEventId.has(message.eventId)
+		);
+
+		// Addressable calendar revisions replace their chat row too, not just
+		// their calendar card. A queued revision wins optimistically; only the
+		// newest queued bubble for the same coordinate stays visible.
+		function eventCoordinate(kind: number, author: string, tags: string[][]): string | null {
+			const definition = getCalendarEventDefinition(kind, '', tags);
+			return definition ? calendarCoordinate({ kind, author, d: definition.d }) : null;
+		}
+		const pendingCalendarRevisions = new Map<string, ChatMessage>();
+		for (const message of pending) {
+			if (!isCalendarEventKind(message.kind)) continue;
+			const coordinate = eventCoordinate(message.kind, message.author, message.tags ?? []);
+			if (!coordinate) continue;
+			const current = pendingCalendarRevisions.get(coordinate);
+			if (!current || message.createdAt >= current.createdAt) {
+				pendingCalendarRevisions.set(coordinate, message);
+			}
+		}
+
 		const confirmedMessages = storedMessages
-			.filter((message) =>
-				message.kind === ChatKinds.Reaction ? reactionMarkers : !isStreamHiddenKind(message.kind)
-			)
+			.filter((message) => {
+				if (message.kind === ChatKinds.Reaction) return reactionMarkers;
+				if (isStreamHiddenKind(message.kind)) return false;
+				if (!isCalendarEventKind(message.kind)) return true;
+				const coordinate = eventCoordinate(message.kind, message.sender, message.tags);
+				return coordinate
+					? !pendingCalendarRevisions.has(coordinate) && latestCalendarEventIds.has(message.id)
+					: true;
+			})
 			.map((message) => {
 				// Kind-7 reactions render as marker rows in the linear timeline
 				// (systemKind 'reaction') in addition to the chips on the target.
@@ -520,16 +572,13 @@
 				};
 			});
 
-		// Never render a pending bubble whose confirmed copy is already
-		// ingested (the live subscription echoes our own send back, and backlog
-		// confirms land while the entry is still queued): the pending→confirmed
-		// swap happens in a single render instead of a both-visible flash.
-		// Unsealed bubbles carry `outbox:` event ids, which never match.
-		const pending = getPendingMessages(groupId).filter(
-			(message) => !byEventId.has(message.eventId)
-		);
+		const visiblePending = pending.filter((message) => {
+			if (!isCalendarEventKind(message.kind)) return true;
+			const coordinate = eventCoordinate(message.kind, message.author, message.tags ?? []);
+			return !coordinate || pendingCalendarRevisions.get(coordinate) === message;
+		});
 		return foldReactionMarkers(
-			[...confirmedMessages, ...pending]
+			[...confirmedMessages, ...visiblePending]
 				.filter((message): message is ChatMessage => message !== null)
 				.sort(compareChatMessages)
 		);
@@ -633,6 +682,19 @@
 			});
 		} catch (error) {
 			sendError = error instanceof Error ? error.message : 'Failed to create poll';
+			return;
+		}
+		void messageListRef?.scrollToBottom();
+		composerFocusKey += 1;
+	}
+
+	/** Calendar event creation enqueues like a poll (durable outbox-first) with
+	 *  its validated tags; the composer dialog has already validated the draft. */
+	function handleCreateEvent(input: { d: string; draft: CalendarEventDraft }) {
+		try {
+			enqueueCalendarEvent(groupId, { ...input, timeZone: viewerTimeZone() });
+		} catch (error) {
+			sendError = error instanceof Error ? error.message : 'Failed to create event';
 			return;
 		}
 		void messageListRef?.scrollToBottom();
@@ -1277,6 +1339,9 @@
 		}}
 	>
 		<ChatHeader {groupId} title={displayTitle} titlePubkey={titlePersonPubkey} />
+		{#if hasCalendarEvents}
+			<GroupSectionNav {groupId} active="chat" />
+		{/if}
 
 		{#if pinnedMessages.length > 0}
 			<ChatPinnedRibbon
@@ -1349,6 +1414,7 @@
 			onSendMedia={handleSendMedia}
 			onSendVoice={handleSendVoice}
 			onSendPoll={handleSendPoll}
+			onSendEvent={handleCreateEvent}
 			disabled={isRemoved || isPoisoned}
 			replyTo={composerReplyPreview}
 			editTo={editTarget

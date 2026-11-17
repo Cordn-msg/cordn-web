@@ -55,6 +55,7 @@
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
 	import { ChatKinds } from '$lib/chat/kinds';
+	import { isCalendarEventKind } from '$lib/chat/calendar';
 	import ChatMessageMedia from './ChatMessageMedia.svelte';
 	import { peekMessageMedia, resolveMessageMedia } from '$lib/services/chatMediaStorage.svelte';
 	import {
@@ -909,16 +910,21 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll}
+										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
 											<!-- Polls are immutable once cast: an edit would swap the question
-											     under standing votes. -->
+											     under standing votes. Calendar events revise through the
+											     event's own details (same `d`, new revision), never as a
+											     text edit. -->
 											<DropdownMenuItem onSelect={startEditing} class="gap-2">
 												<Pencil class="size-4" />
 												<span>Edit</span>
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted}
+										{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
+											<!-- A confirmed calendar event uses Cancel event (the addressable
+											     `a` deletion), not an ordinary single-revision delete. A queued
+											     bubble keeps Delete: that is how it is discarded. -->
 											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
 												<Trash2 class="size-4" />
 												<span>Delete</span>
@@ -1272,7 +1278,7 @@
 									<Info class="size-4 shrink-0 text-muted-foreground" />
 									<span>Message info</span>
 								</button>
-								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll}
+								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
@@ -1282,7 +1288,7 @@
 										<span>Edit</span>
 									</button>
 								{/if}
-								{#if isOwn && !message.deleted}
+								{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"

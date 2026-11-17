@@ -107,6 +107,7 @@ function getBaseTitle(pathname: string) {
 			return `${displayTitle || 'Group info'} | Cordn`;
 		}
 		if (sub === 'e') return `Message | ${name ?? 'Chat'} | Cordn`;
+		if (sub === 'cal') return `Calendar | ${name ?? 'Chat'} | Cordn`;
 		return `${name || 'Chat'} | Cordn`;
 	}
 	return DEFAULT_TITLE;

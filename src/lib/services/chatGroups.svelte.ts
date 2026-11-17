@@ -54,6 +54,7 @@ import {
 	type PinOp
 } from '$lib/chat/references';
 import type { PollDraft } from '$lib/chat/polls';
+import { isCalendarSendKind } from '$lib/chat/calendar';
 import {
 	createGroupPendingEpochStore,
 	dropPendingAddMemberForTarget,
@@ -2599,7 +2600,9 @@ export async function sendChatGroupMessage(input: {
 			!hasMediaAttachment &&
 			!input.deleteTo &&
 			!input.pinTo &&
-			!input.voteTo
+			!input.voteTo &&
+			// A calendar event's description may legitimately be empty (NIP-52).
+			!isCalendarSendKind(outboundShape.kind)
 		) {
 			throw new Error('Message content is required');
 		}
@@ -2660,6 +2663,7 @@ export async function sendChatGroupMessage(input: {
 		const stored: StoredChatMessage = {
 			cursor: posted.cursor,
 			createdAt: posted.at,
+			eventCreatedAt: outbound.event.created_at,
 			direction: 'outbound',
 			sender: normalizePubKey(account.pubkey),
 			id: outbound.event.id,

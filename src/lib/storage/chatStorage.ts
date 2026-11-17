@@ -221,6 +221,10 @@ export interface ChatStorage {
 		groupId: string,
 		options: { after?: number; before?: number; limit: number }
 	): Promise<StoredChatMessage[]>;
+	/** Every durable message of the given kinds, ascending by cursor. The
+	 *  on-demand read behind kind-specific views (the group calendar) whose
+	 *  content is older than the reactive window; never a live scan. */
+	getGroupMessagesByKinds(groupId: string, kinds: readonly number[]): Promise<StoredChatMessage[]>;
 	/** Which of these cursors already have durable message rows — windowed
 	 *  ingest dedupe (docs/long-history.md decision 7). */
 	getPersistedMessageCursors(groupId: string, cursors: number[]): Promise<Set<number>>;
@@ -246,7 +250,7 @@ export interface ChatStorage {
 }
 
 const DATABASE_NAME = 'cordn-web';
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = 8;
 const GROUP_STORE = 'groups';
 const GROUP_STATE_STORE = 'groupStates';
 const MESSAGE_STORE = 'messages';
@@ -433,6 +437,19 @@ class MemoryChatStorage implements ChatStorage {
 		return page.map(cloneMessage);
 	}
 
+	async getGroupMessagesByKinds(
+		groupId: string,
+		kinds: readonly number[]
+	): Promise<StoredChatMessage[]> {
+		const group = this.groups.get(groupId);
+		if (!group || kinds.length === 0) return [];
+		const wanted = new Set(kinds);
+		return group.messages
+			.filter((message) => wanted.has(message.kind))
+			.sort((a, b) => a.cursor - b.cursor)
+			.map(cloneMessage);
+	}
+
 	async listMessageLedgerRows(groupId: string): Promise<StoredMessageLedgerRow[]> {
 		return [...(this.messageLedgerRows.get(groupId)?.values() ?? [])]
 			.map((row) => ({ ...row }))
@@ -603,6 +620,14 @@ class IndexedDbChatStorage implements ChatStorage {
 				if (!db.objectStoreNames.contains(MESSAGE_STORE)) {
 					const store = db.createObjectStore(MESSAGE_STORE, { keyPath: ['groupId', 'cursor'] });
 					store.createIndex('groupId', 'groupId', { unique: false });
+					store.createIndex('groupIdKind', ['groupId', 'kind'], { unique: false });
+				} else if (request.transaction) {
+					// v8: kind-scoped reads (the group calendar) without walking a
+					// group's whole history. Creating the index backfills existing rows.
+					const store = request.transaction.objectStore(MESSAGE_STORE);
+					if (!store.indexNames.contains('groupIdKind')) {
+						store.createIndex('groupIdKind', ['groupId', 'kind'], { unique: false });
+					}
 				}
 				if (!db.objectStoreNames.contains(SYNC_ISSUE_STORE)) {
 					const store = db.createObjectStore(SYNC_ISSUE_STORE, {
@@ -797,6 +822,34 @@ class IndexedDbChatStorage implements ChatStorage {
 				cursor.continue();
 			};
 		});
+	}
+
+	async getGroupMessagesByKinds(
+		groupId: string,
+		kinds: readonly number[]
+	): Promise<StoredChatMessage[]> {
+		if (kinds.length === 0) return [];
+		traceChat('idb getGroupMessagesByKinds', { groupId, kinds });
+		const rows: StoredChatMessage[] = [];
+		for (const kind of kinds) {
+			// Compound key ['groupId', 'kind']: [groupId, kind] … [groupId, kind + 1)
+			// is exactly this kind's rows (integer kinds, element-wise compare).
+			const records = await this.runTransaction<StoredChatMessageRecord[]>(
+				MESSAGE_STORE,
+				'readonly',
+				(store) =>
+					store
+						.index('groupIdKind')
+						.getAll(
+							IDBKeyRange.bound([groupId, kind], [groupId, kind + 1], false, true)
+						) as IDBRequest<StoredChatMessageRecord[]>
+			);
+			for (const { groupId: storedGroupId, ...message } of records) {
+				void storedGroupId;
+				rows.push(cloneMessage(message));
+			}
+		}
+		return rows.sort((a, b) => a.cursor - b.cursor);
 	}
 
 	async listMessageLedgerRows(groupId: string): Promise<StoredMessageLedgerRow[]> {

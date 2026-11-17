@@ -29,6 +29,7 @@
  */
 import { safeNormalizePubKey } from '$lib/utils';
 import { ChatKinds } from '$lib/chat/kinds';
+import { isSafeDisplayText, utf8ByteLength } from '$lib/chat/displayText';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const POLL_MIN_OPTIONS = 2;
@@ -97,47 +98,17 @@ export interface PollTally {
 // Validation (send-side drafts + shared text hygiene)
 // ---------------------------------------------------------------------------
 
-function byteLength(value: string): number {
-	return new TextEncoder().encode(value).length;
-}
-
-const CONTROL_RANGES: Array<[number, number]> = [
-	[0x00, 0x1f],
-	[0x7f, 0x9f]
-];
-const BIDI_CHARS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
-
-function hasControlChars(value: string): boolean {
-	return [...value].some((char) => {
-		const code = char.codePointAt(0) ?? 0;
-		return CONTROL_RANGES.some(([low, high]) => code >= low && code <= high);
-	});
-}
-
-/** Display text must be trimmed, non-empty, and free of control/bidirectional
- *  override characters (poll labels are a spoofing surface). */
-function isValidDisplayText(value: string, maxBytes: number): boolean {
-	const trimmed = value.trim();
-	return (
-		trimmed.length > 0 &&
-		trimmed === value &&
-		byteLength(value) <= maxBytes &&
-		!hasControlChars(value) &&
-		!BIDI_CHARS.test(value)
-	);
-}
-
 function isValidOptionId(value: string): boolean {
 	return (
 		value.length > 0 &&
-		byteLength(value) <= POLL_MAX_OPTION_ID_BYTES &&
+		utf8ByteLength(value) <= POLL_MAX_OPTION_ID_BYTES &&
 		[...value].every((char) => /[a-zA-Z0-9]/.test(char))
 	);
 }
 
 /** Returns a human-readable error for an invalid draft, or null when sendable. */
 export function validatePollDraft(draft: PollDraft, nowSeconds: number): string | null {
-	if (!isValidDisplayText(draft.question, POLL_MAX_QUESTION_BYTES)) {
+	if (!isSafeDisplayText(draft.question, POLL_MAX_QUESTION_BYTES)) {
 		return 'Question is required (max 1024 bytes, no control characters)';
 	}
 	if (
@@ -147,7 +118,7 @@ export function validatePollDraft(draft: PollDraft, nowSeconds: number): string 
 		return `Polls need between ${POLL_MIN_OPTIONS} and ${POLL_MAX_OPTIONS} options`;
 	}
 	for (const label of draft.optionLabels) {
-		if (!isValidDisplayText(label, POLL_MAX_OPTION_BYTES)) {
+		if (!isSafeDisplayText(label, POLL_MAX_OPTION_BYTES)) {
 			return 'Options cannot be empty (max 256 bytes, no control characters)';
 		}
 	}
@@ -243,7 +214,7 @@ export function getMessagePollDefinition(
 			if (
 				tag.length !== 3 ||
 				!isValidOptionId(tag[1]) ||
-				!isValidDisplayText(tag[2], POLL_MAX_OPTION_BYTES)
+				!isSafeDisplayText(tag[2], POLL_MAX_OPTION_BYTES)
 			) {
 				return null;
 			}
@@ -263,7 +234,7 @@ export function getMessagePollDefinition(
 
 	if (options.length < POLL_MIN_OPTIONS || options.length > POLL_MAX_OPTIONS) return null;
 	if (new Set(options.map((option) => option.id)).size !== options.length) return null;
-	if (!isValidDisplayText(content, POLL_MAX_QUESTION_BYTES)) return null;
+	if (!isSafeDisplayText(content, POLL_MAX_QUESTION_BYTES)) return null;
 
 	return {
 		question: content,

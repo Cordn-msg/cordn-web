@@ -10,6 +10,7 @@ test('conversation children go up to their conversation, conversations to the ch
 	expect(chatUpHref('/chat/cordn1abc')).toBe('/chat');
 	expect(chatUpHref('/chat/cordn1abc/info')).toBe('/chat/cordn1abc');
 	expect(chatUpHref('/chat/cordn1abc/e/evt1')).toBe('/chat/cordn1abc');
+	expect(chatUpHref('/chat/cordn1abc/cal')).toBe('/chat/cordn1abc');
 });
 
 test('the query survives only on the way back to a conversation', () => {

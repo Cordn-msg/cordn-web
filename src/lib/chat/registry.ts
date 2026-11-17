@@ -16,8 +16,10 @@ import type { Component } from 'svelte';
 import { ChatKinds } from '$lib/chat/kinds';
 import TextInline from '$lib/chat/inline/TextInline.svelte';
 import PollInline from '$lib/chat/inline/PollInline.svelte';
+import CalendarEventInline from '$lib/chat/inline/CalendarEventInline.svelte';
 import DefaultRich from '$lib/chat/rich/DefaultRich.svelte';
 import PollRich from '$lib/chat/rich/PollRich.svelte';
+import CalendarEventRich from '$lib/chat/rich/CalendarEventRich.svelte';
 
 // ---------------------------------------------------------------------------
 // Inline (compact) bodies — rendered inside the chat stream row.
@@ -43,7 +45,9 @@ export type InlineBody = Component<InlineBodyProps>;
 export const inlineBodies: Record<number, InlineBody> = {
 	[ChatKinds.Text]: TextInline,
 	[ChatKinds.ThreadReply]: TextInline,
-	[ChatKinds.Poll]: PollInline
+	[ChatKinds.Poll]: PollInline,
+	[ChatKinds.CalendarDate]: CalendarEventInline,
+	[ChatKinds.CalendarTime]: CalendarEventInline
 };
 
 export const defaultInlineBody: InlineBody = TextInline;
@@ -65,7 +69,9 @@ export type RichBody = Component<RichBodyProps>;
 /** Kind → rich body. PollRich shares one presentational surface between the
  *  detail sidebar and /chat/[id]/e/[eventId] (README § Rich context). */
 export const richBodies: Record<number, RichBody> = {
-	[ChatKinds.Poll]: PollRich
+	[ChatKinds.Poll]: PollRich,
+	[ChatKinds.CalendarDate]: CalendarEventRich,
+	[ChatKinds.CalendarTime]: CalendarEventRich
 };
 
 export const defaultRichBody: RichBody = DefaultRich;

@@ -64,6 +64,14 @@ export function getChatMessagePreviewText(message: StoredChatMessage): string {
 	if (message.kind === ChatKinds.PollResponse) {
 		return '🗳️ Voted';
 	}
+	if (message.kind === ChatKinds.CalendarDate || message.kind === ChatKinds.CalendarTime) {
+		// The title lives in tags; `content` is the (optional) description.
+		const title = message.tags.find((tag) => tag[0] === 'title')?.[1]?.trim();
+		return `📅 ${title || body || 'Calendar event'}`;
+	}
+	if (message.kind === ChatKinds.CalendarRsvp) {
+		return `📅 RSVP: ${body || 'Responded'}`;
+	}
 	const media = findImetaTag(message.tags ?? []);
 	if (!media) return body;
 	const label = getMediaPreviewLabel(media);

@@ -55,6 +55,14 @@ import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
 import { toast } from 'svelte-sonner';
 import type { ChatMessageReplyTarget, MessageTarget, PinOp } from '$lib/chat/references';
 import { describeEmojiFailures, emojiMediaTagsForContent } from '$lib/services/chatEmojiMedia';
+import {
+	CALENDAR_RSVP_LABELS,
+	createCalendarCancelTags,
+	createCalendarRsvpTags,
+	type CalendarEventTarget,
+	type CalendarRsvpStatus
+} from '$lib/chat/calendar';
+import { ChatKinds } from '$lib/chat/kinds';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const chatHeaderActionsStore = $state<{
@@ -290,6 +298,40 @@ export async function castPollVoteAction(
 ): Promise<StoredChatMessage | false> {
 	if (!groupId || optionIds.length === 0) return false;
 	return runSend(() => sendChatGroupMessage({ groupId, content, voteTo: { target, optionIds } }));
+}
+
+/** RSVP to a calendar event: one event per account per event, latest wins. */
+export async function castCalendarRsvpAction(
+	groupId: string | undefined,
+	event: CalendarEventTarget,
+	status: CalendarRsvpStatus
+): Promise<StoredChatMessage | false> {
+	if (!groupId) return false;
+	return runSend(() =>
+		sendChatGroupMessage({
+			groupId,
+			content: CALENDAR_RSVP_LABELS[status],
+			tags: createCalendarRsvpTags(event, status),
+			kind: ChatKinds.CalendarRsvp
+		})
+	);
+}
+
+/** Cancel a calendar event: a kind-5 carrying the `a` coordinate (all revisions
+ *  up to now) plus the latest revision's `e`, so the chat row hides too. */
+export async function cancelCalendarEventAction(
+	groupId: string | undefined,
+	event: CalendarEventTarget
+): Promise<StoredChatMessage | false> {
+	if (!groupId) return false;
+	return runSend(() =>
+		sendChatGroupMessage({
+			groupId,
+			content: 'Calendar event cancelled',
+			tags: createCalendarCancelTags(event),
+			kind: ChatKinds.Deletion
+		})
+	);
 }
 
 export async function startChatWithKeyPackageAction(keyPackage: {
