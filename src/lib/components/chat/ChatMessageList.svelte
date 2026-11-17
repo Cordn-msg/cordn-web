@@ -23,6 +23,8 @@
 		onReact = () => Promise.resolve(),
 		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
+		onEditEvent = () => {},
+		onCancelEvent = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onSendWithoutEmoji = () => {},
@@ -55,6 +57,9 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
+		/** Open the calendar event composer for an own event (same `d`). */
+		onEditEvent?: (message: ChatMessage) => void;
+		onCancelEvent?: (message: ChatMessage) => void | Promise<void>;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		onSendWithoutEmoji?: (message: ChatMessage) => void | Promise<void>;
@@ -887,6 +892,8 @@
 								{onReact}
 								{onUnreact}
 								{onEdit}
+								{onEditEvent}
+								{onCancelEvent}
 								{onDelete}
 								{onRetrySend}
 								{onSendWithoutEmoji}

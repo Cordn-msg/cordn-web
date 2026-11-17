@@ -82,6 +82,8 @@
 		onReact = () => Promise.resolve(),
 		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
+		onEditEvent = () => {},
+		onCancelEvent = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onSendWithoutEmoji = () => {},
@@ -104,6 +106,9 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
+		/** Open the calendar event composer for an own event (same `d`). */
+		onEditEvent?: (message: ChatMessage) => void;
+		onCancelEvent?: (message: ChatMessage) => void | Promise<void>;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		/** A send held back only by its custom emoji: send the text without them. */
@@ -320,6 +325,18 @@
 		if (!isOwn || message.deleted) return;
 		dismissActionSurfaces();
 		onEdit(message);
+	}
+
+	function editEvent() {
+		if (!isOwn || message.deleted) return;
+		dismissActionSurfaces();
+		onEditEvent(message);
+	}
+
+	function cancelEvent() {
+		if (!isOwn || message.deleted) return;
+		dismissActionSurfaces();
+		void onCancelEvent(message);
 	}
 
 	function handleReactionMenuOpenChange(open: boolean) {
@@ -912,22 +929,35 @@
 
 										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
 											<!-- Polls are immutable once cast: an edit would swap the question
-											     under standing votes. Calendar events revise through the
-											     event's own details (same `d`, new revision), never as a
-											     text edit. -->
+											     under standing votes. -->
 											<DropdownMenuItem onSelect={startEditing} class="gap-2">
 												<Pencil class="size-4" />
 												<span>Edit</span>
 											</DropdownMenuItem>
 										{/if}
 
+										{#if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+											<!-- A calendar event revises through its own composer (same `d`),
+											     never as a text edit. -->
+											<DropdownMenuItem onSelect={editEvent} class="gap-2">
+												<Pencil class="size-4" />
+												<span>Edit event</span>
+											</DropdownMenuItem>
+										{/if}
+
 										{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
-											<!-- A confirmed calendar event uses Cancel event (the addressable
-											     `a` deletion), not an ordinary single-revision delete. A queued
-											     bubble keeps Delete: that is how it is discarded. -->
 											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
 												<Trash2 class="size-4" />
 												<span>Delete</span>
+											</DropdownMenuItem>
+										{:else if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+											<!-- Same slot as any message's Delete, but a confirmed event is
+											     cancelled through its addressable `a` deletion — a single
+											     revision delete would resurrect the previous revision.
+											     A queued bubble keeps Delete: that is how it is discarded. -->
+											<DropdownMenuItem onSelect={cancelEvent} class="gap-2 text-destructive">
+												<Trash2 class="size-4" />
+												<span>Cancel event</span>
 											</DropdownMenuItem>
 										{/if}
 									</DropdownMenuContent>
@@ -1288,6 +1318,16 @@
 										<span>Edit</span>
 									</button>
 								{/if}
+								{#if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={editEvent}
+									>
+										<Pencil class="size-4 shrink-0 text-muted-foreground" />
+										<span>Edit event</span>
+									</button>
+								{/if}
 								{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
 									<button
 										type="button"
@@ -1296,6 +1336,15 @@
 									>
 										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
 										<span>Delete</span>
+									</button>
+								{:else if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={cancelEvent}
+									>
+										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
+										<span>Cancel event</span>
 									</button>
 								{/if}
 							</div>

@@ -7,23 +7,17 @@
 	import { toast } from 'svelte-sonner';
 
 	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
 	import {
 		calendarDraftFromDefinition,
-		calendarEventTarget,
-		viewerTimeZone,
 		type CalendarEventCard,
 		type CalendarEventDraft
 	} from '$lib/chat/calendar';
-	import {
-		cancelCalendarEventAction,
-		chatComposerActionsStore
-	} from '$lib/services/chatUiActions.svelte';
 	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { normalizePubKey, samePubKey } from '$lib/utils';
+	import CalendarEventCancelDialog from './CalendarEventCancelDialog.svelte';
 	import CalendarEventComposerDialog from './CalendarEventComposerDialog.svelte';
 	import CalendarRsvpControls from './CalendarRsvpControls.svelte';
 	import InlineMediaUrl from './InlineMediaUrl.svelte';
@@ -46,7 +40,6 @@
 
 	let composerOpen = $state(false);
 	let cancelOpen = $state(false);
-	let cancelling = $state(false);
 
 	const initialDraft = $derived({
 		d: card.d,
@@ -55,24 +48,9 @@
 
 	function saveRevision(input: { d: string; draft: CalendarEventDraft }) {
 		try {
-			enqueueCalendarEvent(groupId, { ...input, timeZone: viewerTimeZone() });
+			enqueueCalendarEvent(groupId, input);
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Failed to save event');
-		}
-	}
-
-	async function cancelEvent() {
-		if (cancelling) return;
-		cancelling = true;
-		try {
-			const sent = await cancelCalendarEventAction(groupId, calendarEventTarget(card));
-			if (!sent) {
-				toast.error(chatComposerActionsStore.error || 'Failed to cancel event');
-				return;
-			}
-			cancelOpen = false;
-		} finally {
-			cancelling = false;
 		}
 	}
 </script>
@@ -85,7 +63,9 @@
 			<span class="rounded-full border border-border px-1.5 py-px text-[10px]">All day</span>
 		{/if}
 		{#if card.revised}
-			<span class="rounded-full border border-border px-1.5 py-px text-[10px]">Updated</span>
+			<span class="inline-flex items-center" aria-label="Updated" title="Updated">
+				<Pencil class="size-3" />
+			</span>
 		{/if}
 		{#if card.cancelled}
 			<span
@@ -194,20 +174,4 @@
 	onSave={saveRevision}
 />
 
-<Dialog.Root bind:open={cancelOpen}>
-	<Dialog.Content class="sm:max-w-sm">
-		<Dialog.Header>
-			<Dialog.Title>Cancel this event?</Dialog.Title>
-			<Dialog.Description>
-				It disappears from the group calendar and the chat card is marked cancelled. Everyone keeps
-				their RSVP.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="flex justify-end gap-2">
-			<Button variant="outline" onclick={() => (cancelOpen = false)}>Keep event</Button>
-			<Button variant="destructive" disabled={cancelling} onclick={() => void cancelEvent()}>
-				{cancelling ? 'Cancelling…' : 'Cancel event'}
-			</Button>
-		</div>
-	</Dialog.Content>
-</Dialog.Root>
+<CalendarEventCancelDialog bind:open={cancelOpen} {groupId} {card} />

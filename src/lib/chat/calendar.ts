@@ -809,19 +809,3 @@ export function findCalendarEvent(
 ): CalendarEventCard | null {
 	return cards.find((card) => card.revisionIds.includes(eventId)) ?? null;
 }
-
-/** The card for an addressable coordinate, or null. */
-export function findCalendarEventByCoordinate(
-	cards: CalendarEventCard[],
-	coordinate: string
-): CalendarEventCard | null {
-	return cards.find((card) => card.coordinate === coordinate) ?? null;
-}
-
-/** Cards covering a day key, cancelled ones excluded. */
-export function calendarEventsOnDay(
-	cards: CalendarEventCard[],
-	dayKey: string
-): CalendarEventCard[] {
-	return cards.filter((card) => !card.cancelled && card.dayKeys.includes(dayKey));
-}

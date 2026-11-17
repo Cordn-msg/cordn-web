@@ -5,15 +5,22 @@
  * import graph stays free of the outbox (its unit test mocks the account
  * manager).
  */
-import { createCalendarEventMessage, type CalendarEventDraft } from '$lib/chat/calendar';
+import {
+	createCalendarEventMessage,
+	viewerTimeZone,
+	type CalendarEventDraft
+} from '$lib/chat/calendar';
 import { enqueueTextMessage } from '$lib/services/chatOutboxQueue';
 
 /** Create (or revise) a calendar event. Throws on an invalid draft — the
  *  composer validates first, so callers surface the message. */
 export function enqueueCalendarEvent(
 	groupId: string,
-	input: { d: string; draft: CalendarEventDraft; timeZone: string }
+	input: { d: string; draft: CalendarEventDraft; timeZone?: string }
 ): void {
-	const { kind, content, tags } = createCalendarEventMessage(input);
+	const { kind, content, tags } = createCalendarEventMessage({
+		...input,
+		timeZone: input.timeZone ?? viewerTimeZone()
+	});
 	enqueueTextMessage({ groupId, content, tags, kind });
 }

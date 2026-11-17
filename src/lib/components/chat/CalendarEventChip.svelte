@@ -2,7 +2,6 @@
 	import MapPin from '@lucide/svelte/icons/map-pin';
 	import Pencil from '@lucide/svelte/icons/pencil';
 
-	import { Button } from '$lib/components/ui/button';
 	import type { CalendarEventCard, CalendarEventDefinition } from '$lib/chat/calendar';
 	import CalendarRsvpControls from './CalendarRsvpControls.svelte';
 	import InlineMediaUrl from './InlineMediaUrl.svelte';
@@ -11,18 +10,16 @@
 
 	/**
 	 * Compact calendar event card: date badge, title, one-line "when", location
-	 * and the RSVP controls. Shared by the chat stream row and the calendar
-	 * agenda so an event reads the same in both places; the expanded view lives
-	 * in CalendarEventDetails.
+	 * and the RSVP controls. Used by the chat stream row; the calendar agenda
+	 * has its own denser row, and the expanded view lives in
+	 * CalendarEventDetails.
 	 */
 	let {
 		definition,
 		card = null,
 		isOwn = false,
 		groupId = '',
-		onOpen,
-		onEdit,
-		showRsvp = true
+		onOpen
 	}: {
 		definition: CalendarEventDefinition;
 		/** The projected card: carries the confirmed target and RSVP tally.
@@ -31,8 +28,6 @@
 		isOwn?: boolean;
 		groupId?: string;
 		onOpen?: () => void;
-		onEdit?: () => void;
-		showRsvp?: boolean;
 	} = $props();
 
 	const month = $derived(
@@ -100,10 +95,14 @@
 				{#if card?.revised}
 					<span
 						class={cn(
-							'rounded-full border px-1.5 py-px text-[10px]',
-							isOwn ? 'border-primary-foreground/30' : 'border-border'
-						)}>Updated</span
+							'inline-flex items-center',
+							isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'
+						)}
+						aria-label="Updated"
+						title="Updated"
 					>
+						<Pencil class="size-3" />
+					</span>
 				{/if}
 				{#if card?.cancelled}
 					<span
@@ -160,27 +159,9 @@
 		</p>
 	{/if}
 
-	{#if showRsvp && !card?.cancelled}
+	{#if !card?.cancelled}
 		<div class="mt-2">
 			<CalendarRsvpControls {card} {groupId} {isOwn} />
-		</div>
-	{/if}
-
-	{#if onEdit}
-		<div class="mt-2 flex justify-end border-t border-border/50 pt-2">
-			<Button
-				variant="ghost"
-				size="sm"
-				class={cn(
-					'h-7 px-2 text-xs',
-					isOwn &&
-						'text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground'
-				)}
-				onclick={onEdit}
-			>
-				<Pencil class="size-3.5" />
-				Edit event
-			</Button>
 		</div>
 	{/if}
 </div>

@@ -62,13 +62,20 @@
 	} from '$lib/chat/polls';
 	import {
 		calendarCoordinate,
+		calendarDraftFromDefinition,
 		getCalendarEventDefinition,
 		isCalendarEventKind,
-		viewerTimeZone,
+		type CalendarEventCard,
 		type CalendarEventDraft
 	} from '$lib/chat/calendar';
 	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
-	import { groupCalendarCards, loadGroupCalendar } from '$lib/services/chatCalendar.svelte';
+	import {
+		groupCalendarCards,
+		groupCalendarEvent,
+		loadGroupCalendar
+	} from '$lib/services/chatCalendar.svelte';
+	import CalendarEventCancelDialog from './CalendarEventCancelDialog.svelte';
+	import CalendarEventComposerDialog from './CalendarEventComposerDialog.svelte';
 	import { foldReactionMarkers } from './reactionMarkers';
 	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
@@ -692,13 +699,47 @@
 	 *  its validated tags; the composer dialog has already validated the draft. */
 	function handleCreateEvent(input: { d: string; draft: CalendarEventDraft }) {
 		try {
-			enqueueCalendarEvent(groupId, { ...input, timeZone: viewerTimeZone() });
+			enqueueCalendarEvent(groupId, input);
 		} catch (error) {
 			sendError = error instanceof Error ? error.message : 'Failed to create event';
 			return;
 		}
 		void messageListRef?.scrollToBottom();
 		composerFocusKey += 1;
+	}
+
+	// Editing an event from the message's own actions menu: the same composer
+	// the event page uses, keeping the event's `d` so it replaces in place.
+	let eventEditTarget = $state<CalendarEventCard | null>(null);
+	let eventEditOpen = $state(false);
+	let eventCancelTarget = $state<CalendarEventCard | null>(null);
+	let eventCancelOpen = $state(false);
+	const eventEditInitial = $derived(
+		eventEditTarget
+			? { d: eventEditTarget.d, draft: calendarDraftFromDefinition(eventEditTarget.definition) }
+			: null
+	);
+
+	function handleEditEvent(message: ChatMessage) {
+		const card = groupCalendarEvent(groupId, message.eventId);
+		if (!card) return;
+		eventEditTarget = card;
+		eventEditOpen = true;
+	}
+
+	function handleCancelEvent(message: ChatMessage) {
+		const card = groupCalendarEvent(groupId, message.eventId);
+		if (!card || card.cancelled) return;
+		eventCancelTarget = card;
+		eventCancelOpen = true;
+	}
+
+	function saveEventRevision(input: { d: string; draft: CalendarEventDraft }) {
+		try {
+			enqueueCalendarEvent(groupId, input);
+		} catch (error) {
+			sendError = error instanceof Error ? error.message : 'Failed to save event';
+		}
 	}
 
 	function handleSendMedia(entries: OutgoingMediaAttachment[]) {
@@ -1373,6 +1414,8 @@
 					onReact={handleReact}
 					onUnreact={handleUnreact}
 					onEdit={handleEdit}
+					onEditEvent={handleEditEvent}
+					onCancelEvent={handleCancelEvent}
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
 					onSendWithoutEmoji={handleSendWithoutEmoji}
@@ -1426,6 +1469,13 @@
 			{mentionCandidates}
 			bind:selectedMentions
 		/>
+
+		<CalendarEventComposerDialog
+			bind:open={eventEditOpen}
+			initial={eventEditInitial}
+			onSave={saveEventRevision}
+		/>
+		<CalendarEventCancelDialog bind:open={eventCancelOpen} {groupId} card={eventCancelTarget} />
 	</div>
 {/snippet}
 

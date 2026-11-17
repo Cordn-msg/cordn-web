@@ -2,16 +2,13 @@
 	import { Calendar } from 'bits-ui';
 	import { CalendarDate, getLocalTimeZone, startOfWeek, today } from '@internationalized/date';
 	import CalendarDays from '@lucide/svelte/icons/calendar-days';
+	import Pencil from '@lucide/svelte/icons/pencil';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { untrack } from 'svelte';
 
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import {
-		viewerTimeZone,
-		type CalendarEventCard,
-		type CalendarEventDraft
-	} from '$lib/chat/calendar';
+	import type { CalendarEventCard, CalendarEventDraft } from '$lib/chat/calendar';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
 	import {
 		calendarSnapshot,
@@ -43,7 +40,6 @@
 
 	type View = 'month' | 'week' | 'day';
 
-	const timeZone = viewerTimeZone();
 	const todayValue = today(getLocalTimeZone());
 
 	let view = $state<View>('month');
@@ -92,7 +88,7 @@
 	const todayKey = $derived(todayValue.toString());
 
 	function saveEvent(input: { d: string; draft: CalendarEventDraft }) {
-		enqueueCalendarEvent(groupId, { ...input, timeZone });
+		enqueueCalendarEvent(groupId, input);
 	}
 
 	function toggle(coordinate: string) {
@@ -274,9 +270,20 @@
 												{card.definition.allDay ? 'All day' : formatCalendarTime(card.definition)}
 											</span>
 											<span class="min-w-0 flex-1">
-												<span class="block truncate text-sm font-medium"
-													>{card.definition.title}</span
-												>
+												<span class="flex min-w-0 items-center gap-1">
+													<span class="block truncate text-sm font-medium"
+														>{card.definition.title}</span
+													>
+													{#if card.revised}
+														<span
+															class="inline-flex shrink-0 items-center text-muted-foreground"
+															aria-label="Updated"
+															title="Updated"
+														>
+															<Pencil class="size-3" />
+														</span>
+													{/if}
+												</span>
 												<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
 													<CalendarEventAuthor pubkey={card.author} />
 													<span class="shrink-0">· {formatCalendarAttendance(card)}</span>
