@@ -22,21 +22,57 @@
 	import Pin from '@lucide/svelte/icons/pin';
 	import PinOff from '@lucide/svelte/icons/pin-off';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Bell from '@lucide/svelte/icons/bell';
+	import BellOff from '@lucide/svelte/icons/bell-off';
 	import { isChatGroupPinned, toggleChatGroupPin } from '$lib/services/chatGroupPins.svelte';
+	import {
+		CHAT_GROUP_MUTE_ALWAYS,
+		CHAT_GROUP_MUTE_OPTIONS,
+		isChatGroupMuted,
+		muteChatGroup,
+		unmuteChatGroup
+	} from '$lib/services/chatGroupMutes.svelte';
+	import { setGroupMuted } from '$lib/services/nativeBridge';
+	import { toast } from 'svelte-sonner';
+	import type { Snippet } from 'svelte';
 
 	let {
 		group,
 		title,
-		profileHints
+		profileHints,
+		headerActions,
+		triggerClass = 'rounded-lg text-muted-foreground hover:text-foreground'
 	}: {
 		group: StoredChatGroup;
 		title?: string;
 		profileHints?: ChatGroupProfileHints;
+		/** Route-level actions (info/invite/share) rendered above the local ones. */
+		headerActions?: Snippet;
+		triggerClass?: string;
 	} = $props();
 
 	let showDeleteDialog = $state(false);
+	let showMuteDialog = $state(false);
 	const submitting = $derived(chatGroupInfoActionsStore.deleteSubmitting);
 	const pinned = $derived(isChatGroupPinned(group.id));
+	const muted = $derived(isChatGroupMuted(group.id));
+
+	async function chooseMute(option: (typeof CHAT_GROUP_MUTE_OPTIONS)[number]) {
+		showMuteDialog = false;
+		const cutoff = muteChatGroup(group.id, option.ms);
+		toast.success(
+			option.ms === CHAT_GROUP_MUTE_ALWAYS
+				? 'Notifications muted'
+				: `Notifications muted for ${option.label.toLowerCase()}`
+		);
+		await setGroupMuted(group.id, cutoff);
+	}
+
+	async function unmute() {
+		const cutoff = unmuteChatGroup(group.id);
+		toast.success('Notifications unmuted');
+		await setGroupMuted(group.id, cutoff);
+	}
 
 	// Only resolve hints + recompute the title when the caller didn't pass one,
 	// so the common case (rendered inside ChatGroupListItem) doesn't double up.
@@ -78,7 +114,7 @@
 					type="button"
 					variant="ghost"
 					size="icon-sm"
-					class="rounded-lg text-muted-foreground hover:text-foreground"
+					class={triggerClass}
 					aria-label="Group actions"
 					title="Group actions"
 				>
@@ -86,7 +122,8 @@
 				</Button>
 			{/snippet}
 		</DropdownMenu.Trigger>
-		<DropdownMenu.Content align="end" class="w-48">
+		<DropdownMenu.Content align="end" class="w-52">
+			{@render headerActions?.()}
 			<DropdownMenu.Item
 				onclick={() => {
 					markChatGroupRead(group.id);
@@ -97,6 +134,17 @@
 				<CheckCheck class="size-4" />
 				<span>Mark as read</span>
 			</DropdownMenu.Item>
+			{#if muted}
+				<DropdownMenu.Item onclick={unmute} class="gap-2">
+					<Bell class="size-4" />
+					<span>Unmute notifications</span>
+				</DropdownMenu.Item>
+			{:else}
+				<DropdownMenu.Item onclick={() => (showMuteDialog = true)} class="gap-2">
+					<BellOff class="size-4" />
+					<span>Mute notifications…</span>
+				</DropdownMenu.Item>
+			{/if}
 			<DropdownMenu.Item onclick={() => toggleChatGroupPin(group.id)} class="gap-2">
 				{#if pinned}
 					<PinOff class="size-4" />
@@ -134,6 +182,32 @@
 				{#if submitting}<Spinner class="mr-2 size-4" />{/if}
 				{submitting ? 'Deleting…' : 'Delete group'}
 			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={showMuteDialog}>
+	<Dialog.Content class="sm:max-w-[400px]">
+		<Dialog.Header>
+			<Dialog.Title>Mute notifications</Dialog.Title>
+			<Dialog.Description>
+				Messages will still arrive and stay unread. Only notifications from this group are paused.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="flex flex-col gap-2">
+			{#each CHAT_GROUP_MUTE_OPTIONS as option (option.ms)}
+				<Button
+					type="button"
+					variant="outline"
+					class="justify-start"
+					onclick={() => chooseMute(option)}
+				>
+					{option.label}
+				</Button>
+			{/each}
+		</div>
+		<Dialog.Footer>
+			<Button variant="ghost" onclick={() => (showMuteDialog = false)}>Cancel</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

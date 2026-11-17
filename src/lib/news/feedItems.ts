@@ -671,6 +671,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'A Back button that knows the way, and faster launches',
 		body: '- 🔄 On Android, Back now behaves the same every time, however you got here: it hides the keyboard, then closes an open sheet or menu, then goes up one screen — and from chat home it asks for a second press before the app drops to the background, so an accidental swipe no longer ends a conversation.\n- ✨ Packs you keep in your Nostr emoji list now come along on their own: open Settings → Emoji packs and the packs your account publishes are added and ready to use in chat, instead of being added one by one.\n- 🔄 The app opens faster: profiles are remembered between sessions instead of being fetched again on every launch, and relays that refuse a connection are skipped rather than retried.'
+	},
+	{
+		id: 'cordn-news-2026-11-17-group-mutes',
+		createdAt: Date.UTC(2026, 10, 17),
+		version: 1,
+		title: 'Quiet a noisy group, and one menu for every chat action',
+		body: '- ✨ Mute a group for an hour, 8 hours, a day, a week, or always — from its three-dot menu. Messages still arrive and stay unread; only notifications from that group pause, and the setting stays on this device.\n- 🔄 The conversation header now has the same three-dot menu as the chat list: group info, invite, share, mark as read, mute, pin, and delete all live in one place, on desktop and phone alike.\n- 🔄 Muted chats keep their unread count but no longer raise the red attention dot on the Chats tab or the back button — unmute and it comes right back.\n- 🔄 Pin a chat from that menu; press-and-hold on a chat no longer toggles the pin.'
 	}
 ];
 

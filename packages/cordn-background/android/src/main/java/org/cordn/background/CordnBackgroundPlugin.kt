@@ -63,13 +63,26 @@ class CordnBackgroundPlugin : Plugin() {
                 coordinatorServerPubkey = g.getString("coordinatorServerPubkey"),
                 relayUrls = g.optJSONArray("relayUrls")?.toStringList() ?: emptyList(),
                 title = g.optStringOrNull("title"),
-                fetchCursor = g.getLong("fetchCursor")
+                fetchCursor = g.getLong("fetchCursor"),
+                mutedUntil = g.optLong("mutedUntil", 0L)
             )
         }
         BackgroundStore.get(getContext()).seedGroups(accountPubkey, seeds)
         // A poll right after seeding (background/foreground) — KEEP'd so only one is outstanding.
         // De-risks the first FFI round-trip in seconds (not the 15-min floor) + instant catch-up.
         if (seeds.isNotEmpty()) PollScheduler.scheduleOneShot(getContext())
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun setGroupMuted(call: PluginCall) {
+        val gid = call.getString("gid")
+        if (gid.isNullOrEmpty()) {
+            call.reject("gid is required")
+            return
+        }
+        BackgroundStore.get(getContext())
+            .setGroupMuted(gid, call.getData().optLong("mutedUntil", 0L))
         call.resolve()
     }
 

@@ -113,6 +113,9 @@ internal object Notifications {
     ) {
         ensureChannels(ctx)
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        // Final mute gate: covers the live post, the worker, and delayed preview
+        // upgrades, closing every race against a mute set while a post was in flight.
+        if (notificationsMuted(BackgroundStore.get(ctx).getGroupMutedUntil(gid))) return
         // Record for orphan-free clears: clearMessageNotifications cancels seeded ∪ recorded
         // gids, so a notification whose group was unseeded after posting still gets canceled.
         BackgroundStore.get(ctx).addNotifiedGid(gid)

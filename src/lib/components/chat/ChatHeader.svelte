@@ -4,14 +4,14 @@
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
 	import GroupAvatarFallback from './GroupAvatarFallback.svelte';
-	import { Button } from '$lib/components/ui/button';
 	import QrShareDialog from '$lib/components/QrShareDialog.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatSearchBar from '$lib/components/chat/ChatSearchBar.svelte';
+	import ChatGroupActions from '$lib/components/chat/ChatGroupActions.svelte';
 	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Sheet from '$lib/components/ui/sheet';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import { resolve } from '$app/paths';
 	import {
@@ -31,8 +31,9 @@
 	} from '$lib/services/chatGroups.svelte';
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { publicWebOrigin } from '$lib/utils/appOrigin';
+	import { getChatGroupMuteLabel, isChatGroupMuted } from '$lib/services/chatGroupMutes.svelte';
+	import BellOff from '@lucide/svelte/icons/bell-off';
 	import Info from '@lucide/svelte/icons/info';
-	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import Share2 from '@lucide/svelte/icons/share-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 
@@ -81,7 +82,9 @@
 		groupId ? resolve('/chat/[id]/info', { id: groupRouteId(groupId) }) : '/chat'
 	);
 	let groupShareOpen = $state(false);
-	let mobileActionsOpen = $state(false);
+
+	const muted = $derived(groupId ? isChatGroupMuted(groupId) : false);
+	const muteLabel = $derived(groupId ? getChatGroupMuteLabel(groupId) : '');
 
 	const groupShareUrl = $derived.by(() => {
 		if (!groupId || !group?.coordinatorKey) return '';
@@ -141,154 +144,82 @@
 				<h1 class="flex min-w-0 items-center gap-1.5 text-lg font-semibold tracking-tight">
 					<span class="truncate">{title}</span>
 					<PetnameMark pubkey={titlePubkey} class="size-3.5" />
+					{#if muted}
+						<BellOff
+							class="size-3.5 shrink-0 text-muted-foreground"
+							aria-label={muteLabel}
+							title={muteLabel}
+						/>
+					{/if}
 				</h1>
 			</button>
 		</div>
 
 		<ChatSearchBar {groupId} />
 
-		{#if groupId}
-			<div class="hidden items-center gap-2 sm:flex">
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="h-10 w-10 rounded-xl"
-					href={infoHref}
-					aria-label="Group info"
-					title="Group info"
-				>
-					<Info class="size-4" />
-				</Button>
-				<Dialog.Root bind:open={chatHeaderActionsStore.inviteOpen}>
-					<Dialog.Trigger
-						class="inline-flex"
+		{#if group}
+			<ChatGroupActions
+				{group}
+				{title}
+				triggerClass="h-10 w-10 rounded-xl border border-border text-muted-foreground hover:text-foreground"
+			>
+				{#snippet headerActions()}
+					<DropdownMenu.Item onclick={() => void navigateToInfo()} class="gap-2">
+						<Info class="size-4" />
+						<span>Group info</span>
+					</DropdownMenu.Item>
+					<DropdownMenu.Item
 						disabled={!$activeAccount || !canInvite}
-						aria-label={inviteLabel}
+						title={inviteLabel}
+						onclick={() => (chatHeaderActionsStore.inviteOpen = true)}
+						class="gap-2"
 					>
-						<Button
-							type="button"
-							variant="outline"
-							size="icon"
-							class="h-10 w-10 rounded-xl"
-							disabled={!$activeAccount || !canInvite}
-							aria-label={inviteLabel}
-							title={inviteLabel}
-						>
-							<UserPlus class="size-4" />
-						</Button>
-					</Dialog.Trigger>
-					<Dialog.Content class="sm:max-w-2xl">
-						<Dialog.Header>
-							<Dialog.Title>Invite member</Dialog.Title>
-							<Dialog.Description>
-								Invite someone who is reachable on this coordinator.
-							</Dialog.Description>
-						</Dialog.Header>
+						<UserPlus class="size-4" />
+						<span>Invite member</span>
+					</DropdownMenu.Item>
+					<DropdownMenu.Item
+						disabled={!$activeAccount || !groupId}
+						onclick={() => (groupShareOpen = true)}
+						class="gap-2"
+					>
+						<Share2 class="size-4" />
+						<span>Share group link</span>
+					</DropdownMenu.Item>
+				{/snippet}
+			</ChatGroupActions>
 
-						{#if !canInvite}
-							<p class="text-sm text-muted-foreground">
-								Only configured group admins can invite members.
-							</p>
-						{/if}
+			<Dialog.Root bind:open={chatHeaderActionsStore.inviteOpen}>
+				<Dialog.Content class="sm:max-w-2xl">
+					<Dialog.Header>
+						<Dialog.Title>Invite member</Dialog.Title>
+						<Dialog.Description>
+							Invite someone who is reachable on this coordinator.
+						</Dialog.Description>
+					</Dialog.Header>
 
-						{#if chatHeaderActionsStore.error}
-							<p class="text-sm text-destructive">{chatHeaderActionsStore.error}</p>
-						{/if}
+					{#if !canInvite}
+						<p class="text-sm text-muted-foreground">
+							Only configured group admins can invite members.
+						</p>
+					{/if}
 
-						<div class="space-y-3">
-							<AvailableKeyPackageDirectory
-								onStartChat={(entry) => inviteMember(entry)}
-								startingRef={invitingRef}
-								coordinatorKey={group?.coordinatorKey}
-								excludePubkeys={existingMemberPubkeys}
-								actionLabel="Invite"
-								maxHeightClass="max-h-[26rem]"
-								emptyMessage="No one else is reachable on this coordinator yet."
-							/>
-						</div>
-					</Dialog.Content>
-				</Dialog.Root>
+					{#if chatHeaderActionsStore.error}
+						<p class="text-sm text-destructive">{chatHeaderActionsStore.error}</p>
+					{/if}
 
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					class="h-10 w-10 rounded-xl"
-					disabled={!$activeAccount || !groupId}
-					aria-label="Share group link"
-					title="Share group link"
-					onclick={() => (groupShareOpen = true)}
-				>
-					<Share2 class="size-4" />
-				</Button>
-			</div>
-
-			<div class="sm:hidden">
-				<!-- Mobile: group actions as a bottom sheet (thumb zone) instead of a
-				     top-right dropdown. Same three actions as the desktop menu above. -->
-				<Sheet.Root bind:open={mobileActionsOpen}>
-					<Sheet.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								type="button"
-								variant="outline"
-								size="icon"
-								class="h-10 w-10 rounded-xl"
-								aria-label="Open chat actions"
-								title="Chat actions"
-							>
-								<MoreHorizontal class="size-4" />
-							</Button>
-						{/snippet}
-					</Sheet.Trigger>
-					<Sheet.Content side="bottom" class="pb-safe">
-						<Sheet.Header>
-							<Sheet.Title>Chat actions</Sheet.Title>
-							<Sheet.Description class="sr-only">Actions for this group</Sheet.Description>
-						</Sheet.Header>
-						<div class="flex flex-col gap-1 px-4 pb-4">
-							<button
-								type="button"
-								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
-								onclick={() => {
-									mobileActionsOpen = false;
-									void navigateToInfo();
-								}}
-							>
-								<Info class="size-4 shrink-0 text-muted-foreground" />
-								<span>Group info</span>
-							</button>
-							<button
-								type="button"
-								disabled={!$activeAccount || !canInvite}
-								title={inviteLabel}
-								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40 disabled:opacity-50"
-								onclick={() => {
-									mobileActionsOpen = false;
-									chatHeaderActionsStore.inviteOpen = true;
-								}}
-							>
-								<UserPlus class="size-4 shrink-0 text-muted-foreground" />
-								<span>Invite member</span>
-							</button>
-							<button
-								type="button"
-								disabled={!$activeAccount || !groupId}
-								class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40 disabled:opacity-50"
-								onclick={() => {
-									mobileActionsOpen = false;
-									groupShareOpen = true;
-								}}
-							>
-								<Share2 class="size-4 shrink-0 text-muted-foreground" />
-								<span>Share group link</span>
-							</button>
-						</div>
-					</Sheet.Content>
-				</Sheet.Root>
-			</div>
+					<div class="space-y-3">
+						<AvailableKeyPackageDirectory
+							onStartChat={(entry) => inviteMember(entry)}
+							startingRef={invitingRef}
+							coordinatorKey={group?.coordinatorKey}
+							excludePubkeys={existingMemberPubkeys}
+							actionLabel="Invite"
+							maxHeightClass="max-h-[26rem]"
+							emptyMessage="No one else is reachable on this coordinator yet."
+						/>
+					</div>
+				</Dialog.Content>
+			</Dialog.Root>
 		{/if}
 	</div>
 

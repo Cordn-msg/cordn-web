@@ -32,6 +32,8 @@ export interface PollGroup {
 	coordinatorServerPubkey: string;
 	/** Operational relay URLs for this group's coordinator (empty → CEP-17 discovery). */
 	relayUrls: string[];
+	/** 0 = not muted, -1 = always, positive = notification cutoff timestamp. */
+	mutedUntil: number;
 }
 
 /** Delivery mode spectrum (roadmap §4.2). `live` is deferred (Phase 3C, spike-gated). */
@@ -83,6 +85,12 @@ export interface CordnBackgroundPostNotificationOptions {
 	count?: number;
 	/** Recent decrypted messages, oldest first; native shows the latest six as a thread. */
 	messages?: CordnBackgroundNotificationMessage[];
+}
+
+export interface CordnBackgroundMuteOptions {
+	gid: string;
+	/** 0 = not muted, -1 = always, positive = notification cutoff timestamp. */
+	mutedUntil: number;
 }
 
 export interface CordnBackgroundAdvanceCursorOptions {
@@ -153,6 +161,8 @@ export interface CordnBackgroundPlugin {
 	clearMessageNotifications(options?: { gids?: string[] }): Promise<void>;
 	/** Advance the worker's nativeCursor so it skips messages the live path already handled. */
 	advanceNativeCursor(options: CordnBackgroundAdvanceCursorOptions): Promise<void>;
+	/** Update one group's notification mute cutoff (0 = off, -1 = always, positive = until). */
+	setGroupMuted(options: CordnBackgroundMuteOptions): Promise<void>;
 	/** Consume + return the group id captured from a notification-tap launch (deep-link routing). */
 	consumeLaunchGid(): Promise<{ gid: string | null }>;
 	/** Pull staged sidecar rows (wire format) and clear them. Call on foreground catch-up. */

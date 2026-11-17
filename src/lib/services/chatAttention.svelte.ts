@@ -21,6 +21,7 @@ import {
 } from '$lib/services/chatGroupPresence.svelte';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { getNotificationPreviewsEnabled } from '$lib/services/chatNotificationSettings';
+import { getChatGroupMuteCutoff, isChatGroupMuted } from '$lib/services/chatGroupMutes.svelte';
 import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -120,7 +121,11 @@ function getUnreadMessageCount() {
 
 function getUnreadAttentionCount(excludeGroupId?: string) {
 	const pubkey = manager.active?.pubkey;
-	const groups = listChatGroups().filter((group) => group.id !== excludeGroupId);
+	// Muted groups stay unread (counts and tab title are unchanged), but they must
+	// not raise the red attention dots on the tab bar / back button.
+	const groups = listChatGroups().filter(
+		(group) => group.id !== excludeGroupId && !isChatGroupMuted(group.id)
+	);
 	const unreadMessages = groups.reduce(
 		(total, group) => total + getUnreadChatGroupMessageCount(group.id),
 		0
@@ -220,6 +225,11 @@ export async function notifyForUnreadChatMessages() {
 	for (const { group, previousCursor } of pending) {
 		notificationState.lastProcessedCursorByGroup.set(group.id, group.lastCursor);
 
+		// Muted: the cursor above already advanced, so unmuting never replays this
+		// backlog as a notification. Messages are still stored and counted as unread.
+		if (isChatGroupMuted(group.id)) continue;
+		const muteCutoff = getChatGroupMuteCutoff(group.id);
+
 		// Attended tab (visible + focused) → the in-app badge/dots already surface attention, so a
 		// toast is just noise. Mirrors native's appActive suppression; fires only when backgrounded.
 		if (document.visibilityState === 'visible' && document.hasFocus()) continue;
@@ -235,6 +245,8 @@ export async function notifyForUnreadChatMessages() {
 			// Never notify for content the user already read — the profile-hint lookup below
 			// is async, so an open + read can complete before this post goes out.
 			if (message.cursor <= getChatGroupLastReadCursor(group.id)) return false;
+			// A fetch that straddles expiry can include messages from the muted window.
+			if (muteCutoff > 0 && message.createdAt < muteCutoff) return false;
 			// Default-safe self-filter: without an active identity we can't attribute the message, so
 			// stay quiet rather than risk notifying for our own echo. Compare via samePubKey so a
 			// signer returning a differently-cased pubkey can't let an own message through a raw ===.
@@ -260,6 +272,8 @@ export async function notifyForUnreadChatMessages() {
 		for (const [pubkey, hint] of hints) {
 			if (hint) profileHints[pubkey] = hint;
 		}
+		// Re-check after the async profile lookups: the user may have muted meanwhile.
+		if (isChatGroupMuted(group.id)) continue;
 		const title = getChatGroupDisplayTitle({
 			group,
 			activePubkey,
