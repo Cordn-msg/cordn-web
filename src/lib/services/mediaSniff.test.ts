@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { mediaExtFromMime, replaceFileExt, sniffMediaMime } from './mediaSniff';
+import {
+	mediaExtFromMime,
+	randomMediaFilename,
+	replaceFileExt,
+	sniffMediaMime
+} from './mediaSniff';
 
 const ascii = (s: string): number[] => Array.from(s, (c) => c.charCodeAt(0));
 
@@ -49,5 +54,30 @@ describe('mediaExtFromMime / replaceFileExt', () => {
 	it('swaps or appends the extension', () => {
 		expect(replaceFileExt('IMG_1234.HEIC', 'jpg')).toBe('IMG_1234.jpg');
 		expect(replaceFileExt('photo', 'jpg')).toBe('photo.jpg');
+	});
+});
+
+describe('randomMediaFilename', () => {
+	it('keeps a safe extension and drops the picked stem', () => {
+		const name = randomMediaFilename('severance-agreement-final.pdf');
+		expect(name).toMatch(/^[0-9a-f]{8}\.pdf$/);
+		expect(name).not.toContain('severance');
+	});
+
+	it('lowercases the extension and keeps only the last one', () => {
+		expect(randomMediaFilename('Screenshot.PNG')).toMatch(/^[0-9a-f]{8}\.png$/);
+		expect(randomMediaFilename('archive.tar.gz')).toMatch(/^[0-9a-f]{8}\.gz$/);
+	});
+
+	it('drops extensions that are not short lowercase alphanumerics', () => {
+		expect(randomMediaFilename('Makefile')).toMatch(/^[0-9a-f]{8}$/);
+		expect(randomMediaFilename('report.2026 final')).toMatch(/^[0-9a-f]{8}$/);
+		expect(randomMediaFilename('notes.verylongextension')).toMatch(/^[0-9a-f]{8}$/);
+		expect(randomMediaFilename('.env')).toMatch(/^[0-9a-f]{8}$/);
+	});
+
+	it('does not reuse a name', () => {
+		const names = new Set(Array.from({ length: 20 }, () => randomMediaFilename('photo.jpg')));
+		expect(names.size).toBeGreaterThan(1);
 	});
 });

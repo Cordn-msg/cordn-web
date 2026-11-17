@@ -74,3 +74,17 @@ export function replaceFileExt(name: string, ext: string): string {
 	const stem = name.replace(/\.[^.]*$/, '');
 	return `${stem}.${ext}`;
 }
+
+/**
+ * A name for an outgoing file that says nothing about its origin: a document
+ * title, a screenshot's app, a camera's capture date all travel to every group
+ * member in the `imeta` tag. The stem becomes 8 random hex characters; the
+ * extension is kept when it is safe (1–8 lowercase alphanumerics) so the
+ * recipient can still open the file.
+ */
+export function randomMediaFilename(name: string): string {
+	const dot = name.lastIndexOf('.');
+	const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+	const suffix = /^[a-z0-9]{1,8}$/.test(ext) ? `.${ext}` : '';
+	return `${crypto.randomUUID().slice(0, 8)}${suffix}`;
+}

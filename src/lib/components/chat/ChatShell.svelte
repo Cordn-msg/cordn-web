@@ -38,6 +38,7 @@
 		reportMediaUpload,
 		clearMediaUploadProgress
 	} from '$lib/services/chatMediaStorage.svelte';
+	import { randomMediaFilename } from '$lib/services/mediaSniff';
 	import { type RecordingResult } from '$lib/services/voiceRecorder.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import {
@@ -677,10 +678,14 @@
 		replyTo?: ChatMessageReplyTarget,
 		optimisticReplyTo?: ChatMessage['replyTo']
 	) {
-		const isImage = file.type.startsWith('image/');
+		// The picked name is metadata too (a document title, a screenshot's app, a
+		// camera's capture date) and it travels to every member in the `imeta` tag.
+		// The composer chip keeps the original name; only what leaves the device is neutral.
+		const outgoing = new File([file], randomMediaFilename(file.name), { type: file.type });
+		const isImage = outgoing.type.startsWith('image/');
 		const createdAt = Date.now();
 		const optimisticId = `optimistic:${crypto.randomUUID()}`;
-		const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+		const previewUrl = isImage ? URL.createObjectURL(outgoing) : undefined;
 
 		appendOptimisticMessage({
 			id: optimisticId,
@@ -695,9 +700,9 @@
 			replyTo: optimisticReplyTo,
 			displayTags: emojiDisplayTags(text),
 			media: {
-				mime: file.type || 'application/octet-stream',
-				filename: file.name,
-				sizeBytes: file.size,
+				mime: outgoing.type || 'application/octet-stream',
+				filename: outgoing.name,
+				sizeBytes: outgoing.size,
 				previewUrl
 			}
 		});
@@ -716,7 +721,7 @@
 		// confirmed message, on failure it flips to 'error' (preview retained).
 		sendChatMediaMessage({
 			groupId,
-			file,
+			file: outgoing,
 			text,
 			tags,
 			replyTo,
@@ -761,11 +766,15 @@
 	}
 
 	function sendVoiceMessage(result: RecordingResult, text: string, tags: string[][]) {
+		// Voice-note names carry the recording timestamp; that is metadata too.
+		const outgoing = new File([result.file], randomMediaFilename(result.file.name), {
+			type: result.file.type
+		});
 		const createdAt = Date.now();
 		const optimisticId = `optimistic:${crypto.randomUUID()}`;
 		// Audio needs a local URL too (not just images) so the optimistic player can
 		// play the just-recorded clip before the upload resolves.
-		const previewUrl = URL.createObjectURL(result.file);
+		const previewUrl = URL.createObjectURL(outgoing);
 		const currentReplyTarget = replyTarget;
 		const optimisticReplyTarget = buildOptimisticReplyView();
 
@@ -783,8 +792,8 @@
 			displayTags: emojiDisplayTags(text),
 			media: {
 				mime: result.mime,
-				filename: result.file.name,
-				sizeBytes: result.file.size,
+				filename: outgoing.name,
+				sizeBytes: outgoing.size,
 				previewUrl,
 				durationMs: result.durationMs,
 				waveform: result.peaks
@@ -798,7 +807,7 @@
 
 		sendChatMediaMessage({
 			groupId,
-			file: result.file,
+			file: outgoing,
 			text,
 			tags,
 			replyTo: currentReplyTarget ?? undefined,

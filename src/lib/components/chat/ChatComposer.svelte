@@ -97,6 +97,7 @@
 
 	let textareaRef: HTMLTextAreaElement | null = $state(null);
 	let expanded = $state(false);
+	let composerOverflows = $state(false);
 
 	// Staged media attachments: added via the `+` menu (gallery, camera capture, or documents),
 	// sent on submit. Each holds a File plus a preview object URL for images; URLs are revoked
@@ -828,6 +829,8 @@
 		lastResizeValueLength = textareaRef.value.length;
 		lastResizeCap = cap;
 		textareaRef.style.overflowY = textareaRef.scrollHeight > cap ? 'auto' : 'hidden';
+		// The expand control only helps once the collapsed box is scrolling.
+		composerOverflows = textareaRef.scrollHeight > 128;
 	}
 
 	// Track the last-seen focusKey so the effect skips its initial mount run. On mobile, focusing
@@ -1198,18 +1201,20 @@
 							</div>
 						</div>
 					{/if}
-					<div class="flex justify-center">
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							class="h-8 w-8 rounded-lg"
-							onclick={() => (expanded = !expanded)}
-							aria-label={expanded ? 'Collapse composer' : 'Expand composer'}
-						>
-							<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
-						</Button>
-					</div>
+					{#if expanded || composerOverflows}
+						<div class="flex justify-center">
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								class="h-8 w-8 rounded-lg"
+								onclick={() => (expanded = !expanded)}
+								aria-label={expanded ? 'Collapse composer' : 'Expand composer'}
+							>
+								<ChevronUp class={`size-4 transition-transform ${!expanded ? '' : 'rotate-180'}`} />
+							</Button>
+						</div>
+					{/if}
 					<p id="composer-enter-hint" class="sr-only">{enterHint}</p>
 					<Textarea
 						bind:ref={textareaRef}
