@@ -678,6 +678,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Quiet a noisy group, and one menu for every chat action',
 		body: '- ✨ Mute a group for an hour, 8 hours, a day, a week, or always — from its three-dot menu. Messages still arrive and stay unread; only notifications from that group pause, and the setting stays on this device.\n- 🔄 The conversation header now has the same three-dot menu as the chat list: group info, invite, share, mark as read, mute, pin, and delete all live in one place, on desktop and phone alike.\n- 🔄 Muted chats keep their unread count but no longer raise the red attention dot on the Chats tab or the back button — unmute and it comes right back.\n- 🔄 Pin a chat from that menu; press-and-hold on a chat no longer toggles the pin.'
+	},
+	{
+		id: 'cordn-news-2026-11-17-neutral-filenames',
+		createdAt: Date.UTC(2026, 10, 17),
+		version: 1,
+		title: 'File names that stay yours, and a quieter composer',
+		body: '- ✨ Files you share no longer carry the name you picked: attachments and voice notes go out under a random 8-character name with the same extension, so recipients can still open them. The original name stays only on your device.\n- 🔄 The composer’s expand chevron now appears only when the draft is long enough to scroll — or when the composer is already expanded — instead of taking a row above every message.'
 	}
 ];
 
