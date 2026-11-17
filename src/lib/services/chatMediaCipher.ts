@@ -25,7 +25,8 @@ export const MEDIA_VERSION = 'cordn-em-v1' as const;
 export interface MediaMetadata {
 	/** MIME type. Exact UTF-8 bytes are bound into the AAD (§3.2). */
 	readonly mime: string;
-	/** Original filename. Exact UTF-8 bytes are bound into the AAD (§3.2). */
+	/** Filename carried to recipients. Exact UTF-8 bytes are bound into the AAD
+	 *  (§3.2); senders pass a randomized name, never the picked one. */
 	readonly filename: string;
 }
 
