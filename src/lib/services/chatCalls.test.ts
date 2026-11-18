@@ -142,6 +142,7 @@ import {
 	loadGroupCalls,
 	openChatCall,
 	setChatCallCameraEnabled,
+	toggleChatCallPinned,
 	setChatCallScreenShareEnabled
 } from '$lib/services/chatCalls.svelte';
 
@@ -364,5 +365,19 @@ describe('chat call lifecycle', () => {
 		await setChatCallScreenShareEnabled(true);
 		expect(chatCallsStore.error).toBe('');
 		expect(chatCallsStore.active).not.toBeNull();
+	});
+
+	it('pins one participant as the main view and clears it when the call ends', async () => {
+		resetGroup('pinned');
+		await openChatCall('pinned');
+		await confirmChatCall();
+		toggleChatCallPinned('peer:device');
+		expect(chatCallsStore.pinnedIdentity).toBe('peer:device');
+		toggleChatCallPinned('peer:device');
+		expect(chatCallsStore.pinnedIdentity).toBeNull();
+
+		toggleChatCallPinned('peer:device');
+		await leaveChatCall();
+		expect(chatCallsStore.pinnedIdentity).toBeNull();
 	});
 });

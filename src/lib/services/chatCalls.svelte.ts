@@ -95,6 +95,8 @@ export const chatCallsStore = $state<{
 	microphoneEnabled: boolean;
 	cameraEnabled: boolean;
 	screenShareEnabled: boolean;
+	/** Participant forced into the main view, or null for the latest screen share. */
+	pinnedIdentity: string | null;
 	participants: CallParticipant[];
 }>({
 	dialogOpen: false,
@@ -106,6 +108,7 @@ export const chatCallsStore = $state<{
 	microphoneEnabled: true,
 	cameraEnabled: false,
 	screenShareEnabled: false,
+	pinnedIdentity: null,
 	participants: []
 });
 
@@ -318,6 +321,7 @@ function resetEngineState() {
 	chatCallsStore.phase = 'idle';
 	chatCallsStore.busy = false;
 	chatCallsStore.screenShareEnabled = false;
+	chatCallsStore.pinnedIdentity = null;
 	chatCallsStore.participants = [];
 }
 
@@ -471,6 +475,13 @@ function newEngine(session: ActiveCallSession): LiveKitCallEngine {
 			chatCallsStore.microphoneEnabled = !state.muted;
 			chatCallsStore.cameraEnabled = state.cameraEnabled;
 			chatCallsStore.screenShareEnabled = state.screenSharing;
+			// A pinned participant who left must not keep an empty main view.
+			if (
+				chatCallsStore.pinnedIdentity &&
+				!state.participants.some((p) => p.identity === chatCallsStore.pinnedIdentity)
+			) {
+				chatCallsStore.pinnedIdentity = null;
+			}
 			chatCallsStore.participants = state.participants;
 		},
 		onReconnectTimeout() {
@@ -606,6 +617,11 @@ export async function setChatCallCameraEnabled(enabled: boolean) {
 	await session.engine.setCameraEnabled(enabled);
 	// The camera service type is declared only while the camera is actually in use.
 	if (session.nativeCallStarted || enabled) await syncNativeCall(session);
+}
+
+/** Pins a participant as the call's main view; pinning the same one unpins. */
+export function toggleChatCallPinned(identity: string) {
+	chatCallsStore.pinnedIdentity = chatCallsStore.pinnedIdentity === identity ? null : identity;
 }
 
 export async function setChatCallScreenShareEnabled(enabled: boolean) {

@@ -7,7 +7,7 @@
 	import { getChatGroup, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { normalizePubKey } from '$lib/utils';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		attachChatCallVideo,
 		chatCallMemberPubkey,
@@ -18,7 +18,8 @@
 		leaveChatCall,
 		setChatCallCameraEnabled,
 		setChatCallMicrophoneEnabled,
-		setChatCallScreenShareEnabled
+		setChatCallScreenShareEnabled,
+		toggleChatCallPinned
 	} from '$lib/services/chatCalls.svelte';
 	import type { CallVideoSource } from '$lib/services/liveKitCallEngine';
 	import Phone from '@lucide/svelte/icons/phone';
@@ -30,6 +31,9 @@
 	import Minimize2 from '@lucide/svelte/icons/minimize-2';
 	import Maximize from '@lucide/svelte/icons/maximize';
 	import Minimize from '@lucide/svelte/icons/minimize';
+	import Expand from '@lucide/svelte/icons/expand';
+	import Pin from '@lucide/svelte/icons/pin';
+	import PinOff from '@lucide/svelte/icons/pin-off';
 	import ScreenShare from '@lucide/svelte/icons/screen-share';
 	import ScreenShareOff from '@lucide/svelte/icons/screen-share-off';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
@@ -41,7 +45,9 @@
 	onDestroy(() => void leaveChatCall());
 
 	let fullscreenEl = $state<HTMLElement | null>(null);
+	let mainEl = $state<HTMLElement | null>(null);
 	let isFullscreen = $state(false);
+	let isMainFullscreen = $state(false);
 	let fullscreenSupported = $state(false);
 	let screenShareSupported = $state(false);
 
@@ -50,6 +56,7 @@
 		screenShareSupported = typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 		const onFullscreenChange = () => {
 			isFullscreen = Boolean(fullscreenEl && document.fullscreenElement === fullscreenEl);
+			isMainFullscreen = Boolean(mainEl && document.fullscreenElement === mainEl);
 		};
 		document.addEventListener('fullscreenchange', onFullscreenChange);
 		return () => {
@@ -71,6 +78,22 @@
 	async function minimizeCall() {
 		if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
 		closeChatCallSurface();
+	}
+
+	async function toggleMainFullscreen() {
+		try {
+			if (document.fullscreenElement === mainEl) await document.exitFullscreen();
+			else await mainEl?.requestFullscreen();
+		} catch {
+			// Refused: stay in the dialog.
+		}
+	}
+
+	/** Pin, then fullscreen the main view — one click from a participant card. */
+	async function fullscreenParticipant(identity: string) {
+		chatCallsStore.pinnedIdentity = identity;
+		await tick();
+		await mainEl?.requestFullscreen().catch(() => {});
 	}
 
 	const activeGroupId = $derived(chatCallsStore.active?.groupId ?? chatCallsStore.lobby?.groupId);
@@ -101,6 +124,24 @@
 		if (chatCallsStore.phase === 'connecting' || chatCallsStore.busy) return 'Connecting…';
 		return 'End-to-end encrypted';
 	});
+
+	// One main view: the pinned participant, else whoever shares last. The pinned card
+	// leaves the grid so its track is only ever attached to one element.
+	const pinnedParticipant = $derived(
+		chatCallsStore.participants.find((p) => p.identity === chatCallsStore.pinnedIdentity) ?? null
+	);
+	const sharedParticipant = $derived(
+		chatCallsStore.participants.findLast((p) => p.screenSharing) ?? null
+	);
+	const mainParticipant = $derived(pinnedParticipant ?? sharedParticipant);
+	const mainSource: CallVideoSource = $derived(
+		mainParticipant?.screenSharing ? 'screen' : 'camera'
+	);
+	const gridParticipants = $derived(
+		pinnedParticipant
+			? chatCallsStore.participants.filter((p) => p.identity !== pinnedParticipant.identity)
+			: chatCallsStore.participants
+	);
 
 	function participantPubkey(identity: string, isLocal: boolean): string | null {
 		return isLocal
@@ -182,42 +223,82 @@
 							<LoaderCircle class="mr-2 size-5 animate-spin" /> Joining the room…
 						</div>
 					{:else}
-						{@const sharing = chatCallsStore.participants.findLast(
-							(participant) => participant.screenSharing
-						)}
-						{@const sharingPubkey = sharing
-							? participantPubkey(sharing.identity, sharing.isLocal)
-							: null}
-						{#if sharing}
-							<div class="mb-3 overflow-hidden rounded-2xl border bg-black">
+						{#if mainParticipant}
+							{@const mainPubkey = participantPubkey(
+								mainParticipant.identity,
+								mainParticipant.isLocal
+							)}
+							<div bind:this={mainEl} class="mb-3 overflow-hidden rounded-2xl border bg-black">
 								<div
 									class="flex items-center gap-2 border-b border-white/10 bg-background px-3 py-2 text-sm"
 								>
-									{#if sharingPubkey}
+									{#if mainPubkey}
 										<div class="min-w-0 flex-1 truncate font-medium">
-											<ProfileCard pubkey={sharingPubkey} mode="inline" profileLink={false} />
+											<ProfileCard pubkey={mainPubkey} mode="inline" profileLink={false} />
 										</div>
 									{:else}
 										<span class="min-w-0 flex-1 truncate font-medium text-amber-600"
 											>Unknown participant</span
 										>
 									{/if}
-									<span class="shrink-0 text-xs text-muted-foreground">screen</span>
+									<span class="shrink-0 text-xs text-muted-foreground">
+										{mainSource === 'screen'
+											? 'screen'
+											: mainParticipant.cameraEnabled
+												? 'camera'
+												: 'audio'}
+									</span>
+									<div class="ml-auto flex shrink-0 items-center gap-1">
+										{#if pinnedParticipant}
+											<Button
+												variant="ghost"
+												size="icon-sm"
+												aria-label="Unpin participant"
+												onclick={() => toggleChatCallPinned(pinnedParticipant.identity)}
+											>
+												<PinOff />
+											</Button>
+										{/if}
+										{#if fullscreenSupported}
+											<Button
+												variant="ghost"
+												size="icon-sm"
+												aria-label={isMainFullscreen ? 'Exit full screen' : 'View full screen'}
+												onclick={() => void toggleMainFullscreen()}
+											>
+												{#if isMainFullscreen}<Minimize />{:else}<Maximize />{/if}
+											</Button>
+										{/if}
+									</div>
 								</div>
-								{#key `${sharing.identity}:screen`}
-									<video
-										use:videoAttachment={{ identity: sharing.identity, source: 'screen' }}
-										class="mx-auto max-h-[60dvh] w-full object-contain"
-										autoplay
-										playsinline
-										muted={sharing.isLocal}
-										aria-label="Shared screen"
-									></video>
-								{/key}
+								{#if mainSource === 'screen' || mainParticipant.cameraEnabled}
+									{#key `${mainParticipant.identity}:${mainSource}:${mainParticipant.cameraEnabled}`}
+										<video
+											use:videoAttachment={{
+												identity: mainParticipant.identity,
+												source: mainSource
+											}}
+											class="mx-auto max-h-[60dvh] w-full object-contain"
+											class:-scale-x-100={mainSource === 'camera' && mainParticipant.isLocal}
+											autoplay
+											playsinline
+											muted={mainParticipant.isLocal}
+											aria-label={mainSource === 'screen' ? 'Shared screen' : 'Participant video'}
+										></video>
+									{/key}
+								{:else}
+									<div class="flex min-h-40 items-center justify-center">
+										{#if mainPubkey}
+											<Avatar pubkey={mainPubkey} size="size-24" />
+										{:else}
+											<Users class="size-16 text-muted-foreground" />
+										{/if}
+									</div>
+								{/if}
 							</div>
 						{/if}
 						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-							{#each chatCallsStore.participants as participant (participant.identity)}
+							{#each gridParticipants as participant (participant.identity)}
 								{@const pubkey = participantPubkey(participant.identity, participant.isLocal)}
 								<div
 									class="relative flex aspect-video min-h-40 w-full items-center justify-center overflow-hidden rounded-2xl border bg-muted/40"
@@ -242,6 +323,26 @@
 									{:else}
 										<Users class="size-16 text-muted-foreground" />
 									{/if}
+									<div class="absolute top-2 right-2 flex gap-1">
+										<Button
+											variant="secondary"
+											size="icon-sm"
+											aria-label="Pin participant"
+											onclick={() => toggleChatCallPinned(participant.identity)}
+										>
+											<Pin class="size-4" />
+										</Button>
+										{#if fullscreenSupported && (participant.cameraEnabled || participant.screenSharing)}
+											<Button
+												variant="secondary"
+												size="icon-sm"
+												aria-label="View participant full screen"
+												onclick={() => void fullscreenParticipant(participant.identity)}
+											>
+												<Expand class="size-4" />
+											</Button>
+										{/if}
+									</div>
 									<div
 										class="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-xl bg-background/90 px-2.5 py-2 shadow-sm backdrop-blur"
 									>
