@@ -1,8 +1,10 @@
 <script lang="ts">
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import MapPin from '@lucide/svelte/icons/map-pin';
-	import Pencil from '@lucide/svelte/icons/pencil';
 
+	import MessageParts from '$lib/chat/inline/MessageParts.svelte';
 	import type { CalendarEventCard, CalendarEventDefinition } from '$lib/chat/calendar';
+	import CollapsibleText from './CollapsibleText.svelte';
 	import CalendarRsvpControls from './CalendarRsvpControls.svelte';
 	import InlineMediaUrl from './InlineMediaUrl.svelte';
 	import { formatCalendarAttendance, formatCalendarWhen } from './calendarDisplay';
@@ -19,6 +21,7 @@
 		card = null,
 		isOwn = false,
 		groupId = '',
+		messageId = '',
 		onOpen
 	}: {
 		definition: CalendarEventDefinition;
@@ -27,6 +30,8 @@
 		card?: CalendarEventCard | null;
 		isOwn?: boolean;
 		groupId?: string;
+		/** Message id for the description's mention/link render cache. */
+		messageId?: string;
 		onOpen?: () => void;
 	} = $props();
 
@@ -55,7 +60,7 @@
 	{#if definition.image}
 		<!-- Cover image: same auto-load gate as pasted media, bounded to keep the
 		     compact card compact. -->
-		<div class="mt-2 overflow-hidden rounded-xl [&_img]:max-h-36">
+		<div class="mt-2 mb-3 overflow-hidden rounded-xl [&_img]:max-h-36">
 			<InlineMediaUrl href={definition.image} {isOwn} eager />
 		</div>
 	{/if}
@@ -91,18 +96,6 @@
 							isOwn ? 'border-primary-foreground/30' : 'border-border'
 						)}>All day</span
 					>
-				{/if}
-				{#if card?.revised}
-					<span
-						class={cn(
-							'inline-flex items-center',
-							isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'
-						)}
-						aria-label="Updated"
-						title="Updated"
-					>
-						<Pencil class="size-3" />
-					</span>
 				{/if}
 				{#if card?.cancelled}
 					<span
@@ -150,18 +143,44 @@
 					<span class="truncate">{definition.location}</span>
 				</p>
 			{/if}
+
+			{#if definition.description}
+				<div
+					class={cn('mt-2 text-sm', isOwn ? 'text-primary-foreground/90' : 'text-foreground/80')}
+				>
+					<CollapsibleText length={definition.description.length} {isOwn}>
+						<p class="break-words whitespace-pre-wrap">
+							<MessageParts {messageId} text={definition.description} {isOwn} />
+						</p>
+					</CollapsibleText>
+				</div>
+			{/if}
 		</div>
 	</div>
 
 	{#if card && !card.cancelled}
-		<p class={cn('mt-2 text-xs', isOwn ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
-			{formatCalendarAttendance(card)}
-		</p>
-	{/if}
-
-	{#if !card?.cancelled}
-		<div class="mt-2">
-			<CalendarRsvpControls {card} {groupId} {isOwn} />
-		</div>
+		<details class="mt-2">
+			<summary
+				class={cn(
+					'inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium [&::-webkit-details-marker]:hidden',
+					isOwn
+						? 'text-primary-foreground/85 hover:text-primary-foreground'
+						: 'text-muted-foreground hover:text-foreground'
+				)}
+			>
+				<span>RSVP</span>
+				<span class="font-normal opacity-80">· {formatCalendarAttendance(card)}</span>
+				<ChevronDown class="rsvp-chevron size-3 shrink-0 transition-transform" />
+			</summary>
+			<div class="mt-2">
+				<CalendarRsvpControls {card} {groupId} {isOwn} />
+			</div>
+		</details>
 	{/if}
 </div>
+
+<style>
+	details[open] :global(.rsvp-chevron) {
+		transform: rotate(180deg);
+	}
+</style>

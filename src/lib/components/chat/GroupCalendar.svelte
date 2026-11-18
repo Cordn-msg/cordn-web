@@ -1,14 +1,24 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { Calendar } from 'bits-ui';
-	import { CalendarDate, getLocalTimeZone, startOfWeek, today } from '@internationalized/date';
+	import {
+		CalendarDate,
+		getLocalTimeZone,
+		parseDate,
+		startOfWeek,
+		today
+	} from '@internationalized/date';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Plus from '@lucide/svelte/icons/plus';
-	import { untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import type { CalendarEventCard, CalendarEventDraft } from '$lib/chat/calendar';
+	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { getChatGroup } from '$lib/services/chatGroups.svelte';
 	import {
 		calendarSnapshot,
@@ -41,10 +51,21 @@
 	type View = 'month' | 'week' | 'day';
 
 	const todayValue = today(getLocalTimeZone());
+	const initialView = page.url.searchParams.get('cal-view');
+	const initialDay = page.url.searchParams.get('cal-day');
+	function parseCalendarDate(value: string | null): CalendarDate | null {
+		if (!value) return null;
+		try {
+			return parseDate(value);
+		} catch {
+			return null;
+		}
+	}
 
-	let view = $state<View>('month');
-	let selected = $state<CalendarDate>(todayValue);
-	let placeholder = $state<CalendarDate>(todayValue);
+	const initialSelected = parseCalendarDate(initialDay) ?? todayValue;
+	let view = $state<View>(initialView === 'week' || initialView === 'day' ? initialView : 'month');
+	let selected = $state<CalendarDate>(initialSelected);
+	let placeholder = $state<CalendarDate>(initialSelected);
 	let expanded = $state('');
 	let composerOpen = $state(false);
 
@@ -86,6 +107,36 @@
 
 	const selectedKey = $derived(selected.toString());
 	const todayKey = $derived(todayValue.toString());
+	// Never show a no-op Today: hide it when the current range already is today.
+	const showTodayButton = $derived(
+		view === 'week'
+			? !weekDays.some((day) => day.toString() === todayKey)
+			: selectedKey !== todayKey
+	);
+	const routeId = $derived(groupRouteId(groupId));
+	const detailSearch = $derived.by(() => {
+		const params = new URLSearchParams(page.url.search);
+		params.set('from', 'cal');
+		params.set('cal-view', view);
+		params.set('cal-day', selectedKey);
+		return params.toString();
+	});
+	const rangeHasEvents = $derived(
+		rangeDays.some((dayKey) => (eventsByDay.get(dayKey)?.length ?? 0) > 0)
+	);
+
+	function detailHref(eventId: string): string {
+		return `${resolve('/chat/[id]/e/[eventId]', { id: routeId, eventId })}?${detailSearch}`;
+	}
+
+	async function goToday() {
+		selected = todayValue;
+		placeholder = todayValue;
+		await tick();
+		document
+			.querySelector(`[data-calendar-day="${todayValue.toString()}"]`)
+			?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+	}
 
 	function saveEvent(input: { d: string; draft: CalendarEventDraft }) {
 		enqueueCalendarEvent(groupId, input);
@@ -124,17 +175,8 @@
 			{/each}
 		</div>
 		<div class="flex items-center gap-1">
-			{#if selectedKey !== todayKey || view !== 'month'}
-				<Button
-					variant="ghost"
-					size="sm"
-					onclick={() => {
-						selected = todayValue;
-						placeholder = todayValue;
-					}}
-				>
-					Today
-				</Button>
+			{#if showTodayButton}
+				<Button variant="ghost" size="sm" onclick={() => void goToday()}>Today</Button>
 			{/if}
 			<Button size="sm" onclick={() => (composerOpen = true)}>
 				<Plus class="size-3.5" />
@@ -241,71 +283,93 @@
 				<p class="py-4 text-sm text-destructive">{snapshot.error}</p>
 			{/if}
 
-			<div class="mt-3 flex flex-col gap-4">
-				{#each rangeDays as dayKey (dayKey)}
-					{@const dayEvents = eventsByDay.get(dayKey) ?? []}
-					<section>
-						<h2 class="px-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-							{formatCalendarDayLong(dayKey)}
-						</h2>
-						{#if dayEvents.length === 0}
-							<p class="px-1 py-2 text-sm text-muted-foreground">
-								{#if view === 'day' && activeCards.length === 0}
-									No events yet in this group.
-								{:else}
-									No events.
-								{/if}
-							</p>
-						{:else}
-							<div class="mt-1 flex flex-col gap-2">
-								{#each dayEvents as card (card.coordinate)}
-									<div class="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
-										<button
-											type="button"
-											class="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
-											aria-expanded={expanded === card.coordinate}
-											onclick={() => toggle(card.coordinate)}
-										>
-											<span class="w-14 shrink-0 text-xs text-muted-foreground tabular-nums">
-												{card.definition.allDay ? 'All day' : formatCalendarTime(card.definition)}
-											</span>
-											<span class="min-w-0 flex-1">
-												<span class="flex min-w-0 items-center gap-1">
-													<span class="block truncate text-sm font-medium"
-														>{card.definition.title}</span
-													>
-													{#if card.revised}
-														<span
-															class="inline-flex shrink-0 items-center text-muted-foreground"
-															aria-label="Updated"
-															title="Updated"
-														>
-															<Pencil class="size-3" />
+			{#if activeCards.length > 0}
+				<div class="mt-3 flex flex-col gap-4">
+					{#if view === 'week' && !rangeHasEvents}
+						<p class="px-1 text-sm text-muted-foreground">No events this week.</p>
+					{/if}
+					{#each rangeDays as dayKey (dayKey)}
+						{@const dayEvents = eventsByDay.get(dayKey) ?? []}
+						<section data-calendar-day={dayKey}>
+							<h2
+								class={cn(
+									'px-1 text-xs tracking-wide uppercase',
+									dayKey === todayKey
+										? 'font-bold text-foreground'
+										: 'font-semibold text-muted-foreground'
+								)}
+							>
+								{formatCalendarDayLong(dayKey)}
+							</h2>
+							{#if dayEvents.length > 0}
+								<div class="mt-1 flex flex-col gap-2">
+									{#each dayEvents as card (card.coordinate)}
+										<div class="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
+											<div class="flex items-center">
+												<button
+													type="button"
+													class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+													aria-expanded={expanded === card.coordinate}
+													onclick={() => toggle(card.coordinate)}
+												>
+													<span class="w-14 shrink-0 text-xs text-muted-foreground tabular-nums">
+														{card.definition.allDay
+															? 'All day'
+															: formatCalendarTime(card.definition)}
+													</span>
+													<span class="min-w-0 flex-1">
+														<span class="flex min-w-0 items-center gap-1">
+															<span class="block truncate text-sm font-medium"
+																>{card.definition.title}</span
+															>
+															{#if card.revised}
+																<span
+																	class="inline-flex shrink-0 items-center text-muted-foreground"
+																	aria-label="Edited"
+																	title="Edited"
+																>
+																	<Pencil class="size-3" />
+																</span>
+															{/if}
 														</span>
-													{/if}
-												</span>
-												<span class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-													<CalendarEventAuthor pubkey={card.author} />
-													<span class="shrink-0">· {formatCalendarAttendance(card)}</span>
-												</span>
-											</span>
-										</button>
-										{#if expanded === card.coordinate}
-											<div class="border-t border-border/70">
-												<CalendarEventDetails {groupId} {card} />
+														<span
+															class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+														>
+															<CalendarEventAuthor pubkey={card.author} />
+															<span class="shrink-0">· {formatCalendarAttendance(card)}</span>
+														</span>
+													</span>
+												</button>
+												<Button
+													href={detailHref(card.id)}
+													variant="ghost"
+													size="icon-sm"
+													class="mr-2 shrink-0"
+													aria-label="Open event details"
+													title="Open details"
+												>
+													<ArrowUpRight class="size-4" />
+												</Button>
 											</div>
-										{:else if card.myStatus === null}
-											<div class="border-t border-border/70 px-3 py-2">
-												<CalendarRsvpControls {card} {groupId} />
-											</div>
-										{/if}
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</section>
-				{/each}
-			</div>
+											{#if expanded === card.coordinate}
+												<div class="border-t border-border/70">
+													<CalendarEventDetails {groupId} {card} />
+												</div>
+											{:else if card.myStatus === null}
+												<div class="border-t border-border/70 px-3 py-2">
+													<CalendarRsvpControls {card} {groupId} />
+												</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{:else if view === 'day'}
+								<p class="px-1 py-2 text-sm text-muted-foreground">No events today.</p>
+							{/if}
+						</section>
+					{/each}
+				</div>
+			{/if}
 
 			{#if activeCards.length === 0 && !snapshot.loading}
 				<div

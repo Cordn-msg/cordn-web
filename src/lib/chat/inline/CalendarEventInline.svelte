@@ -41,6 +41,7 @@
 		{definition}
 		{card}
 		{groupId}
+		messageId={message.id}
 		isOwn={message.isOwn ?? false}
 		onOpen={card && onOpenRich ? () => onOpenRich(card.id) : undefined}
 	/>

@@ -32,6 +32,7 @@
 	import { formatChatDayLabel } from './chatDayLabel';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
+	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import Check from '@lucide/svelte/icons/check';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
@@ -77,6 +78,7 @@
 		showAuthor = true,
 		showAvatar = true,
 		showDayLabel = false,
+		dayEventCount = 0,
 		showUnreadMarker = false,
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
@@ -98,6 +100,8 @@
 		showAuthor?: boolean;
 		showAvatar?: boolean;
 		showDayLabel?: boolean;
+		/** Active calendar events on this row's day (0 = no hint). */
+		dayEventCount?: number;
 		/** Render the "New messages" divider above this row — set on the message
 		 *  the chat was opened at (first unread), anchored to the open session like
 		 *  Telegram/WhatsApp: it disappears on the next open once read to the end. */
@@ -588,7 +592,23 @@
 	{/snippet}
 	{#if showDayLabel}
 		<Marker.Root variant="separator" class="px-2 py-1 text-[11px] font-medium">
-			<Marker.Content>{formatChatDayLabel(message.createdAt)}</Marker.Content>
+			<Marker.Content class="inline-flex items-center gap-1.5">
+				{formatChatDayLabel(message.createdAt)}
+				{#if dayEventCount > 0}
+					<span
+						class="inline-flex items-center gap-0.5 text-primary/80"
+						title={`${dayEventCount} ${dayEventCount === 1 ? 'event' : 'events'}`}
+						aria-hidden="true"
+					>
+						<CalendarDays class="size-3" />
+						<span class="tabular-nums">{dayEventCount}</span>
+					</span>
+					<span class="sr-only">
+						{dayEventCount}
+						{dayEventCount === 1 ? 'event' : 'events'}
+					</span>
+				{/if}
+			</Marker.Content>
 		</Marker.Root>
 	{/if}
 

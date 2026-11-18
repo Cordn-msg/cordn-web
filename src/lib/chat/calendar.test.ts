@@ -131,6 +131,19 @@ describe('calendar tag round trip', () => {
 		expect(parsed!.end).toBeGreaterThan(parsed!.start);
 	});
 
+	it('carries NIP-31 alt fallbacks on RSVPs and cancellations', () => {
+		const target = {
+			id: 'rev1',
+			kind: ChatKinds.CalendarTime,
+			author: ALICE,
+			d: 'event-1'
+		};
+		expect(createCalendarRsvpTags(target, 'accepted')).toContainEqual(['alt', 'RSVP: Going']);
+		expect(createCalendarRsvpTags(target, 'tentative')).toContainEqual(['alt', 'RSVP: Maybe']);
+		expect(createCalendarRsvpTags(target, 'declined')).toContainEqual(['alt', "RSVP: Can't go"]);
+		expect(createCalendarCancelTags(target)).toContainEqual(['alt', 'Calendar event cancelled']);
+	});
+
 	it('carries a cover image through the round trip', () => {
 		const built = createCalendarEventMessage({
 			d: 'cover',

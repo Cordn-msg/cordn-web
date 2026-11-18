@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { getLocalTimeZone, today } from '@internationalized/date';
 	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import MessageCircle from '@lucide/svelte/icons/message-circle';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+	import { groupCalendarCards } from '$lib/services/chatCalendar.svelte';
 	import { cn } from '$lib/utils';
 
 	/**
@@ -13,6 +15,12 @@
 	let { groupId, active }: { groupId: string; active: 'chat' | 'calendar' } = $props();
 
 	const id = $derived(groupRouteId(groupId));
+	const todayKey = today(getLocalTimeZone()).toString();
+	// Same projection the calendar view reads: a dot only when an active event
+	// covers today, never an unread badge.
+	const hasEventsToday = $derived(
+		groupCalendarCards(groupId).some((card) => !card.cancelled && card.dayKeys.includes(todayKey))
+	);
 	const links = $derived([
 		{
 			key: 'chat' as const,
@@ -46,6 +54,14 @@
 		>
 			<link.icon class="size-3.5" aria-hidden="true" />
 			{link.label}
+			{#if link.key === 'calendar' && hasEventsToday}
+				<span
+					class="size-1.5 shrink-0 rounded-full bg-primary"
+					title="There are events today"
+					aria-hidden="true"
+				></span>
+				<span class="sr-only">events today</span>
+			{/if}
 		</a>
 	{/each}
 </nav>

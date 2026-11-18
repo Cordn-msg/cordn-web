@@ -63,7 +63,7 @@
 			<span class="rounded-full border border-border px-1.5 py-px text-[10px]">All day</span>
 		{/if}
 		{#if card.revised}
-			<span class="inline-flex items-center" aria-label="Updated" title="Updated">
+			<span class="inline-flex items-center" aria-label="Edited" title="Edited">
 				<Pencil class="size-3" />
 			</span>
 		{/if}

@@ -16,6 +16,7 @@
 	let {
 		messages,
 		groupId = '',
+		calendarEventDays = new Map(),
 		initialFocusCursor = 0,
 		ensureMessage,
 		onLoadOlder,
@@ -39,6 +40,8 @@
 		messages: ChatMessage[];
 		/** Group the rows belong to — poll rows self-query their votes from here. */
 		groupId?: string;
+		/** Active event count by local chat-day ordinal (`chatDayKey`). */
+		calendarEventDays?: Map<number, number>;
 		/** Unread @-mentions of the viewer: shown as a floating jump button
 		 *  stacked above scroll-to-bottom (moved out of the composer). */
 		unreadReferenceCount?: number;
@@ -871,6 +874,11 @@
 							and cached (loadedPictures paints it at full opacity instantly), so no fade replays.
 							Own messages omit the pfp entirely. -->
 						{@const runTail = isRunTail(message, nextMessage)}
+						{@const messageDayKey = chatDayKey(message.createdAt)}
+						{@const showDay = previousMessage
+							? chatDayKey(previousMessage.createdAt) !== messageDayKey
+							: true}
+						{@const dayEventCount = showDay ? (calendarEventDays.get(messageDayKey) ?? 0) : 0}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
@@ -884,9 +892,8 @@
 								{groupId}
 								showAuthor={runHead}
 								showAvatar={runTail}
-								showDayLabel={previousMessage
-									? chatDayKey(previousMessage.createdAt) !== chatDayKey(message.createdAt)
-									: true}
+								showDayLabel={showDay}
+								{dayEventCount}
 								showUnreadMarker={message.id === focusMarkerId}
 								{onReply}
 								{onReact}

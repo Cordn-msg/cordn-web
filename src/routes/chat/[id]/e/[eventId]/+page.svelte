@@ -6,6 +6,7 @@
 	import ChatRichBody from '$lib/chat/ChatRichBody.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+	import { chatUpHref } from '$lib/utils/chatUpHref';
 	import { resolveGroupLocator } from '$lib/utils/groupShareLink';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 
@@ -13,10 +14,23 @@
 
 	const groupId = $derived(resolveGroupLocator(params.id, page.url.searchParams).gid);
 	const eventId = $derived(params.eventId);
-	const backHref = $derived(resolve('/chat/[id]', { id: groupRouteId(groupId) }));
+	// Same hierarchy-driven map the Android Back button uses: a calendar-opened
+	// event returns to the calendar, a chat-opened one to the chat feed.
+	const fromCalendar = $derived(page.url.searchParams.get('from') === 'cal');
+	const backHref = $derived(
+		chatUpHref(page.url.pathname, page.url.search) ??
+			resolve('/chat/[id]', { id: groupRouteId(groupId) })
+	);
+	const backLabel = $derived(fromCalendar ? 'Back to calendar' : 'Back to chat');
 
 	function navigateToEvent(id: string) {
-		void goto(resolve('/chat/[id]/e/[eventId]', { id: groupRouteId(groupId), eventId: id }));
+		// Keep the origin (and coordinator query) when following a link to a
+		// sibling event, so Back still goes where the reader came from.
+		const href =
+			resolve('/chat/[id]/e/[eventId]', { id: groupRouteId(groupId), eventId: id }) +
+			page.url.search;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		void goto(href);
 	}
 </script>
 
@@ -35,7 +49,8 @@
 			variant="outline"
 			size="icon"
 			class="h-10 w-10 shrink-0 rounded-xl"
-			aria-label="Back to chat"
+			aria-label={backLabel}
+			title={backLabel}
 		>
 			<ArrowLeft class="size-5" />
 		</Button>

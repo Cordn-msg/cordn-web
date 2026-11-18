@@ -350,6 +350,24 @@
 
 	const calendarCards = $derived(groupCalendarCards(groupId));
 	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
+	// A revised addressable event shows the same pencil as an edited message,
+	// in the message footer (the card itself stays uncluttered).
+	const revisedCalendarEventIds = $derived(
+		new Set(calendarCards.filter((card) => card.revised).map((card) => card.id))
+	);
+	// Day separators and the Calendar tab read one per-day count; the
+	// calendar projection already owns the zone/day semantics.
+	const calendarEventDayCounts = $derived.by(() => {
+		const counts = new Map<number, number>();
+		for (const card of calendarCards) {
+			if (card.cancelled) continue;
+			for (const key of card.dayKeys) {
+				const ordinal = Number(key.replace(/-/g, ''));
+				counts.set(ordinal, (counts.get(ordinal) ?? 0) + 1);
+			}
+		}
+		return counts;
+	});
 	// The Chat/Calendar switch only earns its row once the group has an event:
 	// a group with no events keeps a clean header, and the first event (created
 	// from the composer's `+` menu) brings the switch in.
@@ -554,7 +572,10 @@
 					deleted,
 					pinned,
 					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
-					edited: !deleted && Boolean(pendingEdit || edit),
+					edited:
+						!deleted &&
+						(Boolean(pendingEdit || edit) ||
+							(isCalendarEventKind(message.kind) && revisedCalendarEventIds.has(message.id))),
 					reactions: reactionEntries,
 					replyTo: replySource
 						? buildReplyQuote({
@@ -1405,6 +1426,7 @@
 					bind:this={messageListRef}
 					{messages}
 					{groupId}
+					calendarEventDays={calendarEventDayCounts}
 					{initialFocusCursor}
 					ensureMessage={(cursor) => loadChatGroupMessagesAround(groupId, cursor)}
 					onLoadOlder={() => loadOlderChatGroupMessages(groupId)}

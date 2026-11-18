@@ -13,6 +13,13 @@ test('conversation children go up to their conversation, conversations to the ch
 	expect(chatUpHref('/chat/cordn1abc/cal')).toBe('/chat/cordn1abc');
 });
 
+test('a calendar-opened event goes back to the calendar, keeping the coordinator', () => {
+	expect(chatUpHref('/chat/abc/e/evt1', '?from=cal')).toBe('/chat/abc/cal');
+	expect(chatUpHref('/chat/abc/e/evt1', '?c=nprofile1xyz&from=cal')).toBe(
+		'/chat/abc/cal?c=nprofile1xyz'
+	);
+});
+
 test('the query survives only on the way back to a conversation', () => {
 	// Legacy and event links carry the coordinator (or metadata) in the query.
 	expect(chatUpHref('/chat/abc/info', '?c=nprofile1xyz')).toBe('/chat/abc?c=nprofile1xyz');
