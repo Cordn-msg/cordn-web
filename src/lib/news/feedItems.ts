@@ -91,6 +91,13 @@ export const DEFAULT_DONATION: DonationConfig = {
  */
 const newsReleases: NewsRelease[] = [
 	{
+		id: 'cordn-news-2026-11-18-group-calendar',
+		createdAt: Date.UTC(2026, 10, 18),
+		version: 1,
+		title: 'A calendar for every group, and a way to say you’re coming',
+		body: '- ✨ Every group now has a calendar. Press + next to the message box and choose Event to plan the first one: give it a title, pick an all-day date or range, or a start and end time, and add a location, link, cover image or description if you like. Once a group has events, a Chat / Calendar switch sits above the conversation.\n- ✨ The calendar opens in month, week or day view. Events also land in the chat as compact cards with their date, time and cover, and open into a full view with the complete description and links.\n- ✨ Say whether you’re Going, Maybe or Can’t go — the tally updates for everyone, one answer per person, and your latest answer wins on every device.\n- 🔄 Edit an event later and it updates in place instead of posting a second card. Cancel it and the chat card stays, marked Cancelled, while it leaves the calendar. Only the author can edit or cancel.\n- 🔄 The Calendar tab carries a dot when something is on today, and an event opened from the calendar returns there with Back.\n- 🐛 Images in chat and event covers now fill the width of their card instead of stopping short, and the event details no longer squeeze the conversation on narrow screens.'
+	},
+	{
 		id: 'cordn-news-2026-11-11-floating-date',
 		createdAt: Date.UTC(2026, 10, 11),
 		version: 1,
