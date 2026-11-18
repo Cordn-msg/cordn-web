@@ -49,13 +49,29 @@
 			? Number(definition.startDate.slice(8, 10))
 			: new Date(definition.start * 1000).getDate()
 	);
+
+	/** Pointer-only convenience: the title button is the keyboard/AT action. */
+	function handleCardClick(event: MouseEvent) {
+		if (!onOpen || !(event.target instanceof Element)) return;
+		if (
+			event.target.closest(
+				'a, button, summary, details, input, textarea, select, label, audio, video'
+			)
+		)
+			return;
+		onOpen();
+	}
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
 <div
 	class={cn(
 		'mt-1 w-full max-w-md rounded-2xl border p-3',
-		isOwn ? 'border-primary-foreground/25 bg-primary-foreground/12' : 'border-border/70 bg-card/60'
+		isOwn ? 'border-primary-foreground/25 bg-primary-foreground/12' : 'border-border/70 bg-card/60',
+		onOpen &&
+			(isOwn ? 'cursor-pointer hover:bg-primary-foreground/20' : 'cursor-pointer hover:bg-card/80')
 	)}
+	onclick={handleCardClick}
 >
 	{#if definition.image}
 		<!-- Cover image: same auto-load gate as pasted media, bounded to keep the
@@ -148,7 +164,7 @@
 				<div
 					class={cn('mt-2 text-sm', isOwn ? 'text-primary-foreground/90' : 'text-foreground/80')}
 				>
-					<CollapsibleText length={definition.description.length} {isOwn}>
+					<CollapsibleText length={definition.description.length} {isOwn} compact>
 						<p class="break-words whitespace-pre-wrap">
 							<MessageParts {messageId} text={definition.description} {isOwn} />
 						</p>
