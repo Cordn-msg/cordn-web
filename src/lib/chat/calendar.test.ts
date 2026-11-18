@@ -100,6 +100,20 @@ describe('calendar drafts', () => {
 		expect(validateCalendarEventDraft(draft(), 'Not/AZone')).toMatch(/time zone/);
 	});
 
+	it('accepts long text without field-size caps', () => {
+		const longTitle = 'T'.repeat(600);
+		const longDescription = 'D'.repeat(20_000);
+		const longLocation = 'L'.repeat(2_000);
+		const long = draft({ title: longTitle, description: longDescription, location: longLocation });
+		expect(validateCalendarEventDraft(long, TZ)).toBeNull();
+
+		const built = createCalendarEventMessage({ d: 'long', draft: long, timeZone: TZ });
+		const parsed = getCalendarEventDefinition(built.kind, built.content, built.tags);
+		expect(parsed?.title).toBe(longTitle);
+		expect(parsed?.description).toBe(longDescription);
+		expect(parsed?.location).toBe(longLocation);
+	});
+
 	it('rejects an all-day range whose end is not after the start', () => {
 		const allDay = draft({ allDay: true, startDate: '2026-11-20', endDate: '2026-11-20' });
 		expect(validateCalendarEventDraft(allDay, TZ)).toMatch(/end date/);
@@ -179,6 +193,13 @@ describe('calendar tag round trip', () => {
 		expect(() => createCalendarEventMessage({ d: 'bad id', draft: draft(), timeZone: TZ })).toThrow(
 			/identifier/
 		);
+	});
+
+	it('keeps every valid link', () => {
+		const built = createCalendarEventMessage({ d: 'links', draft: draft(), timeZone: TZ });
+		const links = Array.from({ length: 6 }, (_, index) => ['r', `https://example.com/${index}`]);
+		const parsed = getCalendarEventDefinition(built.kind, built.content, [...built.tags, ...links]);
+		expect(parsed?.links).toHaveLength(6);
 	});
 
 	it('rejects malformed and duplicate inbound tags', () => {

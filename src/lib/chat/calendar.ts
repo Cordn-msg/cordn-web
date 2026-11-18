@@ -14,21 +14,19 @@
  * - The composer schedules in the device's time zone (`start_tzid`); viewers
  *   elsewhere get the converted time. Add a zone picker if cross-zone authoring
  *   is needed.
- * - A multi-day event is bounded to CALENDAR_MAX_DAYS day keys.
  * - `fb` (free/busy) is not sent: nothing in the UI consumes availability.
+ *
+ * Field text has no size caps, matching the other cordn kinds: validation is
+ * shape, safety and renderability only. CALENDAR_MAX_DAYS is different — it
+ * bounds an amplification (one envelope, many day keys), not a field.
  */
 import { ChatKinds } from '$lib/chat/kinds';
-import { isSafeDisplayText, utf8ByteLength } from '$lib/chat/displayText';
+import { isSafeDisplayText } from '$lib/chat/displayText';
 import { safeNormalizePubKey } from '$lib/utils';
 import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
-export const CALENDAR_MAX_TITLE_BYTES = 256;
-export const CALENDAR_MAX_DESCRIPTION_BYTES = 8192;
-export const CALENDAR_MAX_LOCATION_BYTES = 512;
-export const CALENDAR_MAX_LINK_BYTES = 1024;
-export const CALENDAR_MAX_LINKS = 4;
-export const CALENDAR_MAX_TAGS = 64;
-/** Bound the day-key expansion of a multi-day event. */
+/** Bound the day-key expansion of a multi-day event: one envelope must not be
+ *  able to allocate millions of day keys. */
 export const CALENDAR_MAX_DAYS = 366;
 
 export type CalendarRsvpStatus = 'accepted' | 'tentative' | 'declined';
@@ -143,7 +141,6 @@ function localWallClockSeconds(date: string, time: string): number {
 }
 
 function isHttpUrl(value: string): boolean {
-	if (utf8ByteLength(value) > CALENDAR_MAX_LINK_BYTES) return false;
 	try {
 		const url = new URL(value);
 		return url.protocol === 'https:' || url.protocol === 'http:';
@@ -239,19 +236,15 @@ export function validateCalendarEventDraft(
 ): string | null {
 	const normalized = trimmedDraft(draft);
 	// Newlines are ordinary description whitespace, not spoofing controls.
-	// Replacing them one-for-one preserves the byte-limit check.
 	const safeDescription = normalized.description.replace(/[\r\n]/g, ' ');
-	if (!isSafeDisplayText(normalized.title, CALENDAR_MAX_TITLE_BYTES)) {
-		return 'Title is required (max 256 bytes, no control characters)';
+	if (!isSafeDisplayText(normalized.title)) {
+		return 'Title is required (no control characters)';
 	}
-	if (
-		normalized.description &&
-		!isSafeDisplayText(safeDescription, CALENDAR_MAX_DESCRIPTION_BYTES)
-	) {
-		return 'Description is too long (max 8192 bytes, no control characters)';
+	if (normalized.description && !isSafeDisplayText(safeDescription)) {
+		return 'Description contains control characters';
 	}
-	if (normalized.location && !isSafeDisplayText(normalized.location, CALENDAR_MAX_LOCATION_BYTES)) {
-		return 'Location is too long (max 512 bytes, no control characters)';
+	if (normalized.location && !isSafeDisplayText(normalized.location)) {
+		return 'Location contains control characters';
 	}
 	if (normalized.link && !isHttpUrl(normalized.link)) {
 		return 'Link must be a valid http(s) URL';
@@ -442,7 +435,7 @@ export function getCalendarEventDefinition(
 	content: string,
 	tags: string[][]
 ): CalendarEventDefinition | null {
-	if (!isCalendarEventKind(kind) || tags.length > CALENDAR_MAX_TAGS) return null;
+	if (!isCalendarEventKind(kind)) return null;
 
 	const scalars = new Map<string, string>();
 	const links: string[] = [];
@@ -450,7 +443,7 @@ export function getCalendarEventDefinition(
 		const name = tag[0];
 		if (name === 'r') {
 			if (tag.length !== 2 || !isHttpUrl(tag[1])) return null;
-			if (!links.includes(tag[1]) && links.length < CALENDAR_MAX_LINKS) links.push(tag[1]);
+			if (!links.includes(tag[1])) links.push(tag[1]);
 			continue;
 		}
 		if (!SCALAR_TAGS.has(name)) continue; // unknown extension tags are ignored
@@ -461,18 +454,14 @@ export function getCalendarEventDefinition(
 	const d = scalars.get('d') ?? '';
 	if (!IDENTIFIER.test(d)) return null;
 	const title = scalars.get('title') ?? '';
-	if (!isSafeDisplayText(title, CALENDAR_MAX_TITLE_BYTES)) return null;
+	if (!isSafeDisplayText(title)) return null;
 
 	const description = content.trim();
-	if (
-		description &&
-		!isSafeDisplayText(description.replace(/[\r\n]/g, ' '), CALENDAR_MAX_DESCRIPTION_BYTES)
-	)
-		return null;
+	if (description && !isSafeDisplayText(description.replace(/[\r\n]/g, ' '))) return null;
 	const summary = scalars.get('summary') ?? '';
-	if (summary && !isSafeDisplayText(summary, CALENDAR_MAX_TITLE_BYTES)) return null;
+	if (summary && !isSafeDisplayText(summary)) return null;
 	const location = scalars.get('location') ?? '';
-	if (location && !isSafeDisplayText(location, CALENDAR_MAX_LOCATION_BYTES)) return null;
+	if (location && !isSafeDisplayText(location)) return null;
 	const image = scalars.get('image') ?? '';
 	if (image && !isHttpUrl(image)) return null;
 
@@ -586,7 +575,7 @@ export function getCalendarRsvpReference(
 	kind: number,
 	tags: string[][]
 ): CalendarRsvpReference | null {
-	if (kind !== ChatKinds.CalendarRsvp || tags.length > CALENDAR_MAX_TAGS) return null;
+	if (kind !== ChatKinds.CalendarRsvp) return null;
 
 	const coordinateTag = findTag(tags, 'a');
 	const coordinate = coordinateTag?.[1] ? parseCalendarCoordinate(coordinateTag[1]) : null;

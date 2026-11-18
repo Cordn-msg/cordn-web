@@ -21,10 +21,10 @@ export function hasControlChars(value: string): boolean {
 	});
 }
 
-/** Display text must be trimmed, non-empty, within `maxBytes`, and free of
- *  control / bidirectional override characters (display text is a spoofing
- *  surface). */
-export function isSafeDisplayText(value: string, maxBytes: number): boolean {
+/** Display text must be trimmed, non-empty, within `maxBytes` when a cap is
+ *  given, and free of control / bidirectional override characters (display
+ *  text is a spoofing surface). */
+export function isSafeDisplayText(value: string, maxBytes = Number.POSITIVE_INFINITY): boolean {
 	return (
 		value.length > 0 &&
 		value.trim() === value &&
