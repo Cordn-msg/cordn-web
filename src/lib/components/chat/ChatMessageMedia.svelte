@@ -150,7 +150,7 @@
 </script>
 
 {#if hasMedia}
-	<div class="mb-2 max-w-[16rem] sm:max-w-[20rem]">
+	<div class={cn('mb-2', showingImage ? 'w-full' : 'max-w-[16rem] sm:max-w-[20rem]')}>
 		{#if optimistic}
 			<div class="relative">
 				{#if isOptimisticAudio}

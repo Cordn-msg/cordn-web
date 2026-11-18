@@ -1284,13 +1284,16 @@
 	// review (same as the `+` menu). Web-oriented; harmless on native.
 	let composerRef = $state<{ addFiles: (files: File[]) => void } | null>(null);
 	let dragOver = $state(false);
-	const isMobile = new IsMobile();
+	// The rich view becomes a side pane only at lg; below it, the left nav plus
+	// two columns squeeze the message column, so it overlays the chat instead.
+	const isNarrow = new IsMobile(1024);
 	// ponytail: object ref, not $state. PaneForge's defaultSize is reactive, so
 	// feeding a $state back creates a drag loop that snaps the pane back. A
 	// plain object isn't tracked by Svelte, so onResize records silently and the
 	// prop doesn't re-render mid-drag; remount re-reads it so the last dragged
-	// size still restores across close/open in the session.
-	const detailSizeRef = { current: 40 };
+	// size still restores across close/open in the session. 35% leaves the chat
+	// 65% when the side pane first opens.
+	const detailSizeRef = { current: 35 };
 
 	function handleOpenRich(eventId: string) {
 		selectedDetailEventId = eventId;
@@ -1299,9 +1302,9 @@
 	function handleJumpToMessage(targetEventId: string) {
 		const target = messages.find((m) => m.eventId === targetEventId);
 		if (target) void messageListRef?.scrollToMessage(target.id);
-		// On mobile the sidebar overlays the chat, so the scrolled message isn't
-		// visible behind it — close so the user sees the jump. Desktop keeps it open.
-		if (isMobile.current) selectedDetailEventId = null;
+		// In overlay mode the sidebar covers the chat, so the scrolled message isn't
+		// visible behind it — close so the user sees the jump. Side-by-side keeps it open.
+		if (isNarrow.current) selectedDetailEventId = null;
 	}
 
 	function handleCloseRich() {
@@ -1501,7 +1504,7 @@
 	</div>
 {/snippet}
 
-{#if isMobile.current}
+{#if isNarrow.current}
 	<div class="h-full bg-background text-foreground">
 		{@render chatColumn()}
 	</div>
@@ -1518,7 +1521,7 @@
 			<Sheet.Content
 				side="right"
 				showCloseButton={false}
-				class="bg-background data-[side=right]:w-full"
+				class="bg-background data-[side=right]:w-full data-[side=right]:sm:max-w-none"
 			>
 				<ChatDetailSidebar
 					{groupId}
@@ -1532,7 +1535,12 @@
 	{/if}
 {:else}
 	<Resizable.PaneGroup direction="horizontal" class="h-full w-full bg-background text-foreground">
-		<Resizable.Pane order={1} defaultSize={60} minSize={30} class="min-w-0 overflow-hidden">
+		<Resizable.Pane
+			order={1}
+			defaultSize={100 - detailSizeRef.current}
+			minSize={30}
+			class="min-w-0 overflow-hidden"
+		>
 			{@render chatColumn()}
 		</Resizable.Pane>
 		{#if selectedDetailEventId}

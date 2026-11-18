@@ -776,10 +776,10 @@
 					'group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2',
 					// Signal-style: reserve a gutter beside the bubble so the hover action
 					// bar never overlaps the bubble and never runs past the message list —
-					// full bar width on comfortable screens, a single "…" below sm.
+					// full bar on a comfortably wide message column, a single "…" below it.
 					isOwn
-						? 'hoverfine:max-sm:pl-10 hoverfine:sm:pl-[8.5rem]'
-						: 'hoverfine:max-sm:pr-10 hoverfine:sm:pr-[8.5rem]'
+						? 'hoverfine:pl-10 hoverfine:@min-[34rem]:pl-[8.5rem]'
+						: 'hoverfine:pr-10 hoverfine:@min-[34rem]:pr-[8.5rem]'
 				)}
 				class:flex-row-reverse={isOwn}
 				onpointerenter={activateInteractionControls}
@@ -808,7 +808,7 @@
 													type="button"
 													variant="ghost"
 													size="icon-sm"
-													class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+													class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 													onclick={() => onReply(message)}
 													aria-label="Reply to message"
 												>
@@ -835,7 +835,7 @@
 																type="button"
 																variant="ghost"
 																size="icon-sm"
-																class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+																class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 																aria-label="Add reaction"
 																onclick={(event) => event.stopPropagation()}
 															>
@@ -867,7 +867,7 @@
 												type="button"
 												variant="ghost"
 												size="icon-sm"
-												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 												onclick={() => openRich()}
 												aria-label="Message info"
 											>

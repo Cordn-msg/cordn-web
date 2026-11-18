@@ -860,7 +860,9 @@
 		class="h-full overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]"
 		onscroll={handleScroll}
 	>
-		<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
+		<div
+			class="@container mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8"
+		>
 			<div class="relative w-full" style={`height: ${totalSize}px;`}>
 				{#each virtualItems as virtualItem (virtualItem.key)}
 					{@const message = messageSnapshot[virtualItem.index]}
