@@ -16,6 +16,7 @@
 	let {
 		messages,
 		groupId = '',
+		calendarEventDays = new Map(),
 		initialFocusCursor = 0,
 		ensureMessage,
 		onLoadOlder,
@@ -23,6 +24,8 @@
 		onReact = () => Promise.resolve(),
 		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
+		onEditEvent = () => {},
+		onCancelEvent = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onSendWithoutEmoji = () => {},
@@ -37,6 +40,8 @@
 		messages: ChatMessage[];
 		/** Group the rows belong to — poll rows self-query their votes from here. */
 		groupId?: string;
+		/** Active event count by local chat-day ordinal (`chatDayKey`). */
+		calendarEventDays?: Map<number, number>;
 		/** Unread @-mentions of the viewer: shown as a floating jump button
 		 *  stacked above scroll-to-bottom (moved out of the composer). */
 		unreadReferenceCount?: number;
@@ -55,6 +60,9 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
+		/** Open the calendar event composer for an own event (same `d`). */
+		onEditEvent?: (message: ChatMessage) => void;
+		onCancelEvent?: (message: ChatMessage) => void | Promise<void>;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		onSendWithoutEmoji?: (message: ChatMessage) => void | Promise<void>;
@@ -852,7 +860,9 @@
 		class="h-full overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]"
 		onscroll={handleScroll}
 	>
-		<div class="mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8">
+		<div
+			class="@container mx-auto min-h-full w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-5 md:px-6 md:py-8"
+		>
 			<div class="relative w-full" style={`height: ${totalSize}px;`}>
 				{#each virtualItems as virtualItem (virtualItem.key)}
 					{@const message = messageSnapshot[virtualItem.index]}
@@ -866,6 +876,11 @@
 							and cached (loadedPictures paints it at full opacity instantly), so no fade replays.
 							Own messages omit the pfp entirely. -->
 						{@const runTail = isRunTail(message, nextMessage)}
+						{@const messageDayKey = chatDayKey(message.createdAt)}
+						{@const showDay = previousMessage
+							? chatDayKey(previousMessage.createdAt) !== messageDayKey
+							: true}
+						{@const dayEventCount = showDay ? (calendarEventDays.get(messageDayKey) ?? 0) : 0}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
@@ -879,14 +894,15 @@
 								{groupId}
 								showAuthor={runHead}
 								showAvatar={runTail}
-								showDayLabel={previousMessage
-									? chatDayKey(previousMessage.createdAt) !== chatDayKey(message.createdAt)
-									: true}
+								showDayLabel={showDay}
+								{dayEventCount}
 								showUnreadMarker={message.id === focusMarkerId}
 								{onReply}
 								{onReact}
 								{onUnreact}
 								{onEdit}
+								{onEditEvent}
+								{onCancelEvent}
 								{onDelete}
 								{onRetrySend}
 								{onSendWithoutEmoji}

@@ -45,6 +45,10 @@ import { errorMessage, normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 export interface StoredChatMessage {
 	cursor: number;
 	createdAt: number;
+	/** The envelope's own `created_at` (unix seconds). Replaceable kinds order
+	 *  their revisions by it (calendar events); everything else uses the
+	 *  coordinator cursor. Absent on rows ingested before it was recorded. */
+	eventCreatedAt?: number;
 	direction: 'inbound' | 'outbound';
 	sender: string;
 	id: string;
@@ -1178,6 +1182,7 @@ export async function ingestChatGroupMessages(params: {
 			const stored: StoredChatMessage = {
 				cursor: message.cursor,
 				createdAt: message.createdAt,
+				eventCreatedAt: event.created_at,
 				direction: 'inbound',
 				sender,
 				id: event.id,

@@ -32,6 +32,7 @@
 	import { formatChatDayLabel } from './chatDayLabel';
 	import { profileDisplayName } from '$lib/utils/profileName';
 	import { nip19 } from 'nostr-tools';
+	import CalendarDays from '@lucide/svelte/icons/calendar-days';
 	import Check from '@lucide/svelte/icons/check';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
@@ -55,6 +56,7 @@
 	import type { ChatMessage } from './chat.types';
 	import ChatInlineBody from '$lib/chat/ChatInlineBody.svelte';
 	import { ChatKinds } from '$lib/chat/kinds';
+	import { isCalendarEventKind } from '$lib/chat/calendar';
 	import ChatMessageMedia from './ChatMessageMedia.svelte';
 	import { peekMessageMedia, resolveMessageMedia } from '$lib/services/chatMediaStorage.svelte';
 	import {
@@ -76,11 +78,14 @@
 		showAuthor = true,
 		showAvatar = true,
 		showDayLabel = false,
+		dayEventCount = 0,
 		showUnreadMarker = false,
 		onReply = () => {},
 		onReact = () => Promise.resolve(),
 		onUnreact = () => Promise.resolve(),
 		onEdit = () => {},
+		onEditEvent = () => {},
+		onCancelEvent = () => {},
 		onDelete = () => Promise.resolve(),
 		onRetrySend = () => {},
 		onSendWithoutEmoji = () => {},
@@ -95,6 +100,8 @@
 		showAuthor?: boolean;
 		showAvatar?: boolean;
 		showDayLabel?: boolean;
+		/** Active calendar events on this row's day (0 = no hint). */
+		dayEventCount?: number;
 		/** Render the "New messages" divider above this row — set on the message
 		 *  the chat was opened at (first unread), anchored to the open session like
 		 *  Telegram/WhatsApp: it disappears on the next open once read to the end. */
@@ -103,6 +110,9 @@
 		onReact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onUnreact?: (message: ChatMessage, reaction: string) => void | Promise<void>;
 		onEdit?: (message: ChatMessage) => void;
+		/** Open the calendar event composer for an own event (same `d`). */
+		onEditEvent?: (message: ChatMessage) => void;
+		onCancelEvent?: (message: ChatMessage) => void | Promise<void>;
 		onDelete?: (message: ChatMessage) => void | Promise<void>;
 		onRetrySend?: (message: ChatMessage) => void | Promise<void>;
 		/** A send held back only by its custom emoji: send the text without them. */
@@ -319,6 +329,18 @@
 		if (!isOwn || message.deleted) return;
 		dismissActionSurfaces();
 		onEdit(message);
+	}
+
+	function editEvent() {
+		if (!isOwn || message.deleted) return;
+		dismissActionSurfaces();
+		onEditEvent(message);
+	}
+
+	function cancelEvent() {
+		if (!isOwn || message.deleted) return;
+		dismissActionSurfaces();
+		void onCancelEvent(message);
 	}
 
 	function handleReactionMenuOpenChange(open: boolean) {
@@ -570,7 +592,23 @@
 	{/snippet}
 	{#if showDayLabel}
 		<Marker.Root variant="separator" class="px-2 py-1 text-[11px] font-medium">
-			<Marker.Content>{formatChatDayLabel(message.createdAt)}</Marker.Content>
+			<Marker.Content class="inline-flex items-center gap-1.5">
+				{formatChatDayLabel(message.createdAt)}
+				{#if dayEventCount > 0}
+					<span
+						class="inline-flex items-center gap-0.5 text-primary/80"
+						title={`${dayEventCount} ${dayEventCount === 1 ? 'event' : 'events'}`}
+						aria-hidden="true"
+					>
+						<CalendarDays class="size-3" />
+						<span class="tabular-nums">{dayEventCount}</span>
+					</span>
+					<span class="sr-only">
+						{dayEventCount}
+						{dayEventCount === 1 ? 'event' : 'events'}
+					</span>
+				{/if}
+			</Marker.Content>
 		</Marker.Root>
 	{/if}
 
@@ -738,10 +776,10 @@
 					'group flex max-w-[min(100%,48rem)] min-w-0 flex-1 items-end gap-1.5 sm:gap-2',
 					// Signal-style: reserve a gutter beside the bubble so the hover action
 					// bar never overlaps the bubble and never runs past the message list —
-					// full bar width on comfortable screens, a single "…" below sm.
+					// full bar on a comfortably wide message column, a single "…" below it.
 					isOwn
-						? 'hoverfine:max-sm:pl-10 hoverfine:sm:pl-[8.5rem]'
-						: 'hoverfine:max-sm:pr-10 hoverfine:sm:pr-[8.5rem]'
+						? 'hoverfine:pl-10 hoverfine:@min-[34rem]:pl-[8.5rem]'
+						: 'hoverfine:pr-10 hoverfine:@min-[34rem]:pr-[8.5rem]'
 				)}
 				class:flex-row-reverse={isOwn}
 				onpointerenter={activateInteractionControls}
@@ -770,7 +808,7 @@
 													type="button"
 													variant="ghost"
 													size="icon-sm"
-													class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+													class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 													onclick={() => onReply(message)}
 													aria-label="Reply to message"
 												>
@@ -797,7 +835,7 @@
 																type="button"
 																variant="ghost"
 																size="icon-sm"
-																class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+																class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 																aria-label="Add reaction"
 																onclick={(event) => event.stopPropagation()}
 															>
@@ -829,7 +867,7 @@
 												type="button"
 												variant="ghost"
 												size="icon-sm"
-												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm sm:inline-flex"
+												class="hidden rounded-lg bg-background/90 shadow-sm backdrop-blur-sm @min-[34rem]:inline-flex"
 												onclick={() => openRich()}
 												aria-label="Message info"
 											>
@@ -873,9 +911,10 @@
 										sideOffset={8}
 										class="w-64 rounded-xl sm:w-44"
 									>
-										<!-- Collapsed-bar mode (<sm, fine pointer): the "…" menu carries
-										     everything the full bar exposes as icons. -->
-										<div class="flex flex-col gap-1 border-b border-border/70 pb-1 sm:hidden">
+										<!-- The icon bar is hidden by a container query, but this menu is
+										     portaled outside that container; keep its fallback items at every
+										     width so a narrow message column never loses them. -->
+										<div class="flex flex-col gap-1 border-b border-border/70 pb-1">
 											{#if !message.deleted && isStoredEvent}
 												{@render reactionChoices()}
 												<DropdownMenuItem onSelect={handleReplyAction} class="mt-1 gap-2">
@@ -909,7 +948,7 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll}
+										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
 											<!-- Polls are immutable once cast: an edit would swap the question
 											     under standing votes. -->
 											<DropdownMenuItem onSelect={startEditing} class="gap-2">
@@ -918,10 +957,28 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted}
+										{#if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
+											<!-- A calendar event revises through its own composer (same `d`),
+											     never as a text edit. -->
+											<DropdownMenuItem onSelect={editEvent} class="gap-2">
+												<Pencil class="size-4" />
+												<span>Edit event</span>
+											</DropdownMenuItem>
+										{/if}
+
+										{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
 											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
 												<Trash2 class="size-4" />
 												<span>Delete</span>
+											</DropdownMenuItem>
+										{:else if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
+											<!-- Same slot as any message's Delete, but a confirmed event is
+											     cancelled through its addressable `a` deletion — a single
+											     revision delete would resurrect the previous revision.
+											     A queued bubble keeps Delete: that is how it is discarded. -->
+											<DropdownMenuItem onSelect={cancelEvent} class="gap-2 text-destructive">
+												<Trash2 class="size-4" />
+												<span>Cancel event</span>
 											</DropdownMenuItem>
 										{/if}
 									</DropdownMenuContent>
@@ -1272,7 +1329,7 @@
 									<Info class="size-4 shrink-0 text-muted-foreground" />
 									<span>Message info</span>
 								</button>
-								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll}
+								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
@@ -1282,7 +1339,17 @@
 										<span>Edit</span>
 									</button>
 								{/if}
-								{#if isOwn && !message.deleted}
+								{#if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={editEvent}
+									>
+										<Pencil class="size-4 shrink-0 text-muted-foreground" />
+										<span>Edit event</span>
+									</button>
+								{/if}
+								{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
@@ -1290,6 +1357,15 @@
 									>
 										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
 										<span>Delete</span>
+									</button>
+								{:else if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
+									<button
+										type="button"
+										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
+										onclick={cancelEvent}
+									>
+										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
+										<span>Cancel event</span>
 									</button>
 								{/if}
 							</div>

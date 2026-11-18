@@ -8,15 +8,14 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import ImagePlay from '@lucide/svelte/icons/image-play';
 	import BarChart3 from '@lucide/svelte/icons/bar-chart-3';
+	import CalendarPlus from '@lucide/svelte/icons/calendar-plus';
 	import Smile from '@lucide/svelte/icons/smile';
 	import { isNativePlatform } from '$lib/services/nativeShims';
 
-	/**
-	 * Composer actions menu — the `+` next to the composer. Camera capture (photo on all platforms,
+	/** Composer actions menu — the `+` next to the composer. Camera capture (photo on all platforms,
 	 * video native-only), image/document/GIF pickers, and the poll composer. A discrete, exported
 	 * component so further non-media actions (payments, etc.) can be appended to the same dropdown
-	 * later without touching the composer.
-	 */
+	 * later without touching the composer. */
 	let {
 		onTakePhoto = () => {},
 		onTakeVideo = () => {},
@@ -24,6 +23,7 @@
 		onPickDocument = () => {},
 		onPickGif = () => {},
 		onCreatePoll = () => {},
+		onCreateEvent = () => {},
 		onPickEmoji = () => {}
 	}: {
 		onTakePhoto?: () => void;
@@ -32,6 +32,7 @@
 		onPickDocument?: () => void;
 		onPickGif?: () => void;
 		onCreatePoll?: () => void;
+		onCreateEvent?: () => void;
 		onPickEmoji?: () => void;
 	} = $props();
 </script>
@@ -82,6 +83,10 @@
 		<DropdownMenu.Item onclick={onCreatePoll} class="gap-2">
 			<BarChart3 class="size-4" />
 			<span>Poll</span>
+		</DropdownMenu.Item>
+		<DropdownMenu.Item onclick={onCreateEvent} class="gap-2">
+			<CalendarPlus class="size-4" />
+			<span>Event</span>
 		</DropdownMenu.Item>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>

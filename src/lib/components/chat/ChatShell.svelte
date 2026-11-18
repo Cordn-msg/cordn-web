@@ -5,6 +5,7 @@
 	import ChatMessageList from './ChatMessageList.svelte';
 	import ChatPinnedRibbon from './ChatPinnedRibbon.svelte';
 	import ChatDetailSidebar from './ChatDetailSidebar.svelte';
+	import GroupSectionNav from './GroupSectionNav.svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -59,6 +60,22 @@
 		getMessagePollDefinition,
 		type PollDraft
 	} from '$lib/chat/polls';
+	import {
+		calendarCoordinate,
+		calendarDraftFromDefinition,
+		getCalendarEventDefinition,
+		isCalendarEventKind,
+		type CalendarEventCard,
+		type CalendarEventDraft
+	} from '$lib/chat/calendar';
+	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
+	import {
+		groupCalendarCards,
+		groupCalendarEvent,
+		loadGroupCalendar
+	} from '$lib/services/chatCalendar.svelte';
+	import CalendarEventCancelDialog from './CalendarEventCancelDialog.svelte';
+	import CalendarEventComposerDialog from './CalendarEventComposerDialog.svelte';
 	import { foldReactionMarkers } from './reactionMarkers';
 	import { getShowReactionMarkers } from '$lib/services/chatComposerSettings.svelte';
 	import { type StoredChatSystemMessageData } from '$lib/services/chatGroupMessages.svelte';
@@ -331,6 +348,47 @@
 
 	const storedMessages = $derived.by(() => listChatGroupMessages(groupId));
 
+	const calendarCards = $derived(groupCalendarCards(groupId));
+	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
+	// A cancellation deletes the latest revision through the ordinary `e` fold;
+	// the chat row still has to render the cancelled card, not "message deleted".
+	// Revision ids resolve to their card so the fold can tell the two apart.
+	const calendarCardByRevision = $derived.by(() => {
+		const cards = new Map<string, CalendarEventCard>();
+		for (const card of calendarCards) {
+			for (const id of card.revisionIds) cards.set(id, card);
+		}
+		return cards;
+	});
+	// A revised addressable event shows the same pencil as an edited message,
+	// in the message footer (the card itself stays uncluttered).
+	const revisedCalendarEventIds = $derived(
+		new Set(calendarCards.filter((card) => card.revised).map((card) => card.id))
+	);
+	// Day separators and the Calendar tab read one per-day count; the
+	// calendar projection already owns the zone/day semantics.
+	const calendarEventDayCounts = $derived.by(() => {
+		const counts = new Map<number, number>();
+		for (const card of calendarCards) {
+			if (card.cancelled) continue;
+			for (const key of card.dayKeys) {
+				const ordinal = Number(key.replace(/-/g, ''));
+				counts.set(ordinal, (counts.get(ordinal) ?? 0) + 1);
+			}
+		}
+		return counts;
+	});
+	// The Chat/Calendar switch only earns its row once the group has an event:
+	// a group with no events keeps a clean header, and the first event (created
+	// from the composer's `+` menu) brings the switch in.
+	const hasCalendarEvents = $derived(calendarCards.some((card) => !card.cancelled));
+	$effect(() => {
+		void groupId;
+		// Kind-scoped durable read: events older than the loaded window still
+		// count, so the switch appears for a group whose history is long.
+		untrack(() => void loadGroupCalendar(groupId));
+	});
+
 	// Reaction/edit/delete maps are pure functions of the stored messages.
 	// Splitting them into their own $derived means Svelte only rebuilds them when
 	// messages actually change — not on every optimistic edit/delete/reply which
@@ -363,10 +421,39 @@
 		for (const pendingEdit of getPendingEdits(groupId)) {
 			pendingEditByTarget.set(pendingEdit.targetId, pendingEdit);
 		}
+		// Never render a pending bubble whose confirmed copy is already ingested.
+		const pending = getPendingMessages(groupId).filter(
+			(message) => !byEventId.has(message.eventId)
+		);
+
+		// Addressable calendar revisions replace their chat row too, not just
+		// their calendar card. A queued revision wins optimistically; only the
+		// newest queued bubble for the same coordinate stays visible.
+		function eventCoordinate(kind: number, author: string, tags: string[][]): string | null {
+			const definition = getCalendarEventDefinition(kind, '', tags);
+			return definition ? calendarCoordinate({ kind, author, d: definition.d }) : null;
+		}
+		const pendingCalendarRevisions = new Map<string, ChatMessage>();
+		for (const message of pending) {
+			if (!isCalendarEventKind(message.kind)) continue;
+			const coordinate = eventCoordinate(message.kind, message.author, message.tags ?? []);
+			if (!coordinate) continue;
+			const current = pendingCalendarRevisions.get(coordinate);
+			if (!current || message.createdAt >= current.createdAt) {
+				pendingCalendarRevisions.set(coordinate, message);
+			}
+		}
+
 		const confirmedMessages = storedMessages
-			.filter((message) =>
-				message.kind === ChatKinds.Reaction ? reactionMarkers : !isStreamHiddenKind(message.kind)
-			)
+			.filter((message) => {
+				if (message.kind === ChatKinds.Reaction) return reactionMarkers;
+				if (isStreamHiddenKind(message.kind)) return false;
+				if (!isCalendarEventKind(message.kind)) return true;
+				const coordinate = eventCoordinate(message.kind, message.sender, message.tags);
+				return coordinate
+					? !pendingCalendarRevisions.has(coordinate) && latestCalendarEventIds.has(message.id)
+					: true;
+			})
 			.map((message) => {
 				// Kind-7 reactions render as marker rows in the linear timeline
 				// (systemKind 'reaction') in addition to the chips on the target.
@@ -415,8 +502,21 @@
 				const threadReference = getMessageThreadReference(message.tags);
 				const replySource = threadReference ? byEventId.get(threadReference.parentId) : undefined;
 				const replyPendingEdit = replySource ? pendingEditByTarget.get(replySource.id) : undefined;
+				const replySourceCancelled = Boolean(
+					replySource &&
+					isCalendarEventKind(replySource.kind) &&
+					calendarCardByRevision.get(replySource.id)?.cancelled
+				);
+				const replySourceDeleted = replySource
+					? deletedIds.has(replySource.id) && !replySourceCancelled
+					: false;
 				const reactions = reactionMap.get(message.id);
-				const deleted = Boolean(deletedIds.has(message.id) || optimisticDeletes[message.id]);
+				const calendarCancelled = Boolean(
+					isCalendarEventKind(message.kind) && calendarCardByRevision.get(message.id)?.cancelled
+				);
+				const deleted = Boolean(
+					(deletedIds.has(message.id) || optimisticDeletes[message.id]) && !calendarCancelled
+				);
 				// Deleted rows hide their content, so their overlays go silent too —
 				// a pending edit's clock has no business on a removed message.
 				const pendingEdit = deleted ? undefined : pendingEditByTarget.get(message.id);
@@ -493,20 +593,24 @@
 						? undefined
 						: (edit?.mediaKeyBase64 ?? message.mediaKeyBase64),
 					deleted,
+					calendarCancelled,
 					pinned,
 					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
-					edited: !deleted && Boolean(pendingEdit || edit),
+					edited:
+						!deleted &&
+						(Boolean(pendingEdit || edit) ||
+							(isCalendarEventKind(message.kind) && revisedCalendarEventIds.has(message.id))),
 					reactions: reactionEntries,
 					replyTo: replySource
 						? buildReplyQuote({
 								id: `${replySource.id}:${replySource.cursor}`,
 								author: replySource.sender,
-								content: deletedIds.has(replySource.id)
+								content: replySourceDeleted
 									? ''
 									: (replyPendingEdit?.content ??
 										editMap.get(replySource.id)?.content ??
 										replySource.content),
-								deleted: deletedIds.has(replySource.id),
+								deleted: replySourceDeleted,
 								tags: replyPendingEdit
 									? emojiDisplayTags(replyPendingEdit.content)
 									: (editMap.get(replySource.id)?.tags ?? replySource.tags),
@@ -520,16 +624,13 @@
 				};
 			});
 
-		// Never render a pending bubble whose confirmed copy is already
-		// ingested (the live subscription echoes our own send back, and backlog
-		// confirms land while the entry is still queued): the pending→confirmed
-		// swap happens in a single render instead of a both-visible flash.
-		// Unsealed bubbles carry `outbox:` event ids, which never match.
-		const pending = getPendingMessages(groupId).filter(
-			(message) => !byEventId.has(message.eventId)
-		);
+		const visiblePending = pending.filter((message) => {
+			if (!isCalendarEventKind(message.kind)) return true;
+			const coordinate = eventCoordinate(message.kind, message.author, message.tags ?? []);
+			return !coordinate || pendingCalendarRevisions.get(coordinate) === message;
+		});
 		return foldReactionMarkers(
-			[...confirmedMessages, ...pending]
+			[...confirmedMessages, ...visiblePending]
 				.filter((message): message is ChatMessage => message !== null)
 				.sort(compareChatMessages)
 		);
@@ -637,6 +738,53 @@
 		}
 		void messageListRef?.scrollToBottom();
 		composerFocusKey += 1;
+	}
+
+	/** Calendar event creation enqueues like a poll (durable outbox-first) with
+	 *  its validated tags; the composer dialog has already validated the draft. */
+	function handleCreateEvent(input: { d: string; draft: CalendarEventDraft }) {
+		try {
+			enqueueCalendarEvent(groupId, input);
+		} catch (error) {
+			sendError = error instanceof Error ? error.message : 'Failed to create event';
+			return;
+		}
+		void messageListRef?.scrollToBottom();
+		composerFocusKey += 1;
+	}
+
+	// Editing an event from the message's own actions menu: the same composer
+	// the event page uses, keeping the event's `d` so it replaces in place.
+	let eventEditTarget = $state<CalendarEventCard | null>(null);
+	let eventEditOpen = $state(false);
+	let eventCancelTarget = $state<CalendarEventCard | null>(null);
+	let eventCancelOpen = $state(false);
+	const eventEditInitial = $derived(
+		eventEditTarget
+			? { d: eventEditTarget.d, draft: calendarDraftFromDefinition(eventEditTarget.definition) }
+			: null
+	);
+
+	function handleEditEvent(message: ChatMessage) {
+		const card = groupCalendarEvent(groupId, message.eventId);
+		if (!card) return;
+		eventEditTarget = card;
+		eventEditOpen = true;
+	}
+
+	function handleCancelEvent(message: ChatMessage) {
+		const card = groupCalendarEvent(groupId, message.eventId);
+		if (!card || card.cancelled) return;
+		eventCancelTarget = card;
+		eventCancelOpen = true;
+	}
+
+	function saveEventRevision(input: { d: string; draft: CalendarEventDraft }) {
+		try {
+			enqueueCalendarEvent(groupId, input);
+		} catch (error) {
+			sendError = error instanceof Error ? error.message : 'Failed to save event';
+		}
 	}
 
 	function handleSendMedia(entries: OutgoingMediaAttachment[]) {
@@ -1160,13 +1308,16 @@
 	// review (same as the `+` menu). Web-oriented; harmless on native.
 	let composerRef = $state<{ addFiles: (files: File[]) => void } | null>(null);
 	let dragOver = $state(false);
-	const isMobile = new IsMobile();
+	// The rich view becomes a side pane only at lg; below it, the left nav plus
+	// two columns squeeze the message column, so it overlays the chat instead.
+	const isNarrow = new IsMobile(1024);
 	// ponytail: object ref, not $state. PaneForge's defaultSize is reactive, so
 	// feeding a $state back creates a drag loop that snaps the pane back. A
 	// plain object isn't tracked by Svelte, so onResize records silently and the
 	// prop doesn't re-render mid-drag; remount re-reads it so the last dragged
-	// size still restores across close/open in the session.
-	const detailSizeRef = { current: 40 };
+	// size still restores across close/open in the session. 35% leaves the chat
+	// 65% when the side pane first opens.
+	const detailSizeRef = { current: 35 };
 
 	function handleOpenRich(eventId: string) {
 		selectedDetailEventId = eventId;
@@ -1175,9 +1326,9 @@
 	function handleJumpToMessage(targetEventId: string) {
 		const target = messages.find((m) => m.eventId === targetEventId);
 		if (target) void messageListRef?.scrollToMessage(target.id);
-		// On mobile the sidebar overlays the chat, so the scrolled message isn't
-		// visible behind it — close so the user sees the jump. Desktop keeps it open.
-		if (isMobile.current) selectedDetailEventId = null;
+		// In overlay mode the sidebar covers the chat, so the scrolled message isn't
+		// visible behind it — close so the user sees the jump. Side-by-side keeps it open.
+		if (isNarrow.current) selectedDetailEventId = null;
 	}
 
 	function handleCloseRich() {
@@ -1277,6 +1428,9 @@
 		}}
 	>
 		<ChatHeader {groupId} title={displayTitle} titlePubkey={titlePersonPubkey} />
+		{#if hasCalendarEvents}
+			<GroupSectionNav {groupId} active="chat" />
+		{/if}
 
 		{#if pinnedMessages.length > 0}
 			<ChatPinnedRibbon
@@ -1299,6 +1453,7 @@
 					bind:this={messageListRef}
 					{messages}
 					{groupId}
+					calendarEventDays={calendarEventDayCounts}
 					{initialFocusCursor}
 					ensureMessage={(cursor) => loadChatGroupMessagesAround(groupId, cursor)}
 					onLoadOlder={() => loadOlderChatGroupMessages(groupId)}
@@ -1308,6 +1463,8 @@
 					onReact={handleReact}
 					onUnreact={handleUnreact}
 					onEdit={handleEdit}
+					onEditEvent={handleEditEvent}
+					onCancelEvent={handleCancelEvent}
 					onDelete={handleDelete}
 					onRetrySend={handleRetrySend}
 					onSendWithoutEmoji={handleSendWithoutEmoji}
@@ -1349,6 +1506,7 @@
 			onSendMedia={handleSendMedia}
 			onSendVoice={handleSendVoice}
 			onSendPoll={handleSendPoll}
+			onSendEvent={handleCreateEvent}
 			disabled={isRemoved || isPoisoned}
 			replyTo={composerReplyPreview}
 			editTo={editTarget
@@ -1360,10 +1518,17 @@
 			{mentionCandidates}
 			bind:selectedMentions
 		/>
+
+		<CalendarEventComposerDialog
+			bind:open={eventEditOpen}
+			initial={eventEditInitial}
+			onSave={saveEventRevision}
+		/>
+		<CalendarEventCancelDialog bind:open={eventCancelOpen} {groupId} card={eventCancelTarget} />
 	</div>
 {/snippet}
 
-{#if isMobile.current}
+{#if isNarrow.current}
 	<div class="h-full bg-background text-foreground">
 		{@render chatColumn()}
 	</div>
@@ -1380,7 +1545,7 @@
 			<Sheet.Content
 				side="right"
 				showCloseButton={false}
-				class="bg-background data-[side=right]:w-full"
+				class="bg-background data-[side=right]:w-full data-[side=right]:sm:max-w-none"
 			>
 				<ChatDetailSidebar
 					{groupId}
@@ -1394,7 +1559,12 @@
 	{/if}
 {:else}
 	<Resizable.PaneGroup direction="horizontal" class="h-full w-full bg-background text-foreground">
-		<Resizable.Pane order={1} defaultSize={60} minSize={30} class="min-w-0 overflow-hidden">
+		<Resizable.Pane
+			order={1}
+			defaultSize={100 - detailSizeRef.current}
+			minSize={30}
+			class="min-w-0 overflow-hidden"
+		>
 			{@render chatColumn()}
 		</Resizable.Pane>
 		{#if selectedDetailEventId}

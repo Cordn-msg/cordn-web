@@ -5,19 +5,19 @@
  * dispatchers (`ChatInlineBody.svelte`, `ChatRichBody.svelte`) look up by kind
  * and fall back to the default when a kind has no specific renderer.
  *
- * ponytail: today every dispatch resolves to the default — `inlineBodies`
- * maps both live kinds to `TextInline` (which is also `defaultInlineBody`),
- * and `richBodies` is empty. Kept as the documented extension seam
- * (README.md § Registry); collapse to direct `<TextInline>`/`<DefaultRich>`
- * only if the multi-kind plan is abandoned.
+ * Text, polls and calendar events have dedicated bodies; unknown kinds fall
+ * back to the default renderers. Kept as the documented extension seam
+ * (README.md § Registry).
  */
 import type { Component } from 'svelte';
 
 import { ChatKinds } from '$lib/chat/kinds';
 import TextInline from '$lib/chat/inline/TextInline.svelte';
 import PollInline from '$lib/chat/inline/PollInline.svelte';
+import CalendarEventInline from '$lib/chat/inline/CalendarEventInline.svelte';
 import DefaultRich from '$lib/chat/rich/DefaultRich.svelte';
 import PollRich from '$lib/chat/rich/PollRich.svelte';
+import CalendarEventRich from '$lib/chat/rich/CalendarEventRich.svelte';
 
 // ---------------------------------------------------------------------------
 // Inline (compact) bodies — rendered inside the chat stream row.
@@ -43,7 +43,9 @@ export type InlineBody = Component<InlineBodyProps>;
 export const inlineBodies: Record<number, InlineBody> = {
 	[ChatKinds.Text]: TextInline,
 	[ChatKinds.ThreadReply]: TextInline,
-	[ChatKinds.Poll]: PollInline
+	[ChatKinds.Poll]: PollInline,
+	[ChatKinds.CalendarDate]: CalendarEventInline,
+	[ChatKinds.CalendarTime]: CalendarEventInline
 };
 
 export const defaultInlineBody: InlineBody = TextInline;
@@ -65,7 +67,9 @@ export type RichBody = Component<RichBodyProps>;
 /** Kind → rich body. PollRich shares one presentational surface between the
  *  detail sidebar and /chat/[id]/e/[eventId] (README § Rich context). */
 export const richBodies: Record<number, RichBody> = {
-	[ChatKinds.Poll]: PollRich
+	[ChatKinds.Poll]: PollRich,
+	[ChatKinds.CalendarDate]: CalendarEventRich,
+	[ChatKinds.CalendarTime]: CalendarEventRich
 };
 
 export const defaultRichBody: RichBody = DefaultRich;

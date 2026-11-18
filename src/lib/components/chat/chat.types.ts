@@ -34,6 +34,9 @@ export interface ChatMessage {
 	emojiBlocked?: boolean;
 	edited?: boolean;
 	deleted?: boolean;
+	/** A calendar event whose addressable coordinate was cancelled: the card
+	 *  renders with a Cancelled badge, but author actions are gone. */
+	calendarCancelled?: boolean;
 	reactions?: ChatReaction[];
 	replyTo?: ReplyQuoteView;
 	cursor?: number;

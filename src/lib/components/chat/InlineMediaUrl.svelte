@@ -15,7 +15,17 @@
 	 * auto-load setting: off shows a "Load media" button the user taps first.
 	 * Distinct from ChatMessageMedia, which handles encrypted `imeta` attachments.
 	 */
-	let { href, isOwn = false }: { href: string; isOwn?: boolean } = $props();
+	let {
+		href,
+		isOwn = false,
+		/** Load immediately instead of lazily. Virtualized rows give a lazy image
+		 *  no height to intersect with, so a card's deliberate cover image would
+		 *  never load; pasted media keeps the lazy default. */
+		eager = false,
+		/** Meaningful description for a deliberate image (calendar cover); pasted
+		 *  media falls back to the URL filename. */
+		alt = ''
+	}: { href: string; isOwn?: boolean; eager?: boolean; alt?: string } = $props();
 
 	const kind = $derived(mediaUrlKind(href));
 	// Per-URL reveal lives in module scope (see chatMediaStorage) so it survives
@@ -45,14 +55,14 @@
 	{#if show}
 		<button
 			type="button"
-			class="mt-1 block max-h-64 w-full overflow-hidden rounded-2xl sm:max-w-[min(100%,20rem)]"
+			class="mt-1 block max-h-64 w-full overflow-hidden rounded-2xl"
 			aria-label="Open image"
 			onclick={() => openMediaLightbox({ url: href, filename, mime: 'image/*' })}
 		>
 			<img
 				src={href}
-				alt={filename}
-				loading="lazy"
+				alt={alt || filename}
+				loading={eager ? 'eager' : 'lazy'}
 				class="max-h-64 w-full cursor-zoom-in object-cover"
 			/>
 		</button>

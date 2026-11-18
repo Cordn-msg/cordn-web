@@ -27,5 +27,14 @@ export function chatUpHref(pathname: string, search = ''): string | null {
 	}
 	if (rest.length === 1) return '/chat'; // chat | news | create-group | share
 	// Conversation children: /chat/<id>/info and /chat/<id>/e/<eventId>.
+	// A calendar-opened event returns to the calendar, not the chat feed.
+	if (rest.length >= 3 && rest[1] === 'e') {
+		const params = new URLSearchParams(search);
+		if (params.get('from') === 'cal') {
+			params.delete('from');
+			const query = params.toString();
+			return `/chat/${rest[0]}/cal${query ? `?${query}` : ''}`;
+		}
+	}
 	return `/chat/${rest[0]}${search}`;
 }
