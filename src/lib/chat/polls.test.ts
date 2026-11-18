@@ -86,6 +86,18 @@ describe('poll drafts', () => {
 		expect(validatePollDraft(draft({ endsAt: now + 31 * 24 * 3600 }), now)).toMatch(/End time/);
 		expect(validatePollDraft(draft({ endsAt: now + 3600 }), now)).toBeNull();
 	});
+
+	it('accepts long text without field-size caps', () => {
+		const longQuestion = 'Q'.repeat(4_000);
+		const longOption = 'O'.repeat(2_000);
+		const long = draft({ question: longQuestion, optionLabels: [longOption, 'Nay'] });
+		expect(validatePollDraft(long, 1000)).toBeNull();
+
+		const tags = createPollMessageTags(long, 1000);
+		const parsed = getMessagePollDefinition(ChatKinds.Poll, longQuestion, tags);
+		expect(parsed?.question).toBe(longQuestion);
+		expect(parsed?.options[0].label).toBe(longOption);
+	});
 });
 
 describe('poll tag round trip', () => {

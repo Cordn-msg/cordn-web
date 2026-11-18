@@ -8,8 +8,8 @@
  * `polltype` = "singlechoice" | "multiplechoice" (absent = singlechoice);
  * `endsAt` = unix-seconds deadline (absent = never closes). NIP-88 `relay` tags
  * are dropped — cordn routes through the group's coordinator, there are no
- * public relays. Unknown extension tags are ignored (bounded), known tag shapes
- * stay strict.
+ * public relays. Unknown extension tags are ignored, known tag shapes stay
+ * strict.
  *
  * Kind 1018 (response): `e` tag → poll, `response` tags = selected option ids.
  * A response is a complete-selection replacement, never a delta: exactly one id
@@ -34,12 +34,8 @@ import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
 
 export const POLL_MIN_OPTIONS = 2;
 export const POLL_MAX_OPTIONS = 10;
-export const POLL_MAX_QUESTION_BYTES = 1024;
-export const POLL_MAX_OPTION_BYTES = 256;
 export const POLL_MAX_OPTION_ID_BYTES = 64;
 export const POLL_MAX_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
-/** Bound receive-side work; leave room for future extension tags. */
-export const POLL_MAX_TAGS = 32;
 
 export type PollType = 'singlechoice' | 'multiplechoice';
 
@@ -108,8 +104,8 @@ function isValidOptionId(value: string): boolean {
 
 /** Returns a human-readable error for an invalid draft, or null when sendable. */
 export function validatePollDraft(draft: PollDraft, nowSeconds: number): string | null {
-	if (!isSafeDisplayText(draft.question, POLL_MAX_QUESTION_BYTES)) {
-		return 'Question is required (max 1024 bytes, no control characters)';
+	if (!isSafeDisplayText(draft.question)) {
+		return 'Question is required (no control characters)';
 	}
 	if (
 		draft.optionLabels.length < POLL_MIN_OPTIONS ||
@@ -118,8 +114,8 @@ export function validatePollDraft(draft: PollDraft, nowSeconds: number): string 
 		return `Polls need between ${POLL_MIN_OPTIONS} and ${POLL_MAX_OPTIONS} options`;
 	}
 	for (const label of draft.optionLabels) {
-		if (!isSafeDisplayText(label, POLL_MAX_OPTION_BYTES)) {
-			return 'Options cannot be empty (max 256 bytes, no control characters)';
+		if (!isSafeDisplayText(label)) {
+			return 'Options cannot be empty (no control characters)';
 		}
 	}
 	if (draft.endsAt !== null) {
@@ -203,7 +199,7 @@ export function getMessagePollDefinition(
 	content: string,
 	tags: string[][]
 ): PollDefinition | null {
-	if (kind !== ChatKinds.Poll || tags.length > POLL_MAX_TAGS) return null;
+	if (kind !== ChatKinds.Poll) return null;
 
 	const options: PollOptionDefinition[] = [];
 	let pollType: PollType | null = null;
@@ -211,11 +207,7 @@ export function getMessagePollDefinition(
 
 	for (const tag of tags) {
 		if (tag[0] === 'option') {
-			if (
-				tag.length !== 3 ||
-				!isValidOptionId(tag[1]) ||
-				!isSafeDisplayText(tag[2], POLL_MAX_OPTION_BYTES)
-			) {
+			if (tag.length !== 3 || !isValidOptionId(tag[1]) || !isSafeDisplayText(tag[2])) {
 				return null;
 			}
 			options.push({ id: tag[1], label: tag[2] });
@@ -234,7 +226,7 @@ export function getMessagePollDefinition(
 
 	if (options.length < POLL_MIN_OPTIONS || options.length > POLL_MAX_OPTIONS) return null;
 	if (new Set(options.map((option) => option.id)).size !== options.length) return null;
-	if (!isSafeDisplayText(content, POLL_MAX_QUESTION_BYTES)) return null;
+	if (!isSafeDisplayText(content)) return null;
 
 	return {
 		question: content,
@@ -248,7 +240,7 @@ export function getMessagePollResponseReference(
 	kind: number,
 	tags: string[][]
 ): PollResponseReference | null {
-	if (kind !== ChatKinds.PollResponse || tags.length > POLL_MAX_TAGS) return null;
+	if (kind !== ChatKinds.PollResponse) return null;
 
 	const eventTag = findTag(tags, 'e');
 	if (!eventTag?.[1]) return null;
