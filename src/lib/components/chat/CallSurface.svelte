@@ -134,8 +134,10 @@
 		class="flex h-dvh max-h-dvh flex-col gap-0 overflow-hidden rounded-none p-0 sm:h-[calc(100dvh-2rem)] sm:max-w-5xl sm:rounded-4xl"
 	>
 		<!-- The fullscreen target is this inner wrapper, not the dialog box: the dialog's own
-		     centering/size classes would otherwise fight the browser's fullscreen sizing. -->
-		<div bind:this={fullscreenEl} class="flex h-full min-h-0 flex-col bg-popover">
+		     centering/size classes would otherwise fight the browser's fullscreen sizing.
+		     pt-inset: portaled dialogs miss the chat layout's pt-safe, so without it the header
+		     sits under the Android status bar (0px on web, so desktop is unchanged). -->
+		<div bind:this={fullscreenEl} class="flex h-full min-h-0 flex-col bg-popover pt-inset">
 			<Dialog.Header class="flex-row items-center gap-3 border-b px-4 py-3 text-left sm:px-6">
 				<div class="min-w-0 flex-1">
 					<Dialog.Title class="truncate">{groupTitle}</Dialog.Title>
@@ -174,7 +176,7 @@
 			{/if}
 
 			{#if chatCallsStore.active}
-				<div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+				<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">
 					{#if chatCallsStore.participants.length === 0}
 						<div class="flex h-full min-h-48 items-center justify-center text-muted-foreground">
 							<LoaderCircle class="mr-2 size-5 animate-spin" /> Joining the room…
@@ -183,8 +185,25 @@
 						{@const sharing = chatCallsStore.participants.findLast(
 							(participant) => participant.screenSharing
 						)}
+						{@const sharingPubkey = sharing
+							? participantPubkey(sharing.identity, sharing.isLocal)
+							: null}
 						{#if sharing}
 							<div class="mb-3 overflow-hidden rounded-2xl border bg-black">
+								<div
+									class="flex items-center gap-2 border-b border-white/10 bg-background px-3 py-2 text-sm"
+								>
+									{#if sharingPubkey}
+										<div class="min-w-0 flex-1 truncate font-medium">
+											<ProfileCard pubkey={sharingPubkey} mode="inline" profileLink={false} />
+										</div>
+									{:else}
+										<span class="min-w-0 flex-1 truncate font-medium text-amber-600"
+											>Unknown participant</span
+										>
+									{/if}
+									<span class="shrink-0 text-xs text-muted-foreground">screen</span>
+								</div>
 								{#key `${sharing.identity}:screen`}
 									<video
 										use:videoAttachment={{ identity: sharing.identity, source: 'screen' }}
@@ -201,7 +220,7 @@
 							{#each chatCallsStore.participants as participant (participant.identity)}
 								{@const pubkey = participantPubkey(participant.identity, participant.isLocal)}
 								<div
-									class="relative flex aspect-video min-h-40 items-center justify-center overflow-hidden rounded-2xl border bg-muted/40"
+									class="relative flex aspect-video min-h-40 w-full items-center justify-center overflow-hidden rounded-2xl border bg-muted/40"
 									class:border-primary={participant.isSpeaking}
 									class:ring-2={participant.isSpeaking}
 									class:ring-primary={participant.isSpeaking}
