@@ -911,9 +911,10 @@
 										sideOffset={8}
 										class="w-64 rounded-xl sm:w-44"
 									>
-										<!-- Collapsed-bar mode (<sm, fine pointer): the "…" menu carries
-										     everything the full bar exposes as icons. -->
-										<div class="flex flex-col gap-1 border-b border-border/70 pb-1 sm:hidden">
+										<!-- The icon bar is hidden by a container query, but this menu is
+										     portaled outside that container; keep its fallback items at every
+										     width so a narrow message column never loses them. -->
+										<div class="flex flex-col gap-1 border-b border-border/70 pb-1">
 											{#if !message.deleted && isStoredEvent}
 												{@render reactionChoices()}
 												<DropdownMenuItem onSelect={handleReplyAction} class="mt-1 gap-2">
@@ -956,7 +957,7 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+										{#if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
 											<!-- A calendar event revises through its own composer (same `d`),
 											     never as a text edit. -->
 											<DropdownMenuItem onSelect={editEvent} class="gap-2">
@@ -970,7 +971,7 @@
 												<Trash2 class="size-4" />
 												<span>Delete</span>
 											</DropdownMenuItem>
-										{:else if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+										{:else if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
 											<!-- Same slot as any message's Delete, but a confirmed event is
 											     cancelled through its addressable `a` deletion — a single
 											     revision delete would resurrect the previous revision.
@@ -1338,7 +1339,7 @@
 										<span>Edit</span>
 									</button>
 								{/if}
-								{#if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+								{#if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
@@ -1357,7 +1358,7 @@
 										<Trash2 class="size-4 shrink-0 text-muted-foreground" />
 										<span>Delete</span>
 									</button>
-								{:else if isOwn && !message.deleted && isStoredEvent && isCalendarEventKind(message.kind)}
+								{:else if isOwn && !message.deleted && !message.calendarCancelled && isStoredEvent && isCalendarEventKind(message.kind)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"

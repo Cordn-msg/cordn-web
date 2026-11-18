@@ -108,10 +108,16 @@
 	const selectedKey = $derived(selected.toString());
 	const todayKey = $derived(todayValue.toString());
 	// Never show a no-op Today: hide it when the current range already is today.
+	// Month navigation moves `placeholder`, so a selected today can sit outside
+	// the displayed month and still need the jump back.
 	const showTodayButton = $derived(
 		view === 'week'
 			? !weekDays.some((day) => day.toString() === todayKey)
-			: selectedKey !== todayKey
+			: view === 'day'
+				? selectedKey !== todayKey
+				: selectedKey !== todayKey ||
+					placeholder.year !== todayValue.year ||
+					placeholder.month !== todayValue.month
 	);
 	const routeId = $derived(groupRouteId(groupId));
 	const detailSearch = $derived.by(() => {
@@ -364,7 +370,7 @@
 									{/each}
 								</div>
 							{:else if view === 'day'}
-								<p class="px-1 py-2 text-sm text-muted-foreground">No events today.</p>
+								<p class="px-1 py-2 text-sm text-muted-foreground">No events on this day.</p>
 							{/if}
 						</section>
 					{/each}

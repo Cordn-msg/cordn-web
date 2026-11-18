@@ -42,6 +42,12 @@
 		start.setMinutes(0, 0, 0);
 		start.setHours(start.getHours() + 1);
 		const end = new Date(start.getTime() + 60 * 60 * 1000);
+		// The default duration never crosses midnight: an end time on the start
+		// date would otherwise make the freshly opened form invalid at 22:xx.
+		const sameDay =
+			start.getFullYear() === end.getFullYear() &&
+			start.getMonth() === end.getMonth() &&
+			start.getDate() === end.getDate();
 		return {
 			title: '',
 			description: '',
@@ -54,17 +60,25 @@
 				`${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`,
 			endDate: '',
 			startTime: `${pad(start.getHours())}:${pad(start.getMinutes())}`,
-			endTime: `${pad(end.getHours())}:${pad(end.getMinutes())}`
+			endTime: sameDay ? `${pad(end.getHours())}:${pad(end.getMinutes())}` : ''
 		};
 	}
 
 	let draft = $state<CalendarEventDraft>(defaultDraft());
 	let eventId = $state('');
+	let wasOpen = false;
 
-	// bits-ui unmounts the content after the close animation: reset on open, so
-	// a second session never inherits the last form (same as the poll composer).
+	// bits-ui unmounts the content after the close animation: reset on the
+	// closed→open transition, so a second session never inherits the last form
+	// (same as the poll composer). A card update while the form is open must not
+	// replace what the author is typing.
 	$effect(() => {
-		if (!open) return;
+		if (!open) {
+			wasOpen = false;
+			return;
+		}
+		if (wasOpen) return;
+		wasOpen = true;
 		if (initial) {
 			eventId = initial.d;
 			draft = { ...initial.draft };

@@ -68,6 +68,8 @@ export function isCalendarSendKind(kind: number): boolean {
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const CLOCK_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
+/** Largest Unix second whose date still has a four-digit ISO year. */
+const MAX_CALENDAR_TIMESTAMP = 253_402_300_799;
 
 function isIsoDate(value: string): boolean {
 	const match = ISO_DATE.exec(value);
@@ -508,9 +510,15 @@ export function getCalendarEventDefinition(
 	}
 
 	const start = Number(startTag);
-	if (!Number.isInteger(start) || start <= 0) return null;
+	if (!Number.isInteger(start) || start <= 0 || start > MAX_CALENDAR_TIMESTAMP) return null;
 	const end = endTag ? Number(endTag) : start;
-	if (!Number.isInteger(end) || end < start || (Boolean(endTag) && end === start)) return null;
+	if (
+		!Number.isInteger(end) ||
+		end < start ||
+		(Boolean(endTag) && end === start) ||
+		end > MAX_CALENDAR_TIMESTAMP
+	)
+		return null;
 	return {
 		d,
 		kind,

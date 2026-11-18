@@ -202,6 +202,24 @@ describe('calendar tag round trip', () => {
 			)
 		).not.toBeNull(); // no r tags in the fixture
 	});
+
+	it('rejects timestamps outside the JavaScript date range', () => {
+		const built = createCalendarEventMessage({ d: 'abc', draft: draft(), timeZone: TZ });
+		expect(
+			getCalendarEventDefinition(
+				built.kind,
+				built.content,
+				built.tags.map((tag) => (tag[0] === 'start' ? ['start', '1e100'] : tag))
+			)
+		).toBeNull();
+		expect(
+			getCalendarEventDefinition(
+				built.kind,
+				built.content,
+				built.tags.map((tag) => (tag[0] === 'end' ? ['end', '1e100'] : tag))
+			)
+		).toBeNull();
+	});
 });
 
 describe('calendar day keys', () => {

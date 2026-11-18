@@ -21,8 +21,11 @@
 		/** Load immediately instead of lazily. Virtualized rows give a lazy image
 		 *  no height to intersect with, so a card's deliberate cover image would
 		 *  never load; pasted media keeps the lazy default. */
-		eager = false
-	}: { href: string; isOwn?: boolean; eager?: boolean } = $props();
+		eager = false,
+		/** Meaningful description for a deliberate image (calendar cover); pasted
+		 *  media falls back to the URL filename. */
+		alt = ''
+	}: { href: string; isOwn?: boolean; eager?: boolean; alt?: string } = $props();
 
 	const kind = $derived(mediaUrlKind(href));
 	// Per-URL reveal lives in module scope (see chatMediaStorage) so it survives
@@ -58,7 +61,7 @@
 		>
 			<img
 				src={href}
-				alt={filename}
+				alt={alt || filename}
 				loading={eager ? 'eager' : 'lazy'}
 				class="max-h-64 w-full cursor-zoom-in object-cover"
 			/>

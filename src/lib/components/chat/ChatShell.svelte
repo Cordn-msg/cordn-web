@@ -350,6 +350,16 @@
 
 	const calendarCards = $derived(groupCalendarCards(groupId));
 	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
+	// A cancellation deletes the latest revision through the ordinary `e` fold;
+	// the chat row still has to render the cancelled card, not "message deleted".
+	// Revision ids resolve to their card so the fold can tell the two apart.
+	const calendarCardByRevision = $derived.by(() => {
+		const cards = new Map<string, CalendarEventCard>();
+		for (const card of calendarCards) {
+			for (const id of card.revisionIds) cards.set(id, card);
+		}
+		return cards;
+	});
 	// A revised addressable event shows the same pencil as an edited message,
 	// in the message footer (the card itself stays uncluttered).
 	const revisedCalendarEventIds = $derived(
@@ -492,8 +502,21 @@
 				const threadReference = getMessageThreadReference(message.tags);
 				const replySource = threadReference ? byEventId.get(threadReference.parentId) : undefined;
 				const replyPendingEdit = replySource ? pendingEditByTarget.get(replySource.id) : undefined;
+				const replySourceCancelled = Boolean(
+					replySource &&
+					isCalendarEventKind(replySource.kind) &&
+					calendarCardByRevision.get(replySource.id)?.cancelled
+				);
+				const replySourceDeleted = replySource
+					? deletedIds.has(replySource.id) && !replySourceCancelled
+					: false;
 				const reactions = reactionMap.get(message.id);
-				const deleted = Boolean(deletedIds.has(message.id) || optimisticDeletes[message.id]);
+				const calendarCancelled = Boolean(
+					isCalendarEventKind(message.kind) && calendarCardByRevision.get(message.id)?.cancelled
+				);
+				const deleted = Boolean(
+					(deletedIds.has(message.id) || optimisticDeletes[message.id]) && !calendarCancelled
+				);
 				// Deleted rows hide their content, so their overlays go silent too —
 				// a pending edit's clock has no business on a removed message.
 				const pendingEdit = deleted ? undefined : pendingEditByTarget.get(message.id);
@@ -570,6 +593,7 @@
 						? undefined
 						: (edit?.mediaKeyBase64 ?? message.mediaKeyBase64),
 					deleted,
+					calendarCancelled,
 					pinned,
 					pinnedBy: pinned ? pinEntry?.pinnedBy : undefined,
 					edited:
@@ -581,12 +605,12 @@
 						? buildReplyQuote({
 								id: `${replySource.id}:${replySource.cursor}`,
 								author: replySource.sender,
-								content: deletedIds.has(replySource.id)
+								content: replySourceDeleted
 									? ''
 									: (replyPendingEdit?.content ??
 										editMap.get(replySource.id)?.content ??
 										replySource.content),
-								deleted: deletedIds.has(replySource.id),
+								deleted: replySourceDeleted,
 								tags: replyPendingEdit
 									? emojiDisplayTags(replyPendingEdit.content)
 									: (editMap.get(replySource.id)?.tags ?? replySource.tags),

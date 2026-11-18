@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { toast } from 'svelte-sonner';
+
 	import {
 		CALENDAR_RSVP_LABELS,
 		CALENDAR_RSVP_STATUSES,
@@ -6,7 +8,10 @@
 		type CalendarEventCard,
 		type CalendarRsvpStatus
 	} from '$lib/chat/calendar';
-	import { castCalendarRsvpAction } from '$lib/services/chatUiActions.svelte';
+	import {
+		castCalendarRsvpAction,
+		chatComposerActionsStore
+	} from '$lib/services/chatUiActions.svelte';
 	import { cn } from '$lib/utils';
 
 	/**
@@ -44,7 +49,12 @@
 		if (!card || !canRespond || status === selection) return;
 		pendingStatus = status;
 		const sent = await castCalendarRsvpAction(groupId, calendarEventTarget(card), status);
-		if (!sent && pendingStatus === status) pendingStatus = null;
+		if (!sent && pendingStatus === status) {
+			pendingStatus = null;
+			// The chat route shows the composer error inline; calendar and event
+			// routes have no such surface, so every failure gets the same toast.
+			toast.error(chatComposerActionsStore.error || 'Failed to save RSVP');
+		}
 	}
 </script>
 

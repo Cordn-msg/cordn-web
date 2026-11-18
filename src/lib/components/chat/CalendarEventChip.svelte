@@ -77,7 +77,7 @@
 		<!-- Cover image: same auto-load gate as pasted media, bounded to keep the
 		     compact card compact. -->
 		<div class="mt-2 mb-3 overflow-hidden rounded-xl [&_img]:max-h-36">
-			<InlineMediaUrl href={definition.image} {isOwn} eager />
+			<InlineMediaUrl href={definition.image} {isOwn} eager alt={definition.title} />
 		</div>
 	{/if}
 

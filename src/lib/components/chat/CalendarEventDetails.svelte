@@ -94,7 +94,7 @@
 	</div>
 
 	{#if card.definition.image}
-		<InlineMediaUrl href={card.definition.image} />
+		<InlineMediaUrl href={card.definition.image} alt={card.definition.title} />
 	{/if}
 
 	{#if card.definition.description}
