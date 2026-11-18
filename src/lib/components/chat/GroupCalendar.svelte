@@ -14,6 +14,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { tick, untrack } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -145,7 +146,11 @@
 	}
 
 	function saveEvent(input: { d: string; draft: CalendarEventDraft }) {
-		enqueueCalendarEvent(groupId, input);
+		try {
+			enqueueCalendarEvent(groupId, input);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : 'Failed to save event');
+		}
 	}
 
 	function toggle(coordinate: string) {
