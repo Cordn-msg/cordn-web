@@ -15,6 +15,7 @@ import { ChatKinds } from '$lib/chat/kinds';
 import TextInline from '$lib/chat/inline/TextInline.svelte';
 import PollInline from '$lib/chat/inline/PollInline.svelte';
 import CalendarEventInline from '$lib/chat/inline/CalendarEventInline.svelte';
+import CallInline from '$lib/chat/inline/CallInline.svelte';
 import DefaultRich from '$lib/chat/rich/DefaultRich.svelte';
 import PollRich from '$lib/chat/rich/PollRich.svelte';
 import CalendarEventRich from '$lib/chat/rich/CalendarEventRich.svelte';
@@ -44,6 +45,7 @@ export const inlineBodies: Record<number, InlineBody> = {
 	[ChatKinds.Text]: TextInline,
 	[ChatKinds.ThreadReply]: TextInline,
 	[ChatKinds.Poll]: PollInline,
+	[ChatKinds.Call]: CallInline,
 	[ChatKinds.CalendarDate]: CalendarEventInline,
 	[ChatKinds.CalendarTime]: CalendarEventInline
 };

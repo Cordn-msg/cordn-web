@@ -69,6 +69,7 @@
 		type CalendarEventDraft
 	} from '$lib/chat/calendar';
 	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
+	import { groupCallCards, loadGroupCalls } from '$lib/services/chatCalls.svelte';
 	import {
 		groupCalendarCards,
 		groupCalendarEvent,
@@ -350,6 +351,8 @@
 
 	const calendarCards = $derived(groupCalendarCards(groupId));
 	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
+	const callCards = $derived(groupCallCards(groupId));
+	const latestCallEventIds = $derived(new Set(callCards.map((card) => card.message.id)));
 	// A cancellation deletes the latest revision through the ordinary `e` fold;
 	// the chat row still has to render the cancelled card, not "message deleted".
 	// Revision ids resolve to their card so the fold can tell the two apart.
@@ -384,9 +387,12 @@
 	const hasCalendarEvents = $derived(calendarCards.some((card) => !card.cancelled));
 	$effect(() => {
 		void groupId;
-		// Kind-scoped durable read: events older than the loaded window still
-		// count, so the switch appears for a group whose history is long.
-		untrack(() => void loadGroupCalendar(groupId));
+		// Kind-scoped durable reads: addressable events/calls older than the
+		// loaded window still resolve to their latest card.
+		untrack(() => {
+			void loadGroupCalendar(groupId);
+			void loadGroupCalls(groupId);
+		});
 	});
 
 	// Reaction/edit/delete maps are pure functions of the stored messages.
@@ -448,6 +454,7 @@
 			.filter((message) => {
 				if (message.kind === ChatKinds.Reaction) return reactionMarkers;
 				if (isStreamHiddenKind(message.kind)) return false;
+				if (message.kind === ChatKinds.Call) return latestCallEventIds.has(message.id);
 				if (!isCalendarEventKind(message.kind)) return true;
 				const coordinate = eventCoordinate(message.kind, message.sender, message.tags);
 				return coordinate

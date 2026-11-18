@@ -948,7 +948,7 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
+										{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && message.kind !== ChatKinds.Call && !isCalendarEventKind(message.kind)}
 											<!-- Polls are immutable once cast: an edit would swap the question
 											     under standing votes. -->
 											<DropdownMenuItem onSelect={startEditing} class="gap-2">
@@ -966,7 +966,7 @@
 											</DropdownMenuItem>
 										{/if}
 
-										{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
+										{#if isOwn && !message.deleted && message.kind !== ChatKinds.Call && !(isStoredEvent && isCalendarEventKind(message.kind))}
 											<DropdownMenuItem onSelect={deleteMessage} class="gap-2 text-destructive">
 												<Trash2 class="size-4" />
 												<span>Delete</span>
@@ -1329,7 +1329,7 @@
 									<Info class="size-4 shrink-0 text-muted-foreground" />
 									<span>Message info</span>
 								</button>
-								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && !isCalendarEventKind(message.kind)}
+								{#if isOwn && !message.deleted && isStoredEvent && message.kind !== ChatKinds.Poll && message.kind !== ChatKinds.Call && !isCalendarEventKind(message.kind)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"
@@ -1349,7 +1349,7 @@
 										<span>Edit event</span>
 									</button>
 								{/if}
-								{#if isOwn && !message.deleted && !(isStoredEvent && isCalendarEventKind(message.kind))}
+								{#if isOwn && !message.deleted && message.kind !== ChatKinds.Call && !(isStoredEvent && isCalendarEventKind(message.kind))}
 									<button
 										type="button"
 										class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/40"

@@ -18,6 +18,7 @@
 	import RichReactions from './RichReactions.svelte';
 	import type { RichBodyProps } from '$lib/chat/registry';
 	import type { StoredChatMessage } from '$lib/services/chatGroupMessages.svelte';
+	import { ChatKinds } from '$lib/chat/kinds';
 
 	let { groupId, eventId, onNavigate, onJumpToMessage }: RichBodyProps = $props();
 
@@ -77,6 +78,16 @@
 	const displayContent = $derived(subject ? displayText(subject) : '');
 	const isOwn = $derived(subject ? normalizePubKey(subject.sender) === activePubkey : false);
 	const hasMedia = $derived(subject ? Boolean(peekMessageMedia(subject.tags ?? [])) : false);
+	const rawSubject = $derived.by(() =>
+		subject?.kind === ChatKinds.Call
+			? {
+					...subject,
+					tags: subject.tags.map((tag) =>
+						tag[0] === 'identity-secret' ? [tag[0], '[redacted]'] : tag
+					)
+				}
+			: subject
+	);
 
 	// Thread context — resolved purely from local message tags via the shared
 	// parser. Ordered root → … → subject → descendants. Indentation is capped
@@ -347,7 +358,7 @@
 							<pre
 								class="mt-3 max-w-full overflow-x-auto overflow-y-auto rounded-2xl bg-muted p-4 text-xs leading-relaxed"><code
 									class="block min-w-0 break-all whitespace-pre-wrap"
-									>{JSON.stringify(subject, null, 2)}</code
+									>{JSON.stringify(rawSubject, null, 2)}</code
 								></pre>
 						</Collapsible.Content>
 					</Collapsible.Root>

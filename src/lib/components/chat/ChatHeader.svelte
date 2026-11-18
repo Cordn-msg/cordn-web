@@ -11,6 +11,7 @@
 	import AvailableKeyPackageDirectory from '$lib/components/chat/AvailableKeyPackageDirectory.svelte';
 	import type { AvailableKeyPackageWithCoordinator } from '$lib/queries/chatKeyPackageQueries';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import { resolve } from '$app/paths';
@@ -23,6 +24,7 @@
 	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
+	import { openChatCall } from '$lib/services/chatCalls.svelte';
 	import {
 		getChatGroup,
 		isChatGroupRemoved,
@@ -36,6 +38,7 @@
 	import Info from '@lucide/svelte/icons/info';
 	import Share2 from '@lucide/svelte/icons/share-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
+	import Phone from '@lucide/svelte/icons/phone';
 
 	let {
 		groupId,
@@ -156,6 +159,20 @@
 		</div>
 
 		<ChatSearchBar {groupId} />
+
+		{#if group && groupId}
+			<Button
+				variant="ghost"
+				size="icon"
+				class="size-10 rounded-xl border border-border text-muted-foreground hover:text-foreground"
+				disabled={!$activeAccount || isRemoved || isPoisoned}
+				title="Start or join an encrypted call"
+				aria-label="Start or join an encrypted call"
+				onclick={() => void openChatCall(groupId)}
+			>
+				<Phone />
+			</Button>
+		{/if}
 
 		{#if group}
 			<ChatGroupActions

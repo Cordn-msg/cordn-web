@@ -58,6 +58,9 @@ export function getChatMessagePreviewText(message: StoredChatMessage): string {
 	if (message.kind === SYSTEM_MESSAGE_KIND) {
 		return getSystemMessagePreviewText(message.content);
 	}
+	if (message.kind === ChatKinds.Call) {
+		return message.tags.find((tag) => tag[0] === 'alt')?.[1] || '📞 Call';
+	}
 	if (message.kind === ChatKinds.Poll) {
 		return `📊 Poll: ${body}`;
 	}

@@ -20,12 +20,14 @@ import { stopWatchingGroup } from '$lib/services/chatGroupWatch.svelte';
 import { disconnectCoordinatorClients } from '$lib/services/chatRuntime';
 import { clearMultiDeviceConfig } from '$lib/services/multiDevice.svelte';
 import { normalizePubKey } from '$lib/utils';
+import { leaveChatCall } from '$lib/services/chatCalls.svelte';
 
 export async function cleanupActiveAccountChatData(): Promise<void> {
 	const account = manager.getActive();
 	if (!account) return;
 
 	const ownerPubkey = normalizePubKey(account.pubkey);
+	await leaveChatCall();
 	await stopWatchingGroup(undefined, 'logout and clean account data');
 	await disconnectCoordinatorClients(account);
 	queryClient.removeQueries({ queryKey: chatQueryKeys.account(ownerPubkey) });
