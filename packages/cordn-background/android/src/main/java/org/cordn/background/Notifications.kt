@@ -22,6 +22,7 @@ import org.json.JSONArray
 internal object Notifications {
     const val CHANNEL_MESSAGES = "cordn_messages"
     const val CHANNEL_SYNC = "cordn_sync"
+    const val CHANNEL_CALL = "cordn_call"
 
     /** Near-black to match the app primary (oklch(0.205 0 0)) + launcher. */
     const val BRAND_COLOR = 0xFF1C1C1C.toInt()
@@ -47,6 +48,19 @@ internal object Notifications {
                 ).apply {
                     description = "Keeps Cordn checking for new messages"
                     setShowBadge(false)
+                }
+            )
+        }
+        if (nm.getNotificationChannel(CHANNEL_CALL) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_CALL,
+                    "Ongoing call",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Shown while a call is running"
+                    setShowBadge(false)
+                    setSound(null, null)
                 }
             )
         }

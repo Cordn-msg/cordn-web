@@ -70,7 +70,11 @@
 	} from '$lib/chat/calendar';
 	import { parseCallAnnouncement } from '$lib/chat/calls';
 	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
-	import { groupCallCards, loadGroupCalls } from '$lib/services/chatCalls.svelte';
+	import {
+		groupCallCards,
+		groupCallWindowSignature,
+		loadGroupCalls
+	} from '$lib/services/chatCalls.svelte';
 	import {
 		groupCalendarCards,
 		groupCalendarEvent,
@@ -354,6 +358,7 @@
 	const latestCalendarEventIds = $derived(new Set(calendarCards.map((card) => card.id)));
 	const callCards = $derived(groupCallCards(groupId));
 	const latestCallEventIds = $derived(new Set(callCards.map((card) => card.message.id)));
+	const callWindowSignature = $derived(groupCallWindowSignature(groupId));
 	// A cancellation deletes the latest revision through the ordinary `e` fold;
 	// the chat row still has to render the cancelled card, not "message deleted".
 	// Revision ids resolve to their card so the fold can tell the two apart.
@@ -388,11 +393,14 @@
 	const hasCalendarEvents = $derived(calendarCards.some((card) => !card.cancelled));
 	$effect(() => {
 		void groupId;
+		// A close can be evicted from the loaded window before the durable read saw it,
+		// so re-read whenever this group's call rows change.
+		void callWindowSignature;
 		// Kind-scoped durable reads: addressable events/calls older than the
 		// loaded window still resolve to their latest card.
 		untrack(() => {
 			void loadGroupCalendar(groupId);
-			void loadGroupCalls(groupId);
+			void loadGroupCalls(groupId, { force: true });
 		});
 	});
 

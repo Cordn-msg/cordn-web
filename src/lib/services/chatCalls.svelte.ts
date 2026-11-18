@@ -41,8 +41,10 @@ import {
 	LiveKitCallEngine,
 	type CallEngineState,
 	type CallParticipant,
-	type CallPhase
+	type CallPhase,
+	type CallVideoSource
 } from '$lib/services/liveKitCallEngine';
+import { onNativeCallHangUp, startNativeCall, stopNativeCall } from '$lib/services/nativeBridge';
 
 interface PendingCall {
 	kind: 'start' | 'join';
@@ -75,6 +77,7 @@ interface ActiveCallSession extends PendingCall {
 	members: Set<string>;
 	participants: CallParticipant[];
 	connected: boolean;
+	nativeCallStarted: boolean;
 	announcedOpen: boolean;
 	reannounceOnConnect: boolean;
 	/** The MLS state the installed frame key came from — the re-key gate. */
@@ -91,6 +94,7 @@ export const chatCallsStore = $state<{
 	error: string;
 	microphoneEnabled: boolean;
 	cameraEnabled: boolean;
+	screenShareEnabled: boolean;
 	participants: CallParticipant[];
 }>({
 	dialogOpen: false,
@@ -101,6 +105,7 @@ export const chatCallsStore = $state<{
 	error: '',
 	microphoneEnabled: true,
 	cameraEnabled: false,
+	screenShareEnabled: false,
 	participants: []
 });
 
@@ -150,6 +155,15 @@ export function groupCallCards(groupId: string): CallCard[] {
 
 export function groupCallCard(groupId: string, eventId: string): CallCard | null {
 	return findCallCard(groupCallCards(groupId), eventId);
+}
+
+/** Call-row cursors in the loaded window. A close can be evicted from the window before
+ *  the durable snapshot ever saw it, so a change here means the snapshot must be re-read. */
+export function groupCallWindowSignature(groupId: string): string {
+	return listChatGroupMessages(groupId)
+		.filter((message) => message.kind === ChatKinds.Call)
+		.map((message) => message.cursor)
+		.join(',');
 }
 
 function unusableGroup(group: StoredChatGroup | undefined): boolean {
@@ -303,6 +317,7 @@ function resetEngineState() {
 	chatCallsStore.active = null;
 	chatCallsStore.phase = 'idle';
 	chatCallsStore.busy = false;
+	chatCallsStore.screenShareEnabled = false;
 	chatCallsStore.participants = [];
 }
 
@@ -311,7 +326,36 @@ async function disposeSession(session: ActiveCallSession) {
 	activeSession = null;
 	generation++;
 	await session.engine.dispose();
+	if (session.nativeCallStarted) {
+		session.nativeCallStarted = false;
+		await stopNativeCall();
+	}
 	resetEngineState();
+}
+
+/** The ongoing notification's title: the group's own name, else a neutral one. */
+function nativeCallTitle(groupId: string): string {
+	return getChatGroup(groupId)?.metadata?.name?.trim() || 'Group call';
+}
+
+/** Start or re-declare the Android keep-alive. Called after media changes too, because
+ *  the service types follow what is actually capturing (mic/camera) and playback-only
+ *  keeps a muted join alive for the remote audio. */
+async function syncNativeCall(session: ActiveCallSession) {
+	if (activeSession !== session) return;
+	const started = await startNativeCall({
+		title: nativeCallTitle(session.groupId),
+		microphone: chatCallsStore.microphoneEnabled,
+		camera: chatCallsStore.cameraEnabled
+	});
+	if (!started) return;
+	if (activeSession !== session) {
+		// The call ended while the service was starting. A newer call that already owns
+		// the service is left alone.
+		if (!activeSession?.nativeCallStarted) await stopNativeCall();
+		return;
+	}
+	session.nativeCallStarted = true;
 }
 
 async function closeIfLastMember(session: ActiveCallSession) {
@@ -426,6 +470,7 @@ function newEngine(session: ActiveCallSession): LiveKitCallEngine {
 			chatCallsStore.phase = state.phase;
 			chatCallsStore.microphoneEnabled = !state.muted;
 			chatCallsStore.cameraEnabled = state.cameraEnabled;
+			chatCallsStore.screenShareEnabled = state.screenSharing;
 			chatCallsStore.participants = state.participants;
 		},
 		onReconnectTimeout() {
@@ -452,6 +497,7 @@ async function runPendingCall() {
 		members: new Set(),
 		participants: [],
 		connected: false,
+		nativeCallStarted: false,
 		announcedOpen: false,
 		reannounceOnConnect: false,
 		sync: Promise.resolve()
@@ -488,6 +534,10 @@ async function runPendingCall() {
 		});
 		if (activeSession !== session || generation !== attempt) return;
 		session.connected = true;
+		// Started after join (not before), so the runtime mic/camera grant is in place:
+		// Android rejects a microphone/camera service type without its permission.
+		// Still on-screen here, which is the only moment a foreground service may start.
+		await syncNativeCall(session);
 		await syncSession(session);
 		chatCallsStore.busy = false;
 	} catch (error) {
@@ -542,16 +592,42 @@ export async function confirmChatCall() {
 
 export async function setChatCallMicrophoneEnabled(enabled: boolean) {
 	chatCallsStore.microphoneEnabled = enabled;
-	if (activeSession?.connected) await activeSession.engine.setMuted(!enabled);
+	const session = activeSession;
+	if (!session?.connected) return;
+	await session.engine.setMuted(!enabled);
+	// Unmuting is also the first moment the mic grant can exist, so re-declare types here.
+	if (session.nativeCallStarted || enabled) await syncNativeCall(session);
 }
 
 export async function setChatCallCameraEnabled(enabled: boolean) {
 	chatCallsStore.cameraEnabled = enabled;
-	if (activeSession?.connected) await activeSession.engine.setCameraEnabled(enabled);
+	const session = activeSession;
+	if (!session?.connected) return;
+	await session.engine.setCameraEnabled(enabled);
+	// The camera service type is declared only while the camera is actually in use.
+	if (session.nativeCallStarted || enabled) await syncNativeCall(session);
 }
 
-export function attachChatCallVideo(identity: string, element: HTMLMediaElement) {
-	activeSession?.engine.attachVideo(identity, element);
+export async function setChatCallScreenShareEnabled(enabled: boolean) {
+	const session = activeSession;
+	if (!session?.connected) return;
+	try {
+		await session.engine.setScreenShareEnabled(enabled);
+		chatCallsStore.error = '';
+	} catch (error) {
+		// Dismissing the browser's picker is a choice, not a failure worth an alert.
+		if ((error as DOMException | undefined)?.name !== 'NotAllowedError') {
+			chatCallsStore.error = errorMessage(error);
+		}
+	}
+}
+
+export function attachChatCallVideo(
+	identity: string,
+	element: HTMLMediaElement,
+	source: CallVideoSource = 'camera'
+) {
+	activeSession?.engine.attachVideo(identity, element, source);
 }
 
 export function detachChatCallVideo(element: HTMLMediaElement) {
@@ -564,6 +640,9 @@ export function chatCallMemberPubkey(identity: string): string | null {
 }
 
 if (browser) {
+	// Hang up from the ongoing call notification, same path as the in-app button.
+	void onNativeCallHangUp(() => void leaveChatCall());
+
 	$effect.root(() => {
 		$effect(() => {
 			void chatCallsStore.active?.callId;

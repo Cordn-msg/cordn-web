@@ -19,6 +19,16 @@
             android:name="org.cordn.background.CordnNotificationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Keeps an active call's media capture alive while the WebView is backgrounded
+             (screen off / app switch). Both types are declared up front; the service passes
+             only the ones actually in use to startForeground. stopWithTask so swiping the app
+             away never leaves an orphaned mic notification. -->
+        <service
+            android:name="org.cordn.background.CallForegroundService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="microphone|camera|mediaPlayback" />
     </application>
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -26,6 +36,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14+: required because the service declares foregroundServiceType="dataSync". -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 14+: the call service's microphone/camera types. RECORD_AUDIO and CAMERA
+         are declared by the app module (voice notes / QR scanner) and merge in. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Muted joins have no mic track: the call still runs as playback, never a silent
+         background service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Partial wake lock so audio keeps flowing with the screen off. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Prompt the user to exempt Cordn from battery optimization (improves Doze reliability). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

@@ -18,10 +18,22 @@ const harness = vi.hoisted(() => ({
 		join: ReturnType<typeof vi.fn>;
 		setFrameKey: ReturnType<typeof vi.fn>;
 		dispose: ReturnType<typeof vi.fn>;
+		setScreenShareEnabled: ReturnType<typeof vi.fn>;
 	}>,
 	joinError: undefined as Error | undefined,
 	onJoin: undefined as (() => void) | undefined,
-	storageRows: [] as StoredChatMessage[]
+	storageRows: [] as StoredChatMessage[],
+	native: {
+		start: vi.fn(async () => true),
+		stop: vi.fn(async () => {}),
+		hangUp: vi.fn(async () => {})
+	}
+}));
+
+vi.mock('$lib/services/nativeBridge', () => ({
+	startNativeCall: harness.native.start,
+	stopNativeCall: harness.native.stop,
+	onNativeCallHangUp: harness.native.hangUp
 }));
 
 vi.mock('$lib/services/accountManager.svelte', () => ({
@@ -81,7 +93,11 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 vi.mock('$lib/services/liveKitCallEngine', () => ({
 	LiveKitCallEngine: class {
 		callbacks: {
-			onState: (state: { participants: Array<unknown> }) => void;
+			onState: (state: {
+				participants: Array<unknown>;
+				cameraEnabled: boolean;
+				screenSharing: boolean;
+			}) => void;
 			onReconnectTimeout: () => void;
 			onDisconnected: () => void;
 		};
@@ -89,6 +105,8 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 			if (harness.joinError) throw harness.joinError;
 			harness.onJoin?.();
 			this.callbacks.onState({
+				cameraEnabled: false,
+				screenSharing: false,
 				participants: [
 					{
 						identity: 'own',
@@ -104,6 +122,7 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 		dispose = vi.fn(async () => {});
 		setMuted = vi.fn(async () => {});
 		setCameraEnabled = vi.fn(async () => {});
+		setScreenShareEnabled = vi.fn(async () => {});
 		attachVideo = vi.fn();
 		detachVideo = vi.fn();
 
@@ -118,9 +137,12 @@ import {
 	chatCallsStore,
 	confirmChatCall,
 	groupCallCards,
+	groupCallWindowSignature,
 	leaveChatCall,
 	loadGroupCalls,
-	openChatCall
+	openChatCall,
+	setChatCallCameraEnabled,
+	setChatCallScreenShareEnabled
 } from '$lib/services/chatCalls.svelte';
 
 function resetGroup(groupId: string) {
@@ -178,6 +200,7 @@ function callRow(id: string, createdAt: number, status: 'open' | 'closed'): Stor
 beforeEach(async () => {
 	await leaveChatCall({ announce: false });
 	chatCallsStore.error = '';
+	for (const mock of Object.values(harness.native)) mock.mockClear();
 });
 
 describe('chat call lifecycle', () => {
@@ -270,5 +293,76 @@ describe('chat call lifecycle', () => {
 		harness.storageRows = [open, callRow('event-closed', 101, 'closed')];
 		await loadGroupCalls('read-again', { force: true });
 		expect(groupCallCards('read-again')[0].announcement.status).toBe('closed');
+	});
+
+	it('keeps the native keep-alive in step with the call lifecycle', async () => {
+		resetGroup('native-call');
+		await openChatCall('native-call');
+		await confirmChatCall();
+		expect(harness.native.start).toHaveBeenCalledOnce();
+		expect(harness.native.start).toHaveBeenCalledWith(
+			expect.objectContaining({ microphone: true, camera: false })
+		);
+
+		// The camera type is re-declared through the same idempotent start.
+		await setChatCallCameraEnabled(true);
+		expect(harness.native.start).toHaveBeenLastCalledWith(
+			expect.objectContaining({ camera: true })
+		);
+
+		await leaveChatCall();
+		expect(harness.native.stop).toHaveBeenCalledOnce();
+	});
+
+	it('stops the native service when the call ends before it finishes starting', async () => {
+		resetGroup('native-race');
+		let finishStart!: (started: boolean) => void;
+		harness.native.start.mockImplementationOnce(
+			() => new Promise<boolean>((resolve) => (finishStart = resolve))
+		);
+		await openChatCall('native-race');
+		const connecting = confirmChatCall();
+		await vi.waitFor(() => expect(harness.native.start).toHaveBeenCalledOnce());
+		await leaveChatCall();
+		finishStart(true);
+		await connecting;
+		expect(harness.native.stop).toHaveBeenCalledOnce();
+	});
+
+	it('signs only the call rows so a window change forces a re-read', async () => {
+		resetGroup('signature');
+		expect(groupCallWindowSignature('signature')).toBe('');
+		harness.group.messages.push(callRow('event-open', 1, 'open'));
+		expect(groupCallWindowSignature('signature')).toBe('1');
+		harness.group.messages.push({
+			cursor: 2,
+			createdAt: 2,
+			eventCreatedAt: 2,
+			direction: 'inbound',
+			sender: bob,
+			id: 'plain',
+			kind: ChatKinds.Text,
+			tags: [],
+			content: 'hi'
+		});
+		expect(groupCallWindowSignature('signature')).toBe('1');
+	});
+
+	it('delegates screen sharing without ending the call when the picker is dismissed', async () => {
+		resetGroup('screen-share');
+		await openChatCall('screen-share');
+		await confirmChatCall();
+		const engine = harness.instances[0];
+
+		await setChatCallScreenShareEnabled(true);
+		expect(engine.setScreenShareEnabled).toHaveBeenCalledWith(true);
+		expect(chatCallsStore.error).toBe('');
+
+		engine.setScreenShareEnabled.mockRejectedValueOnce(
+			Object.assign(new Error('cancelled'), { name: 'NotAllowedError' })
+		);
+		await setChatCallScreenShareEnabled(true);
+		expect(chatCallsStore.error).toBe('');
+		expect(chatCallsStore.active).not.toBeNull();
 	});
 });

@@ -21,8 +21,16 @@
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { isChatGroupPinned } from '$lib/services/chatGroupPins.svelte';
 	import { getChatGroupMuteLabel, isChatGroupMuted } from '$lib/services/chatGroupMutes.svelte';
+	import {
+		groupCallCards,
+		groupCallWindowSignature,
+		loadGroupCalls
+	} from '$lib/services/chatCalls.svelte';
+	import { liveCallCard } from '$lib/chat/calls';
+	import { untrack } from 'svelte';
 	import Pin from '@lucide/svelte/icons/pin';
 	import BellOff from '@lucide/svelte/icons/bell-off';
+	import Phone from '@lucide/svelte/icons/phone';
 
 	let {
 		group,
@@ -96,6 +104,17 @@
 	const pinned = $derived(isChatGroupPinned(group.id));
 	const muted = $derived(isChatGroupMuted(group.id));
 	const muteLabel = $derived(getChatGroupMuteLabel(group.id));
+	// Presence, not attention: a live call is a badge on the avatar only. It stays out of
+	// the unread counts, sorting and notifications, which keep their own sources.
+	const callLive = $derived(liveCallCard(groupCallCards(group.id)) !== null);
+	const callWindowSignature = $derived(groupCallWindowSignature(group.id));
+	$effect(() => {
+		// A close can leave the window before the durable read saw it: re-read on any
+		// change to the group's call rows so an ended call cannot reappear as live.
+		void callWindowSignature;
+		const id = group.id;
+		untrack(() => void loadGroupCalls(id, { force: true }));
+	});
 
 	// Anchor is a sibling of the action button (not its parent) so the button
 	// click never navigates and we avoid nested interactive elements.
@@ -130,6 +149,15 @@
 				fallbackClass={isSidebar ? 'text-sm font-medium' : 'text-base font-medium'}
 			/>
 			<ChatGroupUnreadChips {unreadCount} {unreadReferenceCount} />
+			{#if callLive}
+				<span
+					class="absolute -bottom-1 -left-1 flex size-5 items-center justify-center rounded-full bg-emerald-500 text-white"
+					aria-hidden="true"
+				>
+					<Phone class="size-3" />
+				</span>
+				<span class="sr-only">Call in progress</span>
+			{/if}
 		</div>
 
 		{#if !collapsed}

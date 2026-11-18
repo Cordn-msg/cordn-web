@@ -9,18 +9,23 @@ import type {
 
 export type CallPhase = 'connecting' | 'connected' | 'reconnecting' | 'ended';
 
+/** Video is multiplexed by purpose: a screen share is not somebody's camera. */
+export type CallVideoSource = 'camera' | 'screen';
+
 export interface CallParticipant {
 	identity: string;
 	isLocal: boolean;
 	isSpeaking: boolean;
 	microphoneEnabled: boolean;
 	cameraEnabled: boolean;
+	screenSharing: boolean;
 }
 
 export interface CallEngineState {
 	phase: CallPhase;
 	muted: boolean;
 	cameraEnabled: boolean;
+	screenSharing: boolean;
 	participants: CallParticipant[];
 }
 
@@ -46,6 +51,10 @@ export class LiveKitCallEngine {
 	private audioElements = new Map<string, HTMLMediaElement>();
 	private videoElements = new Map<string, HTMLMediaElement>();
 	private videoTracks = new Map<HTMLMediaElement, Track>();
+
+	private videoKey(identity: string, source: CallVideoSource): string {
+		return `${identity}\u0000${source}`;
+	}
 
 	constructor(private callbacks: EngineCallbacks) {}
 
@@ -131,6 +140,9 @@ export class LiveKitCallEngine {
 			livekit.RoomEvent.TrackSubscribed,
 			(track: RemoteTrack, _publication: TrackPublication, participant: Participant) => {
 				if (track.kind === livekit.Track.Kind.Audio) {
+					// Screen audio is out of scope (video-only sharing, like Staircase) and would
+					// otherwise be mixed in as a second microphone.
+					if (track.source === livekit.Track.Source.ScreenShareAudio) return;
 					const element = track.attach();
 					// In the document, not merely created: a detached element is the classic
 					// "connected but nobody can hear anybody".
@@ -138,7 +150,11 @@ export class LiveKitCallEngine {
 					document.body.appendChild(element);
 					this.audioElements.set(track.sid ?? track.mediaStreamTrack.id, element);
 				} else {
-					this.attachVideo(participant.identity);
+					this.attachVideo(
+						participant.identity,
+						undefined,
+						track.source === livekit.Track.Source.ScreenShare ? 'screen' : 'camera'
+					);
 				}
 				this.emitState();
 			}
@@ -187,6 +203,9 @@ export class LiveKitCallEngine {
 			),
 			cameraEnabled: publicationEnabled(
 				participant.getTrackPublication(livekit.Track.Source.Camera)
+			),
+			screenSharing: publicationEnabled(
+				participant.getTrackPublication(livekit.Track.Source.ScreenShare)
 			)
 		};
 	}
@@ -197,6 +216,7 @@ export class LiveKitCallEngine {
 				phase: 'ended',
 				muted: true,
 				cameraEnabled: false,
+				screenSharing: false,
 				participants: []
 			});
 			return;
@@ -206,6 +226,7 @@ export class LiveKitCallEngine {
 			phase,
 			muted: !local.isMicrophoneEnabled,
 			cameraEnabled: local.isCameraEnabled,
+			screenSharing: local.isScreenShareEnabled,
 			participants: [
 				this.participantView(local, true),
 				...[...this.room.remoteParticipants.values()].map((participant) =>
@@ -227,6 +248,13 @@ export class LiveKitCallEngine {
 		this.emitState();
 	}
 
+	async setScreenShareEnabled(enabled: boolean) {
+		if (!this.room) return;
+		// Video only: screen audio is a separate, much less portable track.
+		await this.room.localParticipant.setScreenShareEnabled(enabled, { audio: false });
+		this.emitState();
+	}
+
 	/** False when the engine has no key provider yet (still connecting): the caller
 	 *  must retry rather than record the key as installed. */
 	async setFrameKey(frameKey: string, keyIndex: number): Promise<boolean> {
@@ -238,14 +266,15 @@ export class LiveKitCallEngine {
 		return true;
 	}
 
-	/** Registers the tile and attaches a camera the participant already publishes.
+	/** Registers the tile and attaches a track the participant already publishes.
 	 *  A tile mounts before the subscription it needs does, so the element stays
 	 *  registered and every later subscription attaches to it. */
-	attachVideo(identity: string, element?: HTMLMediaElement) {
+	attachVideo(identity: string, element?: HTMLMediaElement, source: CallVideoSource = 'camera') {
 		if (!this.room || !this.livekit) return;
-		if (element) this.videoElements.set(identity, element);
-		const target = this.videoElements.get(identity);
-		const track = this.cameraTrackOf(identity);
+		const key = this.videoKey(identity, source);
+		if (element) this.videoElements.set(key, element);
+		const target = this.videoElements.get(key);
+		const track = this.trackOf(identity, source);
 		if (!target || !track || this.videoTracks.get(target) === track) return;
 		this.videoTracks.get(target)?.detach(target);
 		this.videoTracks.delete(target);
@@ -253,20 +282,24 @@ export class LiveKitCallEngine {
 		this.videoTracks.set(target, track);
 	}
 
-	private cameraTrackOf(identity: string): Track | undefined {
+	private trackOf(identity: string, source: CallVideoSource): Track | undefined {
 		if (!this.room || !this.livekit) return undefined;
 		const participant =
 			this.room.localParticipant.identity === identity
 				? this.room.localParticipant
 				: this.room.remoteParticipants.get(identity);
-		return participant?.getTrackPublication(this.livekit.Track.Source.Camera)?.track;
+		const kind =
+			source === 'screen'
+				? this.livekit.Track.Source.ScreenShare
+				: this.livekit.Track.Source.Camera;
+		return participant?.getTrackPublication(kind)?.track;
 	}
 
 	detachVideo(element: HTMLMediaElement) {
 		this.videoTracks.get(element)?.detach(element);
 		this.videoTracks.delete(element);
-		for (const [identity, element_] of this.videoElements) {
-			if (element_ === element) this.videoElements.delete(identity);
+		for (const [key, element_] of this.videoElements) {
+			if (element_ === element) this.videoElements.delete(key);
 		}
 	}
 
@@ -291,6 +324,12 @@ export class LiveKitCallEngine {
 		}
 		this.worker?.terminate();
 		this.worker = undefined;
-		this.callbacks.onState({ phase: 'ended', muted: true, cameraEnabled: false, participants: [] });
+		this.callbacks.onState({
+			phase: 'ended',
+			muted: true,
+			cameraEnabled: false,
+			screenSharing: false,
+			participants: []
+		});
 	}
 }
