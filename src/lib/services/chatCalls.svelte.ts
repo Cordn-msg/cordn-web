@@ -56,7 +56,6 @@ interface PendingCall {
 interface CallSnapshot {
 	rows: import('$lib/services/chatGroupMessages.svelte').StoredChatMessage[];
 	loaded: boolean;
-	loading: boolean;
 }
 
 interface GroupCallSnapshot {
@@ -67,7 +66,6 @@ interface GroupCallSnapshot {
 
 interface ActiveCallSession extends PendingCall {
 	started: boolean;
-	accountId: string;
 	accountPubkey: string;
 	deviceTag: string;
 	engine: LiveKitCallEngine;
@@ -106,7 +104,7 @@ export const chatCallsStore = $state<{
 	participants: []
 });
 
-const EMPTY_SNAPSHOT: CallSnapshot = { rows: [], loaded: false, loading: false };
+const EMPTY_SNAPSHOT: CallSnapshot = { rows: [], loaded: false };
 const snapshots = $state<Record<string, CallSnapshot>>({});
 const snapshotReads = new Map<string, Promise<void>>();
 const deviceTags = new Map<string, string>();
@@ -118,22 +116,26 @@ function callSnapshot(groupId: string): CallSnapshot {
 	return snapshots[groupId] ?? EMPTY_SNAPSHOT;
 }
 
-export async function loadGroupCalls(groupId: string): Promise<void> {
-	if (callSnapshot(groupId).loaded || snapshotReads.has(groupId)) return snapshotReads.get(groupId);
+/** `force` re-reads: a call's end can leave the window after the snapshot was taken,
+ *  and the stale snapshot would then offer a call that is over as live. */
+export async function loadGroupCalls(
+	groupId: string,
+	options: { force?: boolean } = {}
+): Promise<void> {
+	const pending = snapshotReads.get(groupId);
+	if (pending) return pending;
+	if (!options.force && callSnapshot(groupId).loaded) return;
 	const owner = manager.getActive()?.id;
 	const promise = getChatStorage()
 		.then((storage) => storage.getGroupMessagesByKinds(groupId, [ChatKinds.Call]))
 		.then((rows) => {
-			if (manager.getActive()?.id === owner)
-				snapshots[groupId] = { rows, loaded: true, loading: false };
+			if (manager.getActive()?.id === owner) snapshots[groupId] = { rows, loaded: true };
 		})
 		.catch(() => {
 			// The live window still provides calls; a durable read can be retried next mount.
-			if (manager.getActive()?.id === owner)
-				snapshots[groupId] = { rows: [], loaded: false, loading: false };
+			if (manager.getActive()?.id === owner) snapshots[groupId] = { rows: [], loaded: false };
 		})
 		.finally(() => snapshotReads.delete(groupId));
-	snapshots[groupId] = { ...callSnapshot(groupId), loading: true };
 	snapshotReads.set(groupId, promise);
 	return promise;
 }
@@ -196,8 +198,11 @@ function deriveMaterial(session: ActiveCallSession, snapshot: GroupCallSnapshot)
 	});
 }
 
-function applyMaterial(session: ActiveCallSession, snapshot: GroupCallSnapshot) {
-	const material = deriveMaterial(session, snapshot);
+function applyMaterial(
+	session: ActiveCallSession,
+	snapshot: GroupCallSnapshot,
+	material = deriveMaterial(session, snapshot)
+) {
 	session.material = material;
 	session.epoch = snapshot.epoch;
 	session.pseudonyms = new Map([...session.pseudonyms, ...material.pseudonyms]);
@@ -207,6 +212,25 @@ function applyMaterial(session: ActiveCallSession, snapshot: GroupCallSnapshot) 
 	if (added && !session.connected) session.reannounceOnConnect = true;
 	session.members = new Set(snapshot.memberPubkeys);
 	return added;
+}
+
+/** Capped while reading: a hostile service must not be able to buffer an arbitrary
+ *  body into the page before the size is checked. */
+async function readCappedBody(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error('The call service returned no token');
+	const decoder = new TextDecoder();
+	let text = '';
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		text += decoder.decode(value, { stream: true });
+		if (text.length > 16_384) {
+			await reader.cancel().catch(() => {});
+			throw new Error('The call service returned an oversized response');
+		}
+	}
+	return text + decoder.decode();
 }
 
 async function requestToken(session: ActiveCallSession): Promise<{ token: string; url: string }> {
@@ -228,15 +252,13 @@ async function requestToken(session: ActiveCallSession): Promise<{ token: string
 			signal: controller.signal,
 			redirect: 'error'
 		});
-		const text = await response.text();
-		if (text.length > 16_384) throw new Error('The call service returned an oversized response');
 		if (response.status === 402) throw new Error('The call service requires a subscription');
 		if (response.status === 403)
 			throw new Error('The call service refused this room or browser origin');
 		if (response.status === 429)
 			throw new Error('The call service is rate limiting requests; try again shortly');
 		if (!response.ok) throw new Error(`The call service returned HTTP ${response.status}`);
-		return parseCallTokenGrant(JSON.parse(text));
+		return parseCallTokenGrant(JSON.parse(await readCappedBody(response)));
 	} catch (error) {
 		if (controller.signal.aborted) {
 			throw new Error('The call service did not respond in time', { cause: error });
@@ -262,11 +284,18 @@ function announcementFor(session: ActiveCallSession, status: 'open' | 'closed'):
 }
 
 async function announce(session: ActiveCallSession, status: 'open' | 'closed') {
+	// Revisions order by the envelope's `created_at`, then by event id. An end written in
+	// the same second as the announcement it answers could lose that tie-break and leave
+	// the call reading as live, so every revision of a call is stamped strictly later.
+	const previous =
+		groupCallCards(session.groupId).find((card) => card.announcement.callId === session.callId)
+			?.message.eventCreatedAt ?? 0;
 	await sendChatGroupMessage({
 		groupId: session.groupId,
 		content: '',
 		kind: ChatKinds.Call,
-		tags: createCallAnnouncementTags(announcementFor(session, status))
+		tags: createCallAnnouncementTags(announcementFor(session, status)),
+		eventCreatedAt: Math.max(Math.floor(Date.now() / 1000), previous + 1)
 	});
 }
 
@@ -371,12 +400,13 @@ async function syncSession(session: ActiveCallSession) {
 	const stateBefore = group.stateBase64;
 	const snapshot = await readGroupCallSnapshot(session.groupId);
 	if (activeSession !== session) return;
-	session.stateBase64 = stateBefore;
 	const epochChanged = session.epoch !== snapshot.epoch;
-	const added = epochChanged ? applyMaterial(session, snapshot) : false;
-	if (epochChanged && session.material) {
-		await session.engine.setFrameKey(session.material.frameKey, session.material.keyIndex);
-	}
+	const next = epochChanged ? deriveMaterial(session, snapshot) : null;
+	// Install before recording: a commit that lands while the engine still has no key
+	// provider must leave the gate unset, or the join ends on a key the group moved past.
+	if (next && !(await session.engine.setFrameKey(next.frameKey, next.keyIndex))) return;
+	const added = next ? applyMaterial(session, snapshot, next) : false;
+	session.stateBase64 = stateBefore;
 	if (
 		session.started &&
 		session.connected &&
@@ -415,7 +445,6 @@ async function runPendingCall() {
 	const session: ActiveCallSession = {
 		...pending,
 		started: pending.kind === 'start',
-		accountId: account.id,
 		accountPubkey: normalizePubKey(account.pubkey),
 		deviceTag: deviceTags.get(pending.callId) ?? newCallDeviceTag(),
 		engine: undefined as unknown as LiveKitCallEngine,

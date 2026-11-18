@@ -32,11 +32,6 @@ interface EngineCallbacks {
 
 const RECONNECT_LIMIT_MS = 30_000;
 
-export async function isLiveKitCallSupported(): Promise<boolean> {
-	const { isE2EESupported } = await import('livekit-client');
-	return isE2EESupported();
-}
-
 function publicationEnabled(publication: TrackPublication | undefined): boolean {
 	return Boolean(publication && !publication.isMuted);
 }
@@ -49,6 +44,7 @@ export class LiveKitCallEngine {
 	private disposing = false;
 	private reconnectTimer?: ReturnType<typeof setTimeout>;
 	private audioElements = new Map<string, HTMLMediaElement>();
+	private videoElements = new Map<string, HTMLMediaElement>();
 	private videoTracks = new Map<HTMLMediaElement, Track>();
 
 	constructor(private callbacks: EngineCallbacks) {}
@@ -131,17 +127,22 @@ export class LiveKitCallEngine {
 			this.emitState('ended');
 			if (!this.disposing) this.callbacks.onDisconnected();
 		});
-		room.on(livekit.RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-			if (track.kind === livekit.Track.Kind.Audio) {
-				const element = track.attach();
-				// In the document, not merely created: a detached element is the classic
-				// "connected but nobody can hear anybody".
-				element.style.display = 'none';
-				document.body.appendChild(element);
-				this.audioElements.set(track.sid ?? track.mediaStreamTrack.id, element);
+		room.on(
+			livekit.RoomEvent.TrackSubscribed,
+			(track: RemoteTrack, _publication: TrackPublication, participant: Participant) => {
+				if (track.kind === livekit.Track.Kind.Audio) {
+					const element = track.attach();
+					// In the document, not merely created: a detached element is the classic
+					// "connected but nobody can hear anybody".
+					element.style.display = 'none';
+					document.body.appendChild(element);
+					this.audioElements.set(track.sid ?? track.mediaStreamTrack.id, element);
+				} else {
+					this.attachVideo(participant.identity);
+				}
+				this.emitState();
 			}
-			this.emitState();
-		});
+		);
 		room.on(livekit.RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
 			track.detach();
 			this.audioElements.get(track.sid ?? track.mediaStreamTrack.id)?.remove();
@@ -226,30 +227,47 @@ export class LiveKitCallEngine {
 		this.emitState();
 	}
 
-	async setFrameKey(frameKey: string, keyIndex: number) {
+	/** False when the engine has no key provider yet (still connecting): the caller
+	 *  must retry rather than record the key as installed. */
+	async setFrameKey(frameKey: string, keyIndex: number): Promise<boolean> {
 		const provider = this.keyProvider as BaseKeyProvider & {
 			setFrameKey: (key: string, index: number) => Promise<void>;
 		};
-		await provider?.setFrameKey(frameKey, keyIndex);
+		if (!provider) return false;
+		await provider.setFrameKey(frameKey, keyIndex);
+		return true;
 	}
 
-	attachVideo(identity: string, element: HTMLMediaElement) {
+	/** Registers the tile and attaches a camera the participant already publishes.
+	 *  A tile mounts before the subscription it needs does, so the element stays
+	 *  registered and every later subscription attaches to it. */
+	attachVideo(identity: string, element?: HTMLMediaElement) {
 		if (!this.room || !this.livekit) return;
+		if (element) this.videoElements.set(identity, element);
+		const target = this.videoElements.get(identity);
+		const track = this.cameraTrackOf(identity);
+		if (!target || !track || this.videoTracks.get(target) === track) return;
+		this.videoTracks.get(target)?.detach(target);
+		this.videoTracks.delete(target);
+		track.attach(target);
+		this.videoTracks.set(target, track);
+	}
+
+	private cameraTrackOf(identity: string): Track | undefined {
+		if (!this.room || !this.livekit) return undefined;
 		const participant =
 			this.room.localParticipant.identity === identity
 				? this.room.localParticipant
 				: this.room.remoteParticipants.get(identity);
-		const track = participant?.getTrackPublication(this.livekit.Track.Source.Camera)?.track;
-		if (!track) return;
-		this.detachVideo(element);
-		track.attach(element);
-		this.videoTracks.set(element, track);
+		return participant?.getTrackPublication(this.livekit.Track.Source.Camera)?.track;
 	}
 
 	detachVideo(element: HTMLMediaElement) {
-		const track = this.videoTracks.get(element);
-		track?.detach(element);
+		this.videoTracks.get(element)?.detach(element);
 		this.videoTracks.delete(element);
+		for (const [identity, element_] of this.videoElements) {
+			if (element_ === element) this.videoElements.delete(identity);
+		}
 	}
 
 	private clearReconnectTimer() {
@@ -260,7 +278,8 @@ export class LiveKitCallEngine {
 	async dispose() {
 		this.disposing = true;
 		this.clearReconnectTimer();
-		for (const element of this.videoTracks.keys()) this.detachVideo(element);
+		for (const element of [...this.videoTracks.keys()]) this.detachVideo(element);
+		this.videoElements.clear();
 		for (const element of this.audioElements.values()) element.remove();
 		this.audioElements.clear();
 		const room = this.room;

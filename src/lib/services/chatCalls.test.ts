@@ -20,7 +20,8 @@ const harness = vi.hoisted(() => ({
 		dispose: ReturnType<typeof vi.fn>;
 	}>,
 	joinError: undefined as Error | undefined,
-	onJoin: undefined as (() => void) | undefined
+	onJoin: undefined as (() => void) | undefined,
+	storageRows: [] as StoredChatMessage[]
 }));
 
 vi.mock('$lib/services/accountManager.svelte', () => ({
@@ -39,7 +40,9 @@ vi.mock('$lib/services/chatAdminPolicy', () => ({
 	listGroupMembers: () => [{ stablePubkey: alice }]
 }));
 vi.mock('$lib/storage/chatStorage', () => ({
-	getChatStorage: vi.fn(async () => ({ getGroupMessagesByKinds: vi.fn(async () => []) }))
+	getChatStorage: vi.fn(async () => ({
+		getGroupMessagesByKinds: vi.fn(async () => harness.storageRows)
+	}))
 }));
 
 vi.mock('$lib/services/chatGroups.svelte', () => ({
@@ -50,13 +53,18 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 	listChatGroupMessages: () => harness.group.messages,
 	runGroupOperation: (_groupId: string, operation: () => Promise<unknown>) => operation(),
 	sendChatGroupMessage: vi.fn(
-		async (input: { content: string; kind?: number; tags?: string[][] }) => {
+		async (input: {
+			content: string;
+			kind?: number;
+			tags?: string[][];
+			eventCreatedAt?: number;
+		}) => {
 			harness.sends.push(input);
 			const cursor = harness.group.messages.length + 1;
 			const stored: StoredChatMessage = {
 				cursor,
 				createdAt: 100 + cursor,
-				eventCreatedAt: 100 + cursor,
+				eventCreatedAt: input.eventCreatedAt ?? 100 + cursor,
 				direction: 'outbound',
 				sender: alice,
 				id: `event-${cursor}`,
@@ -92,7 +100,7 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 				]
 			});
 		});
-		setFrameKey = vi.fn(async () => {});
+		setFrameKey = vi.fn(async () => true);
 		dispose = vi.fn(async () => {});
 		setMuted = vi.fn(async () => {});
 		setCameraEnabled = vi.fn(async () => {});
@@ -109,7 +117,9 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 import {
 	chatCallsStore,
 	confirmChatCall,
+	groupCallCards,
 	leaveChatCall,
+	loadGroupCalls,
 	openChatCall
 } from '$lib/services/chatCalls.svelte';
 
@@ -128,18 +138,41 @@ function resetGroup(groupId: string) {
 	harness.instances = [];
 	harness.joinError = undefined;
 	harness.onJoin = undefined;
+	harness.storageRows = [];
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async () => ({
-			ok: true,
-			status: 200,
-			text: async () => JSON.stringify({ token: 'token', url: 'wss://media.example' })
-		}))
+		vi.fn(
+			async () =>
+				new Response(JSON.stringify({ token: 'token', url: 'wss://media.example' }), {
+					status: 200
+				})
+		)
 	);
 }
 
 function statusSends() {
 	return harness.sends.map((send) => send.tags?.find((tag) => tag[0] === 'status')?.[1]);
+}
+
+function callRow(id: string, createdAt: number, status: 'open' | 'closed'): StoredChatMessage {
+	const announcement: CallAnnouncement = {
+		callId: '11'.repeat(32),
+		service: 'https://hushwire.exe.xyz',
+		status,
+		startsAt: 100,
+		identitySecret: status === 'open' ? '22'.repeat(32) : null
+	};
+	return {
+		cursor: createdAt,
+		createdAt,
+		eventCreatedAt: createdAt,
+		direction: 'inbound',
+		sender: bob,
+		id,
+		kind: ChatKinds.Call,
+		tags: createCallAnnouncementTags(announcement),
+		content: ''
+	};
 }
 
 beforeEach(async () => {
@@ -152,7 +185,7 @@ describe('chat call lifecycle', () => {
 		resetGroup('failed-start');
 		vi.stubGlobal(
 			'fetch',
-			vi.fn(async () => ({ ok: false, status: 503, text: async () => '' }))
+			vi.fn(async () => new Response('', { status: 503 }))
 		);
 		await openChatCall('failed-start');
 		await confirmChatCall();
@@ -210,5 +243,32 @@ describe('chat call lifecycle', () => {
 		await confirmChatCall();
 		await leaveChatCall();
 		expect(statusSends()).toEqual(['open', 'closed']);
+	});
+
+	it('withdraws a start whose end lands in the same second', async () => {
+		resetGroup('same-second');
+		const now = vi.spyOn(Date, 'now').mockReturnValue(1_762_000_000_000);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('', { status: 503 }))
+		);
+		await openChatCall('same-second');
+		await confirmChatCall();
+		const cards = groupCallCards('same-second');
+		expect(cards).toHaveLength(1);
+		expect(cards[0].announcement.status).toBe('closed');
+		now.mockRestore();
+	});
+
+	it('re-reads the durable rows so an ended call is not offered again', async () => {
+		resetGroup('read-again');
+		const open = callRow('event-open', 100, 'open');
+		harness.storageRows = [open];
+		await loadGroupCalls('read-again');
+		expect(groupCallCards('read-again')[0].announcement.status).toBe('open');
+
+		harness.storageRows = [open, callRow('event-closed', 101, 'closed')];
+		await loadGroupCalls('read-again', { force: true });
+		expect(groupCallCards('read-again')[0].announcement.status).toBe('closed');
 	});
 });

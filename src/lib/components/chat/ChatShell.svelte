@@ -68,6 +68,7 @@
 		type CalendarEventCard,
 		type CalendarEventDraft
 	} from '$lib/chat/calendar';
+	import { parseCallAnnouncement } from '$lib/chat/calls';
 	import { enqueueCalendarEvent } from '$lib/services/chatCalendarActions';
 	import { groupCallCards, loadGroupCalls } from '$lib/services/chatCalls.svelte';
 	import {
@@ -454,7 +455,12 @@
 			.filter((message) => {
 				if (message.kind === ChatKinds.Reaction) return reactionMarkers;
 				if (isStreamHiddenKind(message.kind)) return false;
-				if (message.kind === ChatKinds.Call) return latestCallEventIds.has(message.id);
+				if (message.kind === ChatKinds.Call)
+					// Malformed announcements have no card; keep them so the row can say so.
+					return (
+						latestCallEventIds.has(message.id) ||
+						!parseCallAnnouncement(message.kind, message.tags ?? [])
+					);
 				if (!isCalendarEventKind(message.kind)) return true;
 				const coordinate = eventCoordinate(message.kind, message.sender, message.tags);
 				return coordinate

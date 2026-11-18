@@ -110,6 +110,20 @@ describe('call key derivations', () => {
 		);
 	});
 
+	it('refuses material for an account the member list does not contain', () => {
+		expect(() =>
+			deriveCallJoinMaterial({
+				exporter,
+				callId,
+				identitySecret,
+				memberPubkey: alice,
+				memberPubkeys: ['bb'.repeat(32)],
+				deviceTag: 'Abcd1234',
+				epoch: 0n
+			})
+		).toThrow();
+	});
+
 	it('derives the expected identity, slot and member map', () => {
 		const material = deriveCallJoinMaterial({
 			exporter,

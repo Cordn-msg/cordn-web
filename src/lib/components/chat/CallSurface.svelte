@@ -7,6 +7,7 @@
 	import { getChatGroup, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { normalizePubKey } from '$lib/utils';
+	import { onDestroy } from 'svelte';
 	import {
 		attachChatCallVideo,
 		chatCallMemberPubkey,
@@ -28,6 +29,10 @@
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import LockKeyhole from '@lucide/svelte/icons/lock-keyhole';
 	import Users from '@lucide/svelte/icons/users';
+
+	// This surface is mounted by the chat layout, so unmounting it means the reader left
+	// /chat: the microphone and camera must not keep running with no control on screen.
+	onDestroy(() => void leaveChatCall());
 
 	const activeGroupId = $derived(chatCallsStore.active?.groupId ?? chatCallsStore.lobby?.groupId);
 	const activeGroup = $derived.by(() => (activeGroupId ? getChatGroup(activeGroupId) : undefined));

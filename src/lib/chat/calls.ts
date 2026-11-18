@@ -186,6 +186,11 @@ export function deriveCallJoinMaterial(input: {
 	epoch: bigint;
 }): CallJoinMaterial {
 	const memberPubkey = input.memberPubkey.toLowerCase();
+	// A device whose own state is off the group's line would derive names and a key
+	// nobody else has: the member list is the only thing that can say it is still in.
+	if (!input.memberPubkeys.some((pubkey) => pubkey.toLowerCase() === memberPubkey)) {
+		throw new Error('This account is no longer a member of the group');
+	}
 	const pseudonym = deriveCallPseudonym(input.identitySecret, memberPubkey);
 	const privateKey = deriveCallEphemeralKey(input.exporter, input.callId, memberPubkey);
 	return {
