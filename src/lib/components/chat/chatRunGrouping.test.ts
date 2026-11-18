@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { isRunTail } from './chatRunGrouping';
+import { isRunContinuation, isRunTail } from './chatRunGrouping';
 import type { ChatMessage } from './chat.types';
 
 function row(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'author'>): ChatMessage {
@@ -12,6 +12,48 @@ function row(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'author'
 		...overrides
 	};
 }
+
+describe('isRunContinuation', () => {
+	test('a same-author message continues the run', () => {
+		expect(isRunContinuation(row({ id: 'a1', author: 'A' }), row({ id: 'a2', author: 'A' }))).toBe(
+			true
+		);
+	});
+
+	test('an author change does not continue the run', () => {
+		expect(isRunContinuation(row({ id: 'a1', author: 'A' }), row({ id: 'b1', author: 'B' }))).toBe(
+			false
+		);
+	});
+
+	test('the last row does not continue a run', () => {
+		expect(isRunContinuation(row({ id: 'a1', author: 'A' }), undefined)).toBe(false);
+	});
+
+	test('system rows never continue a run, even for the same author', () => {
+		expect(
+			isRunContinuation(
+				row({ id: 'r1', author: 'A', systemKind: 'reaction' }),
+				row({ id: 'r2', author: 'A', systemKind: 'reaction' })
+			)
+		).toBe(false);
+	});
+
+	test('a following system row ends the run', () => {
+		expect(
+			isRunContinuation(
+				row({ id: 'a2', author: 'A' }),
+				row({ id: 'r1', author: 'A', systemKind: 'reaction' })
+			)
+		).toBe(false);
+	});
+
+	test('a next row that starts a section (day label or unread marker) ends the run', () => {
+		expect(
+			isRunContinuation(row({ id: 'a1', author: 'A' }), row({ id: 'a2', author: 'A' }), true)
+		).toBe(false);
+	});
+});
 
 describe('isRunTail', () => {
 	test('the last row is always a run tail (avatar anchors there)', () => {

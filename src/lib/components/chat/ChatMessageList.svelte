@@ -10,7 +10,7 @@
 	import { estimateChatMessageHeight } from './chatMessageRenderCache';
 	import { shouldAnchorPrepend } from './chatListScrollAnchor';
 	import { chatDayKey, formatChatDayLabel } from './chatDayLabel';
-	import { isRunTail } from './chatRunGrouping';
+	import { isRunContinuation, isRunTail } from './chatRunGrouping';
 	import type { ChatMessage } from './chat.types';
 
 	let {
@@ -152,10 +152,14 @@
 		count: 0,
 		getScrollElement: () => container,
 		// Shape-aware estimates shrink the estimate→measure deltas that make
-		// first-pass scrolls jump; measured rows keep their real heights.
+		// first-pass scrolls jump; measured rows keep their real heights. Run
+		// continuation is read from the snapshot (never the reactive messages prop)
+		// so estimateSize can't re-enter the virtualizer mid-flush.
 		estimateSize: (index) => {
 			const message = messageSnapshot[index];
-			return message ? estimateChatMessageHeight(message) : ESTIMATED_MESSAGE_HEIGHT;
+			return message
+				? estimateChatMessageHeight(message, isRunContinuation(message, messageSnapshot[index + 1]))
+				: ESTIMATED_MESSAGE_HEIGHT;
 		},
 		overscan: VIRTUAL_OVERSCAN,
 		getItemKey: (index) => messageSnapshot[index]?.id ?? index
@@ -881,11 +885,21 @@
 							? chatDayKey(previousMessage.createdAt) !== messageDayKey
 							: true}
 						{@const dayEventCount = showDay ? (calendarEventDays.get(messageDayKey) ?? 0) : 0}
+						{@const showUnreadMarker = message.id === focusMarkerId}
+						<!-- A day separator or unread marker on the next row starts a new section; the
+						     row above it keeps the normal gap even when the author is unchanged. -->
+						{@const nextStartsSection = nextMessage
+							? messageDayKey !== chatDayKey(nextMessage.createdAt) ||
+								nextMessage.id === focusMarkerId
+							: false}
+						<!-- Same-author runs stack tightly; a run tail (author change or next row is
+						     a system row) keeps the normal breathing room. -->
+						{@const runContinues = isRunContinuation(message, nextMessage, nextStartsSection)}
 						<div
 							data-index={virtualItem.index}
 							data-virtual-item
 							data-message-id={message.id}
-							class="absolute top-0 left-0 w-full pb-4 sm:pb-5 md:pb-6"
+							class={`absolute top-0 left-0 w-full ${runContinues ? 'pb-1 sm:pb-1.5 md:pb-2' : 'pb-4 sm:pb-5 md:pb-6'}`}
 							style={`transform: translateY(${virtualItem.start}px);`}
 							use:measureItem
 						>
@@ -896,7 +910,7 @@
 								showAvatar={runTail}
 								showDayLabel={showDay}
 								{dayEventCount}
-								showUnreadMarker={message.id === focusMarkerId}
+								{showUnreadMarker}
 								{onReply}
 								{onReact}
 								{onUnreact}

@@ -162,12 +162,19 @@ export function saveCustomChatReactions(reactions: string[]): void {
 // (bubble + timestamp row) and each wrapped line adds ~20px. Estimates feed
 // scrollToIndex — overshoot clamps a deep focus scroll to the bottom, which is
 // exactly how open-at-first-unread used to silently fail.
+// A continuation row (`runContinues`, a same-author run stacked with the tight
+// gap) is 12px shorter at this base calibration (pb-4 16px → pb-1 4px), so the
+// estimate must shrink with it: otherwise every unmeasured continuation row in
+// a long run overestimates by 12px and deep jumps miss their target.
 // ponytail: still coarse buckets (measured rows use their real heights) —
 // refine toward per-part math (reply chips, mentions) only if first-pass jumps
 // still visibly miss.
-export function estimateChatMessageHeight(message: ChatMessage): number {
+const TIGHT_RUN_GAP_SAVING = 12;
+
+export function estimateChatMessageHeight(message: ChatMessage, runContinues = false): number {
 	if (message.systemKind) return 48;
-	if (message.media || message.tags?.some((tag) => tag[0] === 'imeta')) return 264;
+	const gapSaving = runContinues ? TIGHT_RUN_GAP_SAVING : 0;
+	if (message.media || message.tags?.some((tag) => tag[0] === 'imeta')) return 264 - gapSaving;
 	const lines = Math.min(30, Math.max(1, Math.ceil(message.text.length / 32)));
-	return 62 + (lines - 1) * 20;
+	return 62 + (lines - 1) * 20 - gapSaving;
 }
