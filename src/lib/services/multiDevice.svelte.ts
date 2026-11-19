@@ -33,7 +33,6 @@ import {
 	type BlossomSigner,
 	type UploadedBlob
 } from '$lib/services/chatBlossomClient';
-import { BLOSSOM_SERVERS } from '$lib/constants/chat';
 import {
 	listChatGroups,
 	getChatGroup,
@@ -135,10 +134,19 @@ export const DEFAULT_MULTI_DEVICE_RELAYS = [
 ];
 
 /**
- * Default document hosts: 3-way replication so a single server outage can't
- * strand the sealed document. Editable in Advanced.
+ * Default document hosts: the Cordn host first, then the older public hosts as
+ * replication/failover so a single server outage can't strand the sealed
+ * document. Editable in Advanced.
  */
 export const DEFAULT_BLOSSOM_SERVERS = [
+	'https://cordn.feeds.relay.tools/',
+	'https://cdn.hzrd149.com/',
+	'https://blossom.ditto.pub/',
+	'https://blossom.primal.net/'
+];
+
+/** The host list every config created before the Cordn host existed carries. */
+const LEGACY_BLOSSOM_SERVERS = [
 	'https://cdn.hzrd149.com/',
 	'https://blossom.ditto.pub/',
 	'https://blossom.primal.net/'
@@ -639,7 +647,7 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			// (sha256(blob)) is deterministic, so every successful upload returns
 			// the same address regardless of which server wins the race.
 			const config = getMultiDeviceConfig();
-			const servers = config?.blossomServers ?? BLOSSOM_SERVERS;
+			const servers = config?.blossomServers ?? DEFAULT_BLOSSOM_SERVERS;
 			// Content addressing is local (spec §6 MUST): the address is the hash of
 			// OUR sealed bytes — the same helper the read path re-verifies with —
 			// never a server's claim. A host whose response disagrees (lying or
@@ -1872,6 +1880,24 @@ let inflightTipEventId: string | null = null;
  * reconcile on every change. Idempotent: re-subscribing tears down the prior
  * subscription first. No-op when disabled.
  */
+/**
+ * Move a config still on the pre-Cordn default hosts onto the current default,
+ * once. Only an untouched default list is rewritten — anyone who picked their
+ * own hosts keeps them. Returns whether it changed anything.
+ */
+export function adoptDefaultBlossomServers(config: MultiDeviceOwnerConfig): boolean {
+	const current = config.blossomServers;
+	if (
+		current.length !== LEGACY_BLOSSOM_SERVERS.length ||
+		!current.every((server, index) => server === LEGACY_BLOSSOM_SERVERS[index])
+	)
+		return false;
+	config.blossomServers = [...DEFAULT_BLOSSOM_SERVERS];
+	saveConfig(config);
+	noteActivity(config, 'info', 'Document hosts updated to the Cordn default');
+	return true;
+}
+
 function startTipSubscription(): void {
 	if (!browser) return;
 	const config = getMultiDeviceConfig();
@@ -1955,6 +1981,13 @@ async function startMultiDevice(): Promise<void> {
 		new Promise<void>((resolve) => setTimeout(resolve, MD_RECONCILE_TIMEOUT_MS))
 	]);
 	startTipSubscription();
+	// Host default migration runs after the reconcile (so it re-uploads any state
+	// just adopted) and queues its full republish in the same tick as
+	// scheduleOwedPublish below, so the two coalesce into one publish. Skipping it
+	// would leave the new tip advertising the new hosts while the documents only
+	// exist on the old ones.
+	if (adoptDefaultBlossomServers(getMultiDeviceConfig() ?? config))
+		scheduleRepublish({ resealGroups: 'all', resealMeta: true });
 	// §10.5 trigger "on startup if local state is ahead of the tip" — evaluated
 	// even when the reconcile deduped (tip unchanged / event id seen): both
 	// signals are pure-local (stale-epoch record + meta view hash), no fetch.
@@ -2192,7 +2225,7 @@ export interface TipTransition {
 
 /** Read-order server list: the tip's advertised hosts first, then the configured fallbacks. */
 function readServers(pointer: TipPointer, config: MultiDeviceOwnerConfig | undefined): string[] {
-	return [...pointer.servers, ...(config?.blossomServers ?? BLOSSOM_SERVERS)];
+	return [...pointer.servers, ...(config?.blossomServers ?? DEFAULT_BLOSSOM_SERVERS)];
 }
 
 /**

@@ -15,7 +15,7 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { copyText } from '$lib/services/nativeShims';
 	import { page } from '$app/state';
-	import { BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVER } from '$lib/constants/chat';
+	import { BLOSSOM_SERVERS } from '$lib/constants/chat';
 	import {
 		enableMultiDevice,
 		unlinkMultiDevice,
@@ -549,7 +549,7 @@
 													onchange={(e) => toggleBlossom(server, e.currentTarget.checked)}
 												/>
 												<span class="font-mono text-xs">{server}</span>
-												{#if server === DEFAULT_BLOSSOM_SERVER}
+												{#if server === DEFAULT_BLOSSOM_SERVERS[0]}
 													<span class="ml-auto text-xs text-muted-foreground">default</span>
 												{/if}
 											</label>
