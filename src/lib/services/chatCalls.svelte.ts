@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { CapacitorHttp } from '@capacitor/core';
 import { untrack } from 'svelte';
 import { mlsExporter, type ClientState } from 'ts-mls';
 import { manager } from '$lib/services/accountManager.svelte';
@@ -45,6 +46,7 @@ import {
 	type CallVideoSource
 } from '$lib/services/liveKitCallEngine';
 import { onNativeCallHangUp, startNativeCall, stopNativeCall } from '$lib/services/nativeBridge';
+import { isNativePlatform } from '$lib/services/nativeShims';
 
 interface PendingCall {
 	kind: 'start' | 'join';
@@ -253,6 +255,74 @@ async function readCappedBody(response: Response): Promise<string> {
 	return text + decoder.decode();
 }
 
+const TOKEN_TIMEOUT_MS = 15_000;
+
+/** The native bridge parses JSON responses itself, so the size cap has to be checked
+ *  on the already-parsed value and on the declared length. */
+function nativeTokenBody(response: { data: unknown; headers?: Record<string, string> }): string {
+	const declared = Object.entries(response.headers ?? {}).find(
+		([name]) => name.toLowerCase() === 'content-length'
+	)?.[1];
+	if (Number(declared) > 16_384) throw new Error('The call service returned an oversized response');
+	const body =
+		typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? '');
+	if (body.length > 16_384) throw new Error('The call service returned an oversized response');
+	return body;
+}
+
+/** The APK's WebView origin is https://localhost, which a service that allowlists only
+ *  its web origin refuses at the CORS preflight. CapacitorHttp runs outside the WebView
+ *  and sends no Origin, so the request is treated as a non-browser client. */
+async function postTokenRequest(request: { url: string; body: string }): Promise<{
+	status: number;
+	body: string;
+}> {
+	if (isNativePlatform()) {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const response = await Promise.race([
+				CapacitorHttp.post({
+					url: request.url,
+					headers: { 'Content-Type': 'application/json' },
+					data: request.body,
+					connectTimeout: TOKEN_TIMEOUT_MS,
+					readTimeout: TOKEN_TIMEOUT_MS,
+					disableRedirects: true,
+					responseType: 'text'
+				}),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error('The call service did not respond in time')),
+						TOKEN_TIMEOUT_MS
+					);
+				})
+			]);
+			return { status: response.status, body: nativeTokenBody(response) };
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
+	try {
+		const response = await fetch(request.url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: request.body,
+			signal: controller.signal,
+			redirect: 'error'
+		});
+		return { status: response.status, body: await readCappedBody(response) };
+	} catch (error) {
+		if (controller.signal.aborted) {
+			throw new Error('The call service did not respond in time', { cause: error });
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 async function requestToken(session: ActiveCallSession): Promise<{ token: string; url: string }> {
 	if (!session.material) throw new Error('Call keys are not ready');
 	const request = createCallTokenRequest({
@@ -262,33 +332,19 @@ async function requestToken(session: ActiveCallSession): Promise<{ token: string
 		privateKey: session.material.privateKey,
 		publicKey: session.material.publicKey
 	});
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 15_000);
 	try {
-		const response = await fetch(request.url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: request.body,
-			signal: controller.signal,
-			redirect: 'error'
-		});
-		if (response.status === 402) throw new Error('The call service requires a subscription');
-		if (response.status === 403)
-			throw new Error('The call service refused this room or browser origin');
-		if (response.status === 429)
+		const { status, body } = await postTokenRequest(request);
+		if (status === 402) throw new Error('The call service requires a subscription');
+		if (status === 403) throw new Error('The call service refused this room or browser origin');
+		if (status === 429)
 			throw new Error('The call service is rate limiting requests; try again shortly');
-		if (!response.ok) throw new Error(`The call service returned HTTP ${response.status}`);
-		return parseCallTokenGrant(JSON.parse(await readCappedBody(response)));
+		if (status < 200 || status >= 300) throw new Error(`The call service returned HTTP ${status}`);
+		return parseCallTokenGrant(JSON.parse(body));
 	} catch (error) {
-		if (controller.signal.aborted) {
-			throw new Error('The call service did not respond in time', { cause: error });
-		}
 		if (error instanceof SyntaxError) {
 			throw new Error('The call service returned malformed JSON', { cause: error });
 		}
 		throw error;
-	} finally {
-		clearTimeout(timeout);
 	}
 }
 

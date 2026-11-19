@@ -29,7 +29,21 @@ const harness = vi.hoisted(() => ({
 		start: vi.fn(async () => true),
 		stop: vi.fn(async () => {}),
 		hangUp: vi.fn(async () => {})
-	}
+	},
+	nativePlatform: false,
+	post: vi.fn(async (_options: Record<string, unknown>) => ({
+		status: 200,
+		headers: {},
+		data: '{}'
+	}))
+}));
+
+vi.mock('$lib/services/nativeShims', () => ({
+	isNativePlatform: () => harness.nativePlatform
+}));
+
+vi.mock('@capacitor/core', () => ({
+	CapacitorHttp: { post: harness.post }
 }));
 
 vi.mock('$lib/services/nativeBridge', () => ({
@@ -209,9 +223,31 @@ beforeEach(async () => {
 	await leaveChatCall({ announce: false });
 	chatCallsStore.error = '';
 	for (const mock of Object.values(harness.native)) mock.mockClear();
+	harness.nativePlatform = false;
+	harness.post.mockClear();
 });
 
 describe('chat call lifecycle', () => {
+	it('posts the token request through native HTTP so the service origin allowlist is not applied', async () => {
+		resetGroup('native-token');
+		harness.nativePlatform = true;
+		harness.post.mockResolvedValueOnce({
+			status: 200,
+			headers: { 'Content-Length': '42' },
+			data: JSON.stringify({ token: 'native-token', url: 'wss://media.example' })
+		});
+		await openChatCall('native-token');
+		await confirmChatCall();
+		expect(harness.post).toHaveBeenCalledOnce();
+		expect(harness.post.mock.calls[0][0]).toMatchObject({
+			url: 'https://hushwire.exe.xyz/api/get-token',
+			disableRedirects: true,
+			headers: { 'Content-Type': 'application/json' }
+		});
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+		expect(chatCallsStore.phase).toBe('connected');
+	});
+
 	it('withdraws a failed start but does not close a failed join', async () => {
 		resetGroup('failed-start');
 		vi.stubGlobal(
