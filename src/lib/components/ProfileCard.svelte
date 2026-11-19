@@ -22,15 +22,18 @@
 		showName = true,
 		showInlineAvatar = false,
 		logoutButtonVariant = 'ghost',
-		profileLink = true
+		profileLink = true,
+		avatarSize = 'h-8 w-8'
 	}: {
 		pubkey: string;
-		mode?: 'compact' | 'extended' | 'inline';
+		mode?: 'compact' | 'extended' | 'inline' | 'avatar';
 		showLogout?: boolean;
 		showName?: boolean;
 		showInlineAvatar?: boolean;
 		logoutButtonVariant?: ButtonVariant;
 		profileLink?: boolean;
+		/** Avatar class for `mode="avatar"` — the picture alone, for tiles and placeholders. */
+		avatarSize?: string;
 	} = $props();
 
 	let showLogoutDialog = $state(false);
@@ -38,6 +41,7 @@
 
 	const isExtended = $derived(mode === 'extended');
 	const isInline = $derived(mode === 'inline');
+	const isAvatar = $derived(mode === 'avatar');
 	const canShowLogout = $derived(mode === 'compact' && showLogout);
 
 	const profileState = useProfile(() => pubkey);
@@ -74,9 +78,7 @@
 	});
 </script>
 
-{#snippet pfp(pubkey: string, pfp?: string, size: 'compact' | 'extended' | 'inline' = 'compact')}
-	{@const sizeClass =
-		size === 'extended' ? 'h-16 w-16' : size === 'inline' ? 'h-6 w-6 shrink-0' : 'h-8 w-8'}
+{#snippet pfp(pubkey: string, pfp?: string, sizeClass = 'h-8 w-8')}
 	{#if profileLink}
 		<a href={profileHref} class="shrink-0" aria-label={`Open profile for ${displayName}`}>
 			<Avatar {pubkey} picture={pfp} size={sizeClass} alt="pfp" />
@@ -95,7 +97,7 @@
 
 		<div class="p-4">
 			<div class="flex items-start gap-3">
-				{@render pfp(pubkey, profile?.picture, 'extended')}
+				{@render pfp(pubkey, profile?.picture, 'h-16 w-16')}
 				<div class="min-w-0 flex-1 pt-1">
 					<button
 						type="button"
@@ -147,7 +149,7 @@
 		class="inline-flex max-w-full min-w-0 items-center gap-1.5 align-baseline text-sm font-medium text-current"
 	>
 		{#if showInlineAvatar}
-			{@render pfp(pubkey, profile?.picture, 'inline')}
+			{@render pfp(pubkey, profile?.picture, 'h-6 w-6 shrink-0')}
 		{/if}
 		{#if profileLink}
 			<a href={profileHref} class="min-w-0 truncate text-left hover:underline">{displayName}</a>
@@ -156,6 +158,8 @@
 		{/if}
 		<PetnameMark {pubkey} class="size-3" />
 	</span>
+{:else if isAvatar}
+	{@render pfp(pubkey, profile?.picture, avatarSize)}
 {:else}
 	<div class="flex items-center gap-2">
 		{@render pfp(pubkey, profile?.picture)}

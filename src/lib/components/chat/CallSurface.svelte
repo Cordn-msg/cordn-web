@@ -1,7 +1,6 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import Avatar from '$lib/components/Avatar.svelte';
 	import ProfileCard from '$lib/components/ProfileCard.svelte';
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { getChatGroup, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
@@ -257,7 +256,12 @@
 								>
 									{#if mainPubkey}
 										<div class="min-w-0 flex-1 truncate font-medium">
-											<ProfileCard pubkey={mainPubkey} mode="inline" profileLink={false} />
+											<ProfileCard
+												pubkey={mainPubkey}
+												mode="inline"
+												showInlineAvatar
+												profileLink={false}
+											/>
 										</div>
 									{:else}
 										<span class="min-w-0 flex-1 truncate font-medium text-amber-600"
@@ -316,7 +320,12 @@
 								{:else}
 									<div class="main-call-avatar flex min-h-40 items-center justify-center">
 										{#if mainPubkey}
-											<Avatar pubkey={mainPubkey} size="size-24" />
+											<ProfileCard
+												pubkey={mainPubkey}
+												mode="avatar"
+												avatarSize="size-24"
+												profileLink={false}
+											/>
 										{:else}
 											<Users class="size-16 text-muted-foreground" />
 										{/if}
@@ -346,7 +355,7 @@
 											></video>
 										{/key}
 									{:else if pubkey}
-										<Avatar {pubkey} size="size-20" />
+										<ProfileCard {pubkey} mode="avatar" avatarSize="size-20" profileLink={false} />
 									{:else}
 										<Users class="size-16 text-muted-foreground" />
 									{/if}
@@ -375,7 +384,7 @@
 									>
 										{#if pubkey}
 											<div class="min-w-0 flex-1 truncate text-sm font-medium">
-												<ProfileCard {pubkey} mode="inline" profileLink={false} />
+												<ProfileCard {pubkey} mode="inline" showInlineAvatar profileLink={false} />
 											</div>
 										{:else}
 											<span class="min-w-0 flex-1 truncate text-sm font-medium text-amber-600"

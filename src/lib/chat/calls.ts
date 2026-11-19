@@ -209,13 +209,21 @@ export function deriveCallJoinMaterial(input: {
 	};
 }
 
-function checkedService(service: string): string {
+/** Accepts only what the token request can safely be sent to: HTTPS (loopback for
+ *  local development), no credentials, no query or fragment, no trailing slash. */
+export function normalizeCallService(service: string): string {
 	const normalized = service.trim().replace(/\/+$/, '');
-	const url = new URL(normalized);
+	let url: URL;
+	try {
+		url = new URL(normalized);
+	} catch {
+		throw new Error('The call service must be a full URL, like https://calls.example');
+	}
 	const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-	if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) || url.username) {
+	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
 		throw new Error('The call service must use HTTPS');
 	}
+	if (url.username || url.password) throw new Error('The call service URL cannot carry a login');
 	if (url.search || url.hash) throw new Error('The call service URL is invalid');
 	return normalized;
 }
@@ -228,7 +236,7 @@ export function createCallTokenRequest(input: {
 	publicKey: string;
 	nowSeconds?: number;
 }): { url: string; body: string } {
-	const url = `${checkedService(input.service)}/api/get-token`;
+	const url = `${normalizeCallService(input.service)}/api/get-token`;
 	const signedEvent = finalizeEvent(
 		{
 			kind: 27235,
@@ -261,7 +269,11 @@ export function parseCallTokenGrant(value: unknown): { token: string; url: strin
 	if (typeof candidate.url !== 'string') throw new Error('The call service returned no media URL');
 	const url = new URL(candidate.url);
 	const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-	if ((url.protocol !== 'wss:' && !(url.protocol === 'ws:' && local)) || url.username) {
+	if (
+		(url.protocol !== 'wss:' && !(url.protocol === 'ws:' && local)) ||
+		url.username ||
+		url.password
+	) {
 		throw new Error('The call service returned an insecure media URL');
 	}
 	return { token: candidate.token, url: candidate.url };

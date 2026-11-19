@@ -14,6 +14,11 @@
 		type EnterKeyMode
 	} from '$lib/services/chatComposerSettings.svelte';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
+	import { DEFAULT_CALL_SERVICE } from '$lib/chat/calls';
+	import { getChatCallService, setChatCallService } from '$lib/services/chatCalls.svelte';
+	import { errorMessage } from '$lib/utils';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
 	import Check from '@lucide/svelte/icons/check';
 
@@ -45,6 +50,20 @@
 	// Shows what 'auto' currently resolves to on this device so the default
 	// isn't a black box. Reads the reactive module state — updates live.
 	const deviceSends = $derived(enterKeySends());
+
+	let callService = $state(getChatCallService());
+	let callServiceError = $state('');
+
+	function saveCallService() {
+		try {
+			setChatCallService(callService);
+			// Read back so the field shows what was stored: trimmed, or the default when blank.
+			callService = getChatCallService();
+			callServiceError = '';
+		} catch (error) {
+			callServiceError = errorMessage(error);
+		}
+	}
 </script>
 
 <svelte:head>
@@ -63,9 +82,9 @@
 			<Keyboard class="size-4" />
 		</div>
 		<div class="min-w-0">
-			<h1 class="text-lg font-semibold tracking-tight">Chat behavior</h1>
+			<h1 class="text-lg font-semibold tracking-tight">Chat &amp; calls</h1>
 			<p class="truncate text-sm text-muted-foreground">
-				How the Enter key behaves and what the message timeline shows.
+				How the Enter key behaves, what the timeline shows, and which service mints call tokens.
 			</p>
 		</div>
 	</header>
@@ -137,6 +156,32 @@
 					</p>
 				</div>
 				<Switch checked={getRenderNostrEmbeds()} onCheckedChange={setRenderNostrEmbeds} />
+			</div>
+
+			<div class="space-y-2 rounded-2xl border border-border p-4">
+				<p class="font-medium">Call service</p>
+				<p class="text-sm text-muted-foreground">
+					Mints the token for calls you start. Joining always uses the service the caller announced,
+					so a different setting never blocks a call.
+				</p>
+				<div class="flex gap-2">
+					<Input
+						bind:value={callService}
+						placeholder={DEFAULT_CALL_SERVICE}
+						aria-label="Call service URL"
+						onblur={saveCallService}
+						onkeydown={(event) => event.key === 'Enter' && saveCallService()}
+					/>
+					<Button variant="outline" onclick={saveCallService}>Save</Button>
+				</div>
+				{#if callServiceError}
+					<p class="text-sm text-destructive" role="alert">{callServiceError}</p>
+				{:else}
+					<p class="text-xs text-muted-foreground">
+						Leave blank for {DEFAULT_CALL_SERVICE}. Audio and video stay end-to-end encrypted
+						whichever service mints the token.
+					</p>
+				{/if}
 			</div>
 
 			<div class="text-center">

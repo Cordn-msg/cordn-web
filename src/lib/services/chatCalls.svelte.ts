@@ -30,6 +30,7 @@ import {
 	newCallDeviceTag,
 	newCallId,
 	newCallIdentitySecret,
+	normalizeCallService,
 	parseCallTokenGrant,
 	CALL_EXPORTER_CONTEXT,
 	CALL_EXPORTER_LABEL,
@@ -116,6 +117,29 @@ export const chatCallsStore = $state<{
 	pinnedIdentity: null,
 	participants: []
 });
+
+const CALL_SERVICE_STORAGE_KEY = 'cordn.callService';
+
+/** Cold read: only a start asks, and the settings form keeps its own draft. A value
+ *  that no longer validates (older build, hand-edited storage) falls back to the default. */
+export function getChatCallService(): string {
+	if (typeof localStorage === 'undefined') return DEFAULT_CALL_SERVICE;
+	const stored = localStorage.getItem(CALL_SERVICE_STORAGE_KEY);
+	if (!stored) return DEFAULT_CALL_SERVICE;
+	try {
+		return normalizeCallService(stored);
+	} catch {
+		return DEFAULT_CALL_SERVICE;
+	}
+}
+
+/** Throws on an invalid URL so the settings form can say why. Blank restores the default. */
+export function setChatCallService(service: string): void {
+	const normalized = service.trim() ? normalizeCallService(service) : DEFAULT_CALL_SERVICE;
+	if (typeof localStorage !== 'undefined') {
+		localStorage.setItem(CALL_SERVICE_STORAGE_KEY, normalized);
+	}
+}
 
 const EMPTY_SNAPSHOT: CallSnapshot = { rows: [], loaded: false };
 const snapshots = $state<Record<string, CallSnapshot>>({});
@@ -641,7 +665,8 @@ export async function openChatCall(groupId: string, eventId?: string) {
 		kind: 'start',
 		groupId,
 		callId: newCallId(),
-		service: DEFAULT_CALL_SERVICE,
+		// A start asks the configured service; a join keeps the one in the announcement.
+		service: getChatCallService(),
 		startsAt: Math.floor(Date.now() / 1000),
 		identitySecret: newCallIdentitySecret()
 	};

@@ -11,6 +11,7 @@ import {
 	deriveCallFrameKey,
 	deriveCallJoinMaterial,
 	deriveCallPseudonym,
+	normalizeCallService,
 	parseCallAnnouncement,
 	parseCallTokenGrant,
 	type CallAnnouncement
@@ -165,6 +166,15 @@ describe('call token request', () => {
 		expect(signedEvent.pubkey).toBe(material.publicKey);
 		expect(signedEvent.pubkey).not.toBe(alice);
 		expect(verifyEvent(signedEvent)).toBe(true);
+	});
+
+	it('normalizes a configured service and refuses what cannot be asked', () => {
+		expect(normalizeCallService(' https://calls.example/ ')).toBe('https://calls.example');
+		expect(normalizeCallService('http://localhost:8080')).toBe('http://localhost:8080');
+		expect(() => normalizeCallService('http://calls.example')).toThrow(/HTTPS/);
+		expect(() => normalizeCallService('calls.example')).toThrow(/full URL/);
+		expect(() => normalizeCallService('https://user:pass@calls.example')).toThrow(/login/);
+		expect(() => normalizeCallService('https://calls.example?x=1')).toThrow(/invalid/);
 	});
 
 	it('validates response URLs', () => {

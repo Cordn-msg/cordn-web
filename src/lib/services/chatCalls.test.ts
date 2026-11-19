@@ -440,6 +440,28 @@ describe('chat call lifecycle', () => {
 		expect(chatCallsStore.connectedAt).toBeNull();
 	});
 
+	it('starts on the configured service and joins on the announced one', async () => {
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => (key === 'cordn.callService' ? 'https://calls.example/' : null),
+			setItem: vi.fn()
+		});
+		resetGroup('configured-service');
+		await openChatCall('configured-service');
+		expect(chatCallsStore.lobby?.service).toBe('https://calls.example');
+		await confirmChatCall();
+		expect(harness.sends[0].tags?.find(([name]) => name === 'service')?.[1]).toBe(
+			'https://calls.example'
+		);
+		expect(vi.mocked(fetch).mock.calls[0][0]).toBe('https://calls.example/api/get-token');
+
+		// A joiner keeps the caller's service: the setting is not a compatibility barrier.
+		await leaveChatCall({ announce: false });
+		resetGroup('configured-join');
+		harness.group.messages.push(callRow('event-open', 1, 'open'));
+		await openChatCall('configured-join', 'event-open');
+		expect(chatCallsStore.lobby?.service).toBe('https://hushwire.exe.xyz');
+	});
+
 	it('pins one participant as the main view and clears it when the call ends', async () => {
 		resetGroup('pinned');
 		await openChatCall('pinned');

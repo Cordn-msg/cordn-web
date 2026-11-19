@@ -254,9 +254,9 @@
 									>
 										<Keyboard class="size-4" />
 									</div>
-									<p class="font-medium">Chat behavior</p>
+									<p class="font-medium">Chat &amp; calls</p>
 									<p class="mt-1 text-sm text-muted-foreground">
-										How the Enter key behaves while writing messages.
+										Enter key behavior, timeline display, and the call token service.
 									</p>
 								</div>
 							</a>
