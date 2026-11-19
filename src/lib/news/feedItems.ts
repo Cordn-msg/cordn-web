@@ -692,6 +692,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'File names that stay yours, and a quieter composer',
 		body: '- ✨ Files you share no longer carry the name you picked: attachments and voice notes go out under a random 8-character name with the same extension, so recipients can still open them. The original name stays only on your device.\n- 🔄 The composer’s expand chevron now appears only when the draft is long enough to scroll — or when the composer is already expanded — instead of taking a row above every message.'
+	},
+	{
+		id: 'cordn-news-2026-11-19-group-calls',
+		createdAt: Date.UTC(2026, 10, 19),
+		version: 1,
+		title: 'Call your group, encrypted end to end',
+		body: '- ✨ Any group can now make a call: press the phone in the conversation header and everyone in the chat sees it as a call card they can join. Audio and video are sealed with the group’s own keys — the same ones that protect its messages — so the servers that carry the call only ever see scrambled data, and the token service learns a random room name and a made-up name for you, never who you are.\n- ✨ See everyone at once: tiles that highlight whoever is speaking, a mute mark where it matters, and the option to pin someone as the main picture or blow any tile up to full screen.\n- ✨ Share your screen from a desktop browser when words are not enough; the newest share takes the main view and everyone’s camera stays in the grid below.\n- 🔄 A live call shows a small phone dot on the group in your chat list, a running timer, and a bar that keeps the call a tap away while you keep reading and typing. Leaving the chat ends the call, so the microphone never stays on behind you.\n- ✨ On Android a call keeps going with the screen off, from an ongoing notification you can open or hang up from — including when you join with the microphone already muted.\n- 🔄 Microphone and camera buttons now tell you when a change did not happen — a refused permission, a camera another app is holding — instead of flipping as if it worked.\n- 🔄 Calls you start use Hushwire by default; point them at another token service in Settings → Chat & calls. Joining always follows the service the caller announced, so two people with different settings still reach each other.\n- 🔄 It is an open format rather than a Cordn-only one: the call card a group member sees is the same one other apps in this space send and read.'
 	}
 ];
 
