@@ -55,6 +55,7 @@ import {
 } from '$lib/chat/references';
 import type { PollDraft } from '$lib/chat/polls';
 import { isCalendarSendKind } from '$lib/chat/calendar';
+import { ChatKinds } from '$lib/chat/kinds';
 import {
 	createGroupPendingEpochStore,
 	dropPendingAddMemberForTarget,
@@ -2601,8 +2602,9 @@ export async function sendChatGroupMessage(input: {
 			!input.deleteTo &&
 			!input.pinTo &&
 			!input.voteTo &&
-			// A calendar event's description may legitimately be empty (NIP-52).
-			!isCalendarSendKind(outboundShape.kind)
+			// Calendar descriptions and NIP-53 call announcements may be empty.
+			!isCalendarSendKind(outboundShape.kind) &&
+			outboundShape.kind !== ChatKinds.Call
 		) {
 			throw new Error('Message content is required');
 		}

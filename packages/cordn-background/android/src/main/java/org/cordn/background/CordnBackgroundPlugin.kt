@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -149,6 +150,32 @@ class CordnBackgroundPlugin : Plugin() {
         call.resolve()
     }
 
+    // ── Calls: keep the WebView's mic/camera alive while Android backgrounds it ──
+
+    @PluginMethod
+    fun startCall(call: PluginCall) {
+        val intent = Intent(getContext(), CallForegroundService::class.java)
+            .putExtra(CallForegroundService.EXTRA_TITLE, call.getString("title") ?: "Group call")
+            .putExtra(CallForegroundService.EXTRA_MICROPHONE, call.getBoolean("microphone") ?: false)
+            .putExtra(CallForegroundService.EXTRA_CAMERA, call.getBoolean("camera") ?: false)
+        try {
+            // Idempotent: while the service runs, this re-declares the types from the
+            // new mic/camera state (service types cannot be changed in place).
+            ContextCompat.startForegroundService(getContext(), intent)
+            call.resolve()
+        } catch (t: Exception) {
+            // No RECORD_AUDIO/CAMERA yet, or the app is no longer visible: the call keeps
+            // running, only the background keep-alive is missing.
+            call.reject(t.message ?: "Could not start the call service", t)
+        }
+    }
+
+    @PluginMethod
+    fun stopCall(call: PluginCall) {
+        getContext().stopService(Intent(getContext(), CallForegroundService::class.java))
+        call.resolve()
+    }
+
     @PluginMethod
     fun advanceNativeCursor(call: PluginCall) {
         val gid = call.getString("gid")
@@ -251,6 +278,11 @@ class CordnBackgroundPlugin : Plugin() {
         notifyListeners(EVENT_SIDECAR_UPDATED, JSObject())
     }
 
+    /** "Hang up" tapped on the ongoing call notification. */
+    fun emitCallHangUp() {
+        notifyListeners(EVENT_CALL_HANG_UP, JSObject())
+    }
+
     // Bridge handle for the background fetcher (runs from the foreground service / WorkManager,
     // same app process). Set in load() (bridge alive), cleared in handleOnDestroy(). Null when the
     // app is cold-started by the background worker before the user opens it — then the
@@ -268,6 +300,7 @@ class CordnBackgroundPlugin : Plugin() {
     companion object {
         const val EXTRA_GID = "cordn_gid"
         const val EVENT_SIDECAR_UPDATED = "sidecarUpdated"
+        const val EVENT_CALL_HANG_UP = "callHangUp"
 
         /** True while the app UI is foregrounded; see [handleOnResume]. */
         @Volatile

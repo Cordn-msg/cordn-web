@@ -134,6 +134,16 @@ export interface CordnBackgroundBatteryResult {
 	exempted: boolean;
 }
 
+/** Ongoing-call keep-alive (foreground service + notification). */
+export interface CordnBackgroundCallOptions {
+	/** Notification title (the group name). */
+	title?: string;
+	/** True while the local mic is capturing: adds the `microphone` service type. */
+	microphone: boolean;
+	/** True while the local camera is publishing: adds the `camera` service type. */
+	camera: boolean;
+}
+
 // ───────────────────────────── share target (Android SEND intent) ─────────────────────────────
 
 /** A share captured from the Android SEND intent (another app → Cordn). Text-only in v1. */
@@ -173,9 +183,14 @@ export interface CordnBackgroundPlugin {
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */
 	requestBatteryExemption(): Promise<void>;
-	/** Fired when the background worker stages new sidecar bytes while the app is foregrounded. */
+	/** Start the ongoing-call foreground service, or re-declare its types when already running. */
+	startCall(options: CordnBackgroundCallOptions): Promise<void>;
+	/** Stop the ongoing-call service and its wake lock. */
+	stopCall(): Promise<void>;
+	/** `sidecarUpdated`: the worker staged bytes while foregrounded.
+	 *  `callHangUp`: "Hang up" was tapped on the ongoing-call notification. */
 	addListener(
-		eventName: 'sidecarUpdated',
+		eventName: 'sidecarUpdated' | 'callHangUp',
 		listener: () => void
 	): Promise<PluginListenerHandle>;
 }

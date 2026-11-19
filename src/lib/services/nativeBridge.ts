@@ -666,6 +666,47 @@ export async function applyDeliveryConfig(): Promise<void> {
 	await setDeliveryConfig(getDeliveryConfig());
 }
 
+// ───────────────────────────── ongoing calls ─────────────────────────────
+
+/**
+ * Keep an active call alive while the Android WebView is backgrounded. The native service owns
+ * only the notification, wake lock and declared service types; media stays in the page.
+ * Idempotent: calling it again re-declares the types after a mic/camera change.
+ * False when it could not start, so the caller retries on the next media change.
+ */
+export async function startNativeCall(options: {
+	title: string;
+	microphone: boolean;
+	camera: boolean;
+}): Promise<boolean> {
+	if (!isNativePlatform()) return true;
+	try {
+		await CordnBackground.startCall(options);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export async function stopNativeCall(): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.stopCall();
+	} catch {
+		// nothing else depends on the stop
+	}
+}
+
+/** "Hang up" tapped on the ongoing-call notification. */
+export async function onNativeCallHangUp(listener: () => void): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.addListener('callHangUp', listener);
+	} catch {
+		// No listener: hang up from the in-app controls instead
+	}
+}
+
 // ───────────────────────────── group notification mutes ─────────────────────────────
 
 /**

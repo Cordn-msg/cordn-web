@@ -19,6 +19,8 @@ export const ChatKinds = {
 	/** Group-scoped pin/unpin of an existing message. Carries an `op` tag
 	 *  (`add` | `remove`); the active pin set is derived last-write-wins. */
 	Pin: 1011,
+	/** NIP-53 interactive room carried as a sealed Cordn group message. */
+	Call: 30312,
 	/** NIP-88 poll: `content` = question, `option`/`polltype`/`endsAt` tags.
 	 *  See `src/lib/chat/polls.ts`. */
 	Poll: 1068,

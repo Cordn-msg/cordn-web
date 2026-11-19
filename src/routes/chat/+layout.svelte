@@ -7,6 +7,7 @@
 	import SignerCapabilityBanner from '$lib/components/chat/SignerCapabilityBanner.svelte';
 	import BatteryOptimizationBanner from '$lib/components/chat/BatteryOptimizationBanner.svelte';
 	import NativeGroupMetaSync from '$lib/components/chat/NativeGroupMetaSync.svelte';
+	import CallSurface from '$lib/components/chat/CallSurface.svelte';
 	import { isNativePlatform, initBackButtonHandler } from '$lib/services/nativeBridge';
 	import { onMount, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -241,6 +242,7 @@
 	</div>
 
 	<MediaLightbox />
+	<CallSurface />
 	<LastResortConflictDialog />
 	{#if isNativePlatform()}
 		<NativeGroupMetaSync />
