@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { formatUnixTimestamp, normalizePubKey, safeNormalizePubKey, samePubKey } from './utils';
+import {
+	formatCallDuration,
+	formatUnixTimestamp,
+	normalizePubKey,
+	safeNormalizePubKey,
+	samePubKey
+} from './utils';
 
 describe('timestamp formatting', () => {
 	it('matches direct toLocaleString and stays stable across cached repeats', () => {
@@ -18,6 +24,17 @@ describe('timestamp formatting', () => {
 			expect(formatUnixTimestamp(ts, showTime, showDate)).toBe(expected);
 		}
 		expect(formatUnixTimestamp(ts, true, false)).not.toBe(formatUnixTimestamp(ts, false, true));
+	});
+});
+
+describe('call duration formatting', () => {
+	it('shows a clock and adds an hours column only when needed', () => {
+		expect(formatCallDuration(0)).toBe('0:00');
+		expect(formatCallDuration(59.9)).toBe('0:59');
+		expect(formatCallDuration(60)).toBe('1:00');
+		expect(formatCallDuration(3599)).toBe('59:59');
+		expect(formatCallDuration(3600)).toBe('1:00:00');
+		expect(formatCallDuration(3723.4)).toBe('1:02:03');
 	});
 });
 

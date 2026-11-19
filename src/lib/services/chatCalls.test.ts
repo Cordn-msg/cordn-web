@@ -18,6 +18,8 @@ const harness = vi.hoisted(() => ({
 		join: ReturnType<typeof vi.fn>;
 		setFrameKey: ReturnType<typeof vi.fn>;
 		dispose: ReturnType<typeof vi.fn>;
+		setMuted: ReturnType<typeof vi.fn>;
+		setCameraEnabled: ReturnType<typeof vi.fn>;
 		setScreenShareEnabled: ReturnType<typeof vi.fn>;
 	}>,
 	joinError: undefined as Error | undefined,
@@ -94,6 +96,8 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 	LiveKitCallEngine: class {
 		callbacks: {
 			onState: (state: {
+				phase: 'connected';
+				muted: boolean;
 				participants: Array<unknown>;
 				cameraEnabled: boolean;
 				screenSharing: boolean;
@@ -105,6 +109,8 @@ vi.mock('$lib/services/liveKitCallEngine', () => ({
 			if (harness.joinError) throw harness.joinError;
 			harness.onJoin?.();
 			this.callbacks.onState({
+				phase: 'connected',
+				muted: false,
 				cameraEnabled: false,
 				screenSharing: false,
 				participants: [
@@ -142,6 +148,7 @@ import {
 	loadGroupCalls,
 	openChatCall,
 	setChatCallCameraEnabled,
+	setChatCallMicrophoneEnabled,
 	toggleChatCallPinned,
 	setChatCallScreenShareEnabled
 } from '$lib/services/chatCalls.svelte';
@@ -365,6 +372,36 @@ describe('chat call lifecycle', () => {
 		await setChatCallScreenShareEnabled(true);
 		expect(chatCallsStore.error).toBe('');
 		expect(chatCallsStore.active).not.toBeNull();
+	});
+
+	it('keeps media toggles truthful when permission or capture fails', async () => {
+		resetGroup('media-errors');
+		await openChatCall('media-errors');
+		await confirmChatCall();
+		const engine = harness.instances[0];
+
+		engine.setCameraEnabled.mockRejectedValueOnce(new Error('Camera permission denied'));
+		await setChatCallCameraEnabled(true);
+		expect(chatCallsStore.cameraEnabled).toBe(false);
+		expect(chatCallsStore.error).toBe('Camera permission denied');
+
+		engine.setMuted.mockRejectedValueOnce(new Error('Microphone unavailable'));
+		await setChatCallMicrophoneEnabled(false);
+		expect(chatCallsStore.microphoneEnabled).toBe(true);
+		expect(chatCallsStore.error).toBe('Microphone unavailable');
+	});
+
+	it('starts the connection clock once and resets it with the call', async () => {
+		resetGroup('call-clock');
+		await openChatCall('call-clock');
+		expect(chatCallsStore.connectedAt).toBeNull();
+		await confirmChatCall();
+		const connectedAt = chatCallsStore.connectedAt;
+		expect(connectedAt).not.toBeNull();
+		await setChatCallCameraEnabled(true);
+		expect(chatCallsStore.connectedAt).toBe(connectedAt);
+		await leaveChatCall();
+		expect(chatCallsStore.connectedAt).toBeNull();
 	});
 
 	it('pins one participant as the main view and clears it when the call ends', async () => {

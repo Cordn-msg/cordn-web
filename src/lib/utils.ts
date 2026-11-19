@@ -212,6 +212,16 @@ export function formatClock(seconds: number): string {
 	return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Elapsed call time: minutes until an hour, then h:mm:ss. */
+export function formatCallDuration(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds < 3600) return formatClock(seconds);
+	const total = Math.floor(seconds);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
 /** Human-readable byte size: B / KB / MB / GB, one decimal under 10 of a unit.
  *  Replaces naive `Math.round(size / 1024)` that rendered e.g. "37245 KB". */
 export function formatBytes(bytes: number): string {

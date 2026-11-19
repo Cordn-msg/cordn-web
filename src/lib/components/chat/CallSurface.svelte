@@ -6,7 +6,7 @@
 	import { manager } from '$lib/services/accountManager.svelte';
 	import { getChatGroup, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
-	import { normalizePubKey } from '$lib/utils';
+	import { formatCallDuration, normalizePubKey } from '$lib/utils';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		attachChatCallVideo,
@@ -50,6 +50,14 @@
 	let isMainFullscreen = $state(false);
 	let fullscreenSupported = $state(false);
 	let screenShareSupported = $state(false);
+	let now = $state(Date.now());
+
+	$effect(() => {
+		if (chatCallsStore.connectedAt === null) return;
+		now = Date.now();
+		const timer = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(timer);
+	});
 
 	onMount(() => {
 		fullscreenSupported = document.fullscreenEnabled;
@@ -124,6 +132,13 @@
 		if (chatCallsStore.phase === 'connecting' || chatCallsStore.busy) return 'Connecting…';
 		return 'End-to-end encrypted';
 	});
+	const callDuration = $derived(
+		formatCallDuration(
+			chatCallsStore.connectedAt === null
+				? 0
+				: Math.max(0, (now - chatCallsStore.connectedAt) / 1000)
+		)
+	);
 
 	// One main view: the pinned participant, else whoever shares last. The pinned card
 	// leaves the grid so its track is only ever attached to one element.
@@ -185,6 +200,11 @@
 					<Dialog.Description class="mt-0.5 flex items-center gap-1.5 text-xs">
 						<LockKeyhole class="size-3.5" />
 						<span>{phaseLabel}</span>
+						{#if chatCallsStore.connectedAt !== null}
+							<span class="shrink-0 tabular-nums" aria-label="Call duration">
+								· {callDuration}
+							</span>
+						{/if}
 					</Dialog.Description>
 				</div>
 				{#if fullscreenSupported && chatCallsStore.active}
@@ -228,9 +248,12 @@
 								mainParticipant.identity,
 								mainParticipant.isLocal
 							)}
-							<div bind:this={mainEl} class="mb-3 overflow-hidden rounded-2xl border bg-black">
+							<div
+								bind:this={mainEl}
+								class="main-call-view mb-3 overflow-hidden rounded-2xl border bg-black"
+							>
 								<div
-									class="flex items-center gap-2 border-b border-white/10 bg-background px-3 py-2 text-sm"
+									class="flex shrink-0 items-center gap-2 border-b border-white/10 bg-background px-3 py-2 text-sm"
 								>
 									{#if mainPubkey}
 										<div class="min-w-0 flex-1 truncate font-medium">
@@ -247,6 +270,9 @@
 											: mainParticipant.cameraEnabled
 												? 'camera'
 												: 'audio'}
+										{#if chatCallsStore.connectedAt !== null}
+											<span class="tabular-nums"> · {callDuration}</span>
+										{/if}
 									</span>
 									<div class="ml-auto flex shrink-0 items-center gap-1">
 										{#if pinnedParticipant}
@@ -278,7 +304,8 @@
 												identity: mainParticipant.identity,
 												source: mainSource
 											}}
-											class="mx-auto max-h-[60dvh] w-full object-contain"
+											class="main-call-video mx-auto max-h-[60dvh] w-full object-contain"
+											class:main-call-camera={mainSource === 'camera'}
 											class:-scale-x-100={mainSource === 'camera' && mainParticipant.isLocal}
 											autoplay
 											playsinline
@@ -287,7 +314,7 @@
 										></video>
 									{/key}
 								{:else}
-									<div class="flex min-h-40 items-center justify-center">
+									<div class="main-call-avatar flex min-h-40 items-center justify-center">
 										{#if mainPubkey}
 											<Avatar pubkey={mainPubkey} size="size-24" />
 										{:else}
@@ -454,8 +481,11 @@
 	<div
 		class="fixed bottom-20 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-2xl border bg-background p-2 shadow-xl"
 	>
-		<Button variant="secondary" class="max-w-48" onclick={() => (chatCallsStore.dialogOpen = true)}>
-			<Phone /> <span class="truncate">{groupTitle}</span>
+		<Button variant="secondary" class="max-w-56" onclick={() => (chatCallsStore.dialogOpen = true)}>
+			<Phone /> <span class="min-w-0 truncate">{groupTitle}</span>
+			{#if chatCallsStore.connectedAt !== null}
+				<span class="shrink-0 text-xs tabular-nums">{callDuration}</span>
+			{/if}
 		</Button>
 		<Button
 			variant="ghost"
@@ -475,3 +505,33 @@
 		</Button>
 	</div>
 {/if}
+
+<style>
+	/* Nested fullscreen gets its own safe areas: the dialog wrapper is no longer painted. */
+	.main-call-view:fullscreen {
+		display: flex;
+		flex-direction: column;
+		width: 100vw;
+		height: 100dvh;
+		margin: 0;
+		border: 0;
+		border-radius: 0;
+		padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+		padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+		padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+		padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+	}
+	.main-call-view:fullscreen .main-call-video {
+		flex: 1;
+		min-height: 0;
+		height: 100%;
+		max-height: none;
+	}
+	.main-call-view:fullscreen .main-call-camera {
+		object-fit: cover;
+	}
+	.main-call-view:fullscreen .main-call-avatar {
+		flex: 1;
+		min-height: 0;
+	}
+</style>

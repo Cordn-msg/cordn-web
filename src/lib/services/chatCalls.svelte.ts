@@ -90,6 +90,8 @@ export const chatCallsStore = $state<{
 	busy: boolean;
 	lobby: { groupId: string; callId?: string; service: string } | null;
 	active: { groupId: string; callId: string; service: string } | null;
+	/** Local connection time; kept across reconnects, reset for a new call. */
+	connectedAt: number | null;
 	phase: CallPhase | 'idle';
 	error: string;
 	microphoneEnabled: boolean;
@@ -103,6 +105,7 @@ export const chatCallsStore = $state<{
 	busy: false,
 	lobby: null,
 	active: null,
+	connectedAt: null,
 	phase: 'idle',
 	error: '',
 	microphoneEnabled: true,
@@ -318,6 +321,7 @@ async function announce(session: ActiveCallSession, status: 'open' | 'closed') {
 
 function resetEngineState() {
 	chatCallsStore.active = null;
+	chatCallsStore.connectedAt = null;
 	chatCallsStore.phase = 'idle';
 	chatCallsStore.busy = false;
 	chatCallsStore.screenShareEnabled = false;
@@ -472,6 +476,7 @@ function newEngine(session: ActiveCallSession): LiveKitCallEngine {
 			if (activeSession !== session) return;
 			session.participants = state.participants;
 			chatCallsStore.phase = state.phase;
+			if (state.phase === 'connected') chatCallsStore.connectedAt ??= Date.now();
 			chatCallsStore.microphoneEnabled = !state.muted;
 			chatCallsStore.cameraEnabled = state.cameraEnabled;
 			chatCallsStore.screenShareEnabled = state.screenSharing;
@@ -602,21 +607,37 @@ export async function confirmChatCall() {
 }
 
 export async function setChatCallMicrophoneEnabled(enabled: boolean) {
-	chatCallsStore.microphoneEnabled = enabled;
 	const session = activeSession;
-	if (!session?.connected) return;
-	await session.engine.setMuted(!enabled);
-	// Unmuting is also the first moment the mic grant can exist, so re-declare types here.
-	if (session.nativeCallStarted || enabled) await syncNativeCall(session);
+	if (!session?.connected) {
+		chatCallsStore.microphoneEnabled = enabled;
+		return;
+	}
+	try {
+		await session.engine.setMuted(!enabled);
+		chatCallsStore.microphoneEnabled = enabled;
+		chatCallsStore.error = '';
+		// Unmuting is also the first moment the mic grant can exist, so re-declare types here.
+		if (session.nativeCallStarted || enabled) await syncNativeCall(session);
+	} catch (error) {
+		chatCallsStore.error = errorMessage(error);
+	}
 }
 
 export async function setChatCallCameraEnabled(enabled: boolean) {
-	chatCallsStore.cameraEnabled = enabled;
 	const session = activeSession;
-	if (!session?.connected) return;
-	await session.engine.setCameraEnabled(enabled);
-	// The camera service type is declared only while the camera is actually in use.
-	if (session.nativeCallStarted || enabled) await syncNativeCall(session);
+	if (!session?.connected) {
+		chatCallsStore.cameraEnabled = enabled;
+		return;
+	}
+	try {
+		await session.engine.setCameraEnabled(enabled);
+		chatCallsStore.cameraEnabled = enabled;
+		chatCallsStore.error = '';
+		// The camera service type is declared only while the camera is actually in use.
+		if (session.nativeCallStarted || enabled) await syncNativeCall(session);
+	} catch (error) {
+		chatCallsStore.error = errorMessage(error);
+	}
 }
 
 /** Pins a participant as the call's main view; pinning the same one unpins. */
