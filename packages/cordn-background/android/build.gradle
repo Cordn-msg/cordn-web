@@ -49,6 +49,10 @@ dependencies {
         implementation project(':capacitor-android')
     }
 
+    // AppCompatActivity is the type Capacitor's getActivity() returns; the plugin module
+    // needs it on its compile classpath to pass the activity to the call audio router.
+    implementation "androidx.appcompat:appcompat:${rootProject.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.1'}"
+
     // WorkManager: periodic background poll + expedited one-shots (Phase 3).
     implementation 'androidx.work:work-runtime-ktx:2.10.0'
     // UniFFI library-mode Kotlin bindings call into the .so via JNA.

@@ -1,6 +1,7 @@
 import type {
 	BaseKeyProvider,
 	Participant,
+	RemoteAudioTrack,
 	RemoteTrack,
 	Room,
 	Track,
@@ -36,6 +37,7 @@ interface EngineCallbacks {
 }
 
 const RECONNECT_LIMIT_MS = 30_000;
+const REMOTE_AUDIO_GAIN = 1.5;
 
 function publicationEnabled(publication: TrackPublication | undefined): boolean {
 	return Boolean(publication && !publication.isMuted);
@@ -94,7 +96,8 @@ export class LiveKitCallEngine {
 			const room = new livekit.Room({
 				encryption: { keyProvider, worker },
 				adaptiveStream: true,
-				dynacast: true
+				dynacast: true,
+				webAudioMix: true
 			});
 			this.keyProvider = keyProvider;
 			this.worker = worker;
@@ -143,7 +146,10 @@ export class LiveKitCallEngine {
 					// Screen audio is out of scope (video-only sharing, like Staircase) and would
 					// otherwise be mixed in as a second microphone.
 					if (track.source === livekit.Track.Source.ScreenShareAudio) return;
-					const element = track.attach();
+					const audioTrack = track as RemoteAudioTrack;
+					const element = audioTrack.attach();
+					// About +3.5 dB; webAudioMix applies this as gain, not an HTML element volume.
+					audioTrack.setVolume(REMOTE_AUDIO_GAIN);
 					// In the document, not merely created: a detached element is the classic
 					// "connected but nobody can hear anybody".
 					element.style.display = 'none';

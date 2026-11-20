@@ -46,7 +46,12 @@ import {
 	type CallPhase,
 	type CallVideoSource
 } from '$lib/services/liveKitCallEngine';
-import { onNativeCallHangUp, startNativeCall, stopNativeCall } from '$lib/services/nativeBridge';
+import {
+	onNativeCallHangUp,
+	prepareCallAudio,
+	startNativeCall,
+	stopNativeCall
+} from '$lib/services/nativeBridge';
 import { isNativePlatform } from '$lib/services/nativeShims';
 
 interface PendingCall {
@@ -414,10 +419,8 @@ async function disposeSession(session: ActiveCallSession) {
 	activeSession = null;
 	generation++;
 	await session.engine.dispose();
-	if (session.nativeCallStarted) {
-		session.nativeCallStarted = false;
-		await stopNativeCall();
-	}
+	// Unconditional: prepareCallAudio may have run even when the foreground service never did.
+	await stopNativeCall();
 	resetEngineState();
 }
 
@@ -621,6 +624,9 @@ async function runPendingCall() {
 		const grant = await requestToken(session);
 		if (activeSession !== session || generation !== attempt) return;
 		applyMaterial(session, await readGroupCallSnapshot(session.groupId));
+		// Before join: the microphone must open on the routed device, not the phone's default.
+		await prepareCallAudio();
+		if (activeSession !== session || generation !== attempt) return;
 		await session.engine.join({
 			...grant,
 			frameKey: session.material!.frameKey,

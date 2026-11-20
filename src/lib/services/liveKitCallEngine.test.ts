@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveKitCallEngine } from '$lib/services/liveKitCallEngine';
 
 function fakeTrack(sid: string) {
@@ -37,6 +37,8 @@ function setup() {
 const cameraEl = { id: 'camera' } as unknown as HTMLMediaElement;
 const screenEl = { id: 'screen' } as unknown as HTMLMediaElement;
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe('call video attachment', () => {
 	it('keeps a camera and a screen share on their own elements', () => {
 		const { engine, identity, cameraTrack, screenTrack } = setup();
@@ -64,5 +66,40 @@ describe('call video attachment', () => {
 
 		expect(screenTrack.detach).toHaveBeenCalledWith(screenEl);
 		expect(nextScreen.attach).toHaveBeenCalledWith(screenEl);
+	});
+});
+
+describe('call audio attachment', () => {
+	it('boosts remote microphone playback through the Web Audio mixer', () => {
+		const appendChild = vi.fn();
+		vi.stubGlobal('document', { body: { appendChild } });
+		const { engine } = setup();
+		const room = { on: vi.fn() };
+		Object.assign(engine as unknown as Record<string, unknown>, {
+			livekit: {
+				RoomEvent: { TrackSubscribed: 'track_subscribed' },
+				Track: {
+					Kind: { Audio: 'audio' },
+					Source: { ScreenShareAudio: 'screen_share_audio' }
+				}
+			},
+			emitState: vi.fn()
+		});
+		(engine as unknown as { listen(value: unknown): void }).listen(room);
+		const onSubscribed = room.on.mock.calls.find(([event]) => event === 'track_subscribed')?.[1];
+		const element = { style: { display: '' }, remove: vi.fn() };
+		const track = {
+			kind: 'audio',
+			source: 'microphone',
+			sid: 'microphone',
+			mediaStreamTrack: { id: 'microphone-media' },
+			attach: vi.fn(() => element),
+			setVolume: vi.fn()
+		};
+
+		onSubscribed?.(track, {}, { identity: 'peer:device' });
+
+		expect(track.setVolume).toHaveBeenCalledWith(1.5);
+		expect(appendChild).toHaveBeenCalledWith(element);
 	});
 });

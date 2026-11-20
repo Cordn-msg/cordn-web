@@ -28,6 +28,7 @@ const harness = vi.hoisted(() => ({
 	native: {
 		start: vi.fn(async () => true),
 		stop: vi.fn(async () => {}),
+		prepareAudio: vi.fn(async () => {}),
 		hangUp: vi.fn(async () => {})
 	},
 	nativePlatform: false,
@@ -47,6 +48,7 @@ vi.mock('@capacitor/core', () => ({
 }));
 
 vi.mock('$lib/services/nativeBridge', () => ({
+	prepareCallAudio: harness.native.prepareAudio,
 	startNativeCall: harness.native.start,
 	stopNativeCall: harness.native.stop,
 	onNativeCallHangUp: harness.native.hangUp
@@ -339,6 +341,27 @@ describe('chat call lifecycle', () => {
 		expect(groupCallCards('read-again')[0].announcement.status).toBe('closed');
 	});
 
+	it('prepares call audio before the microphone opens and tears it down on leave', async () => {
+		resetGroup('native-audio');
+		await openChatCall('native-audio');
+		await confirmChatCall();
+		expect(harness.native.prepareAudio).toHaveBeenCalledOnce();
+		expect(harness.native.prepareAudio.mock.invocationCallOrder[0]).toBeLessThan(
+			harness.instances[0].join.mock.invocationCallOrder[0]
+		);
+
+		await leaveChatCall();
+		expect(harness.native.stop).toHaveBeenCalledOnce();
+	});
+
+	it('tears down prepared audio when the join fails', async () => {
+		resetGroup('native-audio-fail');
+		harness.joinError = new Error('join failed');
+		await openChatCall('native-audio-fail');
+		await confirmChatCall();
+		expect(harness.native.stop).toHaveBeenCalledOnce();
+	});
+
 	it('keeps the native keep-alive in step with the call lifecycle', async () => {
 		resetGroup('native-call');
 		await openChatCall('native-call');
@@ -370,7 +393,8 @@ describe('chat call lifecycle', () => {
 		await leaveChatCall();
 		finishStart(true);
 		await connecting;
-		expect(harness.native.stop).toHaveBeenCalledOnce();
+		// Twice: the late start re-starts the service after dispose already stopped it.
+		expect(harness.native.stop).toHaveBeenCalledTimes(2);
 	});
 
 	it('signs only the call rows so a window change forces a re-read', async () => {

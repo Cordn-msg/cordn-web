@@ -152,12 +152,22 @@ class CordnBackgroundPlugin : Plugin() {
 
     // ── Calls: keep the WebView's mic/camera alive while Android backgrounds it ──
 
+    /** Put Android into call audio mode and route to the best headset/speaker before the
+     *  microphone opens. Best-effort: a failure must not block the call. */
+    @PluginMethod
+    fun prepareCallAudio(call: PluginCall) {
+        CallAudio.start(getContext(), getActivity())
+        call.resolve()
+    }
+
     @PluginMethod
     fun startCall(call: PluginCall) {
+        val audioToken = CallAudio.start(getContext(), getActivity())
         val intent = Intent(getContext(), CallForegroundService::class.java)
             .putExtra(CallForegroundService.EXTRA_TITLE, call.getString("title") ?: "Group call")
             .putExtra(CallForegroundService.EXTRA_MICROPHONE, call.getBoolean("microphone") ?: false)
             .putExtra(CallForegroundService.EXTRA_CAMERA, call.getBoolean("camera") ?: false)
+            .putExtra(CallForegroundService.EXTRA_AUDIO_TOKEN, audioToken)
         try {
             // Idempotent: while the service runs, this re-declares the types from the
             // new mic/camera state (service types cannot be changed in place).
@@ -172,6 +182,7 @@ class CordnBackgroundPlugin : Plugin() {
 
     @PluginMethod
     fun stopCall(call: PluginCall) {
+        CallAudio.stop(getContext())
         getContext().stopService(Intent(getContext(), CallForegroundService::class.java))
         call.resolve()
     }

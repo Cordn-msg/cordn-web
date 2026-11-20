@@ -31,6 +31,7 @@ class CallForegroundService : Service() {
     private var camera = false
     private var foreground = false
     private var title = "Group call"
+    private var audioToken = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,6 +44,7 @@ class CallForegroundService : Service() {
         intent?.getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotBlank() }?.let { title = it }
         microphone = intent?.getBooleanExtra(EXTRA_MICROPHONE, false) ?: microphone
         camera = intent?.getBooleanExtra(EXTRA_CAMERA, false) ?: camera
+        audioToken = intent?.getIntExtra(EXTRA_AUDIO_TOKEN, audioToken) ?: audioToken
         acquireWakeLock()
         return try {
             startInForeground()
@@ -108,6 +110,10 @@ class CallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        // Unconditional: the service can be torn down by the system or by stopWithTask,
+        // not only by the plugin's stopCall. The token keeps a stale teardown from
+        // silencing a newer call that already started.
+        CallAudio.stop(this, audioToken)
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -118,6 +124,7 @@ class CallForegroundService : Service() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_MICROPHONE = "microphone"
         const val EXTRA_CAMERA = "camera"
+        const val EXTRA_AUDIO_TOKEN = "audioToken"
         const val ACTION_HANGUP = "org.cordn.background.action.HANGUP"
         private const val NOTIFICATION_ID = 4312
 
