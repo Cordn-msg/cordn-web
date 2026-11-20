@@ -77,6 +77,19 @@ describe('setMultiDeviceBlossomServers()', () => {
 		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
 		resetMultiDeviceSession();
 	});
+
+	test('a save from a snapshot taken before the plan keeps the stored plan', () => {
+		setMultiDeviceBlossomServers(['https://blossom.example/']);
+		// A publish that started earlier holds a config parsed before the plan.
+		const stale = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		delete stale.pendingPublish;
+
+		adoptFleetBlossomServers(stale, ['https://other.example/']);
+
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
+		resetMultiDeviceSession();
+	});
 });
 
 describe('adoptDefaultBlossomServers()', () => {

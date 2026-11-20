@@ -410,6 +410,11 @@ function saveConfig(config: MultiDeviceOwnerConfig): void {
 		config.activityLog = mergeActivityLogs(config.activityLog ?? [], all[owner]?.activityLog ?? []);
 		multiDeviceActivity[owner] = config.activityLog;
 	}
+	// `pendingPublish` is owned by persistPendingPlan: a publish that started
+	// before a newer plan was queued saves an older snapshot and must neither
+	// resurrect a plan that already ran nor drop one that has not.
+	if (all[owner]?.pendingPublish) config.pendingPublish = all[owner].pendingPublish;
+	else delete config.pendingPublish;
 	all[owner] = config;
 	writeAllConfigs(all);
 	dbg('saveConfig', {
@@ -652,7 +657,7 @@ function getDekSeal(
 }
 
 /** Blossom store for sealed documents (spec §12), ephemeral-signed. */
-function makeBlossomStore(signer: BlossomSigner): BlobStore {
+function makeBlossomStore(signer: BlossomSigner, servers: string[]): BlobStore {
 	return {
 		async publish(blob) {
 			// Replicate to every configured host so the read path's failover has
@@ -661,8 +666,6 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			// not fatal — fail only if EVERY host failed. The content address
 			// (sha256(blob)) is deterministic, so every successful upload returns
 			// the same address regardless of which server wins the race.
-			const config = getMultiDeviceConfig();
-			const servers = config?.blossomServers ?? DEFAULT_BLOSSOM_SERVERS;
 			// Content addressing is local (spec §6 MUST): the address is the hash of
 			// OUR sealed bytes — the same helper the read path re-verifies with —
 			// never a server's claim. A host whose response disagrees (lying or
@@ -1090,10 +1093,13 @@ let pendingPlanOwner: string | null = null;
 let flushScheduled = false;
 
 function persistPendingPlan(): void {
-	const config = pendingPlanOwner ? getMultiDeviceConfig(pendingPlanOwner) : undefined;
+	if (!browser || !pendingPlanOwner) return;
+	const all = readAllConfigs();
+	const config = all[normalizePubKey(pendingPlanOwner)];
 	if (!config) return;
-	config.pendingPublish = pendingPlan ?? undefined;
-	saveConfig(config);
+	if (pendingPlan) config.pendingPublish = pendingPlan;
+	else delete config.pendingPublish;
+	writeAllConfigs(all);
 }
 
 // Fork-MR scenario D: a failed or deferred publish used to be DROPPED —
@@ -1138,12 +1144,20 @@ function drainPendingPlan(): void {
 }
 
 function publishPlan(batch: PublishPlan): void {
+	// Captured at queue time: this closure may run after an account switch, and
+	// the plan belongs to the session that queued it.
+	const session = multiDeviceSession;
 	runSerialized(async () => {
+		if (session !== multiDeviceSession) return;
 		try {
-			await publish(batch);
-			// publish() may have deferred and re-queued the batch; persist that, or clear on success.
+			const handled = await publish(batch, 0, session);
+			if (session !== multiDeviceSession) return;
+			// Nothing ran (no signer / no DEK): keep the plan for the next trigger
+			// instead of clearing it as if it had been published.
+			if (!handled) pendingPlan = pendingPlan ? mergePlans(pendingPlan, batch) : batch;
 			persistPendingPlan();
 		} catch (error) {
+			if (session !== multiDeviceSession) return;
 			console.warn('[multi-device] re-publish failed; will retry', error);
 			const config = getMultiDeviceConfig();
 			if (config) {
@@ -1621,19 +1635,21 @@ async function publish(
 	plan: PublishPlan,
 	attempt = 0,
 	session = multiDeviceSession
-): Promise<void> {
+): Promise<boolean> {
 	const config = getMultiDeviceConfig();
-	if (!config) return;
+	if (!config) return false;
 	// The owner-NIP-44 capability gates the flow: publish decrypts the current
 	// tip to reconcile (parseTipEvent, owner self-seal §6) and re-seals the new
 	// tip via the same signer (buildTipEvent, owner self-seal §6). The DEK gates
 	// document encrypt/decrypt (§7, local — no signer).
 	const active = getActiveNip44Seal();
-	if (!active) return;
+	if (!active) return false;
 	const { ownerPubkey } = active;
-	if (session !== multiDeviceSession || config.ownerPubkey !== ownerPubkey) return;
+	// A torn-down session is abandoned, not retried: the plan is not this
+	// account's any more.
+	if (session !== multiDeviceSession || config.ownerPubkey !== ownerPubkey) return true;
 	const dek = getDekSeal(config);
-	if (!dek) return;
+	if (!dek) return false;
 	const { seal: dekSeal, dekPubkey } = dek;
 	const { pointer, deferred, tipEventId, tipCreatedAt } = await fetchTipForPublish(
 		config,
@@ -1644,7 +1660,7 @@ async function publish(
 		// retried (the stale-epoch sweep makes a later publish self-healing too).
 		noteActivity(config, 'warn', 'Publish deferred: the current tip is unreachable');
 		queuePublishRetry(plan);
-		return;
+		return true;
 	}
 
 	// §12 GC: drain addresses queued for deletion last publish (one-publish grace
@@ -1657,7 +1673,10 @@ async function publish(
 
 	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
 	const { counts } = await applyTip(pointer, { dekSeal, dekPubkey, config });
-	const writeStore = makeBlossomStore(ephemeralSigner(config));
+	// The captured host list, not a re-read: fleet adoption can change the stored
+	// list mid-publish, and the tip below must advertise the hosts that got the
+	// documents.
+	const writeStore = makeBlossomStore(ephemeralSigner(config), config.blossomServers);
 
 	// The published `removed` set (own pending + carried-forward, XOR'd vs the
 	// live inventory per §4.3) drives both the meta doc and the tip's group
@@ -1804,7 +1823,7 @@ async function publish(
 				dbg('tip keeps moving mid-publish; deferring to the retry ladder');
 				noteActivity(config, 'warn', 'Publish deferred: the tip kept moving during upload');
 				queuePublishRetry(plan);
-				return;
+				return true;
 			}
 			dbg('tip moved mid-publish; restarting on the fresh tip', { attempt });
 			return publish(plan, attempt + 1, session);
@@ -1818,18 +1837,19 @@ async function publish(
 		session !== multiDeviceSession ||
 		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
 	)
-		return;
+		return true;
 	await finalizeTipPublish(
 		{ groups, metaAddress, servers: config.blossomServers },
 		config,
 		counts,
-		tipCreatedAt
+		tipCreatedAt,
+		session
 	);
 	if (
 		session !== multiDeviceSession ||
 		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
 	)
-		return;
+		return true;
 	// The push landed: the next failure starts the backoff ladder fresh.
 	retryDelayMs = 2_000;
 	// Record sealed epochs ONLY now — after the tip rewrite landed on relays. A
@@ -1892,6 +1912,7 @@ async function publish(
 		'info',
 		`Published ${gidsToReseal.length} group document${gidsToReseal.length === 1 ? '' : 's'}${plan.resealMeta ? ' + meta' : ''}; tip carries ${groups.length} groups`
 	);
+	return true;
 }
 
 /**
@@ -1902,9 +1923,17 @@ async function finalizeTipPublish(
 	pointer: TipPointer,
 	config: MultiDeviceOwnerConfig,
 	counts?: ReconcileCounts,
-	basisCreatedAt?: number
+	basisCreatedAt?: number,
+	session = multiDeviceSession
 ): Promise<void> {
 	const outer = await buildTipEvent(pointer, config, basisCreatedAt);
+	// Signing can await an external signer: unlink/account switch must not be
+	// followed by a relay write from this lane.
+	if (
+		session !== multiDeviceSession ||
+		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
+	)
+		return;
 	// Persist AFTER the relay publish succeeds. Recording before it (for the
 	// self-echo short-circuit) inflates `lastSeenTipCreatedAt` past tips that
 	// never landed when the publish fails — and the stale-tip rule would then
@@ -3449,6 +3478,9 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	const decoded = nip19.decode(payload.naddr);
 	if (decoded.type !== 'naddr') throw new Error('Invalid connection string');
 	const naddr = decoded.data;
+	// A re-link replaces a working config; keep it so a rejected string (another
+	// account's) leaves this device linked as it was.
+	const previous = getMultiDeviceConfig(account.pubkey);
 	// Persist the inherited config (relays + ephemeral key + d), enabled.
 	const config: MultiDeviceOwnerConfig = {
 		ownerPubkey: normalizePubKey(account.pubkey),
@@ -3475,8 +3507,13 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 			// A tip that will not open here is another account's: without a DEK this
 			// device could never publish either, so leave no config behind.
 			if (!reconciled) {
-				clearMultiDeviceConfig(ownerPubkey);
 				resetMultiDeviceSession();
+				if (previous) {
+					saveConfig(previous);
+					startTipSubscription();
+				} else {
+					clearMultiDeviceConfig(ownerPubkey);
+				}
 				throw new Error(
 					'That connection string belongs to a different account. Link devices signed in to the same identity.'
 				);
