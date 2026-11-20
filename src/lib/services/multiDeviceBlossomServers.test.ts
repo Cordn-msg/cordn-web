@@ -78,6 +78,16 @@ describe('setMultiDeviceBlossomServers()', () => {
 		resetMultiDeviceSession();
 	});
 
+	test('a publish that could not run keeps its plan for the next trigger', async () => {
+		setMultiDeviceBlossomServers(['https://blossom.example/']);
+		// Let the scheduled flush run: no signer here, so nothing is published.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
+		resetMultiDeviceSession();
+	});
+
 	test('a save from a snapshot taken before the plan keeps the stored plan', () => {
 		setMultiDeviceBlossomServers(['https://blossom.example/']);
 		// A publish that started earlier holds a config parsed before the plan.

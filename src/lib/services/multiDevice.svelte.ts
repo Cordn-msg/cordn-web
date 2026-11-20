@@ -1091,13 +1091,19 @@ function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
 let pendingPlan: PublishPlan | null = null;
 let pendingPlanOwner: string | null = null;
 let flushScheduled = false;
+// Plans handed to the serialized lane but not yet published. They stay in the
+// persisted plan too: a publish that finishes while a later one waits must not
+// clear work that has not run.
+const queuedPlans = new Set<PublishPlan>();
 
 function persistPendingPlan(): void {
 	if (!browser || !pendingPlanOwner) return;
 	const all = readAllConfigs();
 	const config = all[normalizePubKey(pendingPlanOwner)];
 	if (!config) return;
-	if (pendingPlan) config.pendingPublish = pendingPlan;
+	let plan = pendingPlan;
+	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	if (plan) config.pendingPublish = plan;
 	else delete config.pendingPublish;
 	writeAllConfigs(all);
 }
@@ -1147,16 +1153,22 @@ function publishPlan(batch: PublishPlan): void {
 	// Captured at queue time: this closure may run after an account switch, and
 	// the plan belongs to the session that queued it.
 	const session = multiDeviceSession;
+	queuedPlans.add(batch);
 	runSerialized(async () => {
-		if (session !== multiDeviceSession) return;
+		if (session !== multiDeviceSession) {
+			queuedPlans.delete(batch);
+			return;
+		}
 		try {
 			const handled = await publish(batch, 0, session);
+			queuedPlans.delete(batch);
 			if (session !== multiDeviceSession) return;
 			// Nothing ran (no signer / no DEK): keep the plan for the next trigger
 			// instead of clearing it as if it had been published.
 			if (!handled) pendingPlan = pendingPlan ? mergePlans(pendingPlan, batch) : batch;
 			persistPendingPlan();
 		} catch (error) {
+			queuedPlans.delete(batch);
 			if (session !== multiDeviceSession) return;
 			console.warn('[multi-device] re-publish failed; will retry', error);
 			const config = getMultiDeviceConfig();
@@ -2221,6 +2233,7 @@ export function resetMultiDeviceSession(): void {
 	// NEW account's config.
 	pendingPlan = null;
 	pendingPlanOwner = null;
+	queuedPlans.clear();
 	flushScheduled = false;
 	multiDeviceSession++;
 	if (retryTimer !== null) {
