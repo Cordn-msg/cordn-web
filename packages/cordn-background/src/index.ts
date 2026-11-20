@@ -183,9 +183,11 @@ export interface CordnBackgroundPlugin {
 	isBatteryExempted(): Promise<CordnBackgroundBatteryResult>;
 	/** Launch the system "disable battery optimization for Cordn" prompt. */
 	requestBatteryExemption(): Promise<void>;
+	/** Put Android into call audio mode and route to the best headset/speaker before the mic opens. */
+	prepareCallAudio(): Promise<void>;
 	/** Start the ongoing-call foreground service, or re-declare its types when already running. */
 	startCall(options: CordnBackgroundCallOptions): Promise<void>;
-	/** Stop the ongoing-call service and its wake lock. */
+	/** Stop the ongoing-call service, its wake lock and call audio routing. */
 	stopCall(): Promise<void>;
 	/** `sidecarUpdated`: the worker staged bytes while foregrounded.
 	 *  `callHangUp`: "Hang up" was tapped on the ongoing-call notification. */

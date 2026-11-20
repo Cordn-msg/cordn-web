@@ -669,6 +669,19 @@ export async function applyDeliveryConfig(): Promise<void> {
 // ───────────────────────────── ongoing calls ─────────────────────────────
 
 /**
+ * Put Android into call audio mode and route to the best headset/speaker before the microphone
+ * opens. Best-effort: a routing failure must not block the call.
+ */
+export async function prepareCallAudio(): Promise<void> {
+	if (!isNativePlatform()) return;
+	try {
+		await CordnBackground.prepareCallAudio();
+	} catch {
+		// The call still connects; only audio routing is missing.
+	}
+}
+
+/**
  * Keep an active call alive while the Android WebView is backgrounded. The native service owns
  * only the notification, wake lock and declared service types; media stays in the page.
  * Idempotent: calling it again re-declares the types after a mic/camera change.
