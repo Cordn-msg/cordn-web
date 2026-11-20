@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { bytesToHex } from 'nostr-tools/utils';
 
-const { OWNER, localStorageMock, values } = vi.hoisted(() => {
+const { OWNER, localStorageMock, values, state, hooks } = vi.hoisted(() => {
 	const OWNER = '11'.repeat(32);
 	const values = new Map<string, string>();
 	const localStorageMock = {
@@ -10,12 +12,60 @@ const { OWNER, localStorageMock, values } = vi.hoisted(() => {
 		clear: vi.fn(() => values.clear())
 	};
 	vi.stubGlobal('localStorage', localStorageMock);
-	return { OWNER, localStorageMock, values };
+	// The tip write parks until the test releases it, so a second plan can be
+	// queued behind a publish that is still running. `tip` is what the relay
+	// returns: whatever was published last.
+	const state: { release: () => void; accepted: unknown[]; tip: unknown } = {
+		release: () => {},
+		accepted: [],
+		tip: null
+	};
+	const hooks = { address: (_sealed: string) => '' };
+	return { OWNER, localStorageMock, values, state, hooks };
 });
 
 vi.mock('$app/environment', () => ({ browser: true, dev: false }));
 vi.mock('$lib/services/accountManager.svelte', () => ({
-	manager: { getActive: () => ({ pubkey: OWNER }) }
+	manager: {
+		getActive: () => ({
+			pubkey: OWNER,
+			// Only the inner tip needs an owner signature; the fake is enough here.
+			signer: { signEvent: async (template: object) => ({ ...template, id: 'id', sig: 'sig' }) },
+			nip44: { encrypt: async () => 'sealed', decrypt: async () => '{}' }
+		})
+	}
+}));
+vi.mock('$lib/services/relay-pool', () => ({
+	commonRelays: [],
+	relayPool: {
+		request: () => ({
+			subscribe: (observer: { next: (e: unknown) => void; complete: () => void }) => {
+				if (state.tip) observer.next(state.tip);
+				observer.complete();
+				return { unsubscribe() {} };
+			}
+		}),
+		subscription: () => ({ pipe: () => ({ subscribe: () => ({ unsubscribe() {} }) }) }),
+		publish: async (_relays: string[], event: unknown) => {
+			await new Promise<void>((resolve) => (state.release = resolve));
+			state.tip = event;
+			return state.accepted;
+		}
+	}
+}));
+vi.mock('$lib/services/eventStore', () => ({
+	eventStore: { addressable: () => ({ subscribe: () => ({ unsubscribe() {} }) }) }
+}));
+vi.mock('applesauce-core/observable', () => ({
+	mapEventsToStore: () => (source: unknown) => source
+}));
+vi.mock('$lib/services/chatBlossomClient', () => ({
+	uploadBlob: vi.fn(async ({ blob }: { blob: Uint8Array }) => ({
+		sha256: hooks.address(new TextDecoder().decode(blob)),
+		url: 'https://blossom.example/blob'
+	})),
+	fetchBlob: vi.fn(),
+	deleteBlob: vi.fn()
 }));
 vi.mock('$lib/services/chatGroups.svelte', () => ({
 	listChatGroups: vi.fn(() => []),
@@ -43,6 +93,12 @@ import {
 	resetMultiDeviceSession,
 	setMultiDeviceBlossomServers
 } from './multiDevice.svelte';
+import { documentAddress } from './multiDevice';
+
+hooks.address = documentAddress;
+
+/** Let every queued microtask (and the 0ms timers) run. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const LEGACY_HOSTS = [
 	'https://cdn.hzrd149.com/',
@@ -86,6 +142,41 @@ describe('setMultiDeviceBlossomServers()', () => {
 		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
 		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
 		resetMultiDeviceSession();
+	});
+
+	test('a plan queued behind a running publish stays stored until it runs', async () => {
+		const ephemeral = generateSecretKey();
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({
+				[OWNER]: {
+					ownerPubkey: OWNER,
+					dTag: 'test',
+					ephemeralPrivateKey: bytesToHex(ephemeral),
+					ephemeralPubkey: getPublicKey(ephemeral),
+					relays: ['wss://relay.example'],
+					blossomServers: ['https://blossom.example/'],
+					dekPrivateKey: bytesToHex(generateSecretKey())
+				}
+			})
+		);
+		state.accepted = [{}];
+		state.tip = null;
+
+		setMultiDeviceBlossomServers(['https://a.example/']);
+		await flush(); // A is now parked at the tip write
+		setMultiDeviceBlossomServers(['https://b.example/']);
+		await flush(); // B is queued behind A
+
+		state.release();
+		await flush(); // A finished; B is parked at its own tip write
+
+		// B has not been published by anyone yet: dropping it here loses the work.
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
+
+		resetMultiDeviceSession();
+		state.release();
 	});
 
 	test('a save from a snapshot taken before the plan keeps the stored plan', () => {
