@@ -36,7 +36,11 @@ vi.mock('$lib/services/chatKeyPackages.svelte', () => ({
 
 import {
 	adoptDefaultBlossomServers,
+	adoptDefaultRelays,
+	adoptFleetBlossomServers,
 	DEFAULT_BLOSSOM_SERVERS,
+	DEFAULT_MULTI_DEVICE_RELAYS,
+	resetMultiDeviceSession,
 	setMultiDeviceBlossomServers
 } from './multiDevice.svelte';
 
@@ -66,6 +70,13 @@ describe('setMultiDeviceBlossomServers()', () => {
 
 		expect(localStorageMock.setItem).not.toHaveBeenCalled();
 	});
+
+	test('a host change persists the bulk plan before any network work', () => {
+		setMultiDeviceBlossomServers(['https://blossom.example/']);
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toEqual({ resealGroups: 'all', resealMeta: true });
+		resetMultiDeviceSession();
+	});
 });
 
 describe('adoptDefaultBlossomServers()', () => {
@@ -86,12 +97,26 @@ describe('adoptDefaultBlossomServers()', () => {
 		return JSON.parse(values.get('cordn.multiDevice')!)[OWNER].blossomServers;
 	}
 
-	test('moves an untouched legacy default list onto the Cordn default', () => {
+	test('moves either untouched legacy default list onto the Cordn default', () => {
 		stored(LEGACY_HOSTS);
 		const config = { ownerPubkey: OWNER, dTag: 'test', blossomServers: [...LEGACY_HOSTS] };
 
 		expect(adoptDefaultBlossomServers(config as never)).toBe(true);
 		expect(config.blossomServers).toEqual([...DEFAULT_BLOSSOM_SERVERS]);
+		expect(read()).toEqual([...DEFAULT_BLOSSOM_SERVERS]);
+	});
+
+	test('migrates the previous four-host default too', () => {
+		const previous = [
+			'https://cordn.feeds.relay.tools/',
+			'https://cdn.hzrd149.com/',
+			'https://blossom.ditto.pub/',
+			'https://blossom.primal.net/'
+		];
+		stored(previous);
+		const config = { ownerPubkey: OWNER, dTag: 'test', blossomServers: [...previous] };
+
+		expect(adoptDefaultBlossomServers(config as never)).toBe(true);
 		expect(read()).toEqual([...DEFAULT_BLOSSOM_SERVERS]);
 	});
 
@@ -113,5 +138,43 @@ describe('adoptDefaultBlossomServers()', () => {
 		};
 
 		expect(adoptDefaultBlossomServers(config as never)).toBe(false);
+	});
+});
+
+describe('fleet configuration', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({
+				[OWNER]: {
+					ownerPubkey: OWNER,
+					dTag: 'test',
+					relays: ['wss://relay.nostr.net', 'wss://relay.ditto.pub/', 'wss://relay.primal.net'],
+					blossomServers: [...DEFAULT_BLOSSOM_SERVERS]
+				}
+			})
+		);
+	});
+
+	test('migrates only the exact old relay default', () => {
+		const config = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(adoptDefaultRelays(config)).toBe(true);
+		expect(config.relays).toEqual(DEFAULT_MULTI_DEVICE_RELAYS);
+		expect(adoptDefaultRelays(config)).toBe(false);
+	});
+
+	test('adopts the signed tip fleet hosts, normalized and deduplicated', () => {
+		const config = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(
+			adoptFleetBlossomServers(config, [
+				' https://one.example/ ',
+				'https://one.example',
+				'not-a-url'
+			])
+		).toBe(true);
+		expect(config.blossomServers).toEqual(['https://one.example/']);
+		expect(adoptFleetBlossomServers(config, ['https://one.example'])).toBe(false);
+		expect(adoptFleetBlossomServers(config, ['not-a-url'])).toBe(false);
 	});
 });

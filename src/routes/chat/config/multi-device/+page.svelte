@@ -51,7 +51,13 @@
 	let config = $state<MultiDeviceOwnerConfig | undefined>(undefined);
 	let connectionString = $state('');
 	let relaysDraft = $state('');
-	// Blossom redundancy: a checked subset of presets, ordered by BLOSSOM_SERVERS,
+	// The fleet's own defaults first, then the media presets: a host the sync
+	// defaults use must render as a preset, not as a custom entry.
+	const BLOSSOM_PRESETS = [
+		...DEFAULT_BLOSSOM_SERVERS,
+		...BLOSSOM_SERVERS.filter((s) => !DEFAULT_BLOSSOM_SERVERS.includes(s))
+	];
+	// Blossom redundancy: a checked subset of presets, ordered by BLOSSOM_PRESETS,
 	// plus explicit custom hosts (kept in add order). The first entry is the
 	// primary (read path tries them in order). SvelteSet is self-reactive, so no
 	// $state wrap — mutate in place.
@@ -90,7 +96,7 @@
 			// A stored host outside the preset list is a custom entry — keeping it
 			// here stops a save from silently dropping it (the presets-only filter
 			// used to do exactly that).
-			if ((BLOSSOM_SERVERS as readonly string[]).includes(s)) blossomChecked.add(s);
+			if (BLOSSOM_PRESETS.includes(s)) blossomChecked.add(s);
 			else customs.push(s);
 		}
 		blossomCustoms = customs;
@@ -142,7 +148,7 @@
 		// Primary = first preset (in declared order) that is checked; customs
 		// follow in add order. Preserves a stable priority without asking the
 		// user to order the list manually.
-		return [...BLOSSOM_SERVERS.filter((s) => blossomChecked.has(s)), ...blossomCustoms];
+		return [...BLOSSOM_PRESETS.filter((s) => blossomChecked.has(s)), ...blossomCustoms];
 	}
 
 	function addBlossomCustom() {
@@ -152,10 +158,7 @@
 			if (url.protocol !== 'https:') throw new Error('not https');
 			// Document fetches address `${server}<sha256>`, so hosts are origins.
 			const server = `${url.origin}/`;
-			if (
-				(BLOSSOM_SERVERS as readonly string[]).includes(server) ||
-				blossomCustoms.includes(server)
-			) {
+			if (BLOSSOM_PRESETS.includes(server) || blossomCustoms.includes(server)) {
 				toast.error('That host is already in the list');
 				return;
 			}
@@ -538,7 +541,7 @@
 								<div class="space-y-2">
 									<Label>Document hosts (pick at least two for redundancy)</Label>
 									<div class="grid gap-2">
-										{#each BLOSSOM_SERVERS as server (server)}
+										{#each BLOSSOM_PRESETS as server (server)}
 											<label
 												class="flex cursor-pointer items-center gap-2 rounded-md border border-border p-2 text-sm hover:bg-muted/30"
 											>
