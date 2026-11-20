@@ -34,7 +34,17 @@ vi.mock('$lib/services/chatKeyPackages.svelte', () => ({
 	setLastResortClaimBaseline: vi.fn()
 }));
 
-import { DEFAULT_BLOSSOM_SERVERS, setMultiDeviceBlossomServers } from './multiDevice.svelte';
+import {
+	adoptDefaultBlossomServers,
+	DEFAULT_BLOSSOM_SERVERS,
+	setMultiDeviceBlossomServers
+} from './multiDevice.svelte';
+
+const LEGACY_HOSTS = [
+	'https://cdn.hzrd149.com/',
+	'https://blossom.ditto.pub/',
+	'https://blossom.primal.net/'
+];
 
 describe('setMultiDeviceBlossomServers()', () => {
 	beforeEach(() => {
@@ -55,5 +65,53 @@ describe('setMultiDeviceBlossomServers()', () => {
 		setMultiDeviceBlossomServers(['', ...DEFAULT_BLOSSOM_SERVERS, DEFAULT_BLOSSOM_SERVERS[0]]);
 
 		expect(localStorageMock.setItem).not.toHaveBeenCalled();
+	});
+});
+
+describe('adoptDefaultBlossomServers()', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	function stored(servers: string[]): void {
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({
+				[OWNER]: { ownerPubkey: OWNER, dTag: 'test', blossomServers: servers }
+			})
+		);
+	}
+
+	function read(): string[] {
+		return JSON.parse(values.get('cordn.multiDevice')!)[OWNER].blossomServers;
+	}
+
+	test('moves an untouched legacy default list onto the Cordn default', () => {
+		stored(LEGACY_HOSTS);
+		const config = { ownerPubkey: OWNER, dTag: 'test', blossomServers: [...LEGACY_HOSTS] };
+
+		expect(adoptDefaultBlossomServers(config as never)).toBe(true);
+		expect(config.blossomServers).toEqual([...DEFAULT_BLOSSOM_SERVERS]);
+		expect(read()).toEqual([...DEFAULT_BLOSSOM_SERVERS]);
+	});
+
+	test('leaves a hand-picked host list alone', () => {
+		const custom = ['https://blossom.ditto.pub/', 'https://cdn.hzrd149.com/'];
+		stored(custom);
+		const config = { ownerPubkey: OWNER, dTag: 'test', blossomServers: [...custom] };
+
+		expect(adoptDefaultBlossomServers(config as never)).toBe(false);
+		expect(read()).toEqual(custom);
+	});
+
+	test('is a no-op once the current default is stored', () => {
+		stored([...DEFAULT_BLOSSOM_SERVERS]);
+		const config = {
+			ownerPubkey: OWNER,
+			dTag: 'test',
+			blossomServers: [...DEFAULT_BLOSSOM_SERVERS]
+		};
+
+		expect(adoptDefaultBlossomServers(config as never)).toBe(false);
 	});
 });

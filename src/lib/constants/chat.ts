@@ -13,9 +13,15 @@ export const DEFAULT_CHAT_COORDINATOR_PUBKEY =
  * octet-stream (nostr.build / blossom.band, 24242.io) or silently re-encode
  * uploads (bostr.online, relay.nostr.net), which would break AEAD decryption
  * for recipients.
+ *
+ * The Cordn host is first because it is ours, and it only accepts the cordn
+ * ciphertext this app sends, scoped to it by the `server` tag
+ * ([`buildBlossomAuth()`](src/lib/services/chatBlossomClient.ts:69)). The rest
+ * stay as the fallback chain.
  */
-export const DEFAULT_BLOSSOM_SERVER = 'https://cdn.hzrd149.com/';
+export const DEFAULT_BLOSSOM_SERVER = 'https://cordn.feeds.relay.tools/';
 export const BLOSSOM_SERVERS = [
+	'https://cordn.feeds.relay.tools/',
 	'https://cdn.hzrd149.com/',
 	'https://blossom.ditto.pub/',
 	'https://blossom.primal.net/',
