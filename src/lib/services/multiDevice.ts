@@ -33,6 +33,24 @@ import { errorMessage } from '$lib/utils';
 
 export const MULTI_DEVICE_SCHEMA_VERSION = 1;
 
+/** NIP-01 replaceable-event order: newer created_at, then lower event id. */
+export interface TipEventStamp {
+	id: string;
+	created_at: number;
+}
+
+export function isNewerTipEvent(candidate: TipEventStamp, current: TipEventStamp): boolean {
+	return (
+		candidate.created_at > current.created_at ||
+		(candidate.created_at === current.created_at && candidate.id < current.id)
+	);
+}
+
+/** A local write must supersede the newest tip even when this clock is behind. */
+export function nextTipCreatedAt(nowSeconds: number, ...seen: number[]): number {
+	return Math.max(nowSeconds, ...seen.map((createdAt) => createdAt + 1));
+}
+
 /**
  * NIP-44 v2 self-seal to the DEK's own pubkey (spec §7). Confidentiality only.
  * The injected seal is bound to the DEK keypair; `pubkey` is the DEK's own

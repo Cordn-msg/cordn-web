@@ -79,6 +79,8 @@ import {
 	diffLocalAhead,
 	diffStaleGroupEpochs,
 	metaViewHash,
+	isNewerTipEvent,
+	nextTipCreatedAt,
 	nextPullRetryDelayMs,
 	shouldReconcileGroupDocument,
 	type UnresolvedDocumentPull,
@@ -128,6 +130,12 @@ const CONFIG_STORAGE_KEY = 'cordn.multiDevice';
  * the tip event must not strand linked devices. Editable in Advanced.
  */
 export const DEFAULT_MULTI_DEVICE_RELAYS = [
+	'wss://newlay.relay.tools',
+	'wss://relay.nostr.net',
+	'wss://relay.primal.net'
+];
+
+const LEGACY_MULTI_DEVICE_RELAYS = [
 	'wss://relay.nostr.net',
 	'wss://relay.ditto.pub/',
 	'wss://relay.primal.net'
@@ -140,16 +148,19 @@ export const DEFAULT_MULTI_DEVICE_RELAYS = [
  */
 export const DEFAULT_BLOSSOM_SERVERS = [
 	'https://cordn.feeds.relay.tools/',
-	'https://cdn.hzrd149.com/',
-	'https://blossom.ditto.pub/',
-	'https://blossom.primal.net/'
+	'https://newlay.relay.tools/',
+	'https://nostr.download/'
 ];
 
-/** The host list every config created before the Cordn host existed carries. */
+/** Exact historical defaults only; a hand-picked list is never migrated. */
 const LEGACY_BLOSSOM_SERVERS = [
-	'https://cdn.hzrd149.com/',
-	'https://blossom.ditto.pub/',
-	'https://blossom.primal.net/'
+	['https://cdn.hzrd149.com/', 'https://blossom.ditto.pub/', 'https://blossom.primal.net/'],
+	[
+		'https://cordn.feeds.relay.tools/',
+		'https://cdn.hzrd149.com/',
+		'https://blossom.ditto.pub/',
+		'https://blossom.primal.net/'
+	]
 ];
 
 /**
@@ -342,6 +353,8 @@ export interface MultiDeviceOwnerConfig {
 	 * meta publish/adopt; an undefined baseline reads as "no edit in flight".
 	 */
 	lastPublishedLastResortHash?: string;
+	/** Merged publish work awaiting its first successful tip write. Restored on startup. */
+	pendingPublish?: PublishPlan;
 }
 
 interface MultiDeviceConfigStore {
@@ -397,6 +410,11 @@ function saveConfig(config: MultiDeviceOwnerConfig): void {
 		config.activityLog = mergeActivityLogs(config.activityLog ?? [], all[owner]?.activityLog ?? []);
 		multiDeviceActivity[owner] = config.activityLog;
 	}
+	// `pendingPublish` is owned by persistPendingPlan: a publish that started
+	// before a newer plan was queued saves an older snapshot and must neither
+	// resurrect a plan that already ran nor drop one that has not.
+	if (all[owner]?.pendingPublish) config.pendingPublish = all[owner].pendingPublish;
+	else delete config.pendingPublish;
 	all[owner] = config;
 	writeAllConfigs(all);
 	dbg('saveConfig', {
@@ -548,6 +566,8 @@ export function setMultiDeviceRelays(relays: string[]): void {
 	if (!config) throw new Error('Enable multi-device before setting relays');
 	config.relays = relays;
 	saveConfig(config);
+	startTipSubscription();
+	scheduleRepublish({ resealGroups: [], resealMeta: false });
 }
 
 /** Set the document host list (ordered, most-reliable first). At least one required. */
@@ -637,7 +657,7 @@ function getDekSeal(
 }
 
 /** Blossom store for sealed documents (spec §12), ephemeral-signed. */
-function makeBlossomStore(signer: BlossomSigner): BlobStore {
+function makeBlossomStore(signer: BlossomSigner, servers: string[]): BlobStore {
 	return {
 		async publish(blob) {
 			// Replicate to every configured host so the read path's failover has
@@ -646,8 +666,6 @@ function makeBlossomStore(signer: BlossomSigner): BlobStore {
 			// not fatal — fail only if EVERY host failed. The content address
 			// (sha256(blob)) is deterministic, so every successful upload returns
 			// the same address regardless of which server wins the race.
-			const config = getMultiDeviceConfig();
-			const servers = config?.blossomServers ?? DEFAULT_BLOSSOM_SERVERS;
 			// Content addressing is local (spec §6 MUST): the address is the hash of
 			// OUR sealed bytes — the same helper the read path re-verifies with —
 			// never a server's claim. A host whose response disagrees (lying or
@@ -821,12 +839,13 @@ async function buildInnerTipEvent(params: {
 	ownerPubkey: string;
 	/** Per-identity DEK private key (spec §6 `dek` tag, §7). */
 	dekPrivateKey: string;
+	createdAt: number;
 }): Promise<NostrEvent> {
 	const template = {
 		kind: MULTI_DEVICE_INNER_KIND,
 		pubkey: params.ownerPubkey,
 		content: '',
-		created_at: Math.floor(Date.now() / 1000),
+		created_at: params.createdAt,
 		tags: [
 			...params.pointer.groups.map((g) => ['x', g.address, 'group', g.gid] as string[]),
 			...(params.pointer.metaAddress
@@ -853,12 +872,13 @@ function buildOuterTipEvent(params: {
 	ephemeralPrivateKey: string;
 	ephemeralPubkey: string;
 	dTag: string;
+	createdAt: number;
 }): NostrEvent {
 	const template = {
 		kind: MULTI_DEVICE_TIP_KIND,
 		pubkey: params.ephemeralPubkey,
 		content: params.sealedContent,
-		created_at: Math.floor(Date.now() / 1000),
+		created_at: params.createdAt,
 		tags: [['d', params.dTag]]
 	};
 	// finalizeEvent mutates + returns its input; the ephemeral key authorizes
@@ -928,16 +948,23 @@ function urlFromTip(address: string, pointer: TipPointer): string {
 /** Build (and seal) the outer tip event for the current inventory (spec §6). */
 async function buildTipEvent(
 	pointer: TipPointer,
-	config: MultiDeviceOwnerConfig
+	config: MultiDeviceOwnerConfig,
+	basisCreatedAt?: number
 ): Promise<NostrEvent> {
 	const account = manager.getActive();
 	if (!account) throw new Error('No active account');
 	const ownerPubkey = normalizePubKey(account.pubkey);
 	if (!config.dekPrivateKey) throw new Error('Cannot publish tip: no DEK configured');
+	const createdAt = nextTipCreatedAt(
+		Math.floor(Date.now() / 1000),
+		config.lastSeenTipCreatedAt ?? 0,
+		basisCreatedAt ?? 0
+	);
 	const inner = await buildInnerTipEvent({
 		pointer,
 		ownerPubkey,
-		dekPrivateKey: config.dekPrivateKey
+		dekPrivateKey: config.dekPrivateKey,
+		createdAt
 	});
 	dbg('tip inner owner-signed', {
 		groups: pointer.groups.length,
@@ -959,7 +986,8 @@ async function buildTipEvent(
 		sealedContent,
 		ephemeralPrivateKey: config.ephemeralPrivateKey,
 		ephemeralPubkey: config.ephemeralPubkey,
-		dTag: config.dTag
+		dTag: config.dTag,
+		createdAt
 	});
 }
 
@@ -1008,6 +1036,8 @@ function parseConnectionString(connection: string): ConnectionPayload {
 	if (!json.naddr || !json.ephemeralPrivateKey) {
 		throw new Error('Connection string is missing the naddr or ephemeral key');
 	}
+	if (!/^[0-9a-fA-F]{64}$/.test(json.ephemeralPrivateKey))
+		throw new Error('Connection string ephemeral key is invalid');
 	// Validate the naddr decodes and points at the tip kind.
 	const decoded = nip19.decode(json.naddr);
 	if (decoded.type !== 'naddr' || decoded.data.kind !== MULTI_DEVICE_TIP_KIND) {
@@ -1030,6 +1060,8 @@ function parseConnectionString(connection: string): ConnectionPayload {
 // a push. Worst case is one redundant publish cycle (a stale `lastSeenTip` write
 // that the next `fetchTipForPublish` / sub delivery corrects). Not corruption.
 let publishInFlight: Promise<void> = Promise.resolve();
+// Invalidates a publish whose account/session was torn down while it awaited I/O.
+let multiDeviceSession = 0;
 
 /**
  * Run an operation on the shared serialized publish lane. The tip is a single
@@ -1057,7 +1089,24 @@ function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
 }
 
 let pendingPlan: PublishPlan | null = null;
+let pendingPlanOwner: string | null = null;
 let flushScheduled = false;
+// Plans handed to the serialized lane but not yet published. They stay in the
+// persisted plan too: a publish that finishes while a later one waits must not
+// clear work that has not run.
+const queuedPlans = new Set<PublishPlan>();
+
+function persistPendingPlan(): void {
+	if (!browser || !pendingPlanOwner) return;
+	const all = readAllConfigs();
+	const config = all[normalizePubKey(pendingPlanOwner)];
+	if (!config) return;
+	let plan = pendingPlan;
+	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	if (plan) config.pendingPublish = plan;
+	else delete config.pendingPublish;
+	writeAllConfigs(all);
+}
 
 // Fork-MR scenario D: a failed or deferred publish used to be DROPPED —
 // stranding every change it carried until some later trigger happened to
@@ -1076,6 +1125,8 @@ const unsealableDocumentAddresses = new Set<string>();
 
 function queuePublishRetry(plan: PublishPlan): void {
 	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
+	pendingPlanOwner ??= getMultiDeviceConfig()?.ownerPubkey ?? null;
+	persistPendingPlan();
 	if (retryTimer !== null) return;
 	retryTimer = setTimeout(() => {
 		retryTimer = null;
@@ -1099,10 +1150,26 @@ function drainPendingPlan(): void {
 }
 
 function publishPlan(batch: PublishPlan): void {
+	// Captured at queue time: this closure may run after an account switch, and
+	// the plan belongs to the session that queued it.
+	const session = multiDeviceSession;
+	queuedPlans.add(batch);
 	runSerialized(async () => {
+		if (session !== multiDeviceSession) {
+			queuedPlans.delete(batch);
+			return;
+		}
 		try {
-			await publish(batch);
+			const handled = await publish(batch, 0, session);
+			queuedPlans.delete(batch);
+			if (session !== multiDeviceSession) return;
+			// Nothing ran (no signer / no DEK): keep the plan for the next trigger
+			// instead of clearing it as if it had been published.
+			if (!handled) pendingPlan = pendingPlan ? mergePlans(pendingPlan, batch) : batch;
+			persistPendingPlan();
 		} catch (error) {
+			queuedPlans.delete(batch);
+			if (session !== multiDeviceSession) return;
 			console.warn('[multi-device] re-publish failed; will retry', error);
 			const config = getMultiDeviceConfig();
 			if (config) {
@@ -1122,6 +1189,8 @@ function publishPlan(batch: PublishPlan): void {
  */
 function scheduleRepublish(plan: PublishPlan): void {
 	pendingPlan = pendingPlan ? mergePlans(pendingPlan, plan) : plan;
+	pendingPlanOwner ??= getMultiDeviceConfig()?.ownerPubkey ?? null;
+	persistPendingPlan();
 	if (flushScheduled) return;
 	flushScheduled = true;
 	queueMicrotask(() => {
@@ -1233,10 +1302,24 @@ function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
  * have seen one: `lastSeenTip` is set) but isn't now → defer the push. On a
  * first-ever publish (never seen a tip) the caller may push fresh.
  */
+function isStaleTip(config: MultiDeviceOwnerConfig, event: NostrEvent): boolean {
+	if (!config.lastSeenTipCreatedAt || !config.lastSeenTipEventId) return false;
+	if (event.id === config.lastSeenTipEventId) return false;
+	return !isNewerTipEvent(event, {
+		id: config.lastSeenTipEventId,
+		created_at: config.lastSeenTipCreatedAt
+	});
+}
+
 async function fetchTipForPublish(
 	config: MultiDeviceOwnerConfig,
 	ownerPubkey: string
-): Promise<{ pointer: TipPointer; deferred: boolean; tipEventId?: string }> {
+): Promise<{
+	pointer: TipPointer;
+	deferred: boolean;
+	tipEventId?: string;
+	tipCreatedAt?: number;
+}> {
 	const tipEvent = await fetchLatestTipEvent(config);
 	if (!tipEvent) {
 		if (config.lastSeenTip) {
@@ -1251,16 +1334,14 @@ async function fetchTipForPublish(
 	// whenever a peer moved the tip (or the relay returned a stale event).
 	// Relay rules: a tip OLDER than the last-seen one is a stale relay response,
 	// not the fleet's state — never reconcile or push from it.
-	if (
-		config.lastSeenTip &&
-		config.lastSeenTipCreatedAt &&
-		tipEvent.created_at < config.lastSeenTipCreatedAt
-	) {
+	if (isStaleTip(config, tipEvent)) {
 		dbg('ignoring stale tip', { eventId: tipEvent.id.slice(0, 12) });
+		if (!config.lastSeenTip) return { pointer: emptyTipPointer(config), deferred: true };
 		return {
 			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
 			deferred: false,
-			tipEventId: config.lastSeenTipEventId
+			tipEventId: config.lastSeenTipEventId,
+			tipCreatedAt: config.lastSeenTipCreatedAt
 		};
 	}
 	if (tipEvent.id === config.lastSeenTipEventId && config.lastSeenTip) {
@@ -1268,14 +1349,16 @@ async function fetchTipForPublish(
 		return {
 			pointer: { ...config.lastSeenTip, servers: config.blossomServers },
 			deferred: false,
-			tipEventId: tipEvent.id
+			tipEventId: tipEvent.id,
+			tipCreatedAt: tipEvent.created_at
 		};
 	}
 	const parsed = await parseTipEvent(tipEvent, ownerPubkey);
 	return {
 		pointer: parsed?.pointer ?? emptyTipPointer(config),
 		deferred: false,
-		tipEventId: tipEvent.id
+		tipEventId: tipEvent.id,
+		tipCreatedAt: tipEvent.created_at
 	};
 }
 
@@ -1560,26 +1643,36 @@ async function applyTip(
  * (group change → that group; meta change → meta; enable/server → all). §4.3
  * is enforced once in `buildInventory`.
  */
-async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
+async function publish(
+	plan: PublishPlan,
+	attempt = 0,
+	session = multiDeviceSession
+): Promise<boolean> {
 	const config = getMultiDeviceConfig();
-	if (!config) return;
+	if (!config) return false;
 	// The owner-NIP-44 capability gates the flow: publish decrypts the current
 	// tip to reconcile (parseTipEvent, owner self-seal §6) and re-seals the new
 	// tip via the same signer (buildTipEvent, owner self-seal §6). The DEK gates
 	// document encrypt/decrypt (§7, local — no signer).
 	const active = getActiveNip44Seal();
-	if (!active) return;
+	if (!active) return false;
 	const { ownerPubkey } = active;
+	// A torn-down session is abandoned, not retried: the plan is not this
+	// account's any more.
+	if (session !== multiDeviceSession || config.ownerPubkey !== ownerPubkey) return true;
 	const dek = getDekSeal(config);
-	if (!dek) return;
+	if (!dek) return false;
 	const { seal: dekSeal, dekPubkey } = dek;
-	const { pointer, deferred, tipEventId } = await fetchTipForPublish(config, ownerPubkey);
+	const { pointer, deferred, tipEventId, tipCreatedAt } = await fetchTipForPublish(
+		config,
+		ownerPubkey
+	);
 	if (deferred) {
 		// Scenario D: an unreadable tip DEFERS the push — the plan is kept and
 		// retried (the stale-epoch sweep makes a later publish self-healing too).
 		noteActivity(config, 'warn', 'Publish deferred: the current tip is unreachable');
 		queuePublishRetry(plan);
-		return;
+		return true;
 	}
 
 	// §12 GC: drain addresses queued for deletion last publish (one-publish grace
@@ -1592,7 +1685,10 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 
 	// §10.5 reconcile-before-push: full document set, delta-gated by lastSeenTip.
 	const { counts } = await applyTip(pointer, { dekSeal, dekPubkey, config });
-	const writeStore = makeBlossomStore(ephemeralSigner(config));
+	// The captured host list, not a re-read: fleet adoption can change the stored
+	// list mid-publish, and the tip below must advertise the hosts that got the
+	// documents.
+	const writeStore = makeBlossomStore(ephemeralSigner(config), config.blossomServers);
 
 	// The published `removed` set (own pending + carried-forward, XOR'd vs the
 	// live inventory per §4.3) drives both the meta doc and the tip's group
@@ -1734,21 +1830,38 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 	// (bounded; then the retry ladder).
 	{
 		const latest = await fetchLatestTipEvent(config);
-		if ((latest?.id ?? undefined) !== tipEventId) {
+		if ((latest?.id ?? undefined) !== tipEventId && !(latest && isStaleTip(config, latest))) {
 			if (attempt >= 3) {
 				dbg('tip keeps moving mid-publish; deferring to the retry ladder');
 				noteActivity(config, 'warn', 'Publish deferred: the tip kept moving during upload');
 				queuePublishRetry(plan);
-				return;
+				return true;
 			}
 			dbg('tip moved mid-publish; restarting on the fresh tip', { attempt });
-			return publish(plan, attempt + 1);
+			return publish(plan, attempt + 1, session);
 		}
 	}
 
 	// Rewrite the tip with the full inventory; §4.3 drops tombstoned gids.
 	const groups = buildInventory(pointer, resealed, tombstonedGids);
-	await finalizeTipPublish({ groups, metaAddress, servers: config.blossomServers }, config, counts);
+	// Unlink/account switch must not be followed by a late write from this lane.
+	if (
+		session !== multiDeviceSession ||
+		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
+	)
+		return true;
+	await finalizeTipPublish(
+		{ groups, metaAddress, servers: config.blossomServers },
+		config,
+		counts,
+		tipCreatedAt,
+		session
+	);
+	if (
+		session !== multiDeviceSession ||
+		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
+	)
+		return true;
 	// The push landed: the next failure starts the backoff ladder fresh.
 	retryDelayMs = 2_000;
 	// Record sealed epochs ONLY now — after the tip rewrite landed on relays. A
@@ -1811,6 +1924,7 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 		'info',
 		`Published ${gidsToReseal.length} group document${gidsToReseal.length === 1 ? '' : 's'}${plan.resealMeta ? ' + meta' : ''}; tip carries ${groups.length} groups`
 	);
+	return true;
 }
 
 /**
@@ -1820,9 +1934,18 @@ async function publish(plan: PublishPlan, attempt = 0): Promise<void> {
 async function finalizeTipPublish(
 	pointer: TipPointer,
 	config: MultiDeviceOwnerConfig,
-	counts?: ReconcileCounts
+	counts?: ReconcileCounts,
+	basisCreatedAt?: number,
+	session = multiDeviceSession
 ): Promise<void> {
-	const outer = await buildTipEvent(pointer, config);
+	const outer = await buildTipEvent(pointer, config, basisCreatedAt);
+	// Signing can await an external signer: unlink/account switch must not be
+	// followed by a relay write from this lane.
+	if (
+		session !== multiDeviceSession ||
+		getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag
+	)
+		return;
 	// Persist AFTER the relay publish succeeds. Recording before it (for the
 	// self-echo short-circuit) inflates `lastSeenTipCreatedAt` past tips that
 	// never landed when the publish fails — and the stale-tip rule would then
@@ -1831,6 +1954,7 @@ async function finalizeTipPublish(
 	// recording late is one redundant reconcile of our own tip; the in-flight
 	// window is covered by the event-id dedup below it.
 	await publishOuterTip(outer, config.relays);
+	if (getMultiDeviceConfig(config.ownerPubkey)?.dTag !== config.dTag) return;
 	setLastSeenTip(config, pointer, outer.id, {
 		source: 'write',
 		counts,
@@ -1865,6 +1989,7 @@ function toGroupSnapshot(group: StoredChatGroup): GroupSnapshot {
 // ---------------------------------------------------------------------------
 
 let tipSubscription: { unsubscribe: () => void } | null = null;
+let tipPollTimer: ReturnType<typeof setInterval> | null = null;
 
 // §10.6: one-shot cold-start reconcile promise. Holds while the tip is fetched
 // + applied before the delivery stream opens; resolves immediately when MD is
@@ -1888,13 +2013,53 @@ let inflightTipEventId: string | null = null;
 export function adoptDefaultBlossomServers(config: MultiDeviceOwnerConfig): boolean {
 	const current = config.blossomServers;
 	if (
-		current.length !== LEGACY_BLOSSOM_SERVERS.length ||
-		!current.every((server, index) => server === LEGACY_BLOSSOM_SERVERS[index])
+		!LEGACY_BLOSSOM_SERVERS.some(
+			(legacy) =>
+				current.length === legacy.length &&
+				current.every((server, index) => server === legacy[index])
+		)
 	)
 		return false;
 	config.blossomServers = [...DEFAULT_BLOSSOM_SERVERS];
 	saveConfig(config);
 	noteActivity(config, 'info', 'Document hosts updated to the Cordn default');
+	return true;
+}
+
+export function adoptDefaultRelays(config: MultiDeviceOwnerConfig): boolean {
+	if (
+		config.relays.length !== LEGACY_MULTI_DEVICE_RELAYS.length ||
+		!config.relays.every((relay, index) => relay === LEGACY_MULTI_DEVICE_RELAYS[index])
+	)
+		return false;
+	config.relays = [...DEFAULT_MULTI_DEVICE_RELAYS];
+	saveConfig(config);
+	return true;
+}
+
+/** The newest owner-signed tip defines where this fleet publishes its documents. */
+export function adoptFleetBlossomServers(
+	config: MultiDeviceOwnerConfig,
+	tipServers: string[]
+): boolean {
+	const seen = new Set<string>();
+	const servers = tipServers
+		.map((server) => server.trim())
+		.filter((server) => /^https?:\/\//.test(server))
+		.filter((server) => {
+			const key = server.replace(/\/+$/, '');
+			return seen.has(key) ? false : (seen.add(key), true);
+		});
+	if (!servers.length) return false;
+	const current = config.blossomServers.map((server) => server.replace(/\/+$/, ''));
+	if (
+		servers.length === current.length &&
+		servers.every((server, i) => server.replace(/\/+$/, '') === current[i])
+	)
+		return false;
+	config.blossomServers = servers;
+	saveConfig(config);
+	noteActivity(config, 'info', `Using the other devices' ${servers.length} document hosts`);
 	return true;
 }
 
@@ -1928,6 +2093,23 @@ function startTipSubscription(): void {
 		)
 		.pipe(mapEventsToStore(eventStore))
 		.subscribe();
+	// A half-open socket can look healthy while delivering nothing. One cheap REQ a
+	// minute also kicks stranded publishes and the pure-local owed-publish audit.
+	tipPollTimer = setInterval(() => {
+		void (async () => {
+			const current = getMultiDeviceConfig(config.ownerPubkey);
+			const account = manager.getActive();
+			if (!current || current.dTag !== config.dTag || !account) return;
+			try {
+				const tip = await fetchLatestTipEvent(current);
+				if (tip) await handleTipEvent(tip, normalizePubKey(account.pubkey));
+				scheduleOwedPublish();
+				if (pendingPlan && !flushScheduled) drainPendingPlan();
+			} catch (error) {
+				dbg('tip poll failed', { error: errorMessage(error) });
+			}
+		})();
+	}, 60_000);
 	tipSubscription = {
 		unsubscribe() {
 			model.unsubscribe();
@@ -1937,6 +2119,10 @@ function startTipSubscription(): void {
 }
 
 function stopTipSubscription(): void {
+	if (tipPollTimer !== null) {
+		clearInterval(tipPollTimer);
+		tipPollTimer = null;
+	}
 	if (tipSubscription) {
 		try {
 			tipSubscription.unsubscribe();
@@ -1980,7 +2166,9 @@ async function startMultiDevice(): Promise<void> {
 		reconcile(),
 		new Promise<void>((resolve) => setTimeout(resolve, MD_RECONCILE_TIMEOUT_MS))
 	]);
+	const relaysMigrated = adoptDefaultRelays(getMultiDeviceConfig() ?? config);
 	startTipSubscription();
+	if (relaysMigrated) scheduleRepublish({ resealGroups: [], resealMeta: false });
 	// Host default migration runs after the reconcile (so it re-uploads any state
 	// just adopted) and queues its full republish in the same tick as
 	// scheduleOwedPublish below, so the two coalesce into one publish. Skipping it
@@ -1988,6 +2176,8 @@ async function startMultiDevice(): Promise<void> {
 	// exist on the old ones.
 	if (adoptDefaultBlossomServers(getMultiDeviceConfig() ?? config))
 		scheduleRepublish({ resealGroups: 'all', resealMeta: true });
+	const pending = getMultiDeviceConfig()?.pendingPublish;
+	if (pending) scheduleRepublish(pending);
 	// §10.5 trigger "on startup if local state is ahead of the tip" — evaluated
 	// even when the reconcile deduped (tip unchanged / event id seen): both
 	// signals are pure-local (stale-epoch record + meta view hash), no fetch.
@@ -2042,7 +2232,10 @@ export function resetMultiDeviceSession(): void {
 	// and a timer that fires after an account switch would publish it under the
 	// NEW account's config.
 	pendingPlan = null;
+	pendingPlanOwner = null;
+	queuedPlans.clear();
 	flushScheduled = false;
+	multiDeviceSession++;
 	if (retryTimer !== null) {
 		clearTimeout(retryTimer);
 		retryTimer = null;
@@ -2364,6 +2557,10 @@ async function handleTipEvent(
 		!Object.keys(config.unresolvedDocumentPulls ?? {}).length
 	)
 		return null;
+	if (config && isStaleTip(config, outer)) {
+		dbg('ignoring stale tip', { eventId: outer.id.slice(0, 12) });
+		return null;
+	}
 	// Re-entrancy guard: the same tip can arrive concurrently — a cold reconcile
 	// overlapping the live subscription, or a relay burst — before setLastSeenTip
 	// records the event id (which only happens AFTER applyTip). lastSeenTipEventId
@@ -2388,6 +2585,7 @@ async function handleTipEvent(
 		const dek = getDekSeal(config);
 		if (!dek) return null; // no DEK → cannot decrypt documents (§7)
 		const pointer = parsed.pointer;
+		adoptFleetBlossomServers(config, pointer.servers);
 
 		dbg('handleTipEvent', {
 			groups: pointer.groups.length,
@@ -3293,6 +3491,9 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	const decoded = nip19.decode(payload.naddr);
 	if (decoded.type !== 'naddr') throw new Error('Invalid connection string');
 	const naddr = decoded.data;
+	// A re-link replaces a working config; keep it so a rejected string (another
+	// account's) leaves this device linked as it was.
+	const previous = getMultiDeviceConfig(account.pubkey);
 	// Persist the inherited config (relays + ephemeral key + d), enabled.
 	const config: MultiDeviceOwnerConfig = {
 		ownerPubkey: normalizePubKey(account.pubkey),
@@ -3316,14 +3517,26 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 		let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0 };
 		if (tipEvent) {
 			const reconciled = await handleTipEvent(tipEvent, ownerPubkey);
-			if (reconciled) {
-				result = {
-					seeded: reconciled.seeded,
-					fastForwarded: reconciled.fastForwarded,
-					skipped: reconciled.skipped,
-					dropped: reconciled.dropped
-				};
+			// A tip that will not open here is another account's: without a DEK this
+			// device could never publish either, so leave no config behind.
+			if (!reconciled) {
+				resetMultiDeviceSession();
+				if (previous) {
+					saveConfig(previous);
+					startTipSubscription();
+				} else {
+					clearMultiDeviceConfig(ownerPubkey);
+				}
+				throw new Error(
+					'That connection string belongs to a different account. Link devices signed in to the same identity.'
+				);
 			}
+			result = {
+				seeded: reconciled.seeded,
+				fastForwarded: reconciled.fastForwarded,
+				skipped: reconciled.skipped,
+				dropped: reconciled.dropped
+			};
 		}
 		// Live subscription reconciles on every subsequent tip move (spec §6).
 		startTipSubscription();
@@ -3370,11 +3583,7 @@ async function fetchLatestTipEvent(
 					// created_at wins, equal created_at → the lowest id (deterministic
 					// across relays).
 					if (event.pubkey !== config.ephemeralPubkey || !verifyEvent(event)) return;
-					if (
-						!latest ||
-						event.created_at > latest.created_at ||
-						(event.created_at === latest.created_at && event.id < latest.id)
-					) {
+					if (!latest || isNewerTipEvent(event, latest)) {
 						latest = event;
 					}
 				},

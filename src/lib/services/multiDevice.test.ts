@@ -37,6 +37,8 @@ import {
 	diffStaleGroupEpochs,
 	documentAddress,
 	groupEpoch,
+	isNewerTipEvent,
+	nextTipCreatedAt,
 	metaViewHash,
 	planLastResortRepair,
 	openDocument,
@@ -160,6 +162,21 @@ function honestStore(blobs?: Map<string, Uint8Array>): BlobStore {
 		}
 	};
 }
+
+describe('tip event ordering', () => {
+	test('uses the NIP-01 created_at then event-id order', () => {
+		const current = { id: 'b', created_at: 100 };
+		expect(isNewerTipEvent({ id: 'a', created_at: 100 }, current)).toBe(true);
+		expect(isNewerTipEvent({ id: 'c', created_at: 100 }, current)).toBe(false);
+		expect(isNewerTipEvent({ id: 'z', created_at: 101 }, current)).toBe(true);
+		expect(isNewerTipEvent({ id: 'a', created_at: 99 }, current)).toBe(false);
+	});
+
+	test('a behind clock still dates a write after every tip it built on', () => {
+		expect(nextTipCreatedAt(100, 140, 125)).toBe(141);
+		expect(nextTipCreatedAt(100, 0, 0)).toBe(100);
+	});
+});
 
 describe('multiDevice core', () => {
 	test('documentAddress is sha256 of the sealed UTF-8 payload', () => {
