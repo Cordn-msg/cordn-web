@@ -27,6 +27,7 @@ const {
 	pruneChatGroupFolders,
 	removeChatGroupFromFolders,
 	selectChatFolder,
+	summarizeChatFolderUnread,
 	toggleChatGroupFolderMembership,
 	updateChatGroupFolder
 } = service;
@@ -134,6 +135,26 @@ describe('chatGroupFolders', () => {
 		expect(store.has(`cordn-chat-group-folders:${owner}`)).toBe(false);
 		expect(listChatGroupFolders()).toEqual([]);
 		expect(getChatFolderSelection()).toBe('all');
+	});
+
+	test('tab unread totals sum messages without double-counting mentions', () => {
+		const summaries = new Map([
+			['g1', { unreadCount: 3, unreadReferenceCount: 1 }],
+			['g2', { unreadCount: 4, unreadReferenceCount: 0 }],
+			['mention-only', { unreadCount: 0, unreadReferenceCount: 2 }]
+		]);
+		expect(summarizeChatFolderUnread(['g1', 'g2', 'missing'], summaries)).toEqual({
+			unreadCount: 7,
+			hasUnreadReferences: true
+		});
+		expect(summarizeChatFolderUnread(['g2'], summaries)).toEqual({
+			unreadCount: 4,
+			hasUnreadReferences: false
+		});
+		expect(summarizeChatFolderUnread(['mention-only'], summaries)).toEqual({
+			unreadCount: 0,
+			hasUnreadReferences: true
+		});
 	});
 
 	test('matching rules: DM = exactly two members; custom folders by membership', () => {

@@ -17,8 +17,7 @@ export interface ChatGroupFolder {
 export type ChatFolderSelection = 'all' | 'dms' | 'groups' | `folder:${string}`;
 
 const STORAGE_KEY = 'cordn-chat-group-folders';
-const FOLDER_NAME_MAX = 30;
-export const CHAT_FOLDER_NAME_MAX = FOLDER_NAME_MAX;
+export const CHAT_FOLDER_NAME_MAX = 30;
 const RESERVED_FOLDER_NAMES = new Set(['all', 'dms', 'groups']);
 const FOLDER_KEY_PREFIX = 'folder:';
 
@@ -53,7 +52,7 @@ function parsePersistedFolders(raw: string | null): ChatGroupFolder[] {
 		if (!entry || typeof entry !== 'object') continue;
 		const { id, name, groupIds } = entry as Record<string, unknown>;
 		if (typeof id !== 'string' || !id) continue;
-		const trimmed = typeof name === 'string' ? name.trim().slice(0, FOLDER_NAME_MAX) : '';
+		const trimmed = typeof name === 'string' ? name.trim().slice(0, CHAT_FOLDER_NAME_MAX) : '';
 		if (!trimmed) continue;
 		folders.push({
 			id,
@@ -67,7 +66,7 @@ function parsePersistedFolders(raw: string | null): ChatGroupFolder[] {
 }
 
 /** '' = valid. Reserved built-in names and case-insensitive duplicates are rejected. */
-export function validateChatGroupFolderName(name: string, excludeFolderId?: string): string {
+function validateChatGroupFolderName(name: string, excludeFolderId?: string): string {
 	const trimmed = name.trim();
 	if (!trimmed) return 'Enter a name.';
 	const lower = trimmed.toLowerCase();
@@ -234,4 +233,21 @@ export function chatFolderMatchesGroup(
 	group: StoredChatGroup
 ): boolean {
 	return chatFolderSelectionMatches(selection, listChatGroupMembers(group.id).length, group.id);
+}
+
+/** Aggregate a tab from cached per-chat summaries. Mention counts stay a
+ *  separate flag: they are already included in unreadCount and must not be
+ *  added a second time, but a mention-only chat still needs attention. */
+export function summarizeChatFolderUnread(
+	groupIds: Iterable<string>,
+	summaries: ReadonlyMap<string, { unreadCount: number; unreadReferenceCount: number }>
+): { unreadCount: number; hasUnreadReferences: boolean } {
+	let unreadCount = 0;
+	let hasUnreadReferences = false;
+	for (const groupId of groupIds) {
+		const summary = summaries.get(groupId);
+		unreadCount += summary?.unreadCount ?? 0;
+		hasUnreadReferences ||= (summary?.unreadReferenceCount ?? 0) > 0;
+	}
+	return { unreadCount, hasUnreadReferences };
 }

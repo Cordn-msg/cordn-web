@@ -9,6 +9,7 @@
 		getSelectedChatGroupFolder,
 		listChatGroupFolders,
 		selectChatFolder,
+		summarizeChatFolderUnread,
 		type ChatFolderSelection
 	} from '$lib/services/chatGroupFolders.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
@@ -36,25 +37,25 @@
 		editorOpen = true;
 	}
 
-	function hasUnreadActivity(groupId: string): boolean {
-		const summary = getChatGroupSummary(groupId, $activeAccount?.pubkey);
-		return summary.unreadCount > 0 || summary.unreadReferenceCount > 0;
-	}
-
-	// Tab badges count CHATS with unread activity (not messages), so the strip
-	// never competes with the per-chat unread badges on rows.
+	// One cached summary read per group per strip; each tab then sums the
+	// message badges of its chats. Mentions stay a separate @ marker because
+	// they are already included in unreadCount and must not be added twice.
 	const tabs = $derived.by(() => {
+		const summaries = new Map(
+			groups.map((group) => [group.id, getChatGroupSummary(group.id, $activeAccount?.pubkey)])
+		);
 		const fixed = (['all', 'dms', 'groups'] as const).map((key) => ({
 			key: key as ChatFolderSelection,
 			label: key === 'all' ? 'All' : key === 'dms' ? 'DMs' : 'Groups',
-			unreadChats: groups.filter(
-				(group) => chatFolderMatchesGroup(key, group) && hasUnreadActivity(group.id)
-			).length
+			...summarizeChatFolderUnread(
+				groups.filter((group) => chatFolderMatchesGroup(key, group)).map((group) => group.id),
+				summaries
+			)
 		}));
 		const custom = folders.map((folder) => ({
 			key: `folder:${folder.id}` as ChatFolderSelection,
 			label: folder.name,
-			unreadChats: folder.groupIds.filter(hasUnreadActivity).length
+			...summarizeChatFolderUnread(folder.groupIds, summaries)
 		}));
 		return [...fixed, ...custom];
 	});
@@ -72,6 +73,7 @@
 				<button
 					type="button"
 					aria-pressed={active}
+					aria-label={`${tab.label}${tab.unreadCount > 0 ? `, ${tab.unreadCount} unread message${tab.unreadCount === 1 ? '' : 's'}` : ''}${tab.hasUnreadReferences ? ', unread mentions' : ''}`}
 					onclick={() => selectChatFolder(tab.key)}
 					class={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${active ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground'}`}
 				>
@@ -79,11 +81,20 @@
 						<Check class="size-3" aria-hidden="true" />
 					{/if}
 					<span class="truncate">{tab.label}</span>
-					{#if tab.unreadChats > 0}
+					{#if tab.unreadCount > 0}
 						<span
+							aria-hidden="true"
 							class="rounded-full bg-primary px-1.5 text-[10px] leading-4 font-semibold text-primary-foreground"
 						>
-							{tab.unreadChats > 99 ? '99+' : tab.unreadChats}
+							{tab.unreadCount > 99 ? '99+' : tab.unreadCount}
+						</span>
+					{/if}
+					{#if tab.hasUnreadReferences}
+						<span
+							aria-hidden="true"
+							class="rounded-full bg-amber-500 px-1.5 text-[10px] leading-4 font-semibold text-white"
+						>
+							@
 						</span>
 					{/if}
 				</button>
