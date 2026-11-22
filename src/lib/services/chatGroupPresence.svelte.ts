@@ -20,6 +20,7 @@ import {
 	pruneMessageLedgers,
 	type MessageLedger
 } from '$lib/services/chatUnreadLedger.svelte';
+import { pruneChatGroupFolders } from '$lib/services/chatGroupFolders.svelte';
 
 const STORAGE_KEY = 'cordn-chat-group-presence';
 
@@ -392,6 +393,7 @@ export function pruneChatGroupPresence() {
 
 	const validGroupIds = new Set(listChatGroups().map((group) => group.id));
 	pruneMessageLedgers(validGroupIds);
+	pruneChatGroupFolders(validGroupIds);
 	const nextEntries = Object.entries(chatGroupPresenceStore.groups).filter(([groupId]) =>
 		validGroupIds.has(groupId)
 	);

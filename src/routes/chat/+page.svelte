@@ -283,7 +283,7 @@
 	>
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
-				{#if pendingJoins.length > 0}
+				{#if folderSelection === 'all' && pendingJoins.length > 0}
 					<div class="space-y-3">
 						{#each pendingJoins as entry (entry.gid)}
 							<PendingJoinListItem
@@ -528,5 +528,7 @@
 		bind:open={newConversationOpen}
 		initialJoinOpen={newConversationInitialJoin}
 	/>
-	<ChatFolderEditDialog bind:open={folderEditorOpen} folderId={selectedCustomFolder?.id ?? ''} />
+	{#if folderEditorOpen}
+		<ChatFolderEditDialog bind:open={folderEditorOpen} folderId={selectedCustomFolder?.id ?? ''} />
+	{/if}
 </div>

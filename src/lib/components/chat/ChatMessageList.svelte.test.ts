@@ -185,7 +185,7 @@ test('the scroll-to-bottom button badges the remaining unread count', async () =
 	document.body.append(target0);
 	const harness = mount(Harness, {
 		target: target0,
-		props: { initialMessages: synthMessages(1, 40), focusCursor: 0, unreadCount: 3 }
+		props: { initialMessages: synthMessages(1, 40), focusCursor: 0, initialUnreadCount: 3 }
 	});
 	await settle(50);
 	await scrollAwayFromBottom();
@@ -205,7 +205,7 @@ test('the scroll-to-bottom button stays unbadged at zero unread', async () => {
 	document.body.append(target0);
 	const harness = mount(Harness, {
 		target: target0,
-		props: { initialMessages: synthMessages(1, 40), focusCursor: 0, unreadCount: 0 }
+		props: { initialMessages: synthMessages(1, 40), focusCursor: 0, initialUnreadCount: 0 }
 	});
 	await settle(50);
 	await scrollAwayFromBottom();
@@ -213,6 +213,39 @@ test('the scroll-to-bottom button stays unbadged at zero unread', async () => {
 	const button = document.querySelector<HTMLButtonElement>('button[aria-label="Scroll to bottom"]');
 	expect(button).not.toBeNull();
 	expect(button!.querySelector('.bg-primary')).toBeNull();
+
+	await unmount(harness);
+	target0.remove();
+});
+
+test('the badge follows the read cursor down and disappears at zero', async () => {
+	const target0 = document.createElement('div');
+	document.body.append(target0);
+	const harness = mount(Harness, {
+		target: target0,
+		props: { initialMessages: synthMessages(1, 40), focusCursor: 0, initialUnreadCount: 3 }
+	});
+	await settle(50);
+	await scrollAwayFromBottom();
+
+	const buttonWith = (count: number) =>
+		document.querySelector<HTMLButtonElement>(
+			`button[aria-label="Scroll to bottom, ${count} unread message${count === 1 ? '' : 's'}"]`
+		);
+
+	expect(buttonWith(3)?.textContent?.trim()).toBe('3');
+
+	// Rows scrolled past advance the read cursor: 3 → 1, still badged.
+	harness.setUnreadCount(1);
+	await settle(50);
+	expect(buttonWith(1)?.textContent?.trim()).toBe('1');
+
+	// Everything read: badge gone, plain accessible name back.
+	harness.setUnreadCount(0);
+	await settle(50);
+	const plain = document.querySelector<HTMLButtonElement>('button[aria-label="Scroll to bottom"]');
+	expect(plain).not.toBeNull();
+	expect(plain!.querySelector('.bg-primary')).toBeNull();
 
 	await unmount(harness);
 	target0.remove();

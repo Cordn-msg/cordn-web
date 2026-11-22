@@ -166,11 +166,15 @@
 			{#each folders as folder (folder.id)}
 				{@const member = folder.groupIds.includes(group.id)}
 				<DropdownMenu.Item
+					role="menuitemcheckbox"
+					aria-checked={member}
 					onclick={() => toggleChatGroupFolderMembership(folder.id, group.id)}
 					class="gap-2"
 				>
 					<Check class={`size-4 ${member ? '' : 'invisible'}`} aria-hidden="true" />
-					<span class="truncate">{folder.name}</span>
+					<span class="truncate"
+						>{member ? `Remove from ${folder.name}` : `Add to ${folder.name}`}</span
+					>
 				</DropdownMenu.Item>
 			{/each}
 			<DropdownMenu.Item onclick={() => (showFolderDialog = true)} class="gap-2">
@@ -188,11 +192,13 @@
 	</DropdownMenu.Root>
 </div>
 
-<ChatFolderEditDialog
-	bind:open={showFolderDialog}
-	preselectGroupId={group.id}
-	selectOnCreate={false}
-/>
+{#if showFolderDialog}
+	<ChatFolderEditDialog
+		bind:open={showFolderDialog}
+		preselectGroupId={group.id}
+		selectOnCreate={false}
+	/>
+{/if}
 
 <Dialog.Root bind:open={showDeleteDialog}>
 	<Dialog.Content class="sm:max-w-[425px]">

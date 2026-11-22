@@ -159,6 +159,23 @@ export function toggleChatGroupFolderMembership(folderId: string, groupId: strin
 	saveFolders();
 }
 
+/** Drop memberships whose group no longer exists locally. Runs from the same
+ *  prune as presence, so every deletion path (local delete, multi-device
+ *  tombstone, coordinator purge) is covered once instead of per caller. */
+export function pruneChatGroupFolders(keepGroupIds: Set<string>) {
+	if (
+		!chatGroupFoldersStore.folders.some((folder) =>
+			folder.groupIds.some((groupId) => !keepGroupIds.has(groupId))
+		)
+	)
+		return;
+	chatGroupFoldersStore.folders = chatGroupFoldersStore.folders.map((folder) => ({
+		...folder,
+		groupIds: folder.groupIds.filter((groupId) => keepGroupIds.has(groupId))
+	}));
+	saveFolders();
+}
+
 /** Drop a deleted group's membership from every folder, mirroring removeChatGroupPin. */
 export function removeChatGroupFromFolders(groupId: string) {
 	if (!chatGroupFoldersStore.folders.some((folder) => folder.groupIds.includes(groupId))) return;
@@ -210,10 +227,6 @@ export function chatFolderSelectionMatches(
 	return chatGroupFoldersStore.folders.some(
 		(folder) => folder.id === folderId && folder.groupIds.includes(groupId)
 	);
-}
-
-export function isChatGroupDm(group: StoredChatGroup): boolean {
-	return listChatGroupMembers(group.id).length === 2;
 }
 
 export function chatFolderMatchesGroup(

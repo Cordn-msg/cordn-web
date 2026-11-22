@@ -460,7 +460,7 @@
 			>
 				No chats yet. Start a new conversation.
 			</div>
-		{:else if chats.length === 0 && pendingJoins.length === 0 && !collapsed}
+		{:else if chats.length === 0 && (folderSelection !== 'all' || pendingJoins.length === 0) && !collapsed}
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>

@@ -24,6 +24,7 @@ const {
 	getSelectedChatGroupFolder,
 	listChatGroupFolders,
 	loadChatGroupFoldersForOwner,
+	pruneChatGroupFolders,
 	removeChatGroupFromFolders,
 	selectChatFolder,
 	toggleChatGroupFolderMembership,
@@ -98,6 +99,20 @@ describe('chatGroupFolders', () => {
 		expect(getChatFolderSelection()).toBe('all');
 		selectChatFolder('dms');
 		expect(getChatFolderSelection()).toBe('dms');
+	});
+
+	test('prune drops memberships of groups that no longer exist', () => {
+		const { folder } = createChatGroupFolder('Work', ['gone', 'kept']);
+		pruneChatGroupFolders(new Set(['kept']));
+		expect(listChatGroupFolders()[0].groupIds).toEqual(['kept']);
+
+		// No change, no write: the storage blob stays byte-identical.
+		const before = store.get(`cordn-chat-group-folders:${owner}`);
+		pruneChatGroupFolders(new Set(['kept']));
+		expect(store.get(`cordn-chat-group-folders:${owner}`)).toBe(before);
+		expect(listChatGroupFolders().find((entry) => entry.id === folder!.id)?.groupIds).toEqual([
+			'kept'
+		]);
 	});
 
 	test('malformed persisted JSON degrades to no folders', () => {

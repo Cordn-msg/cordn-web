@@ -115,5 +115,7 @@
 		</Button>
 	</div>
 
-	<ChatFolderEditDialog bind:open={editorOpen} folderId={editingFolderId} />
+	{#if editorOpen}
+		<ChatFolderEditDialog bind:open={editorOpen} folderId={editingFolderId} />
+	{/if}
 {/if}

@@ -12,14 +12,25 @@
 	let {
 		initialMessages,
 		focusCursor,
-		unreadCount = 0
-	}: { initialMessages: ChatMessage[]; focusCursor: number; unreadCount?: number } = $props();
+		initialUnreadCount = 0
+	}: {
+		initialMessages: ChatMessage[];
+		focusCursor: number;
+		initialUnreadCount?: number;
+	} = $props();
 
 	// Deliberately captures the initial value: the test drives updates through
 	// setMessages, mimicking a store write with a fresh array identity.
 	// svelte-ignore state_referenced_locally
 	let messages = $state(initialMessages);
+	// svelte-ignore state_referenced_locally
+	let unreadCount = $state(initialUnreadCount);
 	const queryClient = new QueryClient();
+
+	/** Mimics the read cursor advancing while the reader scrolls down. */
+	export function setUnreadCount(next: number) {
+		unreadCount = next;
+	}
 
 	export function setMessages(next: ChatMessage[]) {
 		messages = next;

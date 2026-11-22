@@ -3,7 +3,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import ChatGroupAvatar from './ChatGroupAvatar.svelte';
-	import { getChatGroupDisplayTitle } from './chatGroupDisplay';
+	import PetnameMark from '$lib/components/PetnameMark.svelte';
+	import { getChatGroupDisplayTitle, getChatGroupTitlePersonPubkey } from './chatGroupDisplay';
 	import { listChatGroups, listChatGroupMembers } from '$lib/services/chatGroups.svelte';
 	import {
 		CHAT_FOLDER_NAME_MAX,
@@ -78,22 +79,29 @@
 		{ relays: metadataRelays }
 	);
 
-	const titleFor = $derived.by(() => {
-		const byGroup = new Map(
-			groups.map((group) => [
-				group.id,
-				getChatGroupDisplayTitle({
+	// One pass per group: the row label plus the pubkey that owns it (a 1:1
+	// title is the peer's name, so it carries the same PetnameMark as the list).
+	const rows = $derived.by(() =>
+		groups.map((group) => {
+			const memberPubkeys = listChatGroupMembers(group.id).map((member) =>
+				normalizePubKey(member.stablePubkey)
+			);
+			return {
+				group,
+				title: getChatGroupDisplayTitle({
 					group,
 					activePubkey: $activeAccount?.pubkey,
 					profileHints,
-					memberPubkeys: listChatGroupMembers(group.id).map((member) =>
-						normalizePubKey(member.stablePubkey)
-					)
+					memberPubkeys
+				}),
+				titlePersonPubkey: getChatGroupTitlePersonPubkey({
+					group,
+					activePubkey: $activeAccount?.pubkey,
+					memberPubkeys
 				})
-			])
-		);
-		return (groupId: string) => byGroup.get(groupId) ?? 'Group chat';
-	});
+			};
+		})
+	);
 
 	function toggleMember(groupId: string) {
 		memberIds = memberIds.includes(groupId)
@@ -143,7 +151,7 @@
 			<div class="space-y-1.5">
 				<p class="text-sm font-medium">Chats</p>
 				<div class="max-h-64 space-y-1 overflow-y-auto">
-					{#each groups as group (group.id)}
+					{#each rows as { group, title, titlePersonPubkey } (group.id)}
 						{@const member = memberIds.includes(group.id)}
 						<label
 							class={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${member ? 'border-primary/60 bg-primary/5' : 'border-border hover:bg-muted/40'}`}
@@ -155,7 +163,10 @@
 								onchange={() => toggleMember(group.id)}
 							/>
 							<ChatGroupAvatar {group} class="h-8 w-8" fallbackClass="text-xs font-medium" />
-							<span class="truncate">{titleFor(group.id)}</span>
+							<span class="flex min-w-0 items-center gap-1">
+								<span class="truncate">{title}</span>
+								<PetnameMark pubkey={titlePersonPubkey} class="size-3.5 shrink-0" />
+							</span>
 						</label>
 					{/each}
 				</div>
