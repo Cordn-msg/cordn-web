@@ -43,6 +43,7 @@ import {
 	runGroupOperation,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
+import { pruneChatGroupFolders } from '$lib/services/chatGroupFolders.svelte';
 import { getChatCoordinator, markCoordinatorUsed } from '$lib/services/chatCoordinators.svelte';
 import { getProtocolGroupId } from '$lib/services/chatGroupLifecycle.svelte';
 import { requireActiveAccount, withCoordinatorClient } from '$lib/services/chatRuntime';
@@ -2822,6 +2823,7 @@ function makeReconcileTarget(catchUp?: {
 				return 'ignored'; // stale tombstone (spec §8 anti-downgrade)
 			}
 			deleteChatGroup(tombstone.gid);
+			pruneChatGroupFolders(new Set(listChatGroups().map((group) => group.id)));
 			dbg('applyTombstone dropped', {
 				gid: tombstone.gid,
 				tombstoneEpoch: tombstone.epoch,

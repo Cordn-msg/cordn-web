@@ -454,7 +454,7 @@
 				onSelectGroup={navigateToGroup}
 				onSelectMessage={(result) => navigateToMessage(result.groupId, result.messageKey)}
 			/>
-		{:else if allChats.length === 0 && pendingJoins.length === 0 && !collapsed}
+		{:else if folderSelection === 'all' && allChats.length === 0 && pendingJoins.length === 0 && !collapsed}
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>

@@ -151,7 +151,13 @@
 	// and do not show "No chats yet" over a pending card: that card is the group.
 	const showEmptyState = $derived.by(() => {
 		void groups.length;
-		return hasAccount && areChatGroupsLoaded() && !hasGroups && pendingJoins.length === 0;
+		return (
+			hasAccount &&
+			areChatGroupsLoaded() &&
+			!hasGroups &&
+			folderSelection === 'all' &&
+			pendingJoins.length === 0
+		);
 	});
 	const backupConfirmed = $derived.by(() => hasConfirmedBackup($activeAccount?.pubkey));
 	let introAuto = $state(!hasSeenIntro());
@@ -417,7 +423,7 @@
 							{/if}
 						{/each}
 					</div>
-				{:else if hasGroups}
+				{:else if hasGroups || folderSelection !== 'all'}
 					<div
 						class="rounded-xl border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground"
 					>
