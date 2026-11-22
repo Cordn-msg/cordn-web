@@ -17,12 +17,15 @@
 	let message = $state('');
 	let error = $state('');
 
+	// A relay that failed its probe is unknown, not behind: it cannot be repaired.
+	const unprobed = $derived(health?.relays.filter((r) => r.reason).length ?? 0);
 	const repairable = $derived.by(() => {
 		const current = health;
 		if (!current) return false;
 		return (
 			current.missing.length > 0 ||
-			(current.tipEvent !== null && current.relays.some((r) => r.eventId !== current.tipEvent?.id))
+			(current.tipEvent !== null &&
+				current.relays.some((r) => !r.reason && r.eventId !== current.tipEvent?.id))
 		);
 	});
 
@@ -89,6 +92,9 @@
 					{current.relays.filter((r) => r.eventId === current.tipEvent?.id).length}/{current.relays
 						.length} relays have the newest tip
 				</p>
+				{#if unprobed > 0}
+					<p>{unprobed} relay(s) could not be checked</p>
+				{/if}
 				{#each current.servers as server (server)}
 					{@const rows = current.blobs.filter((b) => b.server === server)}
 					<p>

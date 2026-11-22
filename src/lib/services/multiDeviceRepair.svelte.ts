@@ -81,7 +81,10 @@ export async function repairMultiDeviceHealth(config: MultiDeviceOwnerConfig): P
 	let relaysCopied = 0;
 	let documentsCopied = 0;
 	const failures: string[] = [];
-	const weakRelays = before.relays.filter((row) => row.eventId !== before.tipEvent?.id);
+	// A relay that failed its probe is unknown, not behind — never publish to it.
+	const weakRelays = before.relays.filter(
+		(row) => !row.reason && row.eventId !== before.tipEvent?.id
+	);
 	const tipEvent = before.tipEvent;
 	if (tipEvent) {
 		const results = await Promise.allSettled(
@@ -160,6 +163,8 @@ export async function repairMultiDeviceHealth(config: MultiDeviceOwnerConfig): P
 		parts.push(`${before.lost.length} document(s) had no available source copy`);
 	if (before.tipEvent === null) parts.push('No tip was available to re-broadcast');
 	if (parts.length === 0) parts.push('Nothing to repair');
+	const unprobed = before.relays.filter((row) => row.reason).length;
+	if (unprobed > 0) parts.push(`${unprobed} relay(s) could not be checked`);
 	if (failures.length > 0) parts.push(`${failures.length} operation(s) failed`);
 	return { summary: parts.join('; '), health };
 }

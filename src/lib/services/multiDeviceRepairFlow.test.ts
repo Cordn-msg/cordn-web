@@ -120,4 +120,20 @@ describe('multi-device health and repair', () => {
 		expect(ephemeralSigner).toHaveBeenCalledWith(config);
 		expect(result.summary).toBe('Restored 2 missing copies');
 	});
+
+	test('never publishes to a relay whose probe failed', async () => {
+		probeRelayTips.mockResolvedValue([
+			{ relay: 'wss://relay.one', eventId: 'new', createdAt: 2, event: newest },
+			{ relay: 'wss://relay.two', eventId: null, createdAt: null, event: null, reason: 'timeout' }
+		]);
+		probeBlossomTip.mockResolvedValue([
+			blob('https://blossom.one', true),
+			blob('https://blossom.two', true)
+		]);
+
+		const result = await repairMultiDeviceHealth(config);
+
+		expect(publish).not.toHaveBeenCalled();
+		expect(result.summary).toContain('1 relay(s) could not be checked');
+	});
 });
