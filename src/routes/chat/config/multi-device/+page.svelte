@@ -12,6 +12,7 @@
 	import QrCode from '$lib/components/QrCode.svelte';
 	import QrScanner from '$lib/components/QrScanner.svelte';
 	import MultiDeviceDevPanel from '$lib/components/chat/MultiDeviceDevPanel.svelte';
+	import MultiDeviceHealth from '$lib/components/chat/MultiDeviceHealth.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { copyText } from '$lib/services/nativeShims';
 	import { page } from '$app/state';
@@ -510,6 +511,10 @@
 								{/if}
 							</Card.Content>
 						</Card.Root>
+					{/if}
+
+					{#if config}
+						<MultiDeviceHealth {config} />
 					{/if}
 
 					<!-- Advanced: relays + Blossom redundancy + (when configured) rotate.

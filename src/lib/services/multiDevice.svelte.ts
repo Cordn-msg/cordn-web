@@ -940,6 +940,14 @@ async function parseTipEvent(outer: NostrEvent, ownerPubkey: string): Promise<Pa
 	return { pointer: { groups, metaAddress, servers }, dekPrivateKey };
 }
 
+/** Read-only inventory lookup for the explicit multi-device health check. */
+export async function readMultiDeviceTipEvent(
+	outer: NostrEvent,
+	ownerPubkey: string
+): Promise<TipPointer | null> {
+	return (await parseTipEvent(outer, ownerPubkey))?.pointer ?? null;
+}
+
 /** Pick the first advertised server for an address (spec §6 fetch order). */
 function urlFromTip(address: string, pointer: TipPointer): string {
 	return `${pointer.servers[0]?.replace(/\/+$/, '') ?? ''}/${address}`;

@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { acceptChatWelcome, goto, toastSuccess } = vi.hoisted(() => ({
-	acceptChatWelcome: vi.fn(),
-	goto: vi.fn(),
-	toastSuccess: vi.fn()
-}));
+const { acceptChatWelcome, createChatKeyPackage, goto, storeJoinRequest, toastSuccess } =
+	vi.hoisted(() => ({
+		acceptChatWelcome: vi.fn(),
+		createChatKeyPackage: vi.fn(),
+		goto: vi.fn(),
+		storeJoinRequest: vi.fn(),
+		toastSuccess: vi.fn()
+	}));
 
 vi.mock('$app/environment', () => ({ browser: true, dev: false }));
+vi.stubGlobal('localStorage', {
+	getItem: () => null,
+	setItem: () => {},
+	removeItem: () => {}
+});
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/paths', () => ({ resolve: () => '/chat/x' }));
 vi.mock('svelte-sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
@@ -29,6 +37,11 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 	createChatGroup: vi.fn(),
 	deleteChatGroup: vi.fn(),
 	ensureGroupsLoaded: async () => {},
+	getChatGroup: () => ({
+		id: 'repair-gid',
+		coordinatorKey: COORDINATOR,
+		metadata: { name: 'Broken chat' }
+	}),
 	inviteChatGroupMember: vi.fn(),
 	listChatGroups: () => [],
 	listCoordinatorAvailableKeyPackages: vi.fn(),
@@ -52,7 +65,10 @@ vi.mock('$lib/services/multiDevice.svelte', () => ({
 	softDeleteGroup: vi.fn(),
 	isMultiDeviceActive: () => false
 }));
-vi.mock('$lib/services/chatKeyPackages.svelte', () => ({ ensureLastResortPublished: vi.fn() }));
+vi.mock('$lib/services/chatKeyPackages.svelte', () => ({
+	createChatKeyPackage,
+	ensureLastResortPublished: vi.fn()
+}));
 vi.mock('$lib/services/lastResortConflict.svelte', () => ({ promptForeignLastResort: vi.fn() }));
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
 	getDefaultChatCoordinator: () => undefined
@@ -69,6 +85,10 @@ vi.mock('$lib/queries/chatWelcomeQueries', () => ({
 vi.mock('$lib/queries/chatJoinRequestQueries', () => ({
 	fetchCoordinatorJoinRequests: vi.fn(async () => [])
 }));
+vi.mock('$lib/services/chatJoinRequests.svelte', async (importOriginal) => ({
+	...(await importOriginal<object>()),
+	storeJoinRequest
+}));
 
 // Two Welcomes sharing one key package (a last-resort package carries invitations
 // to any group): only the preview's gid may decide which one answers the request.
@@ -84,13 +104,47 @@ vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
 }));
 
 import { sentJoinRequestsStore } from '$lib/services/chatJoinRequests.svelte';
-import { autoAcceptJoinRequestWelcomesAction } from '$lib/services/chatUiActions.svelte';
+import {
+	autoAcceptJoinRequestWelcomesAction,
+	requestGroupRepairAction
+} from '$lib/services/chatUiActions.svelte';
 
 const COORDINATOR = 'bb'.repeat(32);
 
 function welcome(id: string, gid: string) {
 	return { id, kpRef: 'shared-kp', at: 1, coordinatorKey: COORDINATOR, preview: { gid } };
 }
+
+describe('requestGroupRepairAction', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		createChatKeyPackage.mockResolvedValue({ record: { keyPackageRef: 'repair-kp' } });
+		storeJoinRequest.mockResolvedValue(undefined);
+		sentJoinRequestsStore.entries = [];
+	});
+
+	test('publishes a one-time package on the group coordinator and keeps a pending request', async () => {
+		expect(await requestGroupRepairAction('repair-gid')).toBe(true);
+		expect(createChatKeyPackage).toHaveBeenCalledWith({
+			label: 'Rejoin Broken chat',
+			publishCoordinatorKey: COORDINATOR
+		});
+		expect(storeJoinRequest).toHaveBeenCalledWith(COORDINATOR, 'repair-gid', 'repair-kp');
+		expect(sentJoinRequestsStore.entries[0]).toMatchObject({
+			gid: 'repair-gid',
+			coordinatorKey: COORDINATOR,
+			name: 'Broken chat'
+		});
+	});
+
+	test('force sends a fresh request while the first is still pending', async () => {
+		createChatKeyPackage.mockResolvedValue({ record: { keyPackageRef: 'repair-kp-2' } });
+		sentJoinRequestsStore.entries = [{ gid: 'repair-gid', coordinatorKey: COORDINATOR, at: 1 }];
+
+		expect(await requestGroupRepairAction('repair-gid', { force: true })).toBe(true);
+		expect(storeJoinRequest).toHaveBeenCalledWith(COORDINATOR, 'repair-gid', 'repair-kp-2');
+	});
+});
 
 describe('autoAcceptJoinRequestWelcomesAction', () => {
 	beforeEach(() => {

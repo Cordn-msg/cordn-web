@@ -6,6 +6,7 @@ import {
 	createChatGroup,
 	deleteChatGroup,
 	ensureGroupsLoaded,
+	getChatGroup,
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
 	recoverPoisonedChatGroup,
@@ -35,7 +36,9 @@ import {
 	hasJoinRequestBeenSent,
 	listPendingJoinRequests,
 	markJoinRequestDismissed,
-	setJoinRequestSubmitting
+	markJoinRequestSent,
+	setJoinRequestSubmitting,
+	storeJoinRequest
 } from '$lib/services/chatJoinRequests.svelte';
 import { stopWatchingGroup, refreshWatchedGroups } from '$lib/services/chatGroupWatch.svelte';
 import { checkForUpdateNow } from '$lib/services/appUpdate.svelte';
@@ -48,7 +51,10 @@ import { fetchCoordinatorAvailableKeyPackages } from '$lib/queries/chatKeyPackag
 import { fetchCoordinatorWelcomeNotifications } from '$lib/queries/chatWelcomeQueries';
 import { fetchCoordinatorJoinRequests } from '$lib/queries/chatJoinRequestQueries';
 import { requireActiveAccount } from '$lib/services/chatRuntime';
-import { ensureLastResortPublished } from '$lib/services/chatKeyPackages.svelte';
+import {
+	createChatKeyPackage,
+	ensureLastResortPublished
+} from '$lib/services/chatKeyPackages.svelte';
 import { promptForeignLastResort } from '$lib/services/lastResortConflict.svelte';
 import { getDefaultChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import { DEFAULT_CHAT_COORDINATOR_PUBKEY } from '$lib/constants/chat';
@@ -552,6 +558,51 @@ export async function rejectJoinRequestAction(joinRequestId: string) {
 		return false;
 	} finally {
 		clearJoinRequestSubmitting(joinRequestId);
+	}
+}
+
+/** Ask an admin to replace a broken local membership; local history stays put. */
+export async function requestGroupRepairAction(
+	groupId?: string,
+	options: { force?: boolean } = {}
+): Promise<boolean> {
+	if (!groupId || chatGroupInfoActionsStore.recoverySubmitting) return false;
+	chatGroupInfoActionsStore.recoverySubmitting = true;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		const group = getChatGroup(groupId);
+		if (!group) throw new Error('Group not found');
+		if (options.force || !hasJoinRequestBeenSent(groupId)) {
+			const { record } = await createChatKeyPackage({
+				label: `Rejoin ${group.metadata?.name?.trim() || groupId.slice(0, 8)}`,
+				publishCoordinatorKey: group.coordinatorKey
+			});
+			await storeJoinRequest(group.coordinatorKey, groupId, record.keyPackageRef);
+			markJoinRequestSent({
+				gid: groupId,
+				coordinatorKey: group.coordinatorKey,
+				name: group.metadata?.name,
+				icon: group.metadata?.icon
+			});
+		}
+		// The request is already stored; a failed refresh only delays the Welcome
+		// until the next poll, so it must not turn a successful send into an error.
+		try {
+			await refreshCoordinatorWelcomeNotificationsAction(group.coordinatorKey);
+			await autoAcceptJoinRequestWelcomesAction();
+		} catch {
+			/* the periodic welcome poll retries */
+		}
+		toast.success('Rejoin request sent', {
+			description: 'Your messages stay here while you wait for an admin.'
+		});
+		return true;
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to request group repair';
+		return false;
+	} finally {
+		chatGroupInfoActionsStore.recoverySubmitting = false;
 	}
 }
 

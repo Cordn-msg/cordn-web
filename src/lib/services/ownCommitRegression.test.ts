@@ -771,10 +771,10 @@ describe('ratchet-repair trigger discipline (fork-MR scenario I)', () => {
 		expect(stale, 'the collision is recorded').toBeTruthy();
 		expect(staleGenerationLeafIndex(stale!)).toBe(0);
 
-		// the repair is scheduled: an epoch-advancing self-update commit lands
-		await vi.waitFor(() => expect(postCursor).toBeGreaterThan(0), { timeout: 3000 });
+		// The randomized 2–10s defer lets a sibling's repair land first.
+		await vi.waitFor(() => expect(postCursor).toBeGreaterThan(0), { timeout: 12_000 });
 		expect(decodeEpoch(getChatGroup(group.id)!.stateBase64)).toBe(1n);
-	});
+	}, 15_000);
 
 	test("another member's stale generation is recorded but never repaired here", async () => {
 		vi.mocked(isMultiDeviceActive).mockReturnValue(true);

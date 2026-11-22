@@ -1641,14 +1641,19 @@ function scheduleSharedLeafRatchetRepair(groupId: string, detectedAtEpoch: strin
 	// runGroupOperation (e.g. the pre-send catch-up), and the repair re-enters
 	// it via runOutboundGroupOperation — serialized through the group lock, but
 	// only safe to START after the current operation unwinds.
-	setTimeout(() => {
-		void repairSharedLeafRatchetDivergence(groupId, detectedAtEpoch).catch((error) => {
-			console.warn('[multi-device] ratchet-divergence repair failed', {
-				groupId,
-				error: errorMessage(error)
+	setTimeout(
+		() => {
+			void repairSharedLeafRatchetDivergence(groupId, detectedAtEpoch).catch((error) => {
+				console.warn('[multi-device] ratchet-divergence repair failed', {
+					groupId,
+					error: errorMessage(error)
+				});
 			});
-		});
-	}, 0);
+			// Siblings can detect the same divergence. A random defer lets one repair
+			// land before the others re-verify the epoch, avoiding a repair-made fork.
+		},
+		2_000 + Math.floor(Math.random() * 8_000)
+	);
 }
 
 function toPersistedGroupMetadata(metadata?: CordnGroupMetadata): GroupMetadataInput | undefined {
