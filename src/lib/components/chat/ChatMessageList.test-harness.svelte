@@ -9,8 +9,11 @@
 	 * (component exports give the test a plain setter) and the QueryClient
 	 * context the message rows expect (profile lookups).
 	 */
-	let { initialMessages, focusCursor }: { initialMessages: ChatMessage[]; focusCursor: number } =
-		$props();
+	let {
+		initialMessages,
+		focusCursor,
+		unreadCount = 0
+	}: { initialMessages: ChatMessage[]; focusCursor: number; unreadCount?: number } = $props();
 
 	// Deliberately captures the initial value: the test drives updates through
 	// setMessages, mimicking a store write with a fresh array identity.
@@ -25,6 +28,11 @@
 
 <div style="position: fixed; top: 0; left: 0; width: 400px; height: 600px; z-index: 2147483647;">
 	<QueryClientProvider client={queryClient}>
-		<ChatMessageList {messages} groupId="harness-group" initialFocusCursor={focusCursor} />
+		<ChatMessageList
+			{messages}
+			groupId="harness-group"
+			initialFocusCursor={focusCursor}
+			{unreadCount}
+		/>
 	</QueryClientProvider>
 </div>

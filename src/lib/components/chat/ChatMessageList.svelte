@@ -35,6 +35,7 @@
 		onPin = () => {},
 		onVote = () => Promise.resolve(false),
 		unreadReferenceCount = 0,
+		unreadCount = 0,
 		onNavigateToReference = () => {}
 	}: {
 		messages: ChatMessage[];
@@ -45,6 +46,10 @@
 		/** Unread @-mentions of the viewer: shown as a floating jump button
 		 *  stacked above scroll-to-bottom (moved out of the composer). */
 		unreadReferenceCount?: number;
+		/** Unread messages still below the read cursor: a badge on the
+		 *  scroll-to-bottom button (Telegram-style). Already-decrementing —
+		 *  visibility read-marking advances the read cursor as rows appear. */
+		unreadCount?: number;
 		onNavigateToReference?: () => void | Promise<void>;
 		/** Open-at-first-unread target cursor, set once per group by ChatShell on
 		 *  open (0 = open at the bottom). Cursor-based so a gap start below the
@@ -977,11 +982,22 @@
 						type="button"
 						size="icon"
 						variant="secondary"
-						class="h-10 w-10 rounded-full shadow-lg"
+						class="relative h-10 w-10 rounded-full shadow-lg"
 						onclick={scrollToBottom}
-						aria-label="Scroll to bottom"
+						aria-label={unreadCount > 0
+							? `Scroll to bottom, ${unreadCount} unread message${unreadCount === 1 ? '' : 's'}`
+							: 'Scroll to bottom'}
 					>
 						<ChevronDown class="size-5" />
+						{#if unreadCount > 0}
+							<!-- Decorative: the count rides the button's accessible name. -->
+							<span
+								aria-hidden="true"
+								class="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground"
+							>
+								{unreadCount > 99 ? '99+' : unreadCount}
+							</span>
+						{/if}
 					</Button>
 				</div>
 			{/if}

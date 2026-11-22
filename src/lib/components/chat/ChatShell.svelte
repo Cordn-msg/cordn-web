@@ -25,7 +25,8 @@
 		listUnreadChatGroupReferenceTargets,
 		markChatGroupMentionsRead,
 		markChatGroupRead,
-		getChatGroupLastReadCursor
+		getChatGroupLastReadCursor,
+		getUnreadChatGroupMessageCount
 	} from '$lib/services/chatGroupPresence.svelte';
 	import {
 		chatComposerActionsStore,
@@ -243,6 +244,9 @@
 	const unreadReferenceTargets = $derived.by(() =>
 		activePubkey ? listUnreadChatGroupReferenceTargets(groupId, activePubkey) : []
 	);
+	// Same source as the sidebar badge: live-decrements as visibility
+	// read-marking advances the read cursor.
+	const unreadMessageCount = $derived(getUnreadChatGroupMessageCount(groupId));
 	const unreadReferenceCursorByTargetId = $derived.by(() => {
 		const cursors = new SvelteMap<string, number>();
 		for (const entry of unreadReferenceTargets) {
@@ -1479,6 +1483,7 @@
 					ensureMessage={(cursor) => loadChatGroupMessagesAround(groupId, cursor)}
 					onLoadOlder={() => loadOlderChatGroupMessages(groupId)}
 					unreadReferenceCount={unreadReferenceTargets.length}
+					unreadCount={unreadMessageCount}
 					onNavigateToReference={navigateToNextReference}
 					onReply={handleReply}
 					onReact={handleReact}
