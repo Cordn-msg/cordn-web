@@ -1295,7 +1295,7 @@ function mergePublishedGroupEpochs(
 }
 
 /** Ephemeral Blossom signer used by all republish paths. */
-function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
+export function ephemeralSigner(config: MultiDeviceOwnerConfig): BlossomSigner {
 	return {
 		async signEvent(template) {
 			return finalizeEvent(template, hexToBytes(config.ephemeralPrivateKey));

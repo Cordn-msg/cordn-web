@@ -34,9 +34,9 @@ import {
 	clearJoinRequestSubmitting,
 	getJoinRequest,
 	hasJoinRequestBeenSent,
-	listPendingJoinRequests,
 	markJoinRequestDismissed,
 	markJoinRequestSent,
+	sentJoinRequestsStore,
 	setJoinRequestSubmitting,
 	storeJoinRequest
 } from '$lib/services/chatJoinRequests.svelte';
@@ -90,6 +90,8 @@ export const chatGroupInfoActionsStore = $state<{
 	deleteSubmitting: boolean;
 	metadataSubmitting: boolean;
 	recoverySubmitting: boolean;
+	/** Which group the last recovery attempt belonged to. */
+	recoveryGroupId: string;
 	recoveryResult: 'success' | 'failure' | null;
 	error: string;
 }>({
@@ -97,6 +99,7 @@ export const chatGroupInfoActionsStore = $state<{
 	deleteSubmitting: false,
 	metadataSubmitting: false,
 	recoverySubmitting: false,
+	recoveryGroupId: '',
 	recoveryResult: null,
 	error: ''
 });
@@ -454,7 +457,9 @@ export async function acceptWelcomeAction(welcomeId: string, options: { navigate
  * reader still sees it and can accept by hand.
  */
 export async function autoAcceptJoinRequestWelcomesAction(): Promise<void> {
-	const pending = new Map(listPendingJoinRequests().map((entry) => [entry.gid, entry]));
+	// Every sent request, not `listPendingJoinRequests()`: that one hides groups
+	// already joined, and a repair request targets a group that exists here.
+	const pending = new Map(sentJoinRequestsStore.entries.map((entry) => [entry.gid, entry]));
 	if (pending.size === 0) return;
 
 	for (const welcome of listWelcomeNotifications()) {
@@ -609,6 +614,8 @@ export async function requestGroupRepairAction(
 export async function recoverPoisonedGroupAction(groupId?: string) {
 	if (!groupId || chatGroupInfoActionsStore.recoverySubmitting) return;
 	chatGroupInfoActionsStore.recoverySubmitting = true;
+	// Scoped to the group: the info route is reused when the id changes.
+	chatGroupInfoActionsStore.recoveryGroupId = groupId;
 	chatGroupInfoActionsStore.recoveryResult = null;
 	chatGroupInfoActionsStore.error = '';
 	try {

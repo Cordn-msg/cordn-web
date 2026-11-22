@@ -48,15 +48,28 @@ export interface BlobProbe {
 /**
  * Fetch the latest tip from ONE relay (mirrors `fetchLatestTipEvent`'s
  * accumulate-max-created_at + hard-timeout pattern, scoped to a single relay so
- * the caller keeps source attribution). Resolves null if the relay has nothing.
+ * the caller keeps source attribution). Resolves null when the relay answered
+ * and has nothing; rejects when the relay failed or never answered, so a dead
+ * relay is never mistaken for one that definitively has no tip.
  */
 async function fetchLatestTipFromRelay(
 	relay: string,
 	config: MultiDeviceOwnerConfig
 ): Promise<NostrEvent | null> {
 	let latest: NostrEvent | null = null;
-	await new Promise<void>((resolve) => {
-		const sub = relayPool
+	await new Promise<void>((resolve, reject) => {
+		const state: { timer?: ReturnType<typeof setTimeout>; sub?: { unsubscribe(): void } } = {};
+		const finish = (error?: Error) => {
+			if (state.timer) clearTimeout(state.timer);
+			try {
+				state.sub?.unsubscribe();
+			} catch {
+				/* best-effort */
+			}
+			if (error) reject(error);
+			else resolve();
+		};
+		state.sub = relayPool
 			.request(
 				[relay],
 				{
@@ -76,18 +89,11 @@ async function fetchLatestTipFromRelay(
 						return;
 					latest = event;
 				},
-				complete: () => resolve(),
-				error: () => resolve()
+				complete: () => finish(),
+				error: (error) => finish(error instanceof Error ? error : new Error('relay request failed'))
 			});
 		// ponytail: hard 5.5s cap in case the relay neither EOSEs nor errors.
-		setTimeout(() => {
-			try {
-				sub.unsubscribe();
-			} catch {
-				/* best-effort */
-			}
-			resolve();
-		}, 5500);
+		state.timer = setTimeout(() => finish(new Error('relay did not answer within 5.5s')), 5500);
 	});
 	return latest;
 }

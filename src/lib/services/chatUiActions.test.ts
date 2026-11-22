@@ -43,7 +43,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 		metadata: { name: 'Broken chat' }
 	}),
 	inviteChatGroupMember: vi.fn(),
-	listChatGroups: () => [],
+	listChatGroups: () => joinedGroupsForTest,
 	listCoordinatorAvailableKeyPackages: vi.fn(),
 	recoverPoisonedChatGroup: vi.fn(),
 	removeChatGroupMember: vi.fn(),
@@ -93,6 +93,7 @@ vi.mock('$lib/services/chatJoinRequests.svelte', async (importOriginal) => ({
 // Two Welcomes sharing one key package (a last-resort package carries invitations
 // to any group): only the preview's gid may decide which one answers the request.
 let welcomesForTest: unknown[] = [];
+let joinedGroupsForTest: unknown[] = [];
 vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
 	chatWelcomeNotificationsStore: { error: '', submittingIds: {} },
 	listWelcomeNotifications: () => welcomesForTest,
@@ -149,6 +150,7 @@ describe('requestGroupRepairAction', () => {
 describe('autoAcceptJoinRequestWelcomesAction', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		joinedGroupsForTest = [];
 		acceptChatWelcome.mockResolvedValue({ id: 'requested-gid' });
 		sentJoinRequestsStore.entries = [{ gid: 'requested-gid', coordinatorKey: COORDINATOR, at: 1 }];
 	});
@@ -165,6 +167,17 @@ describe('autoAcceptJoinRequestWelcomesAction', () => {
 		expect(acceptChatWelcome).toHaveBeenCalledWith({ welcomeId: 'answers-request' });
 		expect(goto).not.toHaveBeenCalled();
 		expect(toastSuccess).toHaveBeenCalledTimes(1);
+	});
+
+	// A repair request targets a group that already exists here, so the joined-group
+	// filter that hides its sidebar card must not hide its Welcome.
+	test('accepts a repair request for a group already joined locally', async () => {
+		joinedGroupsForTest = [{ id: 'requested-gid' }];
+		welcomesForTest = [welcome('repair-welcome', 'requested-gid')];
+
+		await autoAcceptJoinRequestWelcomesAction();
+
+		expect(acceptChatWelcome).toHaveBeenCalledWith({ welcomeId: 'repair-welcome' });
 	});
 
 	test('accepts nothing while no request is pending', async () => {

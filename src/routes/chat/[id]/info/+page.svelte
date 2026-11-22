@@ -67,6 +67,12 @@
 		return getNewestHealthySnapshot(group.snapshots ?? []) !== undefined;
 	});
 	const repairRequested = $derived.by(() => (group ? hasJoinRequestBeenSent(group.id) : false));
+	// Only this group's own attempt: the route is reused when the id changes.
+	const recoveryResult = $derived(
+		chatGroupInfoActionsStore.recoveryGroupId === group?.id
+			? chatGroupInfoActionsStore.recoveryResult
+			: null
+	);
 	const adminPubkeys = $derived.by(() =>
 		(group?.metadata?.adminPubkeys ?? []).map((pubkey) => normalizePubKey(pubkey))
 	);
@@ -284,11 +290,11 @@
 									{/if}
 								</Button>
 							</div>
-							{#if chatGroupInfoActionsStore.recoveryResult === 'success'}
+							{#if recoveryResult === 'success'}
 								<p class="mt-2 text-xs text-green-600 dark:text-green-400">
 									Recovery successful. The group is now healthy.
 								</p>
-							{:else if chatGroupInfoActionsStore.recoveryResult === 'failure'}
+							{:else if recoveryResult === 'failure'}
 								<p class="mt-2 text-xs">
 									Recovery failed. Ask to rejoin below, or delete this group locally.
 								</p>
@@ -296,7 +302,7 @@
 						{:else}
 							<p class="mt-2 text-xs">No usable recovery snapshot is available.</p>
 						{/if}
-						{#if !hasHealthySnapshot || chatGroupInfoActionsStore.recoveryResult === 'failure'}
+						{#if !hasHealthySnapshot || recoveryResult === 'failure'}
 							<div class="mt-3">
 								{#if repairRequested}
 									<p class="text-xs">

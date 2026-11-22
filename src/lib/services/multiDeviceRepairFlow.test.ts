@@ -1,29 +1,33 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { NostrEvent } from 'nostr-tools';
 
-const { probeRelayTips, probeBlossomTip, readMultiDeviceTipEvent, publish, fetchBlob, uploadBlob } =
-	vi.hoisted(() => ({
-		probeRelayTips: vi.fn(),
-		probeBlossomTip: vi.fn(),
-		readMultiDeviceTipEvent: vi.fn(),
-		publish: vi.fn(),
-		fetchBlob: vi.fn(),
-		uploadBlob: vi.fn()
-	}));
+const {
+	probeRelayTips,
+	probeBlossomTip,
+	readMultiDeviceTipEvent,
+	ephemeralSigner,
+	publish,
+	fetchBlob,
+	uploadBlob
+} = vi.hoisted(() => ({
+	probeRelayTips: vi.fn(),
+	probeBlossomTip: vi.fn(),
+	readMultiDeviceTipEvent: vi.fn(),
+	ephemeralSigner: vi.fn(),
+	publish: vi.fn(),
+	fetchBlob: vi.fn(),
+	uploadBlob: vi.fn()
+}));
 
 vi.mock('$lib/services/multiDeviceDev.svelte', () => ({ probeRelayTips, probeBlossomTip }));
-vi.mock('$lib/services/multiDevice.svelte', () => ({ readMultiDeviceTipEvent }));
+vi.mock('$lib/services/multiDevice.svelte', () => ({ readMultiDeviceTipEvent, ephemeralSigner }));
 vi.mock('$lib/services/multiDevice', () => ({
 	documentAddress: () => 'doc',
 	isNewerTipEvent: (candidate: NostrEvent, current: NostrEvent) =>
 		candidate.created_at > current.created_at
 }));
 vi.mock('$lib/services/relay-pool', () => ({ relayPool: { publish } }));
-vi.mock('$lib/services/chatBlossomClient', () => ({
-	ephemeralBlossomSigner: () => 'signer',
-	fetchBlob,
-	uploadBlob
-}));
+vi.mock('$lib/services/chatBlossomClient', () => ({ fetchBlob, uploadBlob }));
 
 import {
 	checkMultiDeviceHealth,
@@ -61,6 +65,7 @@ describe('multi-device health and repair', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		readMultiDeviceTipEvent.mockResolvedValue(pointer);
+		ephemeralSigner.mockReturnValue('owner-signer');
 	});
 
 	test('checks the newest tip and every advertised document host', async () => {
@@ -109,9 +114,10 @@ describe('multi-device health and repair', () => {
 		expect(uploadBlob).toHaveBeenCalledWith({
 			serverUrl: 'https://blossom.two',
 			blob: new TextEncoder().encode('sealed'),
-			signer: 'signer',
+			signer: 'owner-signer',
 			signal: expect.any(AbortSignal)
 		});
+		expect(ephemeralSigner).toHaveBeenCalledWith(config);
 		expect(result.summary).toBe('Restored 2 missing copies');
 	});
 });

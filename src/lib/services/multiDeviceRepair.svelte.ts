@@ -1,8 +1,9 @@
 import type { NostrEvent } from 'nostr-tools';
 import { relayPool } from '$lib/services/relay-pool';
-import { ephemeralBlossomSigner, fetchBlob, uploadBlob } from '$lib/services/chatBlossomClient';
+import { fetchBlob, uploadBlob } from '$lib/services/chatBlossomClient';
 import { documentAddress, isNewerTipEvent, type TipPointer } from '$lib/services/multiDevice';
 import {
+	ephemeralSigner,
 	readMultiDeviceTipEvent,
 	type MultiDeviceOwnerConfig
 } from '$lib/services/multiDevice.svelte';
@@ -135,7 +136,8 @@ export async function repairMultiDeviceHealth(config: MultiDeviceOwnerConfig): P
 				const uploaded = await uploadBlob({
 					serverUrl: target.server,
 					blob: sealed,
-					signer: ephemeralBlossomSigner(),
+					// The persisted multi-device key, so normal cleanup can still delete the copy.
+					signer: ephemeralSigner(config),
 					signal: AbortSignal.timeout(30_000)
 				});
 				if (uploaded.sha256.toLowerCase() !== address) {
