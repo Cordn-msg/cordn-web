@@ -68,6 +68,9 @@
 	});
 
 	const SCROLL_HIDE_PX = 10;
+	// Decide only after the gesture stops. Collapsing mid-momentum reflows the
+	// list under the reader's finger, which is what read as jumping.
+	const SCROLL_SETTLE_MS = 140;
 	let collapsed = $state(false);
 
 	$effect(() => {
@@ -77,29 +80,30 @@
 		// Trackpad and momentum deltas are often < 2px per event, so per-event
 		// thresholds never fire; accumulate until a whole gesture clears it.
 		let accumulated = 0;
+		let settleTimer: number | null = null;
+		const settle = () => {
+			settleTimer = null;
+			if (lastY <= 8) collapsed = false;
+			else if (accumulated >= SCROLL_HIDE_PX) collapsed = true;
+			else if (accumulated <= -SCROLL_HIDE_PX) collapsed = false;
+			accumulated = 0;
+		};
 		const onScroll = () => {
 			const y = element.scrollTop;
 			const delta = y - lastY;
 			lastY = y;
-			if (y <= 8) {
-				accumulated = 0;
-				collapsed = false;
-				return;
-			}
 			accumulated =
 				accumulated === 0 || Math.sign(accumulated) === Math.sign(delta)
 					? accumulated + delta
 					: delta;
-			if (accumulated >= SCROLL_HIDE_PX) {
-				accumulated = 0;
-				collapsed = true;
-			} else if (accumulated <= -SCROLL_HIDE_PX) {
-				accumulated = 0;
-				collapsed = false;
-			}
+			if (settleTimer !== null) window.clearTimeout(settleTimer);
+			settleTimer = window.setTimeout(settle, SCROLL_SETTLE_MS);
 		};
 		element.addEventListener('scroll', onScroll, { passive: true });
-		return () => element.removeEventListener('scroll', onScroll);
+		return () => {
+			element.removeEventListener('scroll', onScroll);
+			if (settleTimer !== null) window.clearTimeout(settleTimer);
+		};
 	});
 </script>
 
@@ -107,7 +111,7 @@
 	<!-- Height collapse, not display:none, so the list above it eases up instead
 	     of jumping; `inert` keeps the hidden controls out of the tab order. -->
 	<div
-		class={`overflow-hidden transition-all duration-200 ${collapsed ? 'max-h-0 opacity-0' : 'mt-2 max-h-9 opacity-100'}`}
+		class={`overflow-hidden transition-all duration-150 ${collapsed ? 'max-h-0 opacity-0' : 'mt-2 max-h-9 opacity-100'}`}
 		inert={collapsed || undefined}
 	>
 		<div class="flex items-center gap-1">
