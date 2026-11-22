@@ -66,16 +66,16 @@
 
 <div class="space-y-3 rounded-lg border border-border p-3">
 	<div>
-		<h3 class="text-sm font-medium">Backup copies</h3>
+		<h3 class="text-sm font-medium">Sync health</h3>
 		<p class="text-xs text-muted-foreground">
-			Check that your relays have the latest sync tip and every document host has its sealed
-			documents. Repair only copies existing bytes; it does not change your chats.
+			Check that your relays hold the latest sync tip and every document host has its sealed copies.
+			Repair only re-uploads existing bytes; it does not change your chats.
 		</p>
 	</div>
 	<div class="flex flex-wrap gap-2">
 		<Button variant="outline" size="sm" onclick={check} disabled={checking || repairing}>
 			{#if checking}<Spinner class="mr-2 size-3.5" />{:else}<RefreshCw class="mr-2 size-3.5" />{/if}
-			{checking ? 'Checking…' : 'Check copies'}
+			{checking ? 'Checking…' : 'Check health'}
 		</Button>
 		{#if repairable}
 			<Button variant="outline" size="sm" onclick={repair} disabled={checking || repairing}>

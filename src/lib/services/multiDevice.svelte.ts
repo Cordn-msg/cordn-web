@@ -206,6 +206,15 @@ export interface MultiDeviceProgress {
 }
 export const mdProgress = $state<MultiDeviceProgress>({ phase: null, current: 0, total: 0 });
 
+/**
+ * Bumped on every persisted config write. The config is a plain JSON object
+ * re-read from localStorage, so a UI holding one snapshot never sees a
+ * background publish/reconcile that wrote `lastSeenTip` — the observed bug was
+ * a page stuck on "not synced yet" until it was reopened. Read this in any
+ * effect that projects config so a save re-runs it.
+ */
+export const mdConfigRevision = $state({ value: 0 });
+
 /** Activate a phase (and optional i/N total). Idle when phase is null. */
 function setMdProgress(phase: string, current = 0, total = 0): void {
 	mdProgress.phase = phase;
@@ -374,6 +383,7 @@ function readAllConfigs(): MultiDeviceConfigStore {
 function writeAllConfigs(configs: MultiDeviceConfigStore): void {
 	if (!browser) return;
 	localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(configs));
+	mdConfigRevision.value++;
 }
 
 export function getMultiDeviceConfig(ownerPubkey?: string): MultiDeviceOwnerConfig | undefined {
@@ -1097,6 +1107,15 @@ function mergePlans(a: PublishPlan, b: PublishPlan): PublishPlan {
 	return { resealGroups: groups, resealMeta: a.resealMeta || b.resealMeta };
 }
 
+/** Whether an already queued plan publishes everything `plan` asks for. */
+function planCovers(outer: PublishPlan, plan: PublishPlan): boolean {
+	const groups =
+		outer.resealGroups === 'all' ||
+		(plan.resealGroups !== 'all' &&
+			plan.resealGroups.every((gid) => outer.resealGroups.includes(gid)));
+	return groups && (outer.resealMeta || !plan.resealMeta);
+}
+
 let pendingPlan: PublishPlan | null = null;
 let pendingPlanOwner: string | null = null;
 let flushScheduled = false;
@@ -1105,13 +1124,21 @@ let flushScheduled = false;
 // clear work that has not run.
 const queuedPlans = new Set<PublishPlan>();
 
+/** Every plan not yet published — parked for retry plus in flight — folded
+ *  into one. This is the shape `pendingPublish` is persisted in, so any "is
+ *  this work already queued?" check must compare against the same fold. */
+function livePublishPlan(): PublishPlan | null {
+	let plan = pendingPlan;
+	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	return plan;
+}
+
 function persistPendingPlan(): void {
 	if (!browser || !pendingPlanOwner) return;
 	const all = readAllConfigs();
 	const config = all[normalizePubKey(pendingPlanOwner)];
 	if (!config) return;
-	let plan = pendingPlan;
-	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	const plan = livePublishPlan();
 	if (plan) config.pendingPublish = plan;
 	else delete config.pendingPublish;
 	writeAllConfigs(all);
@@ -1156,6 +1183,31 @@ function drainPendingPlan(): void {
 	const batch = pendingPlan;
 	pendingPlan = null;
 	if (batch) publishPlan(batch);
+}
+
+/**
+ * Run unpublished local work now instead of waiting out the retry ladder (the
+ * user-initiated half of `queuePublishRetry`). Returns whether anything was
+ * kicked, so the caller can tell "retried" from "already on its way".
+ */
+export function retryMultiDevicePublish(): boolean {
+	if (!browser) return false;
+	if (pendingPlan) {
+		if (retryTimer !== null) {
+			clearTimeout(retryTimer);
+			retryTimer = null;
+			retryDelayMs = 2_000;
+		}
+		drainPendingPlan();
+		return true;
+	}
+	// Nothing parked: either queued/in-flight work (which needs no kick), or a plan
+	// stranded by a previous session, which only the persisted field knows about.
+	const stored = getMultiDeviceConfig()?.pendingPublish;
+	const live = livePublishPlan();
+	if (!stored || (live && planCovers(live, stored))) return false;
+	scheduleRepublish(stored);
+	return true;
 }
 
 function publishPlan(batch: PublishPlan): void {
@@ -2185,8 +2237,17 @@ async function startMultiDevice(): Promise<void> {
 	// exist on the old ones.
 	if (adoptDefaultBlossomServers(getMultiDeviceConfig() ?? config))
 		scheduleRepublish({ resealGroups: 'all', resealMeta: true });
-	const pending = getMultiDeviceConfig()?.pendingPublish;
-	if (pending) scheduleRepublish(pending);
+	// Restore work stranded by a previous session — unless what is already queued
+	// or in flight publishes it. Both sides are unions of unpublished work, so
+	// the fold is compared against the fold: matching plan-by-plan re-queued a
+	// union of partials (the observed enable resealed all 75 groups twice).
+	const pending = getMultiDeviceConfig(ownerPubkey)?.pendingPublish;
+	const queuedBefore = livePublishPlan();
+	if (pending && !(queuedBefore && planCovers(queuedBefore, pending))) scheduleRepublish(pending);
+	// A queued full reseal already covers every group + the meta, so it subsumes
+	// the owed audit below.
+	const queued = livePublishPlan();
+	const fullPublishActive = queued?.resealGroups === 'all' && queued.resealMeta;
 	// §10.5 trigger "on startup if local state is ahead of the tip" — evaluated
 	// even when the reconcile deduped (tip unchanged / event id seen): both
 	// signals are pure-local (stale-epoch record + meta view hash), no fetch.
@@ -2194,7 +2255,7 @@ async function startMultiDevice(): Promise<void> {
 	// process-killed publish, which the tip-event path can never see (the tip
 	// never moved). A racing mid-flight reconcile is benign: runSerialized
 	// orders the publishes and the sweep converges on its own reconcile.
-	scheduleOwedPublish();
+	if (!fullPublishActive) scheduleOwedPublish();
 	// §8 fetch liveness: retry document pulls that failed in a previous session —
 	// a cold start MUST NOT inherit a previous fetch failure as a permanent skip.
 	scheduleUnresolvedRetry();
@@ -3478,6 +3539,8 @@ export interface LinkResult {
 	fastForwarded: number;
 	skipped: number;
 	dropped: number;
+	/** False when no relay returned a tip yet: linked, but nothing to adopt. */
+	foundTip: boolean;
 }
 
 /**
@@ -3524,7 +3587,13 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 	setMdProgress('Fetching device state');
 	try {
 		const tipEvent = await fetchLatestTipEvent(config);
-		let result: LinkResult = { seeded: 0, fastForwarded: 0, skipped: 0, dropped: 0 };
+		let result: LinkResult = {
+			seeded: 0,
+			fastForwarded: 0,
+			skipped: 0,
+			dropped: 0,
+			foundTip: !!tipEvent
+		};
 		if (tipEvent) {
 			const reconciled = await handleTipEvent(tipEvent, ownerPubkey);
 			// A tip that will not open here is another account's: without a DEK this
@@ -3545,7 +3614,8 @@ export async function linkDeviceFromConnectionString(connection: string): Promis
 				seeded: reconciled.seeded,
 				fastForwarded: reconciled.fastForwarded,
 				skipped: reconciled.skipped,
-				dropped: reconciled.dropped
+				dropped: reconciled.dropped,
+				foundTip: true
 			};
 		}
 		// Live subscription reconciles on every subsequent tip move (spec §6).
