@@ -320,10 +320,14 @@ export interface BlobPresence {
 	reason?: string;
 }
 
-export async function hasBlob(serverUrl: string, sha256Hex: string): Promise<BlobPresence> {
+export async function hasBlob(
+	serverUrl: string,
+	sha256Hex: string,
+	signal?: AbortSignal
+): Promise<BlobPresence> {
 	const server = serverUrl.replace(/\/+$/, '');
 	try {
-		const res = await fetch(`${server}/${sha256Hex}`, { method: 'HEAD' });
+		const res = await fetch(`${server}/${sha256Hex}`, { method: 'HEAD', signal });
 		const len = res.headers.get('content-length');
 		return {
 			ok: res.ok,

@@ -40,7 +40,7 @@
 		loadWelcomeNotificationsAction,
 		loadJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
-	import { listPendingJoinRequests } from '$lib/services/chatJoinRequests.svelte';
+	import { sentJoinRequestsStore } from '$lib/services/chatJoinRequests.svelte';
 	import { listWelcomeNotifications } from '$lib/services/chatWelcomeNotifications.svelte';
 
 	let { children } = $props();
@@ -141,7 +141,7 @@
 	// a minute, hidden tabs excluded (the per-coordinator query keeps its own
 	// staleTime), and stop asking the moment the request does.
 	const pendingJoinPollKey = $derived.by(() =>
-		[...new Set(listPendingJoinRequests().map((entry) => entry.coordinatorKey))]
+		[...new Set(sentJoinRequestsStore.entries.map((entry) => entry.coordinatorKey))]
 			.filter(Boolean)
 			.sort()
 			.join(',')
@@ -170,7 +170,7 @@
 	// as its preview names the group, so the pending card becomes the chat with no
 	// second confirmation. Every other Welcome stays for the notifications dialog.
 	const pendingJoinAcceptKey = $derived.by(() => {
-		const pending = listPendingJoinRequests().map((entry) => entry.gid);
+		const pending = sentJoinRequestsStore.entries.map((entry) => entry.gid);
 		const previewed = listWelcomeNotifications()
 			.filter((welcome) => Boolean(welcome.preview?.gid))
 			.map((welcome) => welcome.id);

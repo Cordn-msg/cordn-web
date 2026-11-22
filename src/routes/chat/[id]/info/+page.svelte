@@ -30,11 +30,13 @@
 		chatGroupInfoActionsStore,
 		deleteGroupAction,
 		recoverPoisonedGroupAction,
+		requestGroupRepairAction,
 		removeGroupMemberAction,
 		updateGroupMetadataAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
+	import { hasJoinRequestBeenSent } from '$lib/services/chatJoinRequests.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -64,6 +66,13 @@
 		if (!group) return false;
 		return getNewestHealthySnapshot(group.snapshots ?? []) !== undefined;
 	});
+	const repairRequested = $derived.by(() => (group ? hasJoinRequestBeenSent(group.id) : false));
+	// Only this group's own attempt: the route is reused when the id changes.
+	const recoveryResult = $derived(
+		chatGroupInfoActionsStore.recoveryGroupId === group?.id
+			? chatGroupInfoActionsStore.recoveryResult
+			: null
+	);
 	const adminPubkeys = $derived.by(() =>
 		(group?.metadata?.adminPubkeys ?? []).map((pubkey) => normalizePubKey(pubkey))
 	);
@@ -281,21 +290,53 @@
 									{/if}
 								</Button>
 							</div>
-							{#if chatGroupInfoActionsStore.recoveryResult === 'success'}
+							{#if recoveryResult === 'success'}
 								<p class="mt-2 text-xs text-green-600 dark:text-green-400">
 									Recovery successful. The group is now healthy.
 								</p>
-							{:else if chatGroupInfoActionsStore.recoveryResult === 'failure'}
+							{:else if recoveryResult === 'failure'}
 								<p class="mt-2 text-xs">
-									Recovery failed. Contact a group admin to be re-invited, or delete this group
-									locally.
+									Recovery failed. Ask to rejoin below, or delete this group locally.
 								</p>
 							{/if}
 						{:else}
-							<p class="mt-2 text-xs">
-								No recovery snapshot is available. Contact a group admin to be re-invited, or delete
-								this group locally.
-							</p>
+							<p class="mt-2 text-xs">No usable recovery snapshot is available.</p>
+						{/if}
+						{#if !hasHealthySnapshot || recoveryResult === 'failure'}
+							<div class="mt-3">
+								{#if repairRequested}
+									<p class="text-xs">
+										Rejoin requested. Your messages stay here while you wait for an admin.
+									</p>
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										class="mt-1"
+										disabled={chatGroupInfoActionsStore.recoverySubmitting}
+										onclick={() => requestGroupRepairAction(group.id, { force: true })}
+									>
+										Send again
+									</Button>
+								{:else}
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										disabled={chatGroupInfoActionsStore.recoverySubmitting}
+										onclick={() => requestGroupRepairAction(group.id)}
+									>
+										Ask to rejoin
+									</Button>
+									<p class="mt-2 text-xs">
+										An admin can replace this device's access. Nothing local is deleted while you
+										wait.
+									</p>
+								{/if}
+							</div>
+						{/if}
+						{#if chatGroupInfoActionsStore.error}
+							<p class="mt-2 text-xs">{chatGroupInfoActionsStore.error}</p>
 						{/if}
 					</div>
 				{/if}
