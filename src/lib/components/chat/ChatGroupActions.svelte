@@ -22,9 +22,16 @@
 	import Pin from '@lucide/svelte/icons/pin';
 	import PinOff from '@lucide/svelte/icons/pin-off';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Check from '@lucide/svelte/icons/check';
+	import FolderPlus from '@lucide/svelte/icons/folder-plus';
 	import Bell from '@lucide/svelte/icons/bell';
 	import BellOff from '@lucide/svelte/icons/bell-off';
 	import { isChatGroupPinned, toggleChatGroupPin } from '$lib/services/chatGroupPins.svelte';
+	import {
+		listChatGroupFolders,
+		toggleChatGroupFolderMembership
+	} from '$lib/services/chatGroupFolders.svelte';
+	import ChatFolderEditDialog from './ChatFolderEditDialog.svelte';
 	import {
 		CHAT_GROUP_MUTE_ALWAYS,
 		CHAT_GROUP_MUTE_OPTIONS,
@@ -53,9 +60,11 @@
 
 	let showDeleteDialog = $state(false);
 	let showMuteDialog = $state(false);
+	let showFolderDialog = $state(false);
 	const submitting = $derived(chatGroupInfoActionsStore.deleteSubmitting);
 	const pinned = $derived(isChatGroupPinned(group.id));
 	const muted = $derived(isChatGroupMuted(group.id));
+	const folders = $derived(listChatGroupFolders());
 
 	async function chooseMute(option: (typeof CHAT_GROUP_MUTE_OPTIONS)[number]) {
 		showMuteDialog = false;
@@ -154,6 +163,24 @@
 					<span>Pin to top</span>
 				{/if}
 			</DropdownMenu.Item>
+			{#each folders as folder (folder.id)}
+				{@const member = folder.groupIds.includes(group.id)}
+				<DropdownMenu.Item
+					role="menuitemcheckbox"
+					aria-checked={member}
+					onclick={() => toggleChatGroupFolderMembership(folder.id, group.id)}
+					class="gap-2"
+				>
+					<Check class={`size-4 ${member ? '' : 'invisible'}`} aria-hidden="true" />
+					<span class="truncate"
+						>{member ? `Remove from ${folder.name}` : `Add to ${folder.name}`}</span
+					>
+				</DropdownMenu.Item>
+			{/each}
+			<DropdownMenu.Item onclick={() => (showFolderDialog = true)} class="gap-2">
+				<FolderPlus class="size-4" />
+				<span>New folder…</span>
+			</DropdownMenu.Item>
 			<DropdownMenu.Item
 				onclick={() => (showDeleteDialog = true)}
 				class="gap-2 text-destructive data-[highlighted]:text-destructive"
@@ -164,6 +191,14 @@
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
+
+{#if showFolderDialog}
+	<ChatFolderEditDialog
+		bind:open={showFolderDialog}
+		preselectGroupId={group.id}
+		selectOnCreate={false}
+	/>
+{/if}
 
 <Dialog.Root bind:open={showDeleteDialog}>
 	<Dialog.Content class="sm:max-w-[425px]">

@@ -3,6 +3,7 @@ import { queryClient } from '$lib/query-client';
 import { chatQueryKeys } from '$lib/queries/chatQueryKeys';
 import { removeChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 import { deleteChatGroupsForCoordinator, listChatGroups } from '$lib/services/chatGroups.svelte';
+import { pruneChatGroupFolders } from '$lib/services/chatGroupFolders.svelte';
 import {
 	listChatKeyPackages,
 	purgeCoordinatorKeyPackages
@@ -118,6 +119,7 @@ export async function purgeChatCoordinator(coordinatorKey: string): Promise<void
 	} else {
 		await deleteChatGroupsForCoordinator(normalized);
 	}
+	pruneChatGroupFolders(new Set(listChatGroups().map((group) => group.id)));
 	await purgeCoordinatorKeyPackages(normalized, willDelete);
 	deleteWelcomeNotificationsForCoordinator(normalized);
 	removeChatCoordinator(normalized);

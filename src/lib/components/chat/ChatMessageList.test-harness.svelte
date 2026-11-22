@@ -9,14 +9,28 @@
 	 * (component exports give the test a plain setter) and the QueryClient
 	 * context the message rows expect (profile lookups).
 	 */
-	let { initialMessages, focusCursor }: { initialMessages: ChatMessage[]; focusCursor: number } =
-		$props();
+	let {
+		initialMessages,
+		focusCursor,
+		initialUnreadCount = 0
+	}: {
+		initialMessages: ChatMessage[];
+		focusCursor: number;
+		initialUnreadCount?: number;
+	} = $props();
 
 	// Deliberately captures the initial value: the test drives updates through
 	// setMessages, mimicking a store write with a fresh array identity.
 	// svelte-ignore state_referenced_locally
 	let messages = $state(initialMessages);
+	// svelte-ignore state_referenced_locally
+	let unreadCount = $state(initialUnreadCount);
 	const queryClient = new QueryClient();
+
+	/** Mimics the read cursor advancing while the reader scrolls down. */
+	export function setUnreadCount(next: number) {
+		unreadCount = next;
+	}
 
 	export function setMessages(next: ChatMessage[]) {
 		messages = next;
@@ -25,6 +39,11 @@
 
 <div style="position: fixed; top: 0; left: 0; width: 400px; height: 600px; z-index: 2147483647;">
 	<QueryClientProvider client={queryClient}>
-		<ChatMessageList {messages} groupId="harness-group" initialFocusCursor={focusCursor} />
+		<ChatMessageList
+			{messages}
+			groupId="harness-group"
+			initialFocusCursor={focusCursor}
+			{unreadCount}
+		/>
 	</QueryClientProvider>
 </div>
