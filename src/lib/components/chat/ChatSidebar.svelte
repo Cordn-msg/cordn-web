@@ -85,8 +85,6 @@
 	);
 	const allChats = $derived.by(() => listChatGroups());
 	const folderSelection = $derived(getChatFolderSelection());
-	// The list's scroller, so the folder strip can collapse while scrolling down.
-	let chatsScrollEl = $state<HTMLElement | null>(null);
 	// Groups this account asked to join and waits on: cards like any other, in their
 	// loading state (the request is the consent; the Welcome is accepted on arrival).
 	const pendingJoins = $derived.by(() => listPendingJoinRequests());
@@ -441,14 +439,14 @@
 		</div>
 	{/if}
 
-	{#if !collapsed && !isSearching}
-		<ChatFolderTabs scrollElement={chatsScrollEl} />
-	{/if}
-
 	<nav
-		bind:this={chatsScrollEl}
 		class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4"
 	>
+		<!-- Inside the scroller: the strip rides away with the list instead of
+		     resizing the viewport (which shifted the list under the finger). -->
+		{#if !collapsed && !isSearching}
+			<ChatFolderTabs />
+		{/if}
 		{#if isSearching && !collapsed}
 			<ChatSearchResults
 				results={searchResults}

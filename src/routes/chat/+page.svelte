@@ -71,8 +71,6 @@
 	const folderSelection = $derived(getChatFolderSelection());
 	const selectedCustomFolder = $derived(getSelectedChatGroupFolder());
 	let folderEditorOpen = $state(false);
-	// The list's scroller, so the folder strip can collapse while scrolling down.
-	let chatsScrollEl = $state<HTMLElement | null>(null);
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
 	const newsFeedItems = getNewsFeedItems();
 	// News sorts exactly like a chat: its "last activity" is the newest unread
@@ -282,16 +280,17 @@
 				</div>
 			{/if}
 		</div>
-		<ChatFolderTabs scrollElement={chatsScrollEl} />
 	</header>
 
 	<div
-		bind:this={chatsScrollEl}
 		class="flex-1 overflow-y-auto px-4 pt-3 pb-6 md:px-6 md:pt-4 md:pb-8"
 		use:pullToRefresh={chatListPullToRefresh}
 	>
 		{#if hasAccount}
 			<div class="mx-auto flex max-w-6xl flex-col gap-6">
+				<!-- Inside the scroller: the strip rides away with the list instead of
+				     resizing the viewport (which shifted the list under the finger). -->
+				<ChatFolderTabs />
 				{#if folderSelection === 'all' && pendingJoins.length > 0}
 					<div class="space-y-3">
 						{#each pendingJoins as entry (entry.gid)}
