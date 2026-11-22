@@ -110,6 +110,7 @@ import {
 	DEFAULT_MULTI_DEVICE_RELAYS,
 	enableMultiDevice,
 	mdConfigRevision,
+	onGroupStateAdvance,
 	retryMultiDevicePublish,
 	resetMultiDeviceSession,
 	setMultiDeviceBlossomServers
@@ -185,6 +186,32 @@ describe('enableMultiDevice()', () => {
 		resetMultiDeviceSession();
 	});
 
+	test('live partial publishes are matched as a union, not one by one', async () => {
+		state.holdNextRequest = true; // hold the startup reconcile's tip read
+		enableMultiDevice();
+		await flush();
+		state.release();
+		await flush(); // the initial full publish lands; the reconcile is still held
+
+		// Two group changes in separate ticks: two partial publishes, persisted as
+		// the single union {g1, g2}. Neither plan covers that union on its own.
+		onGroupStateAdvance('g1');
+		await flush();
+		onGroupStateAdvance('g2');
+		await flush();
+		state.releaseRequest();
+		await flush();
+
+		for (let i = 0; i < 4; i++) {
+			state.release();
+			await flush();
+		}
+
+		// initial + g1 + g2. A fourth write is the union being queued again.
+		expect(state.tipWrites).toBe(3);
+		resetMultiDeviceSession();
+	});
+
 	test('a plan published during the startup reconcile is not restored again', async () => {
 		state.holdNextRequest = true; // hold only the startup reconcile's tip read
 		enableMultiDevice();
@@ -220,6 +247,22 @@ describe('retryMultiDevicePublish()', () => {
 		);
 
 		expect(retryMultiDevicePublish()).toBe(false);
+	});
+
+	test('a publish already in flight is not queued a second time', async () => {
+		enableMultiDevice();
+		await flush(); // the initial publish is parked at its tip write
+
+		// Its work is already on the way; retrying it would upload everything twice.
+		expect(retryMultiDevicePublish()).toBe(false);
+		state.release();
+		await flush();
+		state.release();
+		await flush();
+		expect(state.tipWrites).toBe(1);
+
+		resetMultiDeviceSession();
+		state.release();
 	});
 
 	test('publishes a plan stranded by a previous session and clears it', async () => {

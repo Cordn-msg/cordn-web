@@ -1124,13 +1124,21 @@ let flushScheduled = false;
 // clear work that has not run.
 const queuedPlans = new Set<PublishPlan>();
 
+/** Every plan not yet published — parked for retry plus in flight — folded
+ *  into one. This is the shape `pendingPublish` is persisted in, so any "is
+ *  this work already queued?" check must compare against the same fold. */
+function livePublishPlan(): PublishPlan | null {
+	let plan = pendingPlan;
+	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	return plan;
+}
+
 function persistPendingPlan(): void {
 	if (!browser || !pendingPlanOwner) return;
 	const all = readAllConfigs();
 	const config = all[normalizePubKey(pendingPlanOwner)];
 	if (!config) return;
-	let plan = pendingPlan;
-	for (const queued of queuedPlans) plan = plan ? mergePlans(plan, queued) : queued;
+	const plan = livePublishPlan();
 	if (plan) config.pendingPublish = plan;
 	else delete config.pendingPublish;
 	writeAllConfigs(all);
@@ -1179,22 +1187,26 @@ function drainPendingPlan(): void {
 
 /**
  * Run unpublished local work now instead of waiting out the retry ladder (the
- * user-initiated half of `queuePublishRetry`). Covers all three resting places:
- * a plan stranded by a previous session (persisted only), a queued flush, and a
- * plan parked for retry. Returns whether anything was pending, so the caller
- * can tell "retried" from "nothing to do".
+ * user-initiated half of `queuePublishRetry`). Returns whether anything was
+ * kicked, so the caller can tell "retried" from "already on its way".
  */
 export function retryMultiDevicePublish(): boolean {
 	if (!browser) return false;
-	const stored = getMultiDeviceConfig()?.pendingPublish;
-	if (!pendingPlan && !stored && !flushScheduled && queuedPlans.size === 0) return false;
-	if (retryTimer !== null) {
-		clearTimeout(retryTimer);
-		retryTimer = null;
-		retryDelayMs = 2_000;
+	if (pendingPlan) {
+		if (retryTimer !== null) {
+			clearTimeout(retryTimer);
+			retryTimer = null;
+			retryDelayMs = 2_000;
+		}
+		drainPendingPlan();
+		return true;
 	}
-	if (pendingPlan) drainPendingPlan();
-	else if (stored) scheduleRepublish(stored);
+	// Nothing parked: either queued/in-flight work (which needs no kick), or a plan
+	// stranded by a previous session, which only the persisted field knows about.
+	const stored = getMultiDeviceConfig()?.pendingPublish;
+	const live = livePublishPlan();
+	if (!stored || (live && planCovers(live, stored))) return false;
+	scheduleRepublish(stored);
 	return true;
 }
 
@@ -2225,18 +2237,17 @@ async function startMultiDevice(): Promise<void> {
 	// exist on the old ones.
 	if (adoptDefaultBlossomServers(getMultiDeviceConfig() ?? config))
 		scheduleRepublish({ resealGroups: 'all', resealMeta: true });
-	// Restore work stranded by a previous session — unless a live plan already
-	// publishes it. The persisted plan is the union of everything unpublished, so
-	// an enable/host-migration full reseal, or a plan queued during the reconcile,
-	// already covers it; re-queueing duplicated the publish (all 75 groups twice).
-	const livePlans = [...(pendingPlan ? [pendingPlan] : []), ...queuedPlans];
+	// Restore work stranded by a previous session — unless what is already queued
+	// or in flight publishes it. Both sides are unions of unpublished work, so
+	// the fold is compared against the fold: matching plan-by-plan re-queued a
+	// union of partials (the observed enable resealed all 75 groups twice).
 	const pending = getMultiDeviceConfig(ownerPubkey)?.pendingPublish;
-	if (pending && !livePlans.some((plan) => planCovers(plan, pending))) scheduleRepublish(pending);
-	// An active full reseal already covers every group + the meta, so it subsumes
+	const queuedBefore = livePublishPlan();
+	if (pending && !(queuedBefore && planCovers(queuedBefore, pending))) scheduleRepublish(pending);
+	// A queued full reseal already covers every group + the meta, so it subsumes
 	// the owed audit below.
-	const fullPublishActive =
-		(pendingPlan?.resealGroups === 'all' && pendingPlan.resealMeta) ||
-		[...queuedPlans].some((plan) => plan.resealGroups === 'all' && plan.resealMeta);
+	const queued = livePublishPlan();
+	const fullPublishActive = queued?.resealGroups === 'all' && queued.resealMeta;
 	// §10.5 trigger "on startup if local state is ahead of the tip" — evaluated
 	// even when the reconcile deduped (tip unchanged / event id seen): both
 	// signals are pure-local (stale-epoch record + meta view hash), no fetch.

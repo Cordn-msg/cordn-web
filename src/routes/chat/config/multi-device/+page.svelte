@@ -263,7 +263,8 @@
 		try {
 			// "Sync now" must also push what has not gone out: reading the tip alone
 			// cannot heal a failed or stranded publish (it just reports "no tip").
-			const retried = retryMultiDevicePublish();
+			// Snapshot before the await: the flag decides how to read a `no-tip` result.
+			const pending = retryMultiDevicePublish() || !!pendingPublish;
 			const result = await reconcileMultiDeviceNow();
 			if (result.status === 'ok') {
 				const { counts } = result;
@@ -272,7 +273,7 @@
 				);
 			} else if (result.status === 'signer-no-nip44') {
 				toast.error('This signer does not support NIP-44 v2 — multi-device sync needs it');
-			} else if (result.status === 'no-tip' && retried) {
+			} else if (result.status === 'no-tip' && pending) {
 				toast.info("No tip yet — publishing this device's groups now");
 			} else if (result.status === 'no-tip') {
 				toast.error('No tip found on the configured relays — check them or link again');
