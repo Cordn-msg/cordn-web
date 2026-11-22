@@ -31,6 +31,11 @@
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { isChatGroupPinned } from '$lib/services/chatGroupPins.svelte';
+	import {
+		chatFolderMatchesGroup,
+		getChatFolderSelection
+	} from '$lib/services/chatGroupFolders.svelte';
+	import ChatFolderTabs from '$lib/components/chat/ChatFolderTabs.svelte';
 	import { searchChatContent } from '$lib/services/chatContentSearch';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
 	import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
@@ -79,6 +84,7 @@
 		{ relays: metadataRelays }
 	);
 	const allChats = $derived.by(() => listChatGroups());
+	const folderSelection = $derived(getChatFolderSelection());
 	// Groups this account asked to join and waits on: cards like any other, in their
 	// loading state (the request is the consent; the Welcome is accepted on arrival).
 	const pendingJoins = $derived.by(() => listPendingJoinRequests());
@@ -118,20 +124,24 @@
 	// Pinned groups hold the very top (activity order within the tier), then
 	// the existing rule: unread chats bubble up (newest first within the tier),
 	// read chats settle by last activity. Pin state is $state in chatGroupPins,
-	// so the derived re-sorts on toggle.
+	// so the derived re-sorts on toggle. Folder filtering happens BEFORE the
+	// sort; search stays global (folder-independent) by design.
 	const chats = $derived.by(() =>
-		[...allChats].sort(
-			(a, b) =>
-				Number(isChatGroupPinned(b.id)) - Number(isChatGroupPinned(a.id)) ||
-				Number(hasUnreadActivity(b.id)) - Number(hasUnreadActivity(a.id)) ||
-				getGroupActivityAt(b) - getGroupActivityAt(a)
-		)
+		[...allChats]
+			.filter((chat) => chatFolderMatchesGroup(folderSelection, chat))
+			.sort(
+				(a, b) =>
+					Number(isChatGroupPinned(b.id)) - Number(isChatGroupPinned(a.id)) ||
+					Number(hasUnreadActivity(b.id)) - Number(hasUnreadActivity(a.id)) ||
+					getGroupActivityAt(b) - getGroupActivityAt(a)
+			)
 	);
 	function isActive(href: string) {
 		return page.url.pathname === href;
 	}
 
-	const anyUnreadChats = $derived(chats.some((chat) => hasUnreadActivity(chat.id)));
+	// Global, not filtered — the mark-all button must not depend on the active folder.
+	const anyUnreadChats = $derived(allChats.some((chat) => hasUnreadActivity(chat.id)));
 
 	// gid-based: the [id] segment may be a cordn1 ref or a bare gid, so compare the
 	// decoded gid instead of a raw path string (cordn1 URLs would break isActive).
@@ -367,7 +377,7 @@
 		</Button>
 	{/if}
 
-	{#if !collapsed && chats.length > 0}
+	{#if !collapsed && allChats.length > 0}
 		<div class="pb-3">
 			<div class="flex items-center gap-2">
 				<InputGroup.Root class="min-w-0 flex-1">
@@ -429,6 +439,10 @@
 		</div>
 	{/if}
 
+	{#if !collapsed && !isSearching}
+		<ChatFolderTabs />
+	{/if}
+
 	<nav
 		class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto pb-4"
 	>
@@ -440,14 +454,20 @@
 				onSelectGroup={navigateToGroup}
 				onSelectMessage={(result) => navigateToMessage(result.groupId, result.messageKey)}
 			/>
-		{:else if chats.length === 0 && pendingJoins.length === 0 && !collapsed}
+		{:else if allChats.length === 0 && pendingJoins.length === 0 && !collapsed}
 			<div
 				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
 			>
 				No chats yet. Start a new conversation.
 			</div>
+		{:else if chats.length === 0 && pendingJoins.length === 0 && !collapsed}
+			<div
+				class="rounded-xl border border-dashed border-border px-3 py-4 text-sm text-muted-foreground"
+			>
+				No chats in this filter.
+			</div>
 		{:else}
-			{#if pendingJoins.length > 0}
+			{#if folderSelection === 'all' && pendingJoins.length > 0}
 				<div class="mb-1 space-y-1">
 					{#each pendingJoins as entry (entry.gid)}
 						<PendingJoinListItem
@@ -478,7 +498,7 @@
 				{/each}
 			</div>
 		{/if}
-		{#if !(isSearching && !collapsed)}
+		{#if !(isSearching && !collapsed) && folderSelection === 'all'}
 			<NewsListItem
 				href={resolve('/chat/news')}
 				variant="sidebar"

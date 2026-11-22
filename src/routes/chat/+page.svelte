@@ -4,6 +4,8 @@
 	import PendingJoinListItem from '$lib/components/chat/PendingJoinListItem.svelte';
 	import ChatMobileSidebarButton from '$lib/components/chat/ChatMobileSidebarButton.svelte';
 	import ChatSearchBar from '$lib/components/chat/ChatSearchBar.svelte';
+	import ChatFolderTabs from '$lib/components/chat/ChatFolderTabs.svelte';
+	import ChatFolderEditDialog from '$lib/components/chat/ChatFolderEditDialog.svelte';
 	import LoggedOutIntro from '$lib/components/chat/LoggedOutIntro.svelte';
 	import NewConversationDialog from '$lib/components/chat/NewConversationDialog.svelte';
 	import NewsListItem from '$lib/components/news/NewsListItem.svelte';
@@ -34,6 +36,11 @@
 	} from '$lib/services/chatGroupPresence.svelte';
 	import { getGroupActivityAt } from '$lib/components/chat/chatGroupDisplay';
 	import { isChatGroupPinned } from '$lib/services/chatGroupPins.svelte';
+	import {
+		chatFolderMatchesGroup,
+		getChatFolderSelection,
+		getSelectedChatGroupFolder
+	} from '$lib/services/chatGroupFolders.svelte';
 	import { buildGroupSharePath } from '$lib/utils/groupShareLink';
 	import { safeNormalizePubKey } from '$lib/utils';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
@@ -61,6 +68,9 @@
 	};
 
 	const groups = $derived.by(() => listChatGroups());
+	const folderSelection = $derived(getChatFolderSelection());
+	const selectedCustomFolder = $derived(getSelectedChatGroupFolder());
+	let folderEditorOpen = $state(false);
 	const newsUnreadCount = $derived.by(() => getUnreadNewsCount());
 	const newsFeedItems = getNewsFeedItems();
 	// News sorts exactly like a chat: its "last activity" is the newest unread
@@ -84,16 +94,20 @@
 				activityAt: number;
 		  };
 	const feedRows = $derived.by(() => {
-		const rows: FeedRow[] = groups.map((group) => {
-			const summary = getChatGroupSummary(group.id, $activeAccount?.pubkey);
-			return {
-				kind: 'group' as const,
-				group,
-				unread: summary.unreadCount > 0 || summary.unreadReferenceCount > 0,
-				activityAt: getGroupActivityAt(group)
-			};
-		});
-		if (newsFeedItems.length > 0) {
+		// Folder filter applies to group rows only; news and pending joins are
+		// All-only surfaces.
+		const rows: FeedRow[] = groups
+			.filter((group) => chatFolderMatchesGroup(folderSelection, group))
+			.map((group) => {
+				const summary = getChatGroupSummary(group.id, $activeAccount?.pubkey);
+				return {
+					kind: 'group' as const,
+					group,
+					unread: summary.unreadCount > 0 || summary.unreadReferenceCount > 0,
+					activityAt: getGroupActivityAt(group)
+				};
+			});
+		if (folderSelection === 'all' && newsFeedItems.length > 0) {
 			rows.push({
 				kind: 'news',
 				unread: newsUnreadCount > 0,
@@ -108,7 +122,14 @@
 				b.activityAt - a.activityAt
 		);
 	});
-	const hasUnreadChats = $derived(feedRows.some((row) => row.kind === 'group' && row.unread));
+	// Global, not filtered: the header action must reflect every chat, never a
+	// filtered subset (plan: “Mark all chats read” stays global).
+	const hasUnreadChats = $derived(
+		groups.some((group) => {
+			const summary = getChatGroupSummary(group.id, $activeAccount?.pubkey);
+			return summary.unreadCount > 0 || summary.unreadReferenceCount > 0;
+		})
+	);
 	const hasAccount = $derived.by(() => Boolean($activeAccount));
 	// Web-only storage disclaimer: browser storage is the source of truth on web,
 	// so warn once (dismiss is permanent — the fact is about the browser, not the
@@ -253,6 +274,7 @@
 				</div>
 			{/if}
 		</div>
+		<ChatFolderTabs />
 	</header>
 
 	<div
@@ -395,6 +417,26 @@
 							{/if}
 						{/each}
 					</div>
+				{:else if hasGroups}
+					<div
+						class="rounded-xl border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground"
+					>
+						{#if folderSelection === 'dms'}
+							<p>No direct messages yet.</p>
+						{:else if folderSelection === 'groups'}
+							<p>No group chats yet.</p>
+						{:else if selectedCustomFolder}
+							<p>No chats in “{selectedCustomFolder.name}” yet.</p>
+							<Button
+								variant="outline"
+								size="sm"
+								class="mt-2"
+								onclick={() => (folderEditorOpen = true)}
+							>
+								Add chats
+							</Button>
+						{/if}
+					</div>
 				{/if}
 				{#if hasGroups}
 					<div class="flex flex-wrap items-center gap-2">
@@ -486,4 +528,5 @@
 		bind:open={newConversationOpen}
 		initialJoinOpen={newConversationInitialJoin}
 	/>
+	<ChatFolderEditDialog bind:open={folderEditorOpen} folderId={selectedCustomFolder?.id ?? ''} />
 </div>
