@@ -29,11 +29,12 @@
 		buildConnectionString,
 		linkDeviceFromConnectionString,
 		reconcileMultiDeviceNow,
+		retryMultiDevicePublish,
 		mdProgress,
+		mdConfigRevision,
 		type MultiDeviceOwnerConfig,
 		type LinkResult
 	} from '$lib/services/multiDevice.svelte';
-	import { listChatGroups } from '$lib/services/chatGroups.svelte';
 	import { toast } from 'svelte-sonner';
 	import { SvelteSet } from 'svelte/reactivity';
 	import Smartphone from '@lucide/svelte/icons/smartphone';
@@ -42,7 +43,7 @@
 	import ShieldAlert from '@lucide/svelte/icons/shield-alert';
 	import Copy from '@lucide/svelte/icons/copy';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import Download from '@lucide/svelte/icons/download';
+	import ScanLine from '@lucide/svelte/icons/scan-line';
 	import Unlink from '@lucide/svelte/icons/unlink';
 	import X from '@lucide/svelte/icons/x';
 
@@ -78,7 +79,11 @@
 	// switched on deliberately when you actually want the dev panel.
 	let devMode = $state(false);
 
+	// Project the persisted config. `mdConfigRevision` is what makes a background
+	// publish/reconcile — which writes lastSeenTip behind this page's back — show
+	// up as "Sync active" without a reload.
 	$effect(() => {
+		void mdConfigRevision.value;
 		// Track the active account so config reloads on identity switch.
 		// IMPORTANT: read localStorage into a local const and only THEN assign to
 		// $state — an $effect that reads and writes the same $state loops forever.
@@ -86,8 +91,22 @@
 		const cfg = getMultiDeviceConfig();
 		config = cfg;
 		connectionString = cfg ? buildConnectionString(cfg) : '';
-		relaysDraft = (cfg?.relays ?? DEFAULT_MULTI_DEVICE_RELAYS).join('\n');
+	});
+
+	// Seed the Advanced editors from the persisted relay/host lists only. Keyed
+	// by value: a save that only touched lastSeenTip or the activity log must not
+	// wipe a relay edit in progress.
+	let draftsKey = '';
+	$effect(() => {
+		void mdConfigRevision.value;
+		const pubkey = $activeAccount?.pubkey;
+		const cfg = getMultiDeviceConfig();
+		const relays = cfg?.relays ?? DEFAULT_MULTI_DEVICE_RELAYS;
 		const servers = cfg ? cfg.blossomServers : DEFAULT_BLOSSOM_SERVERS;
+		const key = `${pubkey}|${relays.join(',')}|${servers.join(',')}`;
+		if (key === draftsKey) return;
+		draftsKey = key;
+		relaysDraft = relays.join('\n');
 		blossomChecked.clear();
 		// Accumulate customs in a plain array and assign ONCE: pushing into the
 		// $state array below would read+write it inside this effect and loop
@@ -104,17 +123,28 @@
 	});
 
 	const hasConfig = $derived(!!config);
-	// Hides the "already set up elsewhere?" hint once this device has groups.
-	const hasLocalGroups = $derived(listChatGroups().length > 0);
+	// Unpublished work persists here until its tip write lands, so it is the
+	// honest signal for "changes not synced yet" — including a first publish that
+	// failed and is waiting on the retry ladder.
+	const pendingPublish = $derived(config?.pendingPublish);
 
 	// Every linked device both reads and writes (mesh of equal peers, spec §11),
 	// so there is no enabled/disabled distinction — but "Sync active" is only
-	// honest once a tip has actually been read or published (`lastSeenTip`). A
-	// config that has never seen a tip is linked-but-not-converged (slow relays,
-	// or a signer that cannot decrypt the tip at all).
+	// honest once a tip has been read or published AND nothing is waiting to go
+	// out. A config that has never seen a tip is linked-but-not-converged (slow
+	// relays, or a signer that cannot decrypt the tip at all).
 	const statusLabel = $derived(
-		!hasConfig ? 'Not set up yet' : config?.lastSeenTip ? 'Sync active' : 'Linked — not synced yet'
+		!hasConfig
+			? 'Not set up yet'
+			: pendingPublish
+				? config?.lastSeenTip
+					? 'Publishing changes…'
+					: 'Preparing first sync…'
+				: config?.lastSeenTip
+					? 'Sync active'
+					: 'Linked — not synced yet'
 	);
+	const statusGreen = $derived(hasConfig && !pendingPublish && !!config?.lastSeenTip);
 
 	// Ticker so the tip age on the status card stays honest without a reload.
 	let now = $state(Date.now());
@@ -195,13 +225,13 @@
 	}
 
 	function handleUnlink() {
-		if (
-			!confirm(
-				'Unlink this device? It will stop syncing. Your groups stay on this device as last synced. Re-link anytime with a connection string.'
-			)
-		) {
-			return;
-		}
+		// The shared groups are the real cost: they stop working here the first time
+		// another device changes one (this device can no longer follow the tip).
+		const shared = config?.lastSeenTip?.groups.length ?? 0;
+		const body = shared
+			? `Unlink this device? The ${shared} group${shared === 1 ? '' : 's'} it shares with your other devices stay here, but stop working the first time one of them changes, and getting ${shared === 1 ? 'it' : 'one'} back needs the group to let this device in again. Your other devices are unaffected.`
+			: 'Unlink this device? It will stop syncing. Your groups stay on this device as last synced. Your other devices are unaffected. Re-link anytime with a connection string.';
+		if (!confirm(body)) return;
 		unlinkMultiDevice();
 		config = getMultiDeviceConfig();
 		connectionString = '';
@@ -231,17 +261,19 @@
 	async function handleResync() {
 		resyncing = true;
 		try {
+			// "Sync now" must also push what has not gone out: reading the tip alone
+			// cannot heal a failed or stranded publish (it just reports "no tip").
+			const retried = retryMultiDevicePublish();
 			const result = await reconcileMultiDeviceNow();
 			if (result.status === 'ok') {
 				const { counts } = result;
 				toast.success(
-					`Re-synced — ${counts.fastForwarded} caught up, ${counts.seeded} new, ${counts.skipped} already current`
+					`Synced — ${counts.fastForwarded} caught up, ${counts.seeded} new, ${counts.skipped} already current`
 				);
-				// The service saved a fresh lastSeenTip — re-read so the status card
-				// flips from "not synced yet" to green without a page reload.
-				config = getMultiDeviceConfig();
 			} else if (result.status === 'signer-no-nip44') {
 				toast.error('This signer does not support NIP-44 v2 — multi-device sync needs it');
+			} else if (result.status === 'no-tip' && retried) {
+				toast.info("No tip yet — publishing this device's groups now");
 			} else if (result.status === 'no-tip') {
 				toast.error('No tip found on the configured relays — check them or link again');
 			} else if (result.status === 'unreadable-tip') {
@@ -283,23 +315,32 @@
 			toast.error('Paste a connection string or scan its QR code');
 			return;
 		}
+		if (
+			config &&
+			!confirm(
+				"Replace this device's current sync setup with the one from this connection string? Chats already here are kept, but this device will stop following its current sync tip."
+			)
+		)
+			return;
 		linking = true;
 		linkResult = null;
 		try {
 			linkResult = await linkDeviceFromConnectionString(linkInput.trim());
-			// Refresh config so the status card + Add tab reflect the just-linked state
-			// without a page reload (the $effect only re-runs on account change).
-			config = getMultiDeviceConfig();
-			connectionString = config ? buildConnectionString(config) : '';
-			if (linkResult.seeded === 0 && linkResult.fastForwarded === 0 && linkResult.skipped === 0) {
-				// Nothing came through — relays may be slow, but this is NOT the
-				// "0 groups seeded" success it used to report. The live subscription
-				// keeps converging in the background.
-				toast.warning('Linked, but no groups arrived yet — sync continues in the background');
+			linkInput = '';
+			if (!linkResult.foundTip) {
+				// Linked is not the same as synced: no tip may mean the peer is still
+				// preparing one, or that its relays are slow. Keep the outcome visible.
+				toast.warning('Linked — no groups arrived yet; sync will keep trying');
+			} else if (
+				linkResult.seeded === 0 &&
+				linkResult.fastForwarded === 0 &&
+				linkResult.skipped === 0
+			) {
+				toast.success('Linked — this device was already up to date');
+			} else if (linkResult.seeded === 0 && linkResult.fastForwarded === 0) {
+				toast.success('Linked — newer groups on this device will be published');
 			} else {
-				toast.success(
-					`Linked — ${linkResult.seeded} group${linkResult.seeded === 1 ? '' : 's'} seeded`
-				);
+				toast.success(`Linked — ${linkResult.seeded} added, ${linkResult.fastForwarded} updated`);
 			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'Could not link this device');
@@ -360,7 +401,7 @@
 									<span
 										class="size-2 shrink-0 rounded-full {!hasConfig
 											? 'bg-muted-foreground'
-											: config?.lastSeenTip
+											: statusGreen
 												? 'bg-emerald-500'
 												: 'bg-amber-500'}"
 									></span>
@@ -368,6 +409,12 @@
 								</p>
 								<p class="text-xs text-muted-foreground">
 									{#if hasConfig && config}
+										{#if config.lastSeenTip}
+											{config.lastSeenTip.groups.length} group{config.lastSeenTip.groups.length ===
+											1
+												? ''
+												: 's'} shared ·
+										{/if}
 										{config.relays.length} relay{config.relays.length === 1 ? '' : 's'} ·
 										{config.blossomServers.length} Blossom host{config.blossomServers.length === 1
 											? ''
@@ -405,25 +452,47 @@
 					</div>
 				{/if}
 
-				<!-- Tab navigation: always visible. Enablement happens on action completion. -->
-				<div class="flex space-x-1 rounded-lg bg-muted p-1">
-					<button
-						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'add'
-							? 'bg-background shadow-sm'
-							: 'hover:bg-muted-foreground/10'}"
-						onclick={() => (tab = 'add')}
-					>
-						Add a device
-					</button>
-					<button
-						class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab === 'link'
-							? 'bg-background shadow-sm'
-							: 'hover:bg-muted-foreground/10'}"
-						onclick={() => (tab = 'link')}
-					>
-						Link this device
-					</button>
-				</div>
+				{#if hasConfig}
+					<!-- Configured: two primary actions, no permanent tabs. Re-linking is a
+					     recovery path and lives under Advanced. -->
+					<div class="flex gap-2">
+						<Button class="flex-1" onclick={() => (tab = 'add')}>
+							<Smartphone class="mr-2 size-4" />
+							Add a device
+						</Button>
+						<Button variant="outline" class="flex-1" onclick={handleResync} disabled={resyncing}>
+							{#if resyncing}
+								<Spinner class="mr-2 size-4" />
+								Syncing…
+							{:else}
+								<RefreshCw class="mr-2 size-4" />
+								Sync now
+							{/if}
+						</Button>
+					</div>
+				{:else}
+					<!-- Not set up yet: the two ways in. Enablement happens on action completion. -->
+					<div class="flex space-x-1 rounded-lg bg-muted p-1">
+						<button
+							class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab ===
+							'add'
+								? 'bg-background shadow-sm'
+								: 'hover:bg-muted-foreground/10'}"
+							onclick={() => (tab = 'add')}
+						>
+							This is my first device
+						</button>
+						<button
+							class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {tab ===
+							'link'
+								? 'bg-background shadow-sm'
+								: 'hover:bg-muted-foreground/10'}"
+							onclick={() => (tab = 'link')}
+						>
+							I sync on another device
+						</button>
+					</div>
+				{/if}
 
 				{#if tab === 'add'}
 					<!-- "Share FROM here": this device is (or becomes) the source. -->
@@ -432,47 +501,58 @@
 							<Card.Header>
 								<Card.Title>Your connection code</Card.Title>
 								<Card.Description>
-									Scan this on another device logged in as the same identity. It carries no private
-									keys — only a locator and a write capability for the tip.
+									Scan this on another device logged in as the same identity. It does not contain
+									your account key, but it does grant write access to the sync tip — treat it like a
+									password and share it only with your own devices.
 								</Card.Description>
 							</Card.Header>
 							<Card.Content class="space-y-4">
-								<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
-									<li>Open Cordn on your other device, logged in as the same identity.</li>
-									<li>
-										Go to <span class="font-medium text-foreground">Settings → Multi-device</span>.
-									</li>
-									<li>
-										Under <span class="font-medium text-foreground">Link this device</span>, scan
-										this code.
-									</li>
-								</ol>
+								{#if config?.lastSeenTip}
+									<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
+										<li>Open Cordn on your other device, logged in as the same identity.</li>
+										<li>
+											Go to <span class="font-medium text-foreground">Settings → Multi-device</span
+											>.
+										</li>
+										<li>
+											Under <span class="font-medium text-foreground">Link this device</span>, scan
+											this code.
+										</li>
+									</ol>
 
-								<div class="flex justify-center rounded-lg border border-border bg-white p-4">
-									<div class="w-full max-w-[240px]">
-										<QrCode data={connectionString} size={240} />
+									<div class="flex justify-center rounded-lg border border-border bg-white p-4">
+										<div class="w-full max-w-[240px]">
+											<QrCode data={connectionString} size={240} />
+										</div>
 									</div>
-								</div>
 
-								<div class="space-y-2">
-									<Label>Or copy this string</Label>
-									<div class="flex gap-2">
-										<Input value={connectionString} readonly class="font-mono text-xs" />
-										<Button variant="outline" onclick={handleCopy}>
-											<Copy class="mr-2 size-4" />
-											Copy
-										</Button>
+									<div class="space-y-2">
+										<Label>Or copy this string</Label>
+										<div class="flex gap-2">
+											<Input value={connectionString} readonly class="font-mono text-xs" />
+											<Button variant="outline" onclick={handleCopy}>
+												<Copy class="mr-2 size-4" />
+												Copy
+											</Button>
+										</div>
 									</div>
-								</div>
-
-								{#if !hasLocalGroups}
-									<p class="text-xs text-muted-foreground">
-										Already set up on another device? Use
-										<button class="underline hover:text-foreground" onclick={() => (tab = 'link')}>
-											Link this device
-										</button>
-										instead — enabling here would mint a separate sync identity.
-									</p>
+								{:else}
+									<!-- The string is only usable once a tip exists; showing it early invites a
+									     scan that would find nothing. -->
+									<div class="space-y-2 rounded-lg border border-dashed border-border p-4">
+										<p class="flex items-center gap-2 text-sm font-medium">
+											{#if mdProgress.phase}<Spinner class="size-4" />{/if}
+											{mdProgress.phase
+												? 'Preparing your connection code…'
+												: 'Connection code not ready yet'}
+										</p>
+										<p class="text-xs text-muted-foreground">
+											{mdProgress.phase
+												? 'The first sync is in progress.'
+												: 'No sync tip is available yet; sync will retry automatically.'} The code appears
+											here as soon as one arrives.
+										</p>
+									</div>
 								{/if}
 							</Card.Content>
 						</Card.Root>
@@ -500,21 +580,15 @@
 									>Turn on sync &amp; generate code</Button
 								>
 
-								{#if !hasConfig}
-									<p class="text-xs text-muted-foreground">
-										Already set up on another device? Use
-										<button class="underline hover:text-foreground" onclick={() => (tab = 'link')}>
-											Link this device
-										</button>
-										instead.
-									</p>
-								{/if}
+								<p class="text-xs text-muted-foreground">
+									Already set up on another device? Use
+									<button class="underline hover:text-foreground" onclick={() => (tab = 'link')}>
+										Link this device
+									</button>
+									instead.
+								</p>
 							</Card.Content>
 						</Card.Root>
-					{/if}
-
-					{#if config}
-						<MultiDeviceHealth {config} />
 					{/if}
 
 					<!-- Advanced: relays + Blossom redundancy + (when configured) rotate.
@@ -544,7 +618,7 @@
 								</div>
 
 								<div class="space-y-2">
-									<Label>Document hosts (pick at least two for redundancy)</Label>
+									<Label>Document hosts</Label>
 									<div class="grid gap-2">
 										{#each BLOSSOM_PRESETS as server (server)}
 											<label
@@ -589,34 +663,31 @@
 										</div>
 									</div>
 									<p class="text-xs text-muted-foreground">
-										The sealed document is uploaded to all selected hosts; linked devices try them
-										in order. More hosts = more resilience.
+										Every change is uploaded to all selected hosts; linked devices try them in
+										order. One host is enough to sync, two or more is safer. Each extra host adds an
+										upload per change.
 									</p>
 								</div>
 
-								{#if hasConfig}
+								{#if config}
 									<Button variant="outline" onclick={handleSaveAdvanced} class="w-full">
 										Save advanced settings
 									</Button>
 
-									<Button
-										variant="outline"
-										onclick={handleResync}
-										disabled={resyncing}
-										class="w-full"
-									>
-										{#if resyncing}
-											<Spinner class="mr-2 size-4" />
-											Re-syncing…
-										{:else}
-											<Download class="mr-2 size-4" />
-											Re-sync from document
-										{/if}
-									</Button>
-									<p class="mt-1 text-xs text-muted-foreground">
-										Fetch the latest group document and catch this device up. Use it if a group
-										looks stuck or out of sync.
-									</p>
+									<div class="border-t border-border pt-4">
+										<MultiDeviceHealth {config} />
+									</div>
+
+									<div class="border-t border-border pt-4">
+										<Button variant="outline" onclick={() => (tab = 'link')} class="w-full">
+											<LinkIcon class="mr-2 size-4" />
+											Link this device instead
+										</Button>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Adopt the state of another device. This replaces this device's sync setup and
+											its connection string; chats already here are kept.
+										</p>
+									</div>
 
 									<div class="border-t border-border pt-4">
 										<Button
@@ -675,46 +746,20 @@
 						<Card.Header>
 							<Card.Title>Link this device</Card.Title>
 							<Card.Description>
-								Paste the connection string from another device, or scan its QR code. This adopts
-								that device's groups here.
+								Scan another device's QR code or paste its connection string. This adopts that
+								device's groups here.
 							</Card.Description>
 						</Card.Header>
 						<Card.Content class="space-y-4">
-							<ol class="list-inside list-decimal space-y-1 text-sm text-muted-foreground">
-								<li>
-									On your other device, open
-									<span class="font-medium text-foreground">Multi-device → Add a device</span>.
-								</li>
-								<li>Copy the connection string (or show its QR code).</li>
-								<li>Paste it here, or scan the code below.</li>
-							</ol>
+							{#if hasConfig}
+								<!-- Deep links (?tab=link) and Advanced land here on a device that already
+								     syncs; the configured layout has no tab bar, so offer a way back. -->
+								<Button variant="outline" size="sm" onclick={() => (tab = 'add')} class="w-full">
+									This device is already set up — go back
+								</Button>
+							{/if}
 
-							<div class="space-y-2">
-								<Label for="md-link-input">Connection string</Label>
-								<Input
-									id="md-link-input"
-									bind:value={linkInput}
-									placeholder="Paste the connection string here"
-									class="font-mono text-xs"
-								/>
-							</div>
-
-							<Button onclick={handleLink} disabled={linking} class="w-full">
-								{#if linking}
-									<Spinner class="mr-2 size-4" />
-									Linking…
-								{:else}
-									<LinkIcon class="mr-2 size-4" />
-									Link device
-								{/if}
-							</Button>
-
-							<div class="flex items-center gap-2 text-xs text-muted-foreground">
-								<div class="h-px flex-1 bg-border"></div>
-								<span>or</span>
-								<div class="h-px flex-1 bg-border"></div>
-							</div>
-
+							<!-- Scan first: this page is the mobile path. -->
 							{#if scanning}
 								<div class="space-y-2">
 									<QrScanner
@@ -728,18 +773,53 @@
 									</Button>
 								</div>
 							{:else}
-								<Button variant="outline" onclick={() => (scanning = true)} class="w-full">
+								<Button onclick={() => (scanning = true)} class="w-full">
+									<ScanLine class="mr-2 size-4" />
 									Scan QR code
 								</Button>
 							{/if}
 
+							<div class="flex items-center gap-2 text-xs text-muted-foreground">
+								<div class="h-px flex-1 bg-border"></div>
+								<span>or paste the string</span>
+								<div class="h-px flex-1 bg-border"></div>
+							</div>
+
+							<div class="space-y-2">
+								<Label for="md-link-input">Connection string</Label>
+								<Input
+									id="md-link-input"
+									bind:value={linkInput}
+									placeholder="Paste the connection string here"
+									class="font-mono text-xs"
+								/>
+							</div>
+
+							<Button onclick={handleLink} disabled={linking || !linkInput.trim()} class="w-full">
+								{#if linking}
+									<Spinner class="mr-2 size-4" />
+									Linking…
+								{:else}
+									<LinkIcon class="mr-2 size-4" />
+									Link device
+								{/if}
+							</Button>
+
 							{#if linkResult}
 								<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-									<p class="font-medium">Linked successfully</p>
-									<p class="text-muted-foreground">
-										{linkResult.seeded} group{linkResult.seeded === 1 ? '' : 's'} seeded,
-										{linkResult.fastForwarded} fast-forwarded. New groups will sync as they're added.
-									</p>
+									{#if linkResult.foundTip}
+										<p class="font-medium">Linked</p>
+										<p class="text-muted-foreground">
+											{linkResult.seeded} group{linkResult.seeded === 1 ? '' : 's'} added,
+											{linkResult.fastForwarded} updated. New groups sync as they're added.
+										</p>
+									{:else}
+										<p class="font-medium">Linked — waiting for the first sync</p>
+										<p class="text-muted-foreground">
+											No sync tip arrived yet. The other device may still be preparing it, or the
+											relays may be slow. Groups appear here as soon as one arrives.
+										</p>
+									{/if}
 								</div>
 							{/if}
 						</Card.Content>
@@ -755,17 +835,17 @@
 					</Card.Header>
 					<Card.Content class="space-y-2 text-xs text-muted-foreground">
 						<p>
-							Group state is sealed to a per-identity document key (DEK) that itself travels inside
-							a NIP-44 seal to your npub — so only a device that can sign as you can obtain the DEK
-							and decrypt your groups, yet decryption stays local (no signer round-trip per group).
+							Your groups are encrypted with a key that only your identity can unwrap. It is
+							delivered sealed to your npub, and decryption happens on the device — the signer is
+							never asked once per group.
 						</p>
 						<p>
-							The tip pointer is published under an ephemeral key so it does not reveal your
-							identity or Cordn usage to passive relay observers.
+							The sync pointer uses a throwaway key instead of your identity key, so the pointer
+							itself does not identify your account.
 						</p>
 						<p>
-							A leaked connection string can only deny service (re-point the tip to a stale
-							document); it cannot forge a valid pointer or decrypt your groups.
+							A leaked connection string lets someone point your devices at an old copy (denial of
+							service). It cannot forge a valid pointer or decrypt anything.
 						</p>
 					</Card.Content>
 				</Card.Root>

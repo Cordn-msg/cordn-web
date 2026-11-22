@@ -101,6 +101,19 @@ describe('linkDeviceFromConnectionString()', () => {
 		expect(stored()[OWNER]).toBeUndefined();
 	});
 
+	test('a peer with no tip yet reports waiting, not a synced link', async () => {
+		state.tip = null;
+		const { connection } = tipFor('d1');
+
+		const result = await linkDeviceFromConnectionString(connection);
+
+		// Zero seeded groups must not read as success: nothing was adopted.
+		expect(result.foundTip).toBe(false);
+		expect(result.seeded).toBe(0);
+		expect(stored()[OWNER]?.dTag).toBe('d1');
+		resetMultiDeviceSession();
+	});
+
 	test('a rejected re-link restores the config this device already had', async () => {
 		values.set(
 			'cordn.multiDevice',

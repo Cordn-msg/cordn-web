@@ -15,10 +15,20 @@ const { OWNER, localStorageMock, values, state, hooks } = vi.hoisted(() => {
 	// The tip write parks until the test releases it, so a second plan can be
 	// queued behind a publish that is still running. `tip` is what the relay
 	// returns: whatever was published last.
-	const state: { release: () => void; accepted: unknown[]; tip: unknown } = {
+	const state: {
+		release: () => void;
+		releaseRequest: () => void;
+		holdNextRequest: boolean;
+		accepted: unknown[];
+		tip: unknown;
+		tipWrites: number;
+	} = {
 		release: () => {},
+		releaseRequest: () => {},
+		holdNextRequest: false,
 		accepted: [],
-		tip: null
+		tip: null,
+		tipWrites: 0
 	};
 	const hooks = { address: (_sealed: string) => '' };
 	return { OWNER, localStorageMock, values, state, hooks };
@@ -40,13 +50,20 @@ vi.mock('$lib/services/relay-pool', () => ({
 	relayPool: {
 		request: () => ({
 			subscribe: (observer: { next: (e: unknown) => void; complete: () => void }) => {
-				if (state.tip) observer.next(state.tip);
-				observer.complete();
+				const emit = () => {
+					if (state.tip) observer.next(state.tip);
+					observer.complete();
+				};
+				if (state.holdNextRequest) {
+					state.holdNextRequest = false;
+					void new Promise<void>((resolve) => (state.releaseRequest = resolve)).then(emit);
+				} else emit();
 				return { unsubscribe() {} };
 			}
 		}),
 		subscription: () => ({ pipe: () => ({ subscribe: () => ({ unsubscribe() {} }) }) }),
 		publish: async (_relays: string[], event: unknown) => {
+			state.tipWrites++;
 			await new Promise<void>((resolve) => (state.release = resolve));
 			state.tip = event;
 			return state.accepted;
@@ -88,8 +105,12 @@ import {
 	adoptDefaultBlossomServers,
 	adoptDefaultRelays,
 	adoptFleetBlossomServers,
+	awaitMultiDeviceReconciled,
 	DEFAULT_BLOSSOM_SERVERS,
 	DEFAULT_MULTI_DEVICE_RELAYS,
+	enableMultiDevice,
+	mdConfigRevision,
+	retryMultiDevicePublish,
 	resetMultiDeviceSession,
 	setMultiDeviceBlossomServers
 } from './multiDevice.svelte';
@@ -105,6 +126,131 @@ const LEGACY_HOSTS = [
 	'https://blossom.ditto.pub/',
 	'https://blossom.primal.net/'
 ];
+
+describe('enableMultiDevice()', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		values.clear();
+		state.accepted = [{}];
+		state.tip = null;
+		state.tipWrites = 0;
+		state.release = () => {};
+		state.releaseRequest = () => {};
+		state.holdNextRequest = false;
+	});
+
+	test('the first publish is not repeated by the startup restore/audit', async () => {
+		const revision = mdConfigRevision.value;
+		enableMultiDevice();
+		await flush();
+		state.release(); // let the initial publish finish
+		await flush();
+
+		// A second tip write is the whole 75-group reseal running twice: once for
+		// enable, once for the pending plan the startup pass re-queued.
+		expect(state.tipWrites).toBe(1);
+		// Every persisted config write bumps the revision the page renders from.
+		expect(mdConfigRevision.value).toBeGreaterThan(revision);
+
+		resetMultiDeviceSession();
+		state.release();
+	});
+
+	test('work stranded by a previous session still publishes and clears', async () => {
+		const ephemeral = generateSecretKey();
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({
+				[OWNER]: {
+					ownerPubkey: OWNER,
+					dTag: 'test',
+					ephemeralPrivateKey: bytesToHex(ephemeral),
+					ephemeralPubkey: getPublicKey(ephemeral),
+					relays: ['wss://relay.example'],
+					blossomServers: ['https://blossom.example/'],
+					dekPrivateKey: bytesToHex(generateSecretKey()),
+					pendingPublish: { resealGroups: 'all', resealMeta: true }
+				}
+			})
+		);
+
+		void awaitMultiDeviceReconciled();
+		await flush();
+		expect(state.tipWrites).toBe(1);
+		state.release();
+		await flush();
+
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toBeUndefined();
+		resetMultiDeviceSession();
+	});
+
+	test('a plan published during the startup reconcile is not restored again', async () => {
+		state.holdNextRequest = true; // hold only the startup reconcile's tip read
+		enableMultiDevice();
+		await flush(); // initial publish is parked; startup is still reconciling
+		state.release();
+		await flush(); // initial publish finishes and clears its persisted plan
+		state.releaseRequest();
+		await flush();
+
+		expect(state.tipWrites).toBe(1);
+
+		resetMultiDeviceSession();
+		state.release();
+	});
+});
+
+describe('retryMultiDevicePublish()', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		values.clear();
+		state.accepted = [{}];
+		state.tip = null;
+		state.tipWrites = 0;
+		state.release = () => {};
+		state.releaseRequest = () => {};
+		state.holdNextRequest = false;
+	});
+
+	test('reports nothing to do when no work is waiting', () => {
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({ [OWNER]: { ownerPubkey: OWNER, dTag: 'test' } })
+		);
+
+		expect(retryMultiDevicePublish()).toBe(false);
+	});
+
+	test('publishes a plan stranded by a previous session and clears it', async () => {
+		const ephemeral = generateSecretKey();
+		values.set(
+			'cordn.multiDevice',
+			JSON.stringify({
+				[OWNER]: {
+					ownerPubkey: OWNER,
+					dTag: 'test',
+					ephemeralPrivateKey: bytesToHex(ephemeral),
+					ephemeralPubkey: getPublicKey(ephemeral),
+					relays: ['wss://relay.example'],
+					blossomServers: ['https://blossom.example/'],
+					dekPrivateKey: bytesToHex(generateSecretKey()),
+					pendingPublish: { resealGroups: 'all', resealMeta: true }
+				}
+			})
+		);
+
+		expect(retryMultiDevicePublish()).toBe(true);
+		await flush();
+		expect(state.tipWrites).toBe(1);
+		state.release();
+		await flush();
+
+		const stored = JSON.parse(values.get('cordn.multiDevice')!)[OWNER];
+		expect(stored.pendingPublish).toBeUndefined();
+		resetMultiDeviceSession();
+	});
+});
 
 describe('setMultiDeviceBlossomServers()', () => {
 	beforeEach(() => {
