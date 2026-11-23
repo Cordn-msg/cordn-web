@@ -113,6 +113,50 @@ describe('pollNotificationSources', () => {
 		await pass;
 	});
 
+	test('approves while the welcome read is still pending', async () => {
+		let releaseWelcome = () => {};
+		const welcomeGate = new Promise<void>((resolve) => {
+			releaseWelcome = resolve;
+		});
+		h.fetchQuery = (options) =>
+			(options as { source: string }).source === 'welcome'
+				? welcomeGate.then(() => {})
+				: Promise.resolve();
+
+		const pass = poll.pollNotificationSources();
+
+		// The join leg is signer-free: its approval lands without the welcome leg.
+		await vi.waitFor(() => expect(h.approved).toEqual(expect.arrayContaining([SLOW, FAST])));
+		expect(h.joinNotifications).toEqual(expect.arrayContaining([SLOW, FAST]));
+		expect(h.welcomeNotifications).toHaveLength(0);
+
+		releaseWelcome();
+		await pass;
+		expect(h.welcomeNotifications).toEqual(expect.arrayContaining([SLOW, FAST]));
+	});
+
+	test('starts a newly added coordinator while another lane is stuck', async () => {
+		let releaseSlow = () => {};
+		const slowGate = new Promise<void>((resolve) => {
+			releaseSlow = resolve;
+		});
+		h.keys = [SLOW];
+		h.fetchQuery = (options) =>
+			(options as { key: string }).key === SLOW ? slowGate.then(() => {}) : Promise.resolve();
+
+		const first = poll.pollNotificationSources();
+		h.keys = [SLOW, FAST];
+		const second = poll.pollNotificationSources();
+
+		// The second pass must not be deduped behind the stuck first one.
+		await vi.waitFor(() => expect(h.approved).toContain(FAST));
+		expect(h.approved).not.toContain(SLOW);
+
+		releaseSlow();
+		await Promise.all([first, second]);
+		expect(h.approved).toEqual(expect.arrayContaining([SLOW, FAST]));
+	});
+
 	test('still approves when the welcome read fails', async () => {
 		h.fetchQuery = (options) =>
 			(options as { source: string }).source === 'welcome'

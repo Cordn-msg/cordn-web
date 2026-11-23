@@ -159,25 +159,17 @@ export interface AutoApprovedJoinRequest {
 const inFlight = new Map<string, Promise<AutoApprovedJoinRequest[]>>();
 
 /**
- * Approve the join requests every enabled group may approve right now. Fire and
- * forget from the join-request fetch; awaiting the same promise is safe (the
- * pass is single-flight per coordinator) and lets a caller order notifications
- * after it. Called with a coordinator key it approves only that coordinator's
- * requests; called without one it fans out over the coordinators that currently
- * have requests, so no group is ever handled by two passes at once.
+ * Approve the join requests one coordinator's enabled groups may approve right
+ * now. Fire and forget from the join-request fetch; awaiting the same promise is
+ * safe (the pass is single-flight per coordinator) and lets a caller order
+ * notifications after it. A group lives on exactly one coordinator, so scoping
+ * the pass there is what keeps a slow coordinator from delaying another's.
  */
 export function autoApproveJoinRequests(
-	coordinatorKey?: string
+	coordinatorKey: string
 ): Promise<AutoApprovedJoinRequest[]> {
-	if (coordinatorKey !== undefined) {
-		const key = safeNormalizePubKey(coordinatorKey);
-		if (!key) return Promise.resolve([]);
-		return runCoordinatorPass(key);
-	}
-	const keys = new Set(listJoinRequests().map((entry) => entry.coordinatorKey));
-	return Promise.all([...keys].map((key) => runCoordinatorPass(key).catch(() => []))).then(
-		(results) => results.flat()
-	);
+	const key = safeNormalizePubKey(coordinatorKey);
+	return key ? runCoordinatorPass(key) : Promise.resolve([]);
 }
 
 function runCoordinatorPass(coordinatorKey: string): Promise<AutoApprovedJoinRequest[]> {

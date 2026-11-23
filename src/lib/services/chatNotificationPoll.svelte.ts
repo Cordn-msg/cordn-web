@@ -35,19 +35,34 @@ function shouldPollWelcomes(): boolean {
 	return !(isNativePlatform() && document.visibilityState === 'hidden');
 }
 
-let pollInFlight: Promise<void> | undefined;
-
 /**
- * Single-flight: the interval, the visibility catch-up and the layout's
- * coordinator effect can all fire at once. Sharing one promise keeps the
- * request/welcome reads and the approval announcement from overlapping.
+ * Single-flight per coordinator: the interval, the visibility catch-up and the
+ * layout's coordinator effect can all fire at once. Deduplicating per lane (not
+ * per pass) means a coordinator that is already running never repeats its reads,
+ * while a coordinator added or newly reachable during a stuck pass still starts.
  */
+const lanesInFlight = new Map<string, Promise<void>>();
+
 export function pollNotificationSources(): Promise<void> {
-	pollInFlight ??= runNotificationPoll().finally(() => {
-		pollInFlight = undefined;
-	});
-	return pollInFlight;
+	return runNotificationPoll();
 }
+
+function runLaneOnce(
+	stablePubkey: string,
+	coordinatorKey: string,
+	pollWelcomes: boolean
+): Promise<void> {
+	const running = lanesInFlight.get(coordinatorKey);
+	if (running) return running;
+	const lane = runCoordinatorLane(stablePubkey, coordinatorKey, pollWelcomes).finally(() => {
+		if (lanesInFlight.get(coordinatorKey) === lane) lanesInFlight.delete(coordinatorKey);
+	});
+	lanesInFlight.set(coordinatorKey, lane);
+	return lane;
+}
+
+/** Depth counter: overlapping passes keep the spinner up until the last one ends. */
+let activePolls = 0;
 
 /**
  * One poll pass over the per-coordinator query cache (the same cache the
@@ -70,10 +85,11 @@ async function runNotificationPoll(): Promise<void> {
 	if (coordinatorKeys.length === 0) return;
 	const pollWelcomes = shouldPollWelcomes();
 
+	activePolls += 1;
 	notificationPollState.refreshing = true;
 	try {
 		const results = await Promise.allSettled(
-			coordinatorKeys.map((key) => runCoordinatorLane(account.pubkey, key, pollWelcomes))
+			coordinatorKeys.map((key) => runLaneOnce(account.pubkey, key, pollWelcomes))
 		);
 		notificationPollState.failures = results
 			.map((result, index) =>
@@ -85,35 +101,55 @@ async function runNotificationPoll(): Promise<void> {
 			)
 			.filter(Boolean);
 	} finally {
-		notificationPollState.refreshing = false;
+		activePolls -= 1;
+		if (activePolls === 0) notificationPollState.refreshing = false;
 	}
 }
 
 /**
- * One coordinator's lane. Every step is scoped to this coordinator, so one
- * faulty coordinator cannot affect another's approvals or notifications.
- * A failed welcome read must not skip the signer-free approval, so the two
- * reads settle independently and the lane reports the failure afterwards.
+ * One coordinator's lane: two independent legs. Join requests are signer-free,
+ * so their approval and announcement never wait on the signer-bound welcome leg.
+ * A failed read is returned (not thrown) so the leg still finishes its work and
+ * the lane reports the failure afterwards.
  */
 async function runCoordinatorLane(
 	stablePubkey: string,
 	coordinatorKey: string,
 	pollWelcomes: boolean
 ): Promise<void> {
-	const [welcomeFetch, joinFetch] = await Promise.allSettled([
-		pollWelcomes
-			? queryClient.fetchQuery(welcomeNotificationsQueryOptions(stablePubkey, coordinatorKey))
-			: Promise.resolve(),
-		queryClient.fetchQuery(joinRequestsQueryOptions(stablePubkey, coordinatorKey))
+	const [joinFailure, welcomeFailure] = await Promise.all([
+		runJoinRequestLeg(stablePubkey, coordinatorKey),
+		pollWelcomes ? runWelcomeLeg(stablePubkey, coordinatorKey) : Promise.resolve(undefined)
 	]);
+	if (joinFailure) throw joinFailure;
+	if (welcomeFailure) throw welcomeFailure;
+}
+
+/** Join requests: approve before announcing, so a handled request is never announced. */
+async function runJoinRequestLeg(stablePubkey: string, coordinatorKey: string): Promise<unknown> {
+	let failure: unknown;
+	try {
+		await queryClient.fetchQuery(joinRequestsQueryOptions(stablePubkey, coordinatorKey));
+	} catch (error) {
+		failure = error;
+	}
+	// A failed read still gets its pass: the requests are already durable, and the
+	// guardrails (switch age, membership, removals) are re-checked there.
 	const approved = await autoApproveJoinRequests(coordinatorKey).catch(() => []);
 	await notifyForApprovedJoinRequests(approved).catch(() => {});
 	await notifyForJoinRequests(coordinatorKey).catch(() => {});
-	if (pollWelcomes) await notifyForWelcomes(coordinatorKey).catch(() => {});
-	// Surfaced after the lane's own work: a failed read is reported, but it never
-	// withholds the approval the join request already earned.
-	if (joinFetch.status === 'rejected') throw joinFetch.reason;
-	if (welcomeFetch.status === 'rejected') throw welcomeFetch.reason;
+	return failure;
+}
+
+/** Welcomes ride the stable lane (signer-bound): independent of the join leg. */
+async function runWelcomeLeg(stablePubkey: string, coordinatorKey: string): Promise<unknown> {
+	try {
+		await queryClient.fetchQuery(welcomeNotificationsQueryOptions(stablePubkey, coordinatorKey));
+	} catch (error) {
+		return error;
+	}
+	await notifyForWelcomes(coordinatorKey).catch(() => {});
+	return undefined;
 }
 
 /**

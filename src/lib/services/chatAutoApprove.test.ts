@@ -137,7 +137,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('a', ALICE), request('b', BOB)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		const approved = await autoApprove.autoApproveJoinRequests();
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(1);
 		expect(h.inviteCalls[0].targets.map((target) => target.identifier)).toEqual([ALICE, BOB]);
@@ -153,7 +153,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('a', ALICE)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		const approved = await autoApprove.autoApproveJoinRequests();
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 		expect(h.accepted).toEqual([{ id: 'a', groupId: GROUP }]);
@@ -169,7 +169,7 @@ describe('autoApproveJoinRequests', () => {
 			return Promise.resolve({ group: { id: GROUP }, failures: [] });
 		};
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(seen).toEqual([true]);
 		expect(h.submitting.has('a')).toBe(false);
@@ -180,7 +180,7 @@ describe('autoApproveJoinRequests', () => {
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 		h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [{ identifier: ALICE }] });
 
-		const approved = await autoApprove.autoApproveJoinRequests();
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(approved).toEqual([]);
 		expect(h.accepted).toEqual([]);
@@ -194,13 +194,13 @@ describe('autoApproveJoinRequests', () => {
 		h.invite = () => Promise.reject(new Error('coordinator down'));
 
 		for (let pass = 0; pass < 3; pass += 1) {
-			await autoApprove.autoApproveJoinRequests();
+			await autoApprove.autoApproveJoinRequests(COORD);
 		}
 		expect(h.inviteCalls).toHaveLength(3);
 		expect(h.submitting.size).toBe(0);
 
 		// Out of attempts: the request stays for a human.
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 		expect(h.inviteCalls).toHaveLength(3);
 	});
 
@@ -209,7 +209,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('removed-a', ALICE)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -219,7 +219,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('unreadable-a', ALICE)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -232,7 +232,7 @@ describe('autoApproveJoinRequests', () => {
 			return Promise.resolve({ group: { id: GROUP }, failures: [] });
 		};
 
-		const approved = await autoApprove.autoApproveJoinRequests();
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls[0].targets.map((target) => target.identifier)).toEqual([ALICE]);
 		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
@@ -242,7 +242,7 @@ describe('autoApproveJoinRequests', () => {
 	test('skips a group whose switch is off', async () => {
 		h.entries = [request('a', ALICE)];
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -252,7 +252,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('a', ALICE)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -261,7 +261,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('a', ALICE, Date.now() - 60_000)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -273,7 +273,7 @@ describe('autoApproveJoinRequests', () => {
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 		vi.stubGlobal('document', { visibilityState: 'hidden' });
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -283,7 +283,7 @@ describe('autoApproveJoinRequests', () => {
 		h.entries = [request('frozen-a', ALICE)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests();
+		await autoApprove.autoApproveJoinRequests(COORD);
 
 		expect(h.inviteCalls).toHaveLength(0);
 	});
@@ -304,19 +304,35 @@ describe('autoApproveJoinRequests', () => {
 		expect(h.entries.find((entry) => entry.id === 'theirs-a')?.status).toBeUndefined();
 	});
 
-	test('runs one pass per coordinator without serializing them', async () => {
+	test('one coordinator commits while another is still committing', async () => {
 		h.entries = [
 			request('mine-a', ALICE, Date.now() + 1_000, COORD, 'group-a'),
 			request('theirs-a', BOB, Date.now() + 1_000, OTHER_COORD, 'group-b')
 		];
 		autoApprove.setAutoApproveEnabled('group-a', true);
 		autoApprove.setAutoApproveEnabled('group-b', true);
+		// Hold coordinator A's Commit open: B must approve without waiting for it.
+		let releaseA = () => {};
+		const gateA = new Promise<void>((resolve) => {
+			releaseA = resolve;
+		});
+		h.invite = (input: unknown) => {
+			const groupId = (input as { groupId: string }).groupId;
+			return groupId === 'group-a'
+				? gateA.then(() => ({ group: { id: groupId }, failures: [] }))
+				: Promise.resolve({ group: { id: groupId }, failures: [] });
+		};
 
-		// An unscoped call fans out over both coordinators; each pass keeps its own
-		// single-flight, so neither waits for the other.
-		const approved = await autoApprove.autoApproveJoinRequests();
+		const passA = autoApprove.autoApproveJoinRequests(COORD);
+		const passB = autoApprove.autoApproveJoinRequests(OTHER_COORD);
+		await vi.waitFor(() =>
+			expect(h.accepted.some((mark) => mark.groupId === 'group-b')).toBe(true)
+		);
+		expect(h.accepted.some((mark) => mark.groupId === 'group-a')).toBe(false);
 
-		expect(h.inviteCalls).toHaveLength(2);
-		expect(approved.map((entry) => entry.requester).sort()).toEqual([ALICE, BOB]);
+		releaseA();
+		const [approvedA, approvedB] = await Promise.all([passA, passB]);
+		expect(approvedA).toEqual([{ groupId: 'group-a', requester: ALICE }]);
+		expect(approvedB).toEqual([{ groupId: 'group-b', requester: BOB }]);
 	});
 });
