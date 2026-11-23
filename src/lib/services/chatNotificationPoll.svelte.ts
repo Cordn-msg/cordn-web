@@ -3,14 +3,18 @@ import { queryClient } from '$lib/query-client';
 import { joinRequestsQueryOptions } from '$lib/queries/chatJoinRequestQueries';
 import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
 import { manager } from '$lib/services/accountManager.svelte';
-import { notifyForJoinRequests, notifyForWelcomes } from '$lib/services/chatAttention.svelte';
+import {
+	notifyForApprovedJoinRequests,
+	notifyForJoinRequests,
+	notifyForWelcomes
+} from '$lib/services/chatAttention.svelte';
 import { autoApproveJoinRequests } from '$lib/services/chatAutoApprove.svelte';
 import {
 	getCoordinatorLabel,
 	listKnownCoordinatorKeys
 } from '$lib/services/chatCoordinators.svelte';
 import { isSignerUnavailableError } from '$lib/services/chatRuntime';
-import { isNativePlatform } from '$lib/services/nativeBridge';
+import { canRunBackgroundWork, isNativePlatform } from '$lib/services/nativeBridge';
 import { errorMessage as errorText } from '$lib/utils';
 
 export const NOTIFICATION_POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -31,14 +35,29 @@ function shouldPollWelcomes(): boolean {
 	return !(isNativePlatform() && document.visibilityState === 'hidden');
 }
 
+let pollInFlight: Promise<void> | undefined;
+
+/**
+ * Single-flight: the interval, the visibility catch-up and the layout's
+ * coordinator effect can all fire at once. Sharing one promise keeps the
+ * request/welcome reads and the approval announcement from overlapping.
+ */
+export function pollNotificationSources(): Promise<void> {
+	pollInFlight ??= runNotificationPoll().finally(() => {
+		pollInFlight = undefined;
+	});
+	return pollInFlight;
+}
+
 /**
  * One poll pass over the per-coordinator query cache (the same cache the
  * notifications dialog reads), then the auto-approve pass, then the
  * notifications. Order matters: awaiting the approval pass means a request the
  * admin's own setting just handled is never announced as still pending.
  */
-export async function pollNotificationSources(): Promise<void> {
+async function runNotificationPoll(): Promise<void> {
 	if (!browser) return;
+	if (!canRunBackgroundWork()) return;
 	const account = manager.active;
 	if (!account) return;
 	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys())];
@@ -70,8 +89,9 @@ export async function pollNotificationSources(): Promise<void> {
 		notificationPollState.refreshing = false;
 	}
 
-	await autoApproveJoinRequests().catch(() => {});
+	const approved = await autoApproveJoinRequests().catch(() => []);
 	await notifyForJoinRequests().catch(() => {});
+	await notifyForApprovedJoinRequests(approved).catch(() => {});
 	if (pollWelcomes) await notifyForWelcomes().catch(() => {});
 }
 

@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
+import { notificationsDialog } from '$lib/services/chatNotificationsDialog.svelte';
 import { chatUpHref } from '$lib/utils/chatUpHref';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
@@ -345,6 +346,11 @@ export interface ChatLocalNotification {
 	icon?: string;
 	/** Stable group id — dedup tag (web) and coalescing id (native). */
 	groupId: string;
+	/** Join requests and invitations: the text is useless without its author, so keep
+	 *  the body even when previews are off. */
+	bypassPreviewGate?: boolean;
+	/** Web tap target: open the notifications dialog instead of the group. */
+	openNotifications?: boolean;
 }
 
 /**
@@ -417,7 +423,12 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 	// settings change, and opting out must hide text immediately on web too.
 	const count = Math.max(1, n.count);
 	const previews = getNotificationPreviewsEnabled();
-	const body = previews ? n.body : count === 1 ? 'New message' : `${count} new messages`;
+	const body =
+		previews || n.bypassPreviewGate
+			? n.body
+			: count === 1
+				? 'New message'
+				: `${count} new messages`;
 	if (isNativePlatform()) {
 		// Suppress while foregrounded — the in-app UI already surfaces attention (title badge, unread dots).
 		if (appActive) return;
@@ -444,6 +455,11 @@ export async function showLocalNotification(n: ChatLocalNotification): Promise<v
 	activeWebNotifications.add(notification);
 	notification.onclick = () => {
 		window.focus();
+		if (n.openNotifications) {
+			notificationsDialog.open = true;
+			void goto(resolve('/chat'));
+			return;
+		}
 		goto(resolve('/chat/[id]', { id: groupRouteId(n.groupId) }));
 	};
 	notification.onclose = () => activeWebNotifications.delete(notification);
@@ -664,6 +680,19 @@ export async function setDeliveryConfig(cfg: DeliveryConfig): Promise<void> {
 export async function applyDeliveryConfig(): Promise<void> {
 	if (!isNativePlatform()) return;
 	await setDeliveryConfig(getDeliveryConfig());
+}
+
+/**
+ * Whether background (hidden) work may run right now. A hidden web tab polls
+ * fine. On Android only "fast" mode keeps the app running (foreground service);
+ * in "off"/"standard" the OS may freeze the WebView mid-request, and those
+ * failures would arm the coordinator read backoff for the next foreground session.
+ */
+export function canRunBackgroundWork(): boolean {
+	if (!browser) return false;
+	if (!isNativePlatform()) return true;
+	if (document.visibilityState === 'visible') return true;
+	return getDeliveryConfig().mode === 'fast';
 }
 
 // ───────────────────────────── ongoing calls ─────────────────────────────

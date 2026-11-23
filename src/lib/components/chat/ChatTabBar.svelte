@@ -11,6 +11,7 @@
 	import QrCodeIcon from '@lucide/svelte/icons/qr-code';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { hasUnreadChatAttention } from '$lib/services/chatAttention.svelte';
+	import { notificationsDialog } from '$lib/services/chatNotificationsDialog.svelte';
 	import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
 	import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
 	import { defaultProfileShareUrl, listProfileShareOptions } from '$lib/utils/profileShareOptions';
@@ -33,8 +34,10 @@
 	const isConversationRoute = $derived(page.route.id?.startsWith('/chat/[id]') ?? false);
 
 	let shareOpen = $state(false);
-	let notificationsOpen = $state(false);
 	let newConversationOpen = $state(false);
+	// Shared with the notification tap handler: a tap navigates here and opens the
+	// dialog, so the request cards are one tap away instead of a dead group page.
+	const notificationsOpen = $derived(notificationsDialog.open);
 
 	// Chats dot mirrors the hamburger exactly (same attention source in
 	// chatAttention: messages, references, invites, join requests, news).
@@ -137,7 +140,7 @@
 						? 'text-foreground'
 						: 'text-muted-foreground hover:text-foreground'
 					: 'text-muted-foreground/50'}"
-				onclick={() => (notificationsOpen = true)}
+				onclick={() => (notificationsDialog.open = true)}
 			>
 				<Inbox class="size-5" aria-hidden="true" />
 				<span class="flex items-center gap-1.5">
@@ -190,7 +193,7 @@
 	<NewConversationDialog bind:open={newConversationOpen} />
 
 	{#if $activeAccount}
-		<NotificationsDialog bind:open={notificationsOpen} />
+		<NotificationsDialog bind:open={notificationsDialog.open} />
 		<QrShareDialog
 			bind:open={shareOpen}
 			title="Share your profile"

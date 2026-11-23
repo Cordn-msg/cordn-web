@@ -10,9 +10,11 @@ import {
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
 import {
+	clearJoinRequestSubmitting,
 	isJoinRequestSubmitting,
 	listJoinRequests,
 	markJoinRequestAccepted,
+	setJoinRequestSubmitting,
 	type JoinRequestEntry
 } from '$lib/services/chatJoinRequests.svelte';
 import {
@@ -20,6 +22,8 @@ import {
 	type AutoApproveCandidate
 } from '$lib/services/chatAutoApprovePolicy';
 import { manager } from '$lib/services/accountManager.svelte';
+import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
+import { canRunBackgroundWork, isNativePlatform } from '$lib/services/nativeBridge';
 import { normalizePubKey } from '$lib/utils';
 
 /**
@@ -81,10 +85,6 @@ export function isAutoApproveEnabled(groupId: string): boolean {
 	return chatAutoApproveStore.enabled.has(groupId);
 }
 
-export function getAutoApproveEnabledAt(groupId: string): number | undefined {
-	return chatAutoApproveStore.enabled.get(groupId);
-}
-
 /** Enabling stamps `enabledAt`, so a backlog of waiting requests is never swept in. */
 export function setAutoApproveEnabled(groupId: string, enabled: boolean) {
 	const next = new SvelteMap(chatAutoApproveStore.enabled);
@@ -139,26 +139,44 @@ function toCandidate(entry: JoinRequestEntry): AutoApproveCandidate {
 	return { id: entry.id, requester: normalizePubKey(entry.requesterStablePubkey), at: entry.at };
 }
 
-let inFlight: Promise<void> | undefined;
+/** A request this pass actually approved — the caller announces it. */
+export interface AutoApprovedJoinRequest {
+	groupId: string;
+	/** Normalized requester pubkey. */
+	requester: string;
+}
+
+let inFlight: Promise<AutoApprovedJoinRequest[]> | undefined;
 
 /**
  * Approve the join requests every enabled group may approve right now. Fire and
  * forget from the join-request fetch; awaiting the same promise is safe (the
  * pass is single-flight) and lets a caller order notifications after it.
  */
-export function autoApproveJoinRequests(): Promise<void> {
+export function autoApproveJoinRequests(): Promise<AutoApprovedJoinRequest[]> {
 	inFlight ??= runAutoApprove().finally(() => {
 		inFlight = undefined;
 	});
 	return inFlight;
 }
 
-async function runAutoApprove(): Promise<void> {
-	if (!browser) return;
+async function runAutoApprove(): Promise<AutoApprovedJoinRequest[]> {
+	const approved: AutoApprovedJoinRequest[] = [];
+	if (!browser) return approved;
 	const account = manager.getActive();
-	if (!account) return;
-	await ensureGroupsLoaded();
+	if (!account) return approved;
 	const activePubkey = normalizePubKey(account.pubkey);
+	// A backgrounded Commit with multi-device sync on would need a UI-bound signer
+	// to re-publish the group document; leave those requests for the next
+	// foreground pass instead of committing into a half-updated state.
+	if (!canRunBackgroundWork()) return approved;
+	if (
+		isNativePlatform() &&
+		document.visibilityState === 'hidden' &&
+		isMultiDeviceActive(activePubkey)
+	)
+		return approved;
+	await ensureGroupsLoaded();
 
 	const byGroup = new Map<string, JoinRequestEntry[]>();
 	for (const entry of listJoinRequests()) {
@@ -177,10 +195,19 @@ async function runAutoApprove(): Promise<void> {
 		// local admin list can change between the toggle and this pass.
 		if (!isGroupAdmin({ metadata: group.metadata, stablePubkey: activePubkey })) continue;
 
+		const members = new Set(memberPubkeys(groupId).map(normalizePubKey));
+		// Already a member: the request is satisfied, so close it without inviting.
+		// The manual accept's remove-then-re-add would churn the member for nothing.
+		for (const entry of entries) {
+			if (isJoinRequestSubmitting(entry.id)) continue;
+			if (members.has(normalizePubKey(entry.requesterStablePubkey)))
+				markJoinRequestAccepted(entry.id, groupId);
+		}
+
 		const targets = selectAutoApproveTargets(entries.map(toCandidate), {
 			isAdmin: true,
 			enabledAt,
-			members: memberPubkeys(groupId),
+			members: [...members],
 			removed: listRemovedPubkeys(group),
 			attempts: Object.fromEntries(
 				entries
@@ -192,6 +219,9 @@ async function runAutoApprove(): Promise<void> {
 		});
 		if (targets.length === 0) continue;
 
+		// Mark the batch as being handled so the request cards disable themselves and
+		// a manual accept cannot race this Commit into a remove-then-re-add.
+		for (const target of targets) setJoinRequestSubmitting(target.id);
 		try {
 			const result = await inviteChatGroupMembers({
 				groupId,
@@ -202,7 +232,7 @@ async function runAutoApprove(): Promise<void> {
 			});
 			const failed = new Set(result.failures.map((failure) => normalizePubKey(failure.identifier)));
 			const nowMembers = new Set(memberPubkeys(groupId).map(normalizePubKey));
-			let approved = 0;
+			let approvedCount = 0;
 			for (const target of targets) {
 				// A failure means "not added by this Commit": either they are already a
 				// member (nothing to do, mark the request handled) or the attempt is
@@ -213,12 +243,19 @@ async function runAutoApprove(): Promise<void> {
 					continue;
 				}
 				markJoinRequestAccepted(target.id, groupId);
-				approved += 1;
+				approved.push({ groupId, requester: target.requester });
+				approvedCount += 1;
 			}
-			rememberApprovals(groupId, approved);
+			rememberApprovals(groupId, approvedCount);
 		} catch (error) {
-			// One unhealthy group must not stop the others; the next pass retries.
+			// The whole batch failed to commit: count an attempt for every target so a
+			// persistently broken group cannot retry forever. One unhealthy group must
+			// not stop the others; the next pass retries.
+			for (const target of targets) attempts.set(target.id, (attempts.get(target.id) ?? 0) + 1);
 			console.warn('Auto-approve failed', error instanceof Error ? error.message : error);
+		} finally {
+			for (const target of targets) clearJoinRequestSubmitting(target.id);
 		}
 	}
+	return approved;
 }
