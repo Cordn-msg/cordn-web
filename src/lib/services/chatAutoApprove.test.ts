@@ -11,9 +11,12 @@ const ADMIN = 'ee'.repeat(32);
 const ALICE = 'aa'.repeat(32);
 const BOB = 'bb'.repeat(32);
 const GROUP = 'group-1';
+const COORD = 'cc'.repeat(32);
+const OTHER_COORD = 'dd'.repeat(32);
 
 interface Entry {
 	id: string;
+	coordinatorKey: string;
 	groupId: string;
 	requesterStablePubkey: string;
 	at: number;
@@ -61,7 +64,7 @@ vi.mock('$lib/services/multiDevice.svelte', () => ({
 
 vi.mock('$lib/services/chatGroups.svelte', () => ({
 	ensureGroupsLoaded: () => Promise.resolve(),
-	getChatGroup: () => ({ id: GROUP, metadata: h.metadata, messages: [] }),
+	getChatGroup: (groupId: string) => ({ id: groupId, metadata: h.metadata, messages: [] }),
 	inviteChatGroupMembers: (input: { groupId: string; targets: Array<{ identifier: string }> }) => {
 		h.inviteCalls.push(input);
 		return h.invite(input);
@@ -112,8 +115,14 @@ beforeEach(async () => {
 	autoApprove.loadChatAutoApproveForOwner(ADMIN);
 });
 
-function request(id: string, requester: string, at = Date.now() + 1_000): Entry {
-	return { id, groupId: GROUP, requesterStablePubkey: requester, at };
+function request(
+	id: string,
+	requester: string,
+	at = Date.now() + 1_000,
+	coordinatorKey = COORD,
+	groupId = GROUP
+): Entry {
+	return { id, coordinatorKey, groupId, requesterStablePubkey: requester, at };
 }
 
 function removal(target: string) {
@@ -277,5 +286,37 @@ describe('autoApproveJoinRequests', () => {
 		await autoApprove.autoApproveJoinRequests();
 
 		expect(h.inviteCalls).toHaveLength(0);
+	});
+
+	test('approves only the coordinator whose requests it was scoped to', async () => {
+		h.entries = [
+			request('mine-a', ALICE, Date.now() + 1_000, COORD, 'group-a'),
+			request('theirs-a', BOB, Date.now() + 1_000, OTHER_COORD, 'group-b')
+		];
+		autoApprove.setAutoApproveEnabled('group-a', true);
+		autoApprove.setAutoApproveEnabled('group-b', true);
+
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
+
+		expect(h.inviteCalls).toHaveLength(1);
+		expect(h.inviteCalls[0].targets.map((target) => target.identifier)).toEqual([ALICE]);
+		expect(approved).toEqual([{ groupId: 'group-a', requester: ALICE }]);
+		expect(h.entries.find((entry) => entry.id === 'theirs-a')?.status).toBeUndefined();
+	});
+
+	test('runs one pass per coordinator without serializing them', async () => {
+		h.entries = [
+			request('mine-a', ALICE, Date.now() + 1_000, COORD, 'group-a'),
+			request('theirs-a', BOB, Date.now() + 1_000, OTHER_COORD, 'group-b')
+		];
+		autoApprove.setAutoApproveEnabled('group-a', true);
+		autoApprove.setAutoApproveEnabled('group-b', true);
+
+		// An unscoped call fans out over both coordinators; each pass keeps its own
+		// single-flight, so neither waits for the other.
+		const approved = await autoApprove.autoApproveJoinRequests();
+
+		expect(h.inviteCalls).toHaveLength(2);
+		expect(approved.map((entry) => entry.requester).sort()).toEqual([ALICE, BOB]);
 	});
 });

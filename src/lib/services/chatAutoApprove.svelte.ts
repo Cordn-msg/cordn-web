@@ -24,7 +24,7 @@ import {
 import { manager } from '$lib/services/accountManager.svelte';
 import { isMultiDeviceActive } from '$lib/services/multiDevice.svelte';
 import { canRunBackgroundWork, isNativePlatform } from '$lib/services/nativeBridge';
-import { normalizePubKey } from '$lib/utils';
+import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 
 /**
  * Per-group "auto-approve new join requests" switches, device-local and never
@@ -35,6 +35,10 @@ import { normalizePubKey } from '$lib/utils';
  * approves in ONE Commit + one Welcome per group — the same batching a manual
  * multi-select invite uses. It never takes the remove-then-re-add path a manual
  * accept uses, so an existing member is never churned.
+ *
+ * A pass is scoped to ONE coordinator's requests: a slow or offline coordinator
+ * must never delay the approval of another's, so the single-flight is per
+ * coordinator rather than one global pass.
  */
 const STORAGE_KEY = 'cordn-chat-auto-approve';
 
@@ -152,21 +156,41 @@ export interface AutoApprovedJoinRequest {
 	requester: string;
 }
 
-let inFlight: Promise<AutoApprovedJoinRequest[]> | undefined;
+const inFlight = new Map<string, Promise<AutoApprovedJoinRequest[]>>();
 
 /**
  * Approve the join requests every enabled group may approve right now. Fire and
  * forget from the join-request fetch; awaiting the same promise is safe (the
- * pass is single-flight) and lets a caller order notifications after it.
+ * pass is single-flight per coordinator) and lets a caller order notifications
+ * after it. Called with a coordinator key it approves only that coordinator's
+ * requests; called without one it fans out over the coordinators that currently
+ * have requests, so no group is ever handled by two passes at once.
  */
-export function autoApproveJoinRequests(): Promise<AutoApprovedJoinRequest[]> {
-	inFlight ??= runAutoApprove().finally(() => {
-		inFlight = undefined;
-	});
-	return inFlight;
+export function autoApproveJoinRequests(
+	coordinatorKey?: string
+): Promise<AutoApprovedJoinRequest[]> {
+	if (coordinatorKey !== undefined) {
+		const key = safeNormalizePubKey(coordinatorKey);
+		if (!key) return Promise.resolve([]);
+		return runCoordinatorPass(key);
+	}
+	const keys = new Set(listJoinRequests().map((entry) => entry.coordinatorKey));
+	return Promise.all([...keys].map((key) => runCoordinatorPass(key).catch(() => []))).then(
+		(results) => results.flat()
+	);
 }
 
-async function runAutoApprove(): Promise<AutoApprovedJoinRequest[]> {
+function runCoordinatorPass(coordinatorKey: string): Promise<AutoApprovedJoinRequest[]> {
+	const running = inFlight.get(coordinatorKey);
+	if (running) return running;
+	const pass = runAutoApprove(coordinatorKey).finally(() => {
+		if (inFlight.get(coordinatorKey) === pass) inFlight.delete(coordinatorKey);
+	});
+	inFlight.set(coordinatorKey, pass);
+	return pass;
+}
+
+async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinRequest[]> {
 	const approved: AutoApprovedJoinRequest[] = [];
 	if (!browser) return approved;
 	const account = manager.getActive();
@@ -186,6 +210,7 @@ async function runAutoApprove(): Promise<AutoApprovedJoinRequest[]> {
 
 	const byGroup = new Map<string, JoinRequestEntry[]>();
 	for (const entry of listJoinRequests()) {
+		if (entry.coordinatorKey !== coordinatorKey) continue;
 		if (!chatAutoApproveStore.enabled.has(entry.groupId)) continue;
 		const list = byGroup.get(entry.groupId) ?? [];
 		list.push(entry);

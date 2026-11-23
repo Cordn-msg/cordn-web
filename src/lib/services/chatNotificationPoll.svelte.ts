@@ -15,7 +15,7 @@ import {
 } from '$lib/services/chatCoordinators.svelte';
 import { isSignerUnavailableError } from '$lib/services/chatRuntime';
 import { canRunBackgroundWork, isNativePlatform } from '$lib/services/nativeBridge';
-import { errorMessage as errorText } from '$lib/utils';
+import { errorMessage as errorText, safeNormalizePubKey } from '$lib/utils';
 
 export const NOTIFICATION_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -51,30 +51,29 @@ export function pollNotificationSources(): Promise<void> {
 
 /**
  * One poll pass over the per-coordinator query cache (the same cache the
- * notifications dialog reads), then the auto-approve pass, then the
- * notifications. Order matters: awaiting the approval pass means a request the
- * admin's own setting just handled is never announced as still pending.
+ * notifications dialog reads). Each coordinator runs its own lane — refresh,
+ * approve, announce — so a slow or offline coordinator never delays another's
+ * approval or notification. Order within a lane matters: approving before
+ * announcing means a request the admin's own setting just handled is never
+ * announced as still pending.
  */
 async function runNotificationPoll(): Promise<void> {
 	if (!browser) return;
 	if (!canRunBackgroundWork()) return;
 	const account = manager.active;
 	if (!account) return;
-	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys())];
+	// Normalized: a peer-derived key that is not valid hex cannot be addressed at
+	// all, and would otherwise throw in the query key / label below.
+	const coordinatorKeys = [...new Set(listKnownCoordinatorKeys().map(safeNormalizePubKey))].filter(
+		Boolean
+	);
 	if (coordinatorKeys.length === 0) return;
 	const pollWelcomes = shouldPollWelcomes();
 
 	notificationPollState.refreshing = true;
 	try {
 		const results = await Promise.allSettled(
-			coordinatorKeys.map(async (key) => {
-				await Promise.all([
-					pollWelcomes
-						? queryClient.fetchQuery(welcomeNotificationsQueryOptions(account.pubkey, key))
-						: Promise.resolve(),
-					queryClient.fetchQuery(joinRequestsQueryOptions(account.pubkey, key))
-				]);
-			})
+			coordinatorKeys.map((key) => runCoordinatorLane(account.pubkey, key, pollWelcomes))
 		);
 		notificationPollState.failures = results
 			.map((result, index) =>
@@ -88,11 +87,33 @@ async function runNotificationPoll(): Promise<void> {
 	} finally {
 		notificationPollState.refreshing = false;
 	}
+}
 
-	const approved = await autoApproveJoinRequests().catch(() => []);
-	await notifyForJoinRequests().catch(() => {});
+/**
+ * One coordinator's lane. Every step is scoped to this coordinator, so one
+ * faulty coordinator cannot affect another's approvals or notifications.
+ * A failed welcome read must not skip the signer-free approval, so the two
+ * reads settle independently and the lane reports the failure afterwards.
+ */
+async function runCoordinatorLane(
+	stablePubkey: string,
+	coordinatorKey: string,
+	pollWelcomes: boolean
+): Promise<void> {
+	const [welcomeFetch, joinFetch] = await Promise.allSettled([
+		pollWelcomes
+			? queryClient.fetchQuery(welcomeNotificationsQueryOptions(stablePubkey, coordinatorKey))
+			: Promise.resolve(),
+		queryClient.fetchQuery(joinRequestsQueryOptions(stablePubkey, coordinatorKey))
+	]);
+	const approved = await autoApproveJoinRequests(coordinatorKey).catch(() => []);
 	await notifyForApprovedJoinRequests(approved).catch(() => {});
-	if (pollWelcomes) await notifyForWelcomes().catch(() => {});
+	await notifyForJoinRequests(coordinatorKey).catch(() => {});
+	if (pollWelcomes) await notifyForWelcomes(coordinatorKey).catch(() => {});
+	// Surfaced after the lane's own work: a failed read is reported, but it never
+	// withholds the approval the join request already earned.
+	if (joinFetch.status === 'rejected') throw joinFetch.reason;
+	if (welcomeFetch.status === 'rejected') throw welcomeFetch.reason;
 }
 
 /**

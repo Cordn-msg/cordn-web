@@ -39,7 +39,7 @@ import {
 	listChatGroups,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
-import { normalizePubKey, samePubKey } from '$lib/utils';
+import { normalizePubKey, safeNormalizePubKey, samePubKey } from '$lib/utils';
 import type { AutoApprovedJoinRequest } from '$lib/services/chatAutoApprove.svelte';
 import { decodeCoordinatorQueryParam, resolveGroupLocator } from '$lib/utils/groupShareLink';
 import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
@@ -428,12 +428,20 @@ function isAttended(): boolean {
  * Notify for pending join requests the admin has not been told about yet. One
  * notification per group (the request card list stays the place to act).
  * Call after the join-request poll and its auto-approve pass, so a request the
- * admin's own setting just handled is never announced as pending.
+ * admin's own setting just handled is never announced as pending. Pass a
+ * coordinator key to announce only that coordinator's requests: the poll runs
+ * per-coordinator lanes and must not let one lane announce another's requests
+ * before its approval pass has seen them.
  */
-export async function notifyForJoinRequests(): Promise<void> {
+export async function notifyForJoinRequests(coordinatorKey?: string): Promise<void> {
 	if (!browser) return;
+	const key = coordinatorKey === undefined ? undefined : safeNormalizePubKey(coordinatorKey);
+	if (key === '') return;
 	loadNotifiedIds();
-	const pending = listJoinRequests().filter((entry) => !notifiedJoinRequestIds.has(entry.id));
+	const pending = listJoinRequests().filter(
+		(entry) =>
+			!notifiedJoinRequestIds.has(entry.id) && (key === undefined || entry.coordinatorKey === key)
+	);
 	if (pending.length === 0 || isAttended()) return;
 	if (!(await ensureNotificationPermission())) return;
 
@@ -499,11 +507,19 @@ export async function notifyForApprovedJoinRequests(
 	}
 }
 
-/** Notify for group invitations (welcomes) the reader has not been told about yet. */
-export async function notifyForWelcomes(): Promise<void> {
+/**
+ * Notify for group invitations (welcomes) the reader has not been told about
+ * yet. Pass a coordinator key to announce only that coordinator's welcomes.
+ */
+export async function notifyForWelcomes(coordinatorKey?: string): Promise<void> {
 	if (!browser) return;
+	const key = coordinatorKey === undefined ? undefined : safeNormalizePubKey(coordinatorKey);
+	if (key === '') return;
 	loadNotifiedIds();
-	const pending = listWelcomeNotifications().filter((entry) => !notifiedWelcomeIds.has(entry.id));
+	const pending = listWelcomeNotifications().filter(
+		(entry) =>
+			!notifiedWelcomeIds.has(entry.id) && (key === undefined || entry.coordinatorKey === key)
+	);
 	if (pending.length === 0 || isAttended()) return;
 	if (!(await ensureNotificationPermission())) return;
 
