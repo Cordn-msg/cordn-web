@@ -10,6 +10,7 @@ import {
 	listJoinRequestsForCoordinator
 } from '$lib/services/chatJoinRequests.svelte';
 import { normalizePubKey } from '$lib/utils';
+import { autoApproveJoinRequests } from '$lib/services/chatAutoApprove.svelte';
 
 /** Imperative reads share the same per-coordinator cache as mounted observers. */
 export async function fetchCoordinatorJoinRequests(options: { force?: boolean } = {}) {
@@ -19,6 +20,11 @@ export async function fetchCoordinatorJoinRequests(options: { force?: boolean } 
 			queryClient.fetchQuery(joinRequestsQueryOptions(account.pubkey, key, options))
 		)
 	);
+	// Every join-request read path lands here (startup, pull-to-refresh, poll), so
+	// the auto-approve pass hangs off this one point. Fire-and-forget: a slow
+	// Commit must never hold up a poll; callers that need ordering await the
+	// single-flight promise directly.
+	void autoApproveJoinRequests().catch(() => {});
 	return listJoinRequests();
 }
 

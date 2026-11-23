@@ -1,0 +1,79 @@
+import { normalizePubKey } from '$lib/utils';
+
+/**
+ * Pure guard rules for auto-approving join requests. Kept out of the runner so
+ * every rule is unit-testable without MLS state or a coordinator.
+ *
+ * The feature exists to save admins a tap, not to make membership decisions for
+ * them: anything that could undo a deliberate act (a removal) or duplicate an
+ * existing member stays manual.
+ */
+
+/** Per group, rolling hour. A flood of requests must not turn into a flood of Commits. */
+export const MAX_AUTO_APPROVE_PER_HOUR = 5;
+
+/** Session attempts per request before it is left for a human. */
+export const MAX_AUTO_APPROVE_ATTEMPTS = 3;
+
+export interface AutoApproveCandidate {
+	/** Stable id of the join request row. */
+	id: string;
+	/** Requester's stable pubkey (normalized here). */
+	requester: string;
+	/** Request timestamp in ms. */
+	at: number;
+}
+
+export interface AutoApproveGroupContext {
+	/** The active account is an admin of this group. */
+	isAdmin: boolean;
+	/** When the admin switched auto-approve on (ms). Older requests stay manual. */
+	enabledAt: number;
+	/** Current member pubkeys. */
+	members: string[];
+	/** Pubkeys with a member-removed system message in the loaded window. */
+	removed: string[];
+	/** Session attempt counts by request id. */
+	attempts: Record<string, number>;
+	/** Requests already being accepted by hand. */
+	submitting: string[];
+	/** Approvals already made in this group's rolling hour. */
+	recentApprovals: number;
+}
+
+/**
+ * The requests this group may auto-approve right now, oldest first, capped.
+ * Every skip is a guard: not an admin, already a member, previously removed,
+ * requested before the switch was flipped, already being handled by hand, or
+ * out of attempts / hourly budget.
+ */
+export function selectAutoApproveTargets(
+	candidates: AutoApproveCandidate[],
+	context: AutoApproveGroupContext
+): AutoApproveCandidate[] {
+	if (!context.isAdmin) return [];
+
+	const members = new Set(context.members.map(normalizePubKey));
+	const removed = new Set(context.removed.map(normalizePubKey));
+	const submitting = new Set(context.submitting);
+	const remaining = Math.max(0, MAX_AUTO_APPROVE_PER_HOUR - context.recentApprovals);
+	if (remaining === 0) return [];
+
+	const seen = new Set<string>();
+	const targets: AutoApproveCandidate[] = [];
+	for (const candidate of [...candidates].sort((a, b) => a.at - b.at)) {
+		const requester = normalizePubKey(candidate.requester);
+		if (!requester) continue;
+		if (seen.has(requester)) continue;
+		// Older than the switch: a backlog must never be bulk-approved by surprise.
+		if (candidate.at < context.enabledAt) continue;
+		if (members.has(requester)) continue;
+		if (removed.has(requester)) continue;
+		if (submitting.has(candidate.id)) continue;
+		if ((context.attempts[candidate.id] ?? 0) >= MAX_AUTO_APPROVE_ATTEMPTS) continue;
+		seen.add(requester);
+		targets.push(candidate);
+		if (targets.length >= remaining) break;
+	}
+	return targets;
+}

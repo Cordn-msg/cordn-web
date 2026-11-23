@@ -21,6 +21,11 @@
 		notifyForUnreadChatMessages,
 		syncChatAttention
 	} from '$lib/services/chatAttention.svelte';
+	import {
+		pollNotificationSources,
+		startNotificationPolling
+	} from '$lib/services/chatNotificationPoll.svelte';
+	import { listKnownCoordinatorKeys } from '$lib/services/chatCoordinators.svelte';
 	import { loadNewsReadState } from '$lib/news/newsReadState.svelte';
 	import { chatReconnectStatusStore } from '$lib/services/chatReconnectStatus.svelte';
 	import { signerReadinessStore } from '$lib/services/signerReadiness.svelte';
@@ -48,6 +53,19 @@
 
 	// Stale-notification hygiene: clear shown notifications when the tab is attended again.
 	onMount(initNotificationClearOnForeground);
+
+	// Join request + welcome polling lives here, not in the notifications dialog: it
+	// must keep running on routes without the tab bar (conversations) and raise
+	// notifications while the app is unattended.
+	onMount(startNotificationPolling);
+
+	// Immediate poll when the account/coordinator set resolves (and on later
+	// changes); untrack so the poll's synchronous reads never become deps.
+	const coordinatorCount = $derived(listKnownCoordinatorKeys().length);
+	$effect(() => {
+		if (coordinatorCount === 0) return;
+		void untrack(() => pollNotificationSources());
+	});
 
 	// Android hardware back button: close the keyboard / the mobile sidebar / any open overlay
 	// first, then go up one level in the app's own hierarchy (chatUpHref), then leave the app with

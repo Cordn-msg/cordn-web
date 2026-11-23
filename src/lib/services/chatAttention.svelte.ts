@@ -4,6 +4,7 @@ import {
 	clearShownNotifications,
 	ensureNotificationPermission,
 	isNativePlatform,
+	postMessageNotification,
 	showLocalNotification
 } from '$lib/services/nativeBridge';
 import {
@@ -22,8 +23,16 @@ import {
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { getNotificationPreviewsEnabled } from '$lib/services/chatNotificationSettings';
 import { getChatGroupMuteCutoff, isChatGroupMuted } from '$lib/services/chatGroupMutes.svelte';
-import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
-import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
+import {
+	getUnreadWelcomeNotificationCount,
+	listWelcomeNotifications
+} from '$lib/services/chatWelcomeNotifications.svelte';
+import {
+	getUnreadJoinRequestCount,
+	listJoinRequests,
+	type JoinRequestEntry
+} from '$lib/services/chatJoinRequests.svelte';
+import { profileDisplayLabel } from '$lib/utils/profileName';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
 import {
 	getChatGroup,
@@ -309,6 +318,102 @@ export async function notifyForUnreadChatMessages() {
 			messages,
 			icon,
 			groupId: group.id
+		});
+	}
+}
+
+/**
+ * Join requests and welcomes are not messages: their text must survive the
+ * "hide previews" setting (a request with no author is useless), so they skip
+ * `showLocalNotification`'s preview gate and post their own body.
+ */
+async function postAttentionNotification(notification: {
+	title: string;
+	body: string;
+	count: number;
+	groupId: string;
+}): Promise<void> {
+	if (isNativePlatform()) {
+		await postMessageNotification(
+			notification.groupId,
+			notification.title,
+			notification.body,
+			notification.count
+		);
+		return;
+	}
+	if (!('Notification' in window) || Notification.permission !== 'granted') return;
+	const posted = new Notification(notification.title, {
+		body: notification.body,
+		icon: DEFAULT_FAVICON,
+		tag: `cordn-group-${notification.groupId}`
+	});
+	posted.onclick = () => window.focus();
+}
+
+/** Session dedup: one notification per request/welcome, never repeated by a poll. */
+const notifiedJoinRequestIds = new Set<string>();
+const notifiedWelcomeIds = new Set<string>();
+
+/** The in-app badge already surfaces attention when the app is attended. */
+function isAttended(): boolean {
+	return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+/**
+ * Notify for pending join requests the admin has not been told about yet. One
+ * notification per group (the request card list stays the place to act).
+ * Call after the join-request poll and its auto-approve pass, so a request the
+ * admin's own setting just handled is never announced as pending.
+ */
+export async function notifyForJoinRequests(): Promise<void> {
+	if (!browser) return;
+	const pending = listJoinRequests().filter((entry) => !notifiedJoinRequestIds.has(entry.id));
+	if (pending.length === 0 || isAttended()) return;
+	if (!(await ensureNotificationPermission())) return;
+
+	const byGroup = new Map<string, JoinRequestEntry[]>();
+	for (const entry of pending) {
+		const list = byGroup.get(entry.groupId) ?? [];
+		list.push(entry);
+		byGroup.set(entry.groupId, list);
+	}
+	for (const [groupId, entries] of byGroup) {
+		for (const entry of entries) notifiedJoinRequestIds.add(entry.id);
+		const group = getChatGroup(groupId);
+		if (!group) continue;
+		const hints = await Promise.all(
+			entries.slice(0, 3).map((entry) => resolveProfileHint(entry.requesterStablePubkey))
+		);
+		const labels = hints.map(
+			(hint, index) => profileDisplayLabel(hint, entries[index].requesterStablePubkey) ?? 'Someone'
+		);
+		const who = labels.length === 1 ? labels[0] : `${labels[0]} and ${entries.length - 1} more`;
+		await postAttentionNotification({
+			title: group.metadata?.name?.trim() || 'Join request',
+			body: `${who} ${entries.length === 1 ? 'wants' : 'want'} to join`,
+			count: entries.length,
+			groupId
+		});
+	}
+}
+
+/** Notify for group invitations (welcomes) the reader has not been told about yet. */
+export async function notifyForWelcomes(): Promise<void> {
+	if (!browser) return;
+	const pending = listWelcomeNotifications().filter((entry) => !notifiedWelcomeIds.has(entry.id));
+	if (pending.length === 0 || isAttended()) return;
+	if (!(await ensureNotificationPermission())) return;
+
+	for (const entry of pending) {
+		notifiedWelcomeIds.add(entry.id);
+		const gid = entry.preview?.gid;
+		if (!gid) continue;
+		await postAttentionNotification({
+			title: entry.preview?.name?.trim() || 'Group invitation',
+			body: 'You have been invited to join',
+			count: 1,
+			groupId: gid
 		});
 	}
 }
