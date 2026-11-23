@@ -5,6 +5,7 @@
  * covers the side effects (submitting flags, accepted marks, attempts).
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 
 const ADMIN = 'ee'.repeat(32);
 const ALICE = 'aa'.repeat(32);
@@ -30,7 +31,17 @@ const h = vi.hoisted(() => ({
 	accepted: [] as Array<{ id: string; groupId: string }>,
 	inviteCalls: [] as Array<{ groupId: string; targets: Array<{ identifier: string }> }>,
 	invite: (_input: unknown) =>
-		Promise.resolve({ group: { id: GROUP }, failures: [] as Array<{ identifier: string }> })
+		Promise.resolve({ group: { id: GROUP }, failures: [] as Array<{ identifier: string }> }),
+	/** Durable system rows the removal guard reads. */
+	removedRows: [] as Array<{ kind: number; content: string }>,
+	removedRowsError: false
+}));
+
+vi.mock('$lib/storage/chatStorage', () => ({
+	getChatStorage: () =>
+		h.removedRowsError
+			? Promise.reject(new Error('storage unavailable'))
+			: Promise.resolve({ getGroupMessagesByKinds: () => Promise.resolve(h.removedRows) })
 }));
 
 vi.mock('$app/environment', () => ({ browser: true }));
@@ -95,12 +106,21 @@ beforeEach(async () => {
 	h.accepted = [];
 	h.inviteCalls = [];
 	h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [] });
+	h.removedRows = [];
+	h.removedRowsError = false;
 	autoApprove ??= await import('./chatAutoApprove.svelte');
 	autoApprove.loadChatAutoApproveForOwner(ADMIN);
 });
 
 function request(id: string, requester: string, at = Date.now() + 1_000): Entry {
 	return { id, groupId: GROUP, requesterStablePubkey: requester, at };
+}
+
+function removal(target: string) {
+	return {
+		kind: SYSTEM_MESSAGE_KIND,
+		content: JSON.stringify({ systemKind: 'member-removed', target })
+	};
 }
 
 describe('autoApproveJoinRequests', () => {
@@ -173,6 +193,41 @@ describe('autoApproveJoinRequests', () => {
 		// Out of attempts: the request stays for a human.
 		await autoApprove.autoApproveJoinRequests();
 		expect(h.inviteCalls).toHaveLength(3);
+	});
+
+	test('never auto-approves someone removed outside the loaded message window', async () => {
+		h.removedRows = [removal(ALICE)];
+		h.entries = [request('removed-a', ALICE)];
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+
+		await autoApprove.autoApproveJoinRequests();
+
+		expect(h.inviteCalls).toHaveLength(0);
+	});
+
+	test('leaves the group for a human when the removal history cannot be read', async () => {
+		h.removedRowsError = true;
+		h.entries = [request('unreadable-a', ALICE)];
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+
+		await autoApprove.autoApproveJoinRequests();
+
+		expect(h.inviteCalls).toHaveLength(0);
+	});
+
+	test('closes a duplicate request from someone the batch just approved', async () => {
+		h.entries = [request('dup-old', ALICE), request('dup-new', ALICE, Date.now() + 2_000)];
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+		h.invite = () => {
+			h.members = [ALICE];
+			return Promise.resolve({ group: { id: GROUP }, failures: [] });
+		};
+
+		const approved = await autoApprove.autoApproveJoinRequests();
+
+		expect(h.inviteCalls[0].targets.map((target) => target.identifier)).toEqual([ALICE]);
+		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
+		expect(h.accepted.map((mark) => mark.id).sort()).toEqual(['dup-new', 'dup-old']);
 	});
 
 	test('skips a group whose switch is off', async () => {

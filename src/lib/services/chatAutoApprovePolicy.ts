@@ -31,7 +31,7 @@ export interface AutoApproveGroupContext {
 	enabledAt: number;
 	/** Current member pubkeys. */
 	members: string[];
-	/** Pubkeys with a member-removed system message in the loaded window. */
+	/** Pubkeys with a member-removed system message in the durable history. */
 	removed: string[];
 	/** Session attempt counts by request id. */
 	attempts: Record<string, number>;

@@ -6,9 +6,9 @@ import {
 	ensureGroupsLoaded,
 	getChatGroup,
 	inviteChatGroupMembers,
-	listChatGroupMembers,
-	type StoredChatGroup
+	listChatGroupMembers
 } from '$lib/services/chatGroups.svelte';
+import { getChatStorage } from '$lib/storage/chatStorage';
 import {
 	clearJoinRequestSubmitting,
 	isJoinRequestSubmitting,
@@ -114,10 +114,16 @@ function rememberApprovals(groupId: string, count: number) {
 	approvalTimes.set(groupId, recent);
 }
 
-/** Pubkeys the loaded message window shows as removed — a kicked member stays manual. */
-function listRemovedPubkeys(group: StoredChatGroup): string[] {
+/**
+ * Pubkeys the durable history shows as removed — a kicked member stays manual.
+ * Read from storage, not the live window: a removal older than the window would
+ * otherwise let the next request undo it.
+ */
+async function listRemovedPubkeys(groupId: string): Promise<string[]> {
+	const storage = await getChatStorage();
+	const rows = await storage.getGroupMessagesByKinds(groupId, [SYSTEM_MESSAGE_KIND]);
 	const removed: string[] = [];
-	for (const message of group.messages) {
+	for (const message of rows) {
 		if (message.kind !== SYSTEM_MESSAGE_KIND) continue;
 		try {
 			const data = JSON.parse(message.content) as { systemKind?: string; target?: string };
@@ -204,11 +210,19 @@ async function runAutoApprove(): Promise<AutoApprovedJoinRequest[]> {
 				markJoinRequestAccepted(entry.id, groupId);
 		}
 
+		let removed: string[];
+		try {
+			removed = await listRemovedPubkeys(groupId);
+		} catch {
+			// Without the removal history the guard cannot be honoured: leave the group for a human.
+			continue;
+		}
+
 		const targets = selectAutoApproveTargets(entries.map(toCandidate), {
 			isAdmin: true,
 			enabledAt,
 			members: [...members],
-			removed: listRemovedPubkeys(group),
+			removed,
 			attempts: Object.fromEntries(
 				entries
 					.filter((entry) => attempts.has(entry.id))
@@ -245,6 +259,15 @@ async function runAutoApprove(): Promise<AutoApprovedJoinRequest[]> {
 				markJoinRequestAccepted(target.id, groupId);
 				approved.push({ groupId, requester: target.requester });
 				approvedCount += 1;
+			}
+			// A duplicate request from someone just approved would stay pending and be
+			// announced as "wants to join" right after the approval: close every request
+			// whose requester is a member now.
+			const handled = new Set(targets.map((target) => target.id));
+			for (const entry of entries) {
+				if (handled.has(entry.id)) continue;
+				if (nowMembers.has(normalizePubKey(entry.requesterStablePubkey)))
+					markJoinRequestAccepted(entry.id, groupId);
 			}
 			rememberApprovals(groupId, approvedCount);
 		} catch (error) {
