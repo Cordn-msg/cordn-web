@@ -17,6 +17,7 @@
 	import { metadataRelays } from '$lib/services/relay-pool';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { normalizePubKey } from '$lib/utils';
+	import Search from '@lucide/svelte/icons/search';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	/**
@@ -41,6 +42,7 @@
 	let memberIds = $state<string[]>([]);
 	let error = $state('');
 	let confirmingDelete = $state(false);
+	let query = $state('');
 
 	// Snapshot the folder once per open (not per keystroke) — otherwise a
 	// concurrent folder write would clobber the in-editor edits.
@@ -54,6 +56,7 @@
 			memberIds = folder ? [...folder.groupIds] : preselectGroupId ? [preselectGroupId] : [];
 			error = '';
 			confirmingDelete = false;
+			query = '';
 		}
 		wasOpen = open;
 	});
@@ -103,6 +106,13 @@
 		})
 	);
 
+	// Filtering only narrows what is rendered: `memberIds` stays the source of
+	// truth, so a chat hidden by the query keeps its selection on save.
+	const filteredRows = $derived.by(() => {
+		const needle = query.trim().toLowerCase();
+		return needle ? rows.filter((row) => row.title.toLowerCase().includes(needle)) : rows;
+	});
+
 	function toggleMember(groupId: string) {
 		memberIds = memberIds.includes(groupId)
 			? memberIds.filter((id) => id !== groupId)
@@ -127,52 +137,70 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="sm:max-w-[425px]">
-		<Dialog.Header>
+	<Dialog.Content
+		class="flex max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-[26rem] flex-col gap-4 p-4 sm:gap-6 sm:p-6"
+	>
+		<Dialog.Header class="shrink-0">
 			<Dialog.Title>{folderId ? 'Edit folder' : 'New folder'}</Dialog.Title>
 			<Dialog.Description>
 				Folders are lists of chats kept on this device. Chats are never moved or deleted — they stay
 				in All too.
 			</Dialog.Description>
 		</Dialog.Header>
-		<div class="flex flex-col gap-4">
-			<div class="space-y-1.5">
-				<label class="text-sm font-medium" for="chat-folder-name">Name</label>
-				<Input
-					id="chat-folder-name"
-					bind:value={name}
-					maxlength={CHAT_FOLDER_NAME_MAX}
-					placeholder="Work"
-				/>
-				{#if error}
-					<p class="text-xs text-destructive" role="alert">{error}</p>
+		<div class="shrink-0 space-y-1.5">
+			<label class="text-sm font-medium" for="chat-folder-name">Name</label>
+			<Input
+				id="chat-folder-name"
+				bind:value={name}
+				maxlength={CHAT_FOLDER_NAME_MAX}
+				placeholder="Work"
+			/>
+			{#if error}
+				<p class="text-xs text-destructive" role="alert">{error}</p>
+			{/if}
+		</div>
+		<div class="flex min-h-0 flex-1 flex-col gap-1.5">
+			<div class="flex shrink-0 items-center justify-between gap-2">
+				<p class="text-sm font-medium">Chats</p>
+				{#if memberIds.length > 0}
+					<span class="text-xs text-muted-foreground">{memberIds.length} selected</span>
 				{/if}
 			</div>
-			<div class="space-y-1.5">
-				<p class="text-sm font-medium">Chats</p>
-				<div class="max-h-64 space-y-1 overflow-y-auto">
-					{#each rows as { group, title, titlePersonPubkey } (group.id)}
-						{@const member = memberIds.includes(group.id)}
-						<label
-							class={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${member ? 'border-primary/60 bg-primary/5' : 'border-border hover:bg-muted/40'}`}
-						>
-							<input
-								type="checkbox"
-								class="h-4 w-4 shrink-0 rounded border-border"
-								checked={member}
-								onchange={() => toggleMember(group.id)}
-							/>
-							<ChatGroupAvatar {group} class="h-8 w-8" fallbackClass="text-xs font-medium" />
-							<span class="flex min-w-0 items-center gap-1">
-								<span class="truncate">{title}</span>
-								<PetnameMark pubkey={titlePersonPubkey} class="size-3.5 shrink-0" />
-							</span>
-						</label>
-					{/each}
-				</div>
+			<div class="relative shrink-0">
+				<Search
+					class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+				/>
+				<Input
+					bind:value={query}
+					class="pl-9"
+					placeholder="Search chats"
+					aria-label="Search chats"
+				/>
+			</div>
+			<div class="min-h-0 flex-1 space-y-1 overflow-y-auto">
+				{#each filteredRows as { group, title, titlePersonPubkey } (group.id)}
+					{@const member = memberIds.includes(group.id)}
+					<label
+						class={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${member ? 'border-primary/60 bg-primary/5' : 'border-border hover:bg-muted/40'}`}
+					>
+						<input
+							type="checkbox"
+							class="h-4 w-4 shrink-0 rounded border-border"
+							checked={member}
+							onchange={() => toggleMember(group.id)}
+						/>
+						<ChatGroupAvatar {group} class="h-8 w-8" fallbackClass="text-xs font-medium" />
+						<span class="flex min-w-0 items-center gap-1">
+							<span class="truncate">{title}</span>
+							<PetnameMark pubkey={titlePersonPubkey} class="size-3.5 shrink-0" />
+						</span>
+					</label>
+				{:else}
+					<p class="px-1 py-2 text-xs text-muted-foreground">No chats match.</p>
+				{/each}
 			</div>
 		</div>
-		<Dialog.Footer>
+		<Dialog.Footer class="shrink-0 flex-row flex-wrap justify-end">
 			{#if folderId}
 				{#if confirmingDelete}
 					<Button variant="destructive" size="sm" class="mr-auto" onclick={remove}>
