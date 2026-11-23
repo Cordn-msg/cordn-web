@@ -41,7 +41,7 @@ import {
 } from '$lib/services/chatGroups.svelte';
 import { normalizePubKey, samePubKey } from '$lib/utils';
 import type { AutoApprovedJoinRequest } from '$lib/services/chatAutoApprove.svelte';
-import { resolveGroupLocator } from '$lib/utils/groupShareLink';
+import { decodeCoordinatorQueryParam, resolveGroupLocator } from '$lib/utils/groupShareLink';
 import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 import { eventStore } from '$lib/services/eventStore';
 import { firstValueFrom } from 'applesauce-core/observable';
@@ -86,8 +86,20 @@ function getBaseTitle(pathname: string) {
 	if (pathname.startsWith('/chat/config/media')) return 'Media | Cordn';
 	if (pathname.startsWith('/chat/config')) return 'Settings | Cordn';
 	if (pathname.startsWith('/chat/coordinators/')) {
-		const key = decodeURIComponent(pathname.slice('/chat/coordinators/'.length));
-		return key ? `${getCoordinatorLabel(key)} | Cordn` : 'Coordinators | Cordn';
+		// The segment is a locator (nprofile with relay hints, npub, or legacy hex),
+		// not a raw pubkey — decode it first. Feeding an nprofile straight to
+		// getCoordinatorLabel throws inside normalizePubKey, and a throw here kills
+		// the attention effect (and the badge) for good. Same defensive rule as the
+		// group-info branch below.
+		let label = '';
+		try {
+			const raw = decodeURIComponent(pathname.slice('/chat/coordinators/'.length));
+			const key = decodeCoordinatorQueryParam(raw)?.coordinatorKey ?? '';
+			label = key ? getCoordinatorLabel(key) : '';
+		} catch {
+			// Corrupt or unknown locator: fall back to the plain title.
+		}
+		return label ? `${label} | Cordn` : 'Coordinators | Cordn';
 	}
 	if (pathname.startsWith('/chat/coordinators')) return 'Coordinators | Cordn';
 	if (pathname.startsWith('/chat/')) {
