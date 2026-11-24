@@ -44,6 +44,14 @@ export function promoteTentativeSnapshot(
 	);
 }
 
+/** Keep older states for message catch-up, with the adopted state newest. */
+export function appendHealthySnapshot(
+	snapshots: ChatGroupStateSnapshot[],
+	next: ChatGroupStateSnapshot
+): ChatGroupStateSnapshot[] {
+	return [...snapshots, { ...next, status: 'healthy' as const }].slice(-3);
+}
+
 export function getNewestHealthySnapshot(
 	snapshots: ChatGroupStateSnapshot[]
 ): ChatGroupStateSnapshot | undefined {

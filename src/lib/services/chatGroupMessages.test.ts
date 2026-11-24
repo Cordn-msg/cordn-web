@@ -66,7 +66,37 @@ vi.mock('$lib/services/multiDevice.svelte', async (importOriginal) => {
 	};
 });
 
-import { ingestChatGroupMessages, unrecoveredDropHorizon } from './chatGroupMessages.svelte';
+import {
+	ingestChatGroupMessages,
+	nextUnopenedCursor,
+	unrecoveredDropHorizon
+} from './chatGroupMessages.svelte';
+
+describe('nextUnopenedCursor()', () => {
+	const failed = (cursor: number) => ({
+		cursor,
+		createdAt: 1,
+		detail: 'Sealed payload decrypt failed: invalid tag'
+	});
+
+	test('moves to the next sealed failure that still has no row', () => {
+		expect(nextUnopenedCursor([failed(334), failed(336)], new Set([334]), 334)).toBe(336);
+	});
+
+	test('clears when every later failure has a row', () => {
+		expect(nextUnopenedCursor([failed(334), failed(336)], new Set([336]), 334)).toBeUndefined();
+	});
+
+	test('ignores inner-MLS failures and cursors already behind', () => {
+		expect(
+			nextUnopenedCursor(
+				[failed(330), { cursor: 336, createdAt: 1, detail: 'Fatal MLS decryption failure' }],
+				new Set(),
+				334
+			)
+		).toBeUndefined();
+	});
+});
 
 describe('ingestChatGroupMessages()', () => {
 	beforeEach(() => {
@@ -152,6 +182,7 @@ describe('ingestChatGroupMessages()', () => {
 			fetchCursor: 0,
 			messages: [],
 			syncIssues: [],
+			lineCursor: 4,
 			status: 'active' as const
 		};
 
@@ -166,6 +197,8 @@ describe('ingestChatGroupMessages()', () => {
 		expect(result.removedLocalMember).toBe(false);
 		expect(group.fetchCursor).toBe(9);
 		expect(group.lastCursor).toBe(9);
+		// The old line proof does not survive a missed epoch transition.
+		expect(group.lineCursor).toBeUndefined();
 		expect(result.issues).toHaveLength(1);
 		expect(result.issues[0]?.cursor).toBe(9);
 		expect(result.issues[0]?.detail).toMatch(/sibling commit/i);

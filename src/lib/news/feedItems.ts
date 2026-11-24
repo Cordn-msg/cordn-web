@@ -713,6 +713,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Join requests that approve themselves',
 		body: '- ✨ Any group you administer can now let people in without you tapping each request. Turn on **Auto-approve join requests** in the group’s info page: requests are approved in batches, so several people waiting means one encrypted join event instead of a queue of them.\n- ✨ Requests already waiting when you turn it on are approved too — it is not “new requests only”.\n- ✨ You still get one notification per request, and when the app let someone in for you it says **Approved** instead of **wants to join**.\n- 🔄 The safeguards stay: someone already in the group is never re-invited, anyone you removed is never auto-approved, and a group whose history cannot be read stays manual. The switch is admin-only and stays on this device.\n- 🔄 It runs while Cordn is open — on refresh and about every five minutes — so a request can take a few minutes to be approved. Turning it off stops it immediately.'
+	},
+	{
+		id: 'cordn-news-2026-11-24-repair-behind-chat',
+		createdAt: Date.UTC(2026, 10, 24),
+		version: 1,
+		title: 'A chat that fell behind can find its way back',
+		body: '- ✨ When this device misses a group change, newer messages stop opening and sending pauses. The chat now says so, and **Repair this chat** checks the group history to catch this device up. It only switches to the repaired state when the whole missed stretch can be followed; otherwise it changes nothing and offers to ask a group admin.\n- ✨ Already current but missing earlier messages? **Recover messages** replays the saved states to restore what can still be read, without changing the current group state.\n- 🔄 Your messages stay in place through either path, and a repaired device shares its fresh state with your other linked devices so they settle on the same history.\n- 🐛 A device that is behind can no longer publish its stale state as the group’s shared copy, which could pull your other devices into the same dead end.'
 	}
 ];
 

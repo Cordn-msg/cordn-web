@@ -16,8 +16,11 @@ const reconcileTipForOutboundMock = vi.fn();
 const unrecoveredDropHorizonMock = vi
 	.fn<(group: unknown) => number | undefined>()
 	.mockReturnValue(undefined);
+const ingestChatGroupMessagesMock = vi.fn();
 const markDropIssuesRecoveredMock = vi
-	.fn<(issues: Array<Record<string, unknown>>) => Array<Record<string, unknown>>>()
+	.fn<
+		(issues: Array<Record<string, unknown>>, fromCursor?: number) => Array<Record<string, unknown>>
+	>()
 	.mockImplementation((issues) => issues.map((issue) => ({ ...issue, recovered: true })));
 
 vi.mock('ts-mls', async () => {
@@ -75,18 +78,20 @@ vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
 	markWelcomeAccepted: vi.fn()
 }));
 
-vi.mock('$lib/services/chatGroupMessages.svelte', () => ({
+vi.mock('$lib/services/chatGroupMessages.svelte', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/services/chatGroupMessages.svelte')>()),
 	createApplicationMessageBase64: vi.fn(),
 	createSystemMessagesFromStateChange: vi.fn(() => []),
 	createUnsignedCordnMessageEvent: vi.fn(),
 	encodeAuthenticatedSender: vi.fn(),
 	buildInboundSystemMessage: vi.fn(() => ({ id: 'sys', content: '{}' })),
 	noteFormerPayloadKey: vi.fn(async (held: Record<string, string> | undefined) => held ?? {}),
+	ingestChatGroupMessages: ingestChatGroupMessagesMock,
 	probeSealedMessage: vi.fn(),
 	staleGenerationLeafIndex: vi.fn(() => undefined),
 	unrecoveredDropHorizon: (group: unknown) => unrecoveredDropHorizonMock(group),
-	markDropIssuesRecovered: (issues: Array<Record<string, unknown>>) =>
-		markDropIssuesRecoveredMock(issues)
+	markDropIssuesRecovered: (issues: Array<Record<string, unknown>>, fromCursor?: number) =>
+		markDropIssuesRecoveredMock(issues, fromCursor)
 }));
 
 vi.mock('$lib/services/chatGroupPayloadCrypto', () => ({
@@ -385,6 +390,25 @@ describe('getNewestHealthySnapshot()', () => {
 		const result = getNewestHealthySnapshot(snapshots);
 		expect(result?.epoch).toBe('3');
 		expect(result?.status).toBe('healthy');
+	});
+
+	test('adoption retains the old catch-up state and adds the new recovery baseline', async () => {
+		const { appendHealthySnapshot, getNewestHealthySnapshot } =
+			await import('./chatGroupSnapshots');
+		const old = {
+			groupId: 'test',
+			status: 'healthy' as const,
+			epoch: '9',
+			cursor: 0,
+			createdAt: 100,
+			stateBase64: 'AA=='
+		};
+		const adopted = { ...old, epoch: '15', cursor: 457, createdAt: 200, stateBase64: 'BB==' };
+
+		const snapshots = appendHealthySnapshot([old], adopted);
+
+		expect(snapshots).toEqual([old, adopted]);
+		expect(getNewestHealthySnapshot(snapshots)).toEqual(adopted);
 	});
 
 	test('returns undefined when no healthy snapshots exist', async () => {
@@ -1171,7 +1195,8 @@ describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', ()
 				groupMetadata: undefined
 			}
 		});
-		createWorkingChatGroupSessionMock.mockReturnValue({});
+		createWorkingChatGroupSessionMock.mockReturnValue({ lineCursor: 5 });
+		buildPersistedChatGroupMock.mockClear();
 		buildPersistedChatGroupMock.mockReturnValue({
 			id: 'gid-repair-commit',
 			ownerPubkey: 'bb'.repeat(32),
@@ -1192,6 +1217,9 @@ describe('repairSharedLeafRatchetDivergence (spec §10.1 repair discipline)', ()
 		await repairSharedLeafRatchetDivergence('gid-repair-commit', '5');
 		expect(createSelfUpdateCommitMock).toHaveBeenCalledTimes(1);
 		expect(postGroupMessageMock).toHaveBeenCalledTimes(1);
+		// Own-epoch advance: the old epoch's line proof must not survive the
+		// commit-intent write (the pending echo skips ingestion's clear).
+		expect(buildPersistedChatGroupMock.mock.calls[0][0].workingGroup.lineCursor).toBeUndefined();
 	});
 });
 
@@ -1308,7 +1336,6 @@ describe('wedged-send convergence heal (staleMark + empty catch-up fetch)', () =
 		expect(stored.id).toBe('evt-1');
 		expect(chatGroupsStore.groups.find((g) => g.id === 'held')?.staleMark).toBeUndefined();
 	});
-
 	test('a failed fetch proves nothing: the hold stays and the send is refused', async () => {
 		const { chatGroupsStore, sendChatGroupMessage } = await import('./chatGroups.svelte');
 		chatGroupsStore.groups = [seedHeldGroup()] as never;
@@ -1564,5 +1591,489 @@ describe('withLegacyEmojiMediaKey()', () => {
 		const messages = [row(1)];
 
 		expect(await withLegacyEmojiMediaKey(group(), messages)).toBe(messages);
+	});
+});
+
+describe('runChatGroupCatchUpCheck()', () => {
+	const myPk = 'bb'.repeat(32);
+	const dropIssue = {
+		cursor: 10,
+		createdAt: 1,
+		detail: 'Sealed payload decrypt failed: invalid tag'
+	};
+	const laterDropIssue = { ...dropIssue, cursor: 12 };
+
+	function snapshot(groupId: string, cursor: number) {
+		return {
+			groupId,
+			status: 'healthy' as const,
+			epoch: '2',
+			cursor,
+			createdAt: 1,
+			stateBase64: 'AA=='
+		};
+	}
+
+	function makeGroup(id: string): StoredChatGroup {
+		return {
+			id,
+			ownerPubkey: myPk,
+			coordinatorKey: 'ee'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 30,
+			fetchCursor: 30,
+			messages: [],
+			syncIssues: [dropIssue, laterDropIssue],
+			firstUnopenedCursor: 10,
+			snapshots: [snapshot(id, 0), snapshot(id, 5)],
+			joinEpoch: 2n,
+			metadata: { name: 'demo' }
+		} as StoredChatGroup;
+	}
+
+	function row(cursor: number): StoredChatMessage {
+		return {
+			cursor,
+			createdAt: cursor,
+			direction: 'inbound',
+			sender: myPk,
+			id: `ev-${cursor}`,
+			kind: 9,
+			tags: [],
+			content: `message ${cursor}`
+		};
+	}
+
+	beforeEach(() => {
+		clientStateDecoderMock.mockReset();
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 2n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+		requireActiveAccountMock.mockReset();
+		requireActiveAccountMock.mockReturnValue({ pubkey: myPk });
+		createWorkingChatGroupSessionMock.mockReset();
+		createWorkingChatGroupSessionMock.mockImplementation(
+			(group: StoredChatGroup, state: unknown) => ({
+				...group,
+				state,
+				messages: [...group.messages],
+				syncIssues: [...group.syncIssues]
+			})
+		);
+		ingestChatGroupMessagesMock.mockReset();
+		markDropIssuesRecoveredMock.mockClear();
+		getCoordinatorClientMock.mockReset();
+	});
+
+	test('replays from cursor 0 without an after, keeps live state, filters durable rows', async () => {
+		const { chatGroupsStore, runChatGroupCatchUpCheck } = await import('./chatGroups.svelte');
+		const { getChatStorage } = await import('$lib/storage/chatStorage');
+		const storage = await getChatStorage();
+		const group = makeGroup('catch-up-success');
+		await storage.putGroup({
+			id: group.id,
+			ownerPubkey: myPk,
+			coordinatorKey: group.coordinatorKey,
+			createdAt: 1,
+			lastCursor: 0,
+			fetchCursor: 0,
+			status: 'active',
+			stateBytes: new Uint8Array([1]),
+			messages: [row(10)],
+			syncIssues: []
+		});
+		chatGroupsStore.groups = [group];
+
+		const fetch = vi.fn().mockResolvedValue({
+			messages: [
+				{ gid: 'd', cursor: 3, at: 0, msg_64: 'm3' },
+				{ gid: 'd', cursor: 10, at: 1, msg_64: 'm10' },
+				{ gid: 'd', cursor: 30, at: 2, msg_64: 'm30' }
+			]
+		});
+		getCoordinatorClientMock.mockReturnValue({ FetchManyGroupMessages: fetch });
+		ingestChatGroupMessagesMock.mockImplementation(async ({ group: working }) => ({
+			received: working.id?.endsWith(':0') ? [row(10), row(30)] : []
+		}));
+
+		const result = await runChatGroupCatchUpCheck(group.id);
+
+		expect(fetch).toHaveBeenCalledWith({ groups: [{ gid: 'd', after: undefined }] });
+		// Each snapshot sees only what came after it: replaying cursor 3 on the
+		// cursor-5 state would re-apply messages that state already contains.
+		expect(
+			ingestChatGroupMessagesMock.mock.calls.map(([input]) =>
+				input.messages.map((message: StoredChatMessage) => message.cursor)
+			)
+		).toEqual([
+			[3, 10, 30],
+			[10, 30]
+		]);
+		expect(result).toEqual({
+			checked: 3,
+			recovered: 1,
+			snapshots: 2,
+			failedSnapshots: 0,
+			fromCursor: 0
+		});
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		// Live MLS state, cursors and snapshots are untouched; only the missing
+		// non-durable row is merged into the window.
+		expect(after.stateBase64).toBe(group.stateBase64);
+		expect(after.fetchCursor).toBe(30);
+		expect(after.lastCursor).toBe(30);
+		expect(after.snapshots).toEqual(group.snapshots);
+		expect(after.messages.map((message) => message.cursor)).toEqual([30]);
+		// Cursor 10 is durable/open; 12 never opened, so the frontier moves there
+		// instead of clearing (the warning must survive a partial recovery).
+		expect(after.firstUnopenedCursor).toBe(12);
+		expect(markDropIssuesRecoveredMock).toHaveBeenCalledWith(group.syncIssues, 0);
+
+		await storage.deleteGroup(group.id);
+	});
+
+	test('merges rows a partial replay opened but leaves issue and frontier state alone', async () => {
+		const { chatGroupsStore, runChatGroupCatchUpCheck } = await import('./chatGroups.svelte');
+		const group = makeGroup('catch-up-partial');
+		chatGroupsStore.groups = [group];
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn().mockResolvedValue({ messages: [] })
+		});
+		ingestChatGroupMessagesMock.mockResolvedValue({ received: [row(10), row(30)] });
+		createWorkingChatGroupSessionMock.mockImplementationOnce(() => {
+			throw new Error('broken snapshot');
+		});
+
+		const result = await runChatGroupCatchUpCheck(group.id);
+
+		expect(result).toEqual({
+			checked: 0,
+			recovered: 2,
+			snapshots: 2,
+			failedSnapshots: 1,
+			fromCursor: 0
+		});
+		// A partial replay proves nothing about the drop window: no issue may be
+		// marked recovered. Rows it did open are real, and the frontier must move
+		// past the one that opened or it would stay stuck on a seen cursor.
+		expect(markDropIssuesRecoveredMock).not.toHaveBeenCalled();
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		expect(after.stateBase64).toBe(group.stateBase64);
+		expect(after.messages.map((message) => message.cursor)).toEqual([10, 30]);
+		expect(after.syncIssues).toEqual(group.syncIssues);
+		expect(after.firstUnopenedCursor).toBe(12);
+	});
+});
+
+describe('repairChatGroup()', () => {
+	const myPk = 'bb'.repeat(32);
+
+	function snapshot(groupId: string, cursor: number) {
+		return {
+			groupId,
+			status: 'healthy' as const,
+			epoch: '9',
+			cursor,
+			createdAt: 1,
+			stateBase64: 'AA=='
+		};
+	}
+
+	function makeGroup(id: string): StoredChatGroup {
+		return {
+			id,
+			ownerPubkey: myPk,
+			coordinatorKey: 'ee'.repeat(32),
+			createdAt: 1,
+			stateBase64: 'AA==',
+			lastCursor: 457,
+			fetchCursor: 457,
+			messages: [row(336), row(337)],
+			syncIssues: [
+				{ cursor: 338, createdAt: 1, detail: 'Sealed payload decrypt failed: invalid tag' }
+			],
+			staleMark: { cursor: 338, unopenableCount: 933 },
+			firstUnopenedCursor: 338,
+			snapshots: [snapshot(id, 457)],
+			appliedDocument: { address: 'bad-doc', cursor: 297, fingerprint: '9:old' },
+			epochFingerprints: { '9': 'old' },
+			branch: { kind: 'live', sinceEpoch: '9' },
+			skippedSiblingCommit: { epoch: '9', cursor: 206 },
+			joinEpoch: 9n,
+			metadata: { name: 'demo' }
+		} as StoredChatGroup;
+	}
+
+	function row(cursor: number): StoredChatMessage {
+		return {
+			cursor,
+			createdAt: cursor,
+			direction: 'inbound',
+			sender: myPk,
+			id: `ev-${cursor}`,
+			kind: 9,
+			tags: [],
+			content: `message ${cursor}`
+		};
+	}
+
+	function fetchedMessages(count: number) {
+		return Array.from({ length: count }, (_, index) => ({
+			gid: 'd',
+			cursor: index + 1,
+			at: index + 1,
+			msg_64: `m${index + 1}`
+		}));
+	}
+
+	beforeEach(() => {
+		clientStateDecoderMock.mockReset();
+		clientStateDecoderMock.mockReturnValue([
+			{
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 9n,
+					treeHash: new Uint8Array([1]),
+					confirmedTranscriptHash: new Uint8Array([2])
+				},
+				ratchetTree: [],
+				groupActiveState: { kind: 'active' }
+			}
+		]);
+		requireActiveAccountMock.mockReset();
+		requireActiveAccountMock.mockReturnValue({ pubkey: myPk });
+		createWorkingChatGroupSessionMock.mockReset();
+		createWorkingChatGroupSessionMock.mockImplementation(
+			(group: StoredChatGroup, state: unknown) => ({
+				...group,
+				state,
+				messages: [...group.messages],
+				syncIssues: [...group.syncIssues]
+			})
+		);
+		ingestChatGroupMessagesMock.mockReset();
+		getCoordinatorClientMock.mockReset();
+	});
+
+	test('replays the skipped commits and adopts the newer state', async () => {
+		const { chatGroupsStore, repairChatGroup } = await import('./chatGroups.svelte');
+		const group = makeGroup('repair-incident');
+		chatGroupsStore.groups = [group];
+		const fetch = vi.fn().mockResolvedValue({ messages: fetchedMessages(457) });
+		getCoordinatorClientMock.mockReturnValue({ FetchManyGroupMessages: fetch });
+		ingestChatGroupMessagesMock.mockImplementation(
+			async ({
+				group: working,
+				messages
+			}: {
+				group: Record<string, unknown>;
+				messages: Array<{ cursor: number }>;
+			}) => {
+				working.state = {
+					groupContext: {
+						groupId: new Uint8Array([100]),
+						epoch: 15n,
+						treeHash: new Uint8Array([3]),
+						confirmedTranscriptHash: new Uint8Array([4])
+					},
+					groupActiveState: { kind: 'active' }
+				};
+				working.status = 'active';
+				const failed = messages.filter(
+					(message) => message.cursor <= 204 || message.cursor === 336 || message.cursor === 337
+				);
+				return {
+					received: messages
+						.filter((message) => !failed.some((issue) => issue.cursor === message.cursor))
+						.map((message) => row(message.cursor)),
+					issues: failed.map((message) => ({
+						cursor: message.cursor,
+						createdAt: message.cursor,
+						detail: 'Sealed payload decrypt failed: invalid tag'
+					}))
+				};
+			}
+		);
+
+		const result = await repairChatGroup(group.id);
+
+		expect(fetch).toHaveBeenCalledWith({ groups: [{ gid: 'd' }] });
+		expect(result).toEqual({
+			repaired: true,
+			removed: false,
+			checked: 457,
+			recovered: 251,
+			oldEpoch: '9',
+			newEpoch: '15'
+		});
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		expect(after.stateBase64).toBe('AQ==');
+		expect(after.fetchCursor).toBe(457);
+		expect(after.lastCursor).toBe(457);
+		expect(after.staleMark).toBeUndefined();
+		expect(after.firstUnopenedCursor).toBeUndefined();
+		expect(after.skippedSiblingCommit).toBeUndefined();
+		expect(after.appliedDocument).toBeUndefined();
+		expect(after.syncIssues).toEqual([]);
+		expect(after.snapshots).toHaveLength(1);
+		expect(after.snapshots[0]).toMatchObject({ status: 'healthy', epoch: '15', cursor: 457 });
+		expect(after.messages[0].cursor).toBe(205);
+		expect(after.messages.at(-1)?.cursor).toBe(457);
+		expect(after.messages.map((message) => message.cursor)).toContain(336);
+		expect(after.epochFingerprints?.['15']).toBeDefined();
+	});
+
+	test('writes nothing when the replay does not advance the epoch', async () => {
+		const { chatGroupsStore, repairChatGroup } = await import('./chatGroups.svelte');
+		const group = makeGroup('repair-no-advance');
+		group.messages = [row(10)];
+		group.fetchCursor = 10;
+		group.lastCursor = 10;
+		chatGroupsStore.groups = [group];
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn().mockResolvedValue({ messages: fetchedMessages(10) })
+		});
+		ingestChatGroupMessagesMock.mockResolvedValue({
+			received: [row(10)],
+			issues: []
+		});
+
+		const result = await repairChatGroup(group.id);
+
+		expect(result).toEqual({
+			repaired: false,
+			removed: false,
+			checked: 10,
+			recovered: 0,
+			oldEpoch: '9',
+			newEpoch: '9'
+		});
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		expect(after.stateBase64).toBe('AA==');
+		expect(after.fetchCursor).toBe(10);
+		expect(after.messages).toEqual(group.messages);
+	});
+
+	test('does not adopt a poisoned replay', async () => {
+		const { chatGroupsStore, repairChatGroup } = await import('./chatGroups.svelte');
+		const group = makeGroup('repair-poisoned');
+		group.messages = [row(10)];
+		group.fetchCursor = 10;
+		group.lastCursor = 10;
+		chatGroupsStore.groups = [group];
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn().mockResolvedValue({ messages: fetchedMessages(10) })
+		});
+		ingestChatGroupMessagesMock.mockResolvedValue({
+			received: [row(10)],
+			issues: [],
+			poisoned: true
+		});
+
+		const result = await repairChatGroup(group.id);
+
+		expect(result.repaired).toBe(false);
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		expect(after.stateBase64).toBe('AA==');
+		expect(after.fetchCursor).toBe(10);
+	});
+
+	test('reports removal instead of a sending-available repair', async () => {
+		const { chatGroupsStore, repairChatGroup } = await import('./chatGroups.svelte');
+		const group = makeGroup('repair-removed');
+		group.messages = [];
+		group.fetchCursor = 10;
+		group.lastCursor = 10;
+		chatGroupsStore.groups = [group];
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn().mockResolvedValue({ messages: fetchedMessages(10) })
+		});
+		ingestChatGroupMessagesMock.mockImplementation(async ({ group: working }) => {
+			working.state = {
+				groupContext: {
+					groupId: new Uint8Array([100]),
+					epoch: 10n,
+					treeHash: new Uint8Array([3]),
+					confirmedTranscriptHash: new Uint8Array([4])
+				}
+			};
+			working.removedAtCursor = 10;
+			return { received: [row(10)], issues: [], removedLocalMember: true };
+		});
+
+		const result = await repairChatGroup(group.id);
+
+		expect(result).toMatchObject({ repaired: true, removed: true });
+		expect(chatGroupsStore.groups[0].status).toBe('removed');
+	});
+
+	test('writes nothing when a replay leaves unresolved history', async () => {
+		const { chatGroupsStore, repairChatGroup } = await import('./chatGroups.svelte');
+		const group = makeGroup('repair-partial');
+		group.messages = [];
+		group.firstUnopenedCursor = 10;
+		group.staleMark = { cursor: 10, unopenableCount: 2 };
+		chatGroupsStore.groups = [group];
+		getCoordinatorClientMock.mockReturnValue({
+			FetchManyGroupMessages: vi.fn().mockResolvedValue({ messages: fetchedMessages(30) })
+		});
+		ingestChatGroupMessagesMock.mockImplementation(
+			async ({
+				group: working,
+				messages
+			}: {
+				group: Record<string, unknown>;
+				messages: Array<{ cursor: number }>;
+			}) => {
+				working.state = {
+					groupContext: {
+						groupId: new Uint8Array([100]),
+						epoch: 10n,
+						treeHash: new Uint8Array([3]),
+						confirmedTranscriptHash: new Uint8Array([4])
+					},
+					groupActiveState: { kind: 'active' }
+				};
+				const failed = messages.filter((message) => message.cursor !== 10 && message.cursor !== 19);
+				return {
+					received: messages
+						.filter((message) => message.cursor === 10 || message.cursor === 19)
+						.map((message) => row(message.cursor)),
+					issues: failed.map((message) => ({
+						cursor: message.cursor,
+						createdAt: message.cursor,
+						detail: 'Sealed payload decrypt failed: invalid tag'
+					}))
+				};
+			}
+		);
+
+		const result = await repairChatGroup(group.id);
+
+		expect(result).toEqual({
+			repaired: false,
+			removed: false,
+			checked: 30,
+			recovered: 0,
+			oldEpoch: '9',
+			newEpoch: '10'
+		});
+		const after = chatGroupsStore.groups.find((candidate) => candidate.id === group.id)!;
+		expect(after.stateBase64).toBe('AA==');
+		expect(after.fetchCursor).toBe(457);
+		expect(after.messages).toEqual([]);
+		expect(after.snapshots).toEqual([snapshot(group.id, 457)]);
+		expect(after.firstUnopenedCursor).toBe(10);
+		expect(after.staleMark).toEqual({ cursor: 10, unopenableCount: 2 });
 	});
 });

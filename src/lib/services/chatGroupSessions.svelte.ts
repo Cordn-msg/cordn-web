@@ -32,6 +32,10 @@ export interface PersistedChatGroupLike {
 	 *  held once the run proves the device is behind. Cleared by any message
 	 *  that decrypts at the current epoch. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Newest cursor opened from another member at the current epoch. */
+	lineCursor?: number;
+	/** Earliest cursor whose sealed payload never opened here. */
+	firstUnopenedCursor?: number;
 	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
 	 *  seals under an epoch we already left. */
 	formerPayloadKeys?: Record<string, string>;
@@ -54,6 +58,9 @@ export interface WorkingChatGroupSession {
 	/** Updated by ingestion's unseal-failure hook; cleared on a current-epoch
 	 *  decrypt (see PersistedChatGroupLike). */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Line and unopened-frontier evidence (see PersistedChatGroupLike). */
+	lineCursor?: number;
+	firstUnopenedCursor?: number;
 	/** Retained per-epoch payload keys (see PersistedChatGroupLike). */
 	formerPayloadKeys?: Record<string, string>;
 }
@@ -74,6 +81,8 @@ export function createWorkingChatGroupSession(
 		removedAtCursor: group.removedAtCursor,
 		poisonedAtCursor: group.poisonedAtCursor,
 		staleMark: group.staleMark,
+		lineCursor: group.lineCursor,
+		firstUnopenedCursor: group.firstUnopenedCursor,
 		formerPayloadKeys: group.formerPayloadKeys
 	};
 }
@@ -161,6 +170,8 @@ export function buildPersistedChatGroup<TGroup extends PersistedChatGroupLike>(p
 		// current-epoch decrypt CLEARS the mark by writing undefined, and that
 		// clear must survive the persist.
 		staleMark: params.workingGroup.staleMark,
+		lineCursor: params.workingGroup.lineCursor,
+		firstUnopenedCursor: params.workingGroup.firstUnopenedCursor,
 		formerPayloadKeys: params.workingGroup.formerPayloadKeys ?? params.group.formerPayloadKeys,
 		// Fork evidence written by ingestion's sibling-skip hook (spec §10 step
 		// 1) — a fresh skip replaces, no skip keeps the previous one (cleared on

@@ -16,15 +16,23 @@
 	import PetnameMark from '$lib/components/PetnameMark.svelte';
 	import { resolve } from '$app/paths';
 	import {
+		chatGroupInfoActionsStore,
 		chatHeaderActionsStore,
+		checkChatGroupMessagesAction,
 		inviteGroupMemberAction,
-		refreshInviteKeyPackagesAction
+		refreshInviteKeyPackagesAction,
+		repairChatGroupAction
 	} from '$lib/services/chatUiActions.svelte';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { getChatCoordinator } from '$lib/services/chatCoordinators.svelte';
 	import { groupRouteId } from '$lib/services/chatGroupLinks.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import { openChatCall } from '$lib/services/chatCalls.svelte';
+	import { unrecoveredDropHorizon } from '$lib/services/chatGroupMessages.svelte';
+	import {
+		chatGroupUnopenedCursor,
+		classifyChatGroupUnopened
+	} from '$lib/services/chatGroupRecovery';
 	import {
 		getChatGroup,
 		isChatGroupRemoved,
@@ -73,6 +81,24 @@
 	const group = $derived.by(() => (groupId ? getChatGroup(groupId) : undefined));
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
+	const unopenedCursor = $derived.by(() => {
+		if (!group) return undefined;
+		return chatGroupUnopenedCursor({
+			firstUnopenedCursor: group.firstUnopenedCursor,
+			dropHorizon: unrecoveredDropHorizon(group),
+			staleMarkCursor: group.staleMark?.cursor
+		});
+	});
+	const unopenedVerdict = $derived.by(() =>
+		classifyChatGroupUnopened({
+			poisoned: isPoisoned,
+			firstUnopenedCursor: unopenedCursor,
+			durableFrontier: group?.firstUnopenedCursor,
+			adoptedCursor: group?.appliedDocument?.cursor,
+			stateBehind: group?.staleMark !== undefined || group?.skippedSiblingCommit !== undefined,
+			lineCursor: group?.lineCursor
+		})
+	);
 	const canInvite = $derived.by(() => {
 		if (!$activeAccount || !group) return false;
 		if (isRemoved) return false;
@@ -248,6 +274,40 @@
 		<p class="px-4 pb-3 text-sm text-destructive md:px-6">
 			This group's local state is corrupted. New messages cannot be decrypted. Contact a group admin
 			to request a fresh invite.
+		</p>
+	{:else if group && unopenedVerdict && unopenedVerdict !== 'poisoned'}
+		<p class="px-4 pb-3 text-sm text-amber-600 md:px-6 dark:text-amber-400">
+			{unopenedVerdict === 'foreign-keys'
+				? 'Some messages here use different group keys'
+				: unopenedVerdict === 'catch-up'
+					? 'Some earlier messages are still missing'
+					: 'This device may be behind this group'}
+			{#if (unopenedVerdict === 'behind' || unopenedVerdict === 'catch-up') && groupId}
+				·
+				<Button
+					variant="link"
+					size="xs"
+					class="h-auto p-0 text-amber-600 dark:text-amber-400"
+					disabled={chatGroupInfoActionsStore.repairSubmitting ||
+						chatGroupInfoActionsStore.catchUpSubmitting}
+					onclick={() =>
+						void (unopenedVerdict === 'catch-up'
+							? checkChatGroupMessagesAction(groupId)
+							: repairChatGroupAction(groupId))}
+				>
+					{chatGroupInfoActionsStore.repairSubmitting &&
+					chatGroupInfoActionsStore.repairGroupId === groupId
+						? 'Repairing…'
+						: chatGroupInfoActionsStore.catchUpSubmitting &&
+							  chatGroupInfoActionsStore.catchUpGroupId === groupId
+							? 'Recovering…'
+							: unopenedVerdict === 'catch-up'
+								? 'Recover messages'
+								: 'Repair this chat'}
+				</Button>
+			{/if}
+			·
+			<a class="underline underline-offset-2" href={infoHref}>group details</a>
 		</p>
 	{/if}
 

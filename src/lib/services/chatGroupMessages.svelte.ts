@@ -109,6 +109,9 @@ export interface GroupMessageIngestionTarget {
 	/** Missed-update evidence (see PersistedChatGroupLike): set on an unopenable
 	 *  sealed payload, cleared by a current-epoch decrypt. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Line and unopened-frontier evidence (see PersistedChatGroupLike). */
+	lineCursor?: number;
+	firstUnopenedCursor?: number;
 	/** Retained per-epoch payload keys (newest-4 epochs, epoch → base64 key):
 	 *  a lagging sender seals under an epoch we already left. */
 	formerPayloadKeys?: Record<string, string>;
@@ -698,12 +701,37 @@ export function unrecoveredDropHorizon(group: {
 	return horizon;
 }
 
+/** The frontier after the earliest unopened cursor finally opened: the next
+ *  sealed-payload failure with no row here. Issues marked recovered still
+ *  count — recovered means "a pass ran", not "the message opened". */
+export function nextUnopenedCursor(
+	issues: StoredChatSyncIssue[],
+	openedCursors: ReadonlySet<number>,
+	openedCursor: number
+): number | undefined {
+	let next: number | undefined;
+	for (const issue of issues) {
+		if (issue.cursor <= openedCursor) continue;
+		if (!issue.detail.startsWith(DECRYPT_FAILED_DETAIL)) continue;
+		if (openedCursors.has(issue.cursor)) continue;
+		if (next === undefined || issue.cursor < next) next = issue.cursor;
+	}
+	return next;
+}
+
 /** Mark the drop-class issues as recovered: a successful pass ran over their
  *  window — the messages arrived and either opened or were proven unopenable;
  *  either way the recovery fetch must not repeat. */
-export function markDropIssuesRecovered(issues: StoredChatSyncIssue[]): StoredChatSyncIssue[] {
+export function markDropIssuesRecovered(
+	issues: StoredChatSyncIssue[],
+	/** Only issues above this cursor were inside the replay window (the
+	 *  coordinator fetch is exclusive). */
+	fromCursor = -Infinity
+): StoredChatSyncIssue[] {
 	return issues.map((issue) =>
-		isUnrecoveredDropIssue(issue) ? { ...issue, recovered: true } : issue
+		isUnrecoveredDropIssue(issue) && issue.cursor > fromCursor
+			? { ...issue, recovered: true }
+			: issue
 	);
 }
 
@@ -851,10 +879,12 @@ export async function ingestChatGroupMessages(params: {
 	if (!params.previewOnly && group.id && messages.length > 0) {
 		try {
 			const storage = await getChatStorage();
-			const persisted = await storage.getPersistedMessageCursors(
-				group.id,
-				messages.map((message) => message.cursor)
-			);
+			const persisted = await storage.getPersistedMessageCursors(group.id, [
+				...messages.map((message) => message.cursor),
+				// Issue cursors too: the frontier move below must tell an opened
+				// failure from one that still has no row here.
+				...group.syncIssues.map((issue) => issue.cursor)
+			]);
 			for (const cursor of persisted) seenCursors.add(cursor);
 		} catch (error) {
 			// Storage unavailable: fall back to in-memory dedupe only.
@@ -937,6 +967,10 @@ export async function ingestChatGroupMessages(params: {
 					cursor: group.staleMark?.cursor ?? message.cursor,
 					unopenableCount: (group.staleMark?.unopenableCount ?? 0) + 1
 				};
+				group.firstUnopenedCursor = Math.min(
+					group.firstUnopenedCursor ?? message.cursor,
+					message.cursor
+				);
 				if (params.mdActive && !advancePastUnopenablePayload(group.id)) {
 					heldUnopenableByGroup.set(group.id, { rescued: false });
 					// Held (spec §10.6): later messages may still be readable in this
@@ -955,6 +989,7 @@ export async function ingestChatGroupMessages(params: {
 		let processed: Awaited<ReturnType<typeof processMessageBase64>>;
 		let commitSenderPubkey: string | undefined;
 		let commitProposals: ProposalWithSender[] = [];
+		const epochBefore = group.state.groupContext?.epoch;
 
 		try {
 			const adminCallback = createAdminAuthorizationCallback({
@@ -1014,6 +1049,9 @@ export async function ingestChatGroupMessages(params: {
 				// runs inside catchUpGroupFromChain's unguarded replay loop, where a throw
 				// would abort gap recovery and silently lose the offline message window.
 				try {
+					// A sibling Commit proves a missed epoch transition: the old line
+					// cursor is not reusable evidence.
+					group.lineCursor = undefined;
 					const systemMessages = createSystemMessagesFromCommitProposals({
 						cursor: message.cursor,
 						createdAt: message.createdAt,
@@ -1140,7 +1178,31 @@ export async function ingestChatGroupMessages(params: {
 		// group's line (staircase StaleEpochTest: "back to normal"): the
 		// missed-update mark goes and commits work again. A former-epoch decrypt
 		// (a lagging sender) proves no such thing and keeps the mark.
-		if (!formerEpoch) group.staleMark = undefined;
+		if (message.cursor === group.firstUnopenedCursor) {
+			group.firstUnopenedCursor = nextUnopenedCursor(group.syncIssues, seenCursors, message.cursor);
+		}
+		if (!formerEpoch) {
+			group.staleMark = undefined;
+			let sender = commitSenderPubkey;
+			if (!sender && processed.kind === 'applicationMessage') {
+				try {
+					sender = decodeAuthenticatedSender(processed.aad);
+				} catch {
+					// no authenticated sender: cannot attribute the line
+				}
+			}
+			const thirdParty =
+				sender !== undefined &&
+				params.localStablePubkey !== undefined &&
+				safeNormalizePubKey(sender) !== safeNormalizePubKey(params.localStablePubkey);
+			if (group.state.groupContext?.epoch !== epochBefore) {
+				// The line does not cross an epoch this device produced itself.
+				if (thirdParty) group.lineCursor = Math.max(group.lineCursor ?? 0, message.cursor);
+				else group.lineCursor = undefined;
+			} else if (thirdParty) {
+				group.lineCursor = Math.max(group.lineCursor ?? 0, message.cursor);
+			}
+		}
 
 		if (processed.kind === 'newState' && wasMessageRejectedByCallback(processed)) {
 			group.fetchCursor = message.cursor;

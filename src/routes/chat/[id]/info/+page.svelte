@@ -18,6 +18,11 @@
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import { getNewestHealthySnapshot } from '$lib/services/chatGroupSnapshots';
+	import { unrecoveredDropHorizon } from '$lib/services/chatGroupMessages.svelte';
+	import {
+		chatGroupUnopenedCursor,
+		classifyChatGroupUnopened
+	} from '$lib/services/chatGroupRecovery';
 	import {
 		clearChatGroupSyncIssues,
 		decodeStoredGroupState,
@@ -30,8 +35,10 @@
 	} from '$lib/services/chatGroups.svelte';
 	import {
 		chatGroupInfoActionsStore,
+		checkChatGroupMessagesAction,
 		deleteGroupAction,
 		recoverPoisonedGroupAction,
+		repairChatGroupAction,
 		refreshJoinRequestsAction,
 		requestGroupRepairAction,
 		removeGroupMemberAction,
@@ -69,6 +76,35 @@
 	});
 	const isRemoved = $derived.by(() => isChatGroupRemoved(group));
 	const isPoisoned = $derived.by(() => isChatGroupPoisoned(group));
+	const unopenedCursor = $derived.by(() => {
+		if (!group) return undefined;
+		return chatGroupUnopenedCursor({
+			firstUnopenedCursor: group.firstUnopenedCursor,
+			dropHorizon: unrecoveredDropHorizon(group),
+			staleMarkCursor: group.staleMark?.cursor
+		});
+	});
+	const unopenedVerdict = $derived.by(() =>
+		classifyChatGroupUnopened({
+			poisoned: isPoisoned,
+			firstUnopenedCursor: unopenedCursor,
+			durableFrontier: group?.firstUnopenedCursor,
+			adoptedCursor: group?.appliedDocument?.cursor,
+			stateBehind: group?.staleMark !== undefined || group?.skippedSiblingCommit !== undefined,
+			lineCursor: group?.lineCursor
+		})
+	);
+	// Only this group's own check: the route is reused when the id changes.
+	const catchUpResult = $derived(
+		chatGroupInfoActionsStore.catchUpGroupId === group?.id
+			? chatGroupInfoActionsStore.catchUpResult
+			: null
+	);
+	const repairResult = $derived(
+		chatGroupInfoActionsStore.repairGroupId === group?.id
+			? chatGroupInfoActionsStore.repairResult
+			: null
+	);
 	const hasHealthySnapshot = $derived.by(() => {
 		if (!group) return false;
 		return getNewestHealthySnapshot(group.snapshots ?? []) !== undefined;
@@ -344,6 +380,153 @@
 						{/if}
 						{#if chatGroupInfoActionsStore.error}
 							<p class="mt-2 text-xs">{chatGroupInfoActionsStore.error}</p>
+						{/if}
+					</div>
+				{/if}
+
+				{#if !isRemoved && !isPoisoned && unopenedVerdict && unopenedCursor !== undefined}
+					<div class="rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-4 text-sm">
+						<p class="font-semibold">
+							{unopenedVerdict === 'foreign-keys'
+								? 'Some messages use different group keys'
+								: unopenedVerdict === 'catch-up'
+									? 'Some earlier messages are still missing'
+									: 'This device may have missed a group change'}
+						</p>
+						<p class="mt-1 text-xs text-muted-foreground">
+							{#if unopenedVerdict === 'foreign-keys'}
+								Messages from cursor {unopenedCursor} were sealed with keys this device does not hold.
+								Another member's app may be out of step; everything this device can read stays available.
+							{:else if unopenedVerdict === 'catch-up'}
+								This device has the current group state. Check its saved states to recover earlier
+								messages without changing that state.
+							{:else}
+								Messages from cursor {unopenedCursor} could not be opened, so this device may be behind.
+								Repair checks the group history and updates this device only if it can follow the group
+								again. Your messages stay here.
+							{/if}
+						</p>
+						<div class="mt-3 flex flex-wrap gap-2">
+							{#if unopenedVerdict === 'behind'}
+								<Button
+									type="button"
+									size="sm"
+									disabled={chatGroupInfoActionsStore.repairSubmitting ||
+										chatGroupInfoActionsStore.catchUpSubmitting}
+									onclick={() => repairChatGroupAction(group.id)}
+								>
+									{#if chatGroupInfoActionsStore.repairSubmitting && chatGroupInfoActionsStore.repairGroupId === group.id}
+										<Spinner class="mr-2 size-4" />
+										Repairing…
+									{:else}
+										Repair this chat
+									{/if}
+								</Button>
+							{/if}
+							<Button
+								type="button"
+								variant={unopenedVerdict === 'behind' ? 'ghost' : 'outline'}
+								size="sm"
+								disabled={chatGroupInfoActionsStore.catchUpSubmitting ||
+									chatGroupInfoActionsStore.repairSubmitting}
+								onclick={() => checkChatGroupMessagesAction(group.id)}
+							>
+								{#if chatGroupInfoActionsStore.catchUpSubmitting && chatGroupInfoActionsStore.catchUpGroupId === group.id}
+									<Spinner class="mr-2 size-4" />
+									Checking…
+								{:else}
+									{unopenedVerdict === 'catch-up'
+										? 'Recover messages'
+										: 'Check for missing messages'}
+								{/if}
+							</Button>
+						</div>
+						{#if catchUpResult}
+							{#if catchUpResult.failedSnapshots > 0}
+								<p class="mt-2 text-xs text-destructive">
+									Could not check {catchUpResult.failedSnapshots} of {catchUpResult.snapshots} saved states.
+								</p>
+							{/if}
+							{#if catchUpResult.snapshots === 0}
+								<p class="mt-2 text-xs">No saved state is available to check against.</p>
+							{:else if catchUpResult.recovered > 0}
+								<p class="mt-2 text-xs">
+									Recovered {catchUpResult.recovered}
+									{catchUpResult.recovered === 1 ? 'message' : 'messages'} from a saved state. This device's
+									current state was not changed.
+								</p>
+							{:else if catchUpResult.failedSnapshots === 0}
+								<p class="mt-2 text-xs">
+									Checked {catchUpResult.checked}
+									{catchUpResult.checked === 1 ? 'message' : 'messages'} from cursor
+									{catchUpResult.fromCursor}: nothing this device can open is missing.
+								</p>
+							{/if}
+						{/if}
+						{#if chatGroupInfoActionsStore.error && (chatGroupInfoActionsStore.catchUpGroupId === group.id || chatGroupInfoActionsStore.repairGroupId === group.id)}
+							<p class="mt-2 text-xs text-destructive">{chatGroupInfoActionsStore.error}</p>
+						{/if}
+					</div>
+				{/if}
+
+				{#if group && repairResult}
+					<div
+						class="rounded-2xl border px-4 py-4 text-sm {repairResult.repaired &&
+						!repairResult.removed
+							? 'border-green-500/30 bg-green-500/5'
+							: 'border-amber-500/30 bg-amber-500/5'}"
+					>
+						{#if repairResult.removed}
+							<p class="font-semibold">You're no longer a member of this group</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								The group history shows that this membership was removed. Ask a group admin to let
+								you back in. Your local messages stay here.
+							</p>
+						{:else if repairResult.repaired}
+							<p class="font-semibold text-green-700 dark:text-green-400">You're caught up</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								Recovered {repairResult.recovered}
+								{repairResult.recovered === 1 ? 'message' : 'messages'}. This device is now at epoch
+								{repairResult.newEpoch}. Sending is available again.
+							</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								Messages sent while this chat was out of sync may still be unreadable to other
+								members. They stay in your history here.
+							</p>
+						{:else}
+							<p class="font-semibold">This device couldn't repair itself</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								Ask a group admin to let this device back in. Nothing local is deleted while you
+								wait.
+							</p>
+						{/if}
+						{#if !repairResult.repaired || repairResult.removed}
+							{#if repairRequested}
+								<p class="mt-2 text-xs">
+									Rejoin requested. Your messages stay here while you wait for an admin.
+								</p>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									class="mt-1"
+									disabled={chatGroupInfoActionsStore.recoverySubmitting}
+									onclick={() => requestGroupRepairAction(group.id, { force: true })}
+								>
+									Send again
+								</Button>
+							{:else}
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									class="mt-2"
+									disabled={chatGroupInfoActionsStore.recoverySubmitting}
+									onclick={() => requestGroupRepairAction(group.id)}
+								>
+									Ask to rejoin
+								</Button>
+							{/if}
 						{/if}
 					</div>
 				{/if}

@@ -35,7 +35,9 @@ import {
 	createSystemMessagesFromStateChange,
 	createUnsignedCordnMessageEvent,
 	encodeAuthenticatedSender,
+	ingestChatGroupMessages,
 	markDropIssuesRecovered,
+	nextUnopenedCursor,
 	noteFormerPayloadKey,
 	staleGenerationLeafIndex,
 	probeSealedMessage,
@@ -44,6 +46,7 @@ import {
 	type StoredChatSyncIssue
 } from '$lib/services/chatGroupMessages.svelte';
 import { noteStateFingerprint } from '$lib/services/multiDevice';
+import { chatGroupUnopenedCursor, deriveLineCursor } from '$lib/services/chatGroupRecovery';
 import { encryptGroupPayloadBase64 } from '$lib/services/chatGroupPayloadCrypto';
 import { deriveMediaKey, hasEncryptedMediaTag } from '$lib/services/chatMediaCrypto';
 import { dropStaleEmojiMediaTags, EMOJI_MEDIA_TAG } from '$lib/chat/emoji';
@@ -158,6 +161,12 @@ export interface StoredChatGroup {
 	 *  payload. Refuses commits while set, sends once the run reaches 2; cleared
 	 *  by any message that decrypts at the current epoch. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Newest cursor at which another member's message decrypted at the current
+	 *  epoch — positive evidence this device is on a line someone else is on. */
+	lineCursor?: number;
+	/** Earliest cursor whose sealed payload never opened here (durable beyond
+	 *  the 50-issue cap). */
+	firstUnopenedCursor?: number;
 	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
 	 *  seals under an epoch we already left (report-05 disappearing messages). */
 	formerPayloadKeys?: Record<string, string>;
@@ -434,6 +443,8 @@ function toStoredGroupData(group: StoredChatGroup): StoredChatGroupData {
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
 		staleMark: group.staleMark,
+		lineCursor: group.lineCursor,
+		firstUnopenedCursor: group.firstUnopenedCursor,
 		formerPayloadKeys: group.formerPayloadKeys,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision,
@@ -478,6 +489,27 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 	if (decoded) {
 		groupStateEntry(group.id, stateBase64).facts ??= deriveGroupStateFacts(decoded[0]);
 	}
+	// Records from before `lineCursor` existed: derive it from the loaded window
+	// so the first verdict needs no new traffic. Only messages after the current
+	// epoch began count.
+	const derivedLineCursor = (() => {
+		if (group.lineCursor !== undefined || !decoded) return group.lineCursor;
+		const epoch = decoded[0].groupContext.epoch.toString();
+		const epochStarts = (group.snapshots ?? [])
+			.filter((snapshot) => snapshot.epoch === epoch)
+			.map((snapshot) => snapshot.cursor);
+		const epochStartCursor =
+			epochStarts.length > 0
+				? Math.min(...epochStarts)
+				: group.joinEpoch !== undefined && BigInt(group.joinEpoch).toString() === epoch
+					? 0
+					: undefined;
+		return deriveLineCursor({
+			epochStartCursor,
+			ownerPubkey: group.ownerPubkey ?? manager.getActive()?.pubkey,
+			messages: group.messages
+		});
+	})();
 	return {
 		id: group.id,
 		ownerPubkey: group.ownerPubkey,
@@ -506,6 +538,8 @@ function fromStoredGroupData(group: StoredChatGroupData): StoredChatGroup {
 		branch: group.branch,
 		skippedSiblingCommit: group.skippedSiblingCommit,
 		staleMark: group.staleMark,
+		lineCursor: derivedLineCursor,
+		firstUnopenedCursor: group.firstUnopenedCursor,
 		formerPayloadKeys: group.formerPayloadKeys,
 		commitPoint: group.commitPoint,
 		forkDecision: group.forkDecision
@@ -1161,6 +1195,9 @@ export function replaceGroup(groupId: string, nextGroup: StoredChatGroup) {
  */
 async function persistCommitIntent(group: StoredChatGroup, newState: ClientState): Promise<void> {
 	const workingGroup = createWorkingChatGroupSession(group, newState);
+	// An own Commit moves the epoch; a line proved at the old epoch is not proof
+	// at the new one, and the pending echo skips ingestion's clear.
+	workingGroup.lineCursor = undefined;
 	// The epoch this Commit leaves is one a lagging sender may still seal under
 	// (report-05 disappearing messages): keep its payload key.
 	workingGroup.formerPayloadKeys = await noteFormerPayloadKey(
@@ -1581,7 +1618,11 @@ export async function repairSharedLeafRatchetDivergence(
 				// advance must still land as a system message at the Commit's cursor:
 				// that record is what dedupes a re-delivered self-echo via seenCursors
 				// instead of failing decryption (ownCommitRegression "bug 2").
-				const workingGroup = createWorkingChatGroupSession(group, commitResult.newState);
+				// Post-intent record: persistCommitIntent already cleared the old line.
+				const workingGroup = createWorkingChatGroupSession(
+					requireChatGroup(group.id),
+					commitResult.newState
+				);
 				for (const systemMessage of createSystemMessagesFromStateChange({
 					cursor: posted.cursor,
 					createdAt: posted.at,
@@ -2188,7 +2229,7 @@ export async function removeChatGroupMember(input: {
 
 		const removeWorkingGroup = createWorkingChatGroupSession(
 			{
-				...group,
+				...requireChatGroup(group.id),
 				metadata:
 					toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 					group.metadata
@@ -2298,7 +2339,7 @@ export async function updateChatGroupMetadata(input: {
 
 		const metadataWorkingGroup = createWorkingChatGroupSession(
 			{
-				...group,
+				...requireChatGroup(group.id),
 				metadata:
 					toPersistedGroupMetadata(getCordnGroupMetadataExtension(commitResult.newState)) ??
 					metadata
@@ -2709,6 +2750,369 @@ export async function sendChatGroupMessage(input: {
 	});
 }
 
+export interface ChatGroupCatchUpResult {
+	/** Messages fetched and replayed from the oldest retained state. */
+	checked: number;
+	/** Cursors that opened in a replay and were not already durable here. */
+	recovered: number;
+	/** Retained states a replay was attempted from. */
+	snapshots: number;
+	/** Retained states whose replay threw and could not be checked. */
+	failedSnapshots: number;
+	fromCursor: number;
+}
+
+/**
+ * Non-destructive full catch-up (staircase `AccountRuntime.fullCatchUp`):
+ * refetch this group from its oldest retained state and replay every retained
+ * state, oldest first, on a throwaway working copy. Messages that open in a
+ * replay and are not durable here are merged in; the live MLS state, cursors
+ * and snapshots are never replaced. This answers "is anything missing that a
+ * saved state can open?" without risking a working group, and is the honest
+ * tool when the outer seal fails (an `invalid tag` hides the sender's epoch,
+ * so a rollback cannot be shown to help beforehand).
+ */
+export async function runChatGroupCatchUpCheck(groupId: string): Promise<ChatGroupCatchUpResult> {
+	return runGroupOperation(groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to check this group');
+		const group = requireChatGroup(groupId);
+		assertChatGroupIsActive(group);
+		const snapshots = [...group.snapshots].sort((a, b) => a.cursor - b.cursor);
+		if (snapshots.length === 0) {
+			return {
+				checked: 0,
+				recovered: 0,
+				snapshots: 0,
+				failedSnapshots: 0,
+				fromCursor: group.fetchCursor
+			};
+		}
+
+		const fromCursor = snapshots[0].cursor;
+		const gid = groupIdDecoder.decode(decodeStoredGroupState(group).groupContext.groupId);
+		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchManyGroupMessages({
+				// The contract requires a positive cursor; a snapshot at 0 means
+				// "from the start", which is an absent `after`.
+				groups: [{ gid, after: fromCursor > 0 ? fromCursor : undefined }]
+			})
+		);
+		const messages = result.messages
+			.filter((message) => message.gid === gid)
+			.map((message) => ({
+				cursor: message.cursor,
+				createdAt: message.at,
+				opaqueMessageBase64: message.msg_64
+			}))
+			.sort((a, b) => a.cursor - b.cursor);
+
+		const liveCursors = new Set(group.messages.map((message) => message.cursor));
+		const opened = new Map<number, StoredChatMessage>();
+		let replayed = 0;
+		let failedSnapshots = 0;
+		for (const snapshot of snapshots) {
+			try {
+				const state = decodeStoredGroupState({ ...group, stateBase64: snapshot.stateBase64 });
+				const working = createWorkingChatGroupSession(group, state);
+				// A replay must not inherit the live window's dedupe: only what this
+				// state itself can open counts. Persistence is filtered afterwards. A
+				// scoped id keeps ingest's hold/rescue globals off the live group.
+				working.id = `catch-up:${groupId}:${snapshot.cursor}`;
+				working.messages = [];
+				working.syncIssues = [];
+				working.fetchCursor = snapshot.cursor;
+				working.lastCursor = snapshot.cursor;
+				working.status = 'active';
+				working.staleMark = undefined;
+				working.skippedSiblingCommit = undefined;
+				const sync = await ingestChatGroupMessages({
+					group: working,
+					// A snapshot already contains everything through its own cursor.
+					messages: messages.filter((message) => message.cursor > snapshot.cursor),
+					localStablePubkey: normalizePubKey(account.pubkey),
+					mdActive: true,
+					previewOnly: true
+				});
+				for (const message of sync.received) {
+					if (!liveCursors.has(message.cursor) && !opened.has(message.cursor)) {
+						opened.set(message.cursor, message);
+					}
+				}
+				replayed++;
+			} catch (error) {
+				// Keep the other snapshots' results; a broken state is itself a finding.
+				failedSnapshots++;
+				console.warn('[chat-catch-up] snapshot replay failed', {
+					groupId,
+					snapshotEpoch: snapshot.epoch,
+					snapshotCursor: snapshot.cursor,
+					error: errorMessage(error)
+				});
+			}
+		}
+
+		let recoveredMessages = [...opened.values()];
+		let durableCursors = new Set<number>();
+		if (recoveredMessages.length > 0 || group.firstUnopenedCursor !== undefined) {
+			const storage = await getChatStorage();
+			durableCursors = await storage.getPersistedMessageCursors(groupId, [
+				...recoveredMessages.map((message) => message.cursor),
+				...(group.firstUnopenedCursor !== undefined ? [group.firstUnopenedCursor] : []),
+				// Later issue cursors: the frontier move must not point at a row
+				// that already opened.
+				...group.syncIssues.map((issue) => issue.cursor)
+			]);
+			recoveredMessages = recoveredMessages.filter(
+				(message) => !durableCursors.has(message.cursor)
+			);
+		}
+		// The replay ran across awaits: never write an old account's group into
+		// the store after a switch (replaceGroup matches by id only).
+		assertCoordinatorOperationActive(account);
+
+		// Rows a replay opened are real whatever the other snapshots did; only
+		// issue recovery needs the whole window checked.
+		const fullReplay = replayed === snapshots.length;
+		// Every retained state replayed over the whole window: any drop issue is
+		// now either opened or proven unopenable from local history, so the
+		// automatic drop-refetch loop must not repeat it.
+		const syncIssues = fullReplay
+			? markDropIssuesRecovered(group.syncIssues, fromCursor)
+			: group.syncIssues;
+		const openedCursors = new Set([
+			...liveCursors,
+			...durableCursors,
+			...recoveredMessages.map((message) => message.cursor)
+		]);
+		let firstUnopenedCursor = group.firstUnopenedCursor;
+		if (firstUnopenedCursor !== undefined && openedCursors.has(firstUnopenedCursor)) {
+			firstUnopenedCursor = nextUnopenedCursor(syncIssues, openedCursors, firstUnopenedCursor);
+		}
+		const frontierChanged = firstUnopenedCursor !== group.firstUnopenedCursor;
+		const issuesChanged = syncIssues.some((issue, index) => issue !== group.syncIssues[index]);
+		if (recoveredMessages.length > 0 || issuesChanged || frontierChanged) {
+			const next: StoredChatGroup = { ...group, syncIssues, firstUnopenedCursor };
+			if (recoveredMessages.length > 0) {
+				// Recovered rows can sit below the live tail; cap from the history
+				// side so the row this pass recovered survives to be persisted.
+				next.messages = capWindowRows(
+					mergeWindowMessages(group.messages, recoveredMessages),
+					'high'
+				);
+			}
+			replaceGroup(groupId, next);
+		}
+
+		return {
+			checked: messages.length,
+			recovered: recoveredMessages.length,
+			snapshots: snapshots.length,
+			failedSnapshots,
+			fromCursor
+		};
+	});
+}
+
+export interface ChatGroupRepairResult {
+	/** True only when the replay advanced the epoch with no unresolved row. */
+	repaired: boolean;
+	/** The replay discovered that this account was removed from the group. */
+	removed: boolean;
+	/** Cursors fetched for the replay (from the beginning of retained history). */
+	checked: number;
+	/** Rows the replay opened that were not already durable here. */
+	recovered: number;
+	oldEpoch: string;
+	newEpoch: string;
+}
+
+/**
+ * State-adopting replay (the guided "Repair this chat" action).
+ *
+ * The non-destructive catch-up above can prove that saved states open messages,
+ * but it cannot heal a device whose live state is stuck before a Commit: every
+ * snapshot may be on the same stale branch, and the live cursors already cover
+ * the missed window. This function instead replays the coordinator history on a
+ * throwaway copy of the LIVE state, applies the Commits the device skipped, and
+ * adopts that state only when the epoch actually advances.
+ *
+ * Fetching from the beginning is deliberate: the durable frontier may be after
+ * the first missed Commit (the incident had `firstUnopenedCursor` 338 while the
+ * first applicable message was 205), so no cursor field gives a safe start.
+ * Old/pre-join messages simply fail to open and are skipped; the first message
+ * the state can process is where the replay becomes meaningful.
+ *
+ * Safety:
+ * - Nothing is written unless the replay advances the epoch, is not poisoned,
+ *   and leaves no unresolved row at or after the evidence that prompted repair.
+ *   A partial replay must not replace the state: its snapshots are the only
+ *   source that can still open the unresolved history, and the native cursor
+ *   is MAX-clamped and cannot follow a rewound web cursor.
+ * - Local history is merged, never replaced; stale branch snapshots are retired.
+ * - The replayed state is recorded as a healthy snapshot and published as the
+ *   group's multi-device document (the publish guard skips behind groups).
+ */
+export async function repairChatGroup(groupId: string): Promise<ChatGroupRepairResult> {
+	return runGroupOperation(groupId, async () => {
+		const account = requireActiveAccount('You must be logged in to repair this group');
+		const group = requireChatGroup(groupId);
+		assertChatGroupIsActive(group);
+
+		const state = decodeStoredGroupState(group);
+		const oldEpoch = state.groupContext.epoch;
+		const gid = groupIdDecoder.decode(state.groupContext.groupId);
+		const result = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+			client.FetchManyGroupMessages({ groups: [{ gid }] })
+		);
+		const messages = result.messages
+			.filter((message) => message.gid === gid)
+			.map((message) => ({
+				cursor: message.cursor,
+				createdAt: message.at,
+				opaqueMessageBase64: message.msg_64
+			}))
+			.sort((a, b) => a.cursor - b.cursor);
+
+		const working = createWorkingChatGroupSession(group, state);
+		// A replay must not inherit the live window's dedupe: only what this state
+		// itself can open counts. The scoped id keeps ingest's hold/rescue globals
+		// off the live group.
+		working.id = `repair:${groupId}`;
+		working.messages = [];
+		working.syncIssues = [];
+		working.fetchCursor = 0;
+		working.lastCursor = 0;
+		working.status = 'active';
+		working.staleMark = undefined;
+		working.lineCursor = undefined;
+		working.firstUnopenedCursor = undefined;
+		working.skippedSiblingCommit = undefined;
+
+		const sync = await ingestChatGroupMessages({
+			group: working,
+			messages,
+			localStablePubkey: normalizePubKey(account.pubkey),
+			// No document rescue here: a sibling Commit this state cannot apply is a
+			// genuine failure for this replay, not something to wait for.
+			mdActive: false,
+			previewOnly: true
+		});
+
+		const newEpoch = working.state.groupContext.epoch;
+		const failedCursors = new Set(sync.issues.map((issue) => issue.cursor));
+		let lastAppliedCursor = 0;
+		for (const message of messages) {
+			if (!failedCursors.has(message.cursor)) lastAppliedCursor = message.cursor;
+		}
+		if (newEpoch <= oldEpoch || lastAppliedCursor === 0 || sync.poisoned) {
+			return {
+				repaired: false,
+				removed: false,
+				checked: messages.length,
+				recovered: 0,
+				oldEpoch: oldEpoch.toString(),
+				newEpoch: newEpoch.toString()
+			};
+		}
+
+		const storage = await getChatStorage();
+		const durableCursors = await storage.getPersistedMessageCursors(groupId, [
+			...sync.received.map((message) => message.cursor),
+			...sync.issues.map((issue) => issue.cursor)
+		]);
+		const openedCursors = new Set(sync.received.map((message) => message.cursor));
+		const localCursors = new Set([
+			...group.messages.map((message) => message.cursor),
+			...durableCursors
+		]);
+		// Pre-join traffic is expected to fail during a full replay. Only failures
+		// at or after the evidence that prompted repair count against completion.
+		const repairFloor =
+			chatGroupUnopenedCursor({
+				firstUnopenedCursor: group.firstUnopenedCursor,
+				dropHorizon: unrecoveredDropHorizon(group),
+				staleMarkCursor: group.staleMark?.cursor
+			}) ?? 0;
+		const unresolvedIssues = sync.issues.filter(
+			(issue) =>
+				issue.cursor >= repairFloor &&
+				!localCursors.has(issue.cursor) &&
+				!openedCursors.has(issue.cursor)
+		);
+		if (unresolvedIssues.length > 0 || lastAppliedCursor < group.fetchCursor) {
+			// Adopting a partial state would delete the only snapshots that can still
+			// open this history and leave the native cursor past the rewound range.
+			return {
+				repaired: false,
+				removed: false,
+				checked: messages.length,
+				recovered: 0,
+				oldEpoch: oldEpoch.toString(),
+				newEpoch: newEpoch.toString()
+			};
+		}
+		const recovered = sync.received.filter((message) => !durableCursors.has(message.cursor));
+		// The replay ran across awaits: never write an old account's group into the
+		// store after a switch (replaceGroup matches by id only).
+		assertCoordinatorOperationActive(account);
+
+		const nextStateBase64 = encodeState(working.state);
+		const nextSnapshot: ChatGroupStateSnapshot = {
+			groupId,
+			status: 'healthy',
+			epoch: newEpoch.toString(),
+			cursor: lastAppliedCursor,
+			createdAt: Date.now(),
+			stateBase64: nextStateBase64
+		};
+		const next: StoredChatGroup = {
+			...group,
+			stateBase64: nextStateBase64,
+			metadata:
+				toPersistedGroupMetadata(getCordnGroupMetadataExtension(working.state)) ?? group.metadata,
+			fetchCursor: lastAppliedCursor,
+			// A complete replay reaches the old fetch frontier, so both cursors can
+			// follow the state without claiming messages it did not apply.
+			lastCursor: lastAppliedCursor,
+			messages: capWindowRows(mergeWindowMessages(group.messages, sync.received), 'high'),
+			// The replay proved which failures were old-branch noise: they are not a
+			// missed-update hold anymore.
+			syncIssues: [],
+			status: sync.removedLocalMember ? 'removed' : 'active',
+			removedAtCursor: sync.removedLocalMember ? working.removedAtCursor : undefined,
+			poisonedAtCursor: undefined,
+			staleMark: undefined,
+			lineCursor: undefined,
+			firstUnopenedCursor: undefined,
+			skippedSiblingCommit: undefined,
+			branch: undefined,
+			commitPoint: undefined,
+			forkDecision: undefined,
+			// The old document describes the branch this replay just left.
+			appliedDocument: undefined,
+			epochFingerprints: noteStateFingerprint(group.epochFingerprints, working.state),
+			// Retire stale-branch snapshots: a later catch-up must not pick one and
+			// replay the losing branch over the repaired state.
+			snapshots: [nextSnapshot],
+			formerPayloadKeys: working.formerPayloadKeys ?? group.formerPayloadKeys
+		};
+		replaceGroup(groupId, next);
+		void advanceNativeCursor(groupId, groupFetchWatermark(next));
+		// Publish the repaired state so siblings converge on it. The publish guard
+		// now sees no missed-update evidence and permits the reseal.
+		onGroupStateAdvance(groupId);
+
+		return {
+			repaired: true,
+			removed: sync.removedLocalMember === true,
+			checked: messages.length,
+			recovered: recovered.length,
+			oldEpoch: oldEpoch.toString(),
+			newEpoch: newEpoch.toString()
+		};
+	});
+}
+
 /**
  * Attempt to recover a poisoned group by replaying from the newest healthy snapshot.
  *
@@ -2752,7 +3156,9 @@ export async function recoverPoisonedChatGroup(groupId: string): Promise<boolean
 			fetchCursor: healthySnapshot.cursor,
 			status: 'active',
 			poisonedAtCursor: undefined,
-			syncIssues: []
+			syncIssues: [],
+			lineCursor: undefined,
+			firstUnopenedCursor: undefined
 		};
 
 		// Fetch messages from snapshot epoch
