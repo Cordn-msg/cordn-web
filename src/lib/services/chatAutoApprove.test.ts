@@ -284,6 +284,29 @@ describe('autoApproveJoinRequests', () => {
 		expect(approved).toHaveLength(8);
 	});
 
+	test('a batch whose key-package lookups all fail spends no Commit budget', async () => {
+		// Five no-op waves would exhaust the hourly budget if a batch that never
+		// committed counted against it. Each wave is a different requester so the
+		// attempt limit does not end the experiment first.
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+		for (let pass = 0; pass < 5; pass += 1) {
+			const requester = String(pass + 1)
+				.padStart(2, '0')
+				.repeat(32);
+			h.entries = [request(`no-kp-${pass}`, requester)];
+			h.invite = () =>
+				Promise.resolve({ group: { id: GROUP }, failures: [{ identifier: requester }] });
+			await autoApprove.autoApproveJoinRequests(COORD);
+		}
+		expect(h.inviteCalls).toHaveLength(5);
+
+		h.entries = [request('has-kp', ALICE)];
+		h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [] });
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
+
+		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
+	});
+
 	test('skips backgrounded native passes while multi-device sync is on', async () => {
 		h.native = true;
 		h.multiDevice = true;
@@ -352,5 +375,31 @@ describe('autoApproveJoinRequests', () => {
 		const [approvedA, approvedB] = await Promise.all([passA, passB]);
 		expect(approvedA).toEqual([{ groupId: 'group-a', requester: ALICE }]);
 		expect(approvedB).toEqual([{ groupId: 'group-b', requester: BOB }]);
+	});
+});
+
+describe('stored switch settings', () => {
+	const storageKey = `cordn-chat-auto-approve:${ADMIN}`;
+
+	test('reads the legacy { gid: enabledAt } shape as enabled', () => {
+		// The switch used to store a timestamp per group; the key is unchanged and a
+		// gid present there means on, so an upgrade must not silently switch it off.
+		storage.set(storageKey, JSON.stringify({ [GROUP]: 1_700_000_000_000 }));
+
+		autoApprove.loadChatAutoApproveForOwner(ADMIN);
+
+		expect(autoApprove.isAutoApproveEnabled(GROUP)).toBe(true);
+	});
+
+	test('round-trips the current array shape and forgets a disabled group', () => {
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+		autoApprove.setAutoApproveEnabled('group-2', true);
+		autoApprove.setAutoApproveEnabled('group-2', false);
+		expect(JSON.parse(storage.get(storageKey) ?? 'null')).toEqual([GROUP]);
+
+		autoApprove.loadChatAutoApproveForOwner(ADMIN);
+
+		expect(autoApprove.isAutoApproveEnabled(GROUP)).toBe(true);
+		expect(autoApprove.isAutoApproveEnabled('group-2')).toBe(false);
 	});
 });

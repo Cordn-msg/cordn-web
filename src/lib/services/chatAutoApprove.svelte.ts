@@ -275,9 +275,10 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 				if (nowMembers.has(normalizePubKey(entry.requesterStablePubkey)))
 					markJoinRequestAccepted(entry.id, groupId);
 			}
-			// The Commit happened, whatever each target's outcome: it counts against the
-			// hourly budget. A thrown batch never reaches here, so it costs no Commit.
-			rememberCommit(groupId);
+			// Charge the budget only when a Commit actually happened: a batch whose
+			// key-package lookups all failed returns without committing, so it must not
+			// spend the hour's budget. A thrown batch never reaches here either.
+			if (targets.some((target) => !failed.has(target.requester))) rememberCommit(groupId);
 		} catch (error) {
 			// The whole batch failed to commit: count an attempt for every target so a
 			// persistently broken group cannot retry forever. One unhealthy group must
