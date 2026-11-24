@@ -557,7 +557,7 @@
 								class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4"
 							>
 								<Label for="auto-approve-join-requests" class="text-sm font-normal">
-									Auto-approve new join requests
+									Auto-approve join requests
 								</Label>
 								<Switch
 									id="auto-approve-join-requests"
