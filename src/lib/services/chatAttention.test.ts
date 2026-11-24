@@ -92,10 +92,18 @@ vi.mock('$lib/services/chatNotificationSettings', () => ({
 }));
 
 vi.mock('$lib/services/chatCoordinators.svelte', () => ({
-	getCoordinatorLabel: (key: string) => (key === 'ck1' ? 'Coordinator One' : key)
+	getCoordinatorLabel: (key: string) =>
+		key === 'ck1' ? 'Coordinator One' : key === 'ck2' ? 'Coordinator Two' : key
 }));
 
 vi.mock('$lib/utils/groupShareLink', () => ({
+	// Coordinator segments arrive as locators (nprofile/npub/hex); decode like the
+	// real helper so a raw nprofile is never handed to getCoordinatorLabel.
+	decodeCoordinatorQueryParam: (param: string) => {
+		if (param === 'ck1') return { coordinatorKey: 'ck1' };
+		if (param === 'nprofile1npub') return { coordinatorKey: 'ck2' };
+		return null;
+	},
 	// Bare-gid passthrough: enough to drive getChatGroup lookups per route.
 	resolveGroupLocator: (id: string) => ({
 		gid: id,
@@ -202,6 +210,9 @@ describe('chat page title', () => {
 		expectTitle('/chat/config/key-packages', '(2) Key packages | Cordn');
 		expectTitle('/chat/coordinators', '(2) Coordinators | Cordn');
 		expectTitle('/chat/coordinators/ck1', '(2) Coordinator One | Cordn');
+		expectTitle('/chat/coordinators/nprofile1npub', '(2) Coordinator Two | Cordn');
+		expectTitle('/chat/coordinators/not-a-locator', '(2) Coordinators | Cordn');
+		expectTitle('/chat/coordinators/%E0%A4%A', '(2) Coordinators | Cordn');
 		expectTitle('/chat/g1', '(2) Besao | Cordn');
 		expectTitle('/chat/g1/info', '(2) Besao | Cordn');
 		expectTitle('/chat/g1/e/abc', '(2) Message | Besao | Cordn');

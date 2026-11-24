@@ -22,8 +22,16 @@ import {
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { getNotificationPreviewsEnabled } from '$lib/services/chatNotificationSettings';
 import { getChatGroupMuteCutoff, isChatGroupMuted } from '$lib/services/chatGroupMutes.svelte';
-import { getUnreadWelcomeNotificationCount } from '$lib/services/chatWelcomeNotifications.svelte';
-import { getUnreadJoinRequestCount } from '$lib/services/chatJoinRequests.svelte';
+import {
+	getUnreadWelcomeNotificationCount,
+	listWelcomeNotifications
+} from '$lib/services/chatWelcomeNotifications.svelte';
+import {
+	getUnreadJoinRequestCount,
+	listJoinRequests,
+	type JoinRequestEntry
+} from '$lib/services/chatJoinRequests.svelte';
+import { profileDisplayLabel } from '$lib/utils/profileName';
 import { getUnreadNewsCount } from '$lib/news/newsReadState.svelte';
 import {
 	getChatGroup,
@@ -31,8 +39,9 @@ import {
 	listChatGroups,
 	type StoredChatGroup
 } from '$lib/services/chatGroups.svelte';
-import { samePubKey } from '$lib/utils';
-import { resolveGroupLocator } from '$lib/utils/groupShareLink';
+import { normalizePubKey, safeNormalizePubKey, samePubKey } from '$lib/utils';
+import type { AutoApprovedJoinRequest } from '$lib/services/chatAutoApprove.svelte';
+import { decodeCoordinatorQueryParam, resolveGroupLocator } from '$lib/utils/groupShareLink';
 import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 import { eventStore } from '$lib/services/eventStore';
 import { firstValueFrom } from 'applesauce-core/observable';
@@ -77,8 +86,20 @@ function getBaseTitle(pathname: string) {
 	if (pathname.startsWith('/chat/config/media')) return 'Media | Cordn';
 	if (pathname.startsWith('/chat/config')) return 'Settings | Cordn';
 	if (pathname.startsWith('/chat/coordinators/')) {
-		const key = decodeURIComponent(pathname.slice('/chat/coordinators/'.length));
-		return key ? `${getCoordinatorLabel(key)} | Cordn` : 'Coordinators | Cordn';
+		// The segment is a locator (nprofile with relay hints, npub, or legacy hex),
+		// not a raw pubkey — decode it first. Feeding an nprofile straight to
+		// getCoordinatorLabel throws inside normalizePubKey, and a throw here kills
+		// the attention effect (and the badge) for good. Same defensive rule as the
+		// group-info branch below.
+		let label = '';
+		try {
+			const raw = decodeURIComponent(pathname.slice('/chat/coordinators/'.length));
+			const key = decodeCoordinatorQueryParam(raw)?.coordinatorKey ?? '';
+			label = key ? getCoordinatorLabel(key) : '';
+		} catch {
+			// Corrupt or unknown locator: fall back to the plain title.
+		}
+		return label ? `${label} | Cordn` : 'Coordinators | Cordn';
 	}
 	if (pathname.startsWith('/chat/coordinators')) return 'Coordinators | Cordn';
 	if (pathname.startsWith('/chat/')) {
@@ -310,6 +331,210 @@ export async function notifyForUnreadChatMessages() {
 			icon,
 			groupId: group.id
 		});
+	}
+}
+
+/**
+ * Join requests and welcomes are not messages: their text must survive the
+ * "hide previews" setting (a request with no author is useless), so they go
+ * through the shared poster with its preview gate bypassed. That keeps the web
+ * tracking/close/click wiring and the native foreground suppression in one place.
+ */
+async function postAttentionNotification(notification: {
+	title: string;
+	body: string;
+	count: number;
+	groupId: string;
+	openNotifications?: boolean;
+}): Promise<void> {
+	await showLocalNotification({
+		...notification,
+		icon: DEFAULT_FAVICON,
+		bypassPreviewGate: true
+	});
+}
+
+/**
+ * Dedup: one notification per request/welcome, never repeated by a poll — and
+ * persisted per account so a reload or activity recreation doesn't re-announce
+ * what the admin already saw. Bounded FIFO; the set only grows with new ids.
+ */
+const NOTIFIED_STORAGE_KEY = 'cordn-notified-attention';
+const MAX_NOTIFIED_IDS = 200;
+
+const notifiedJoinRequestIds = new Set<string>();
+const notifiedWelcomeIds = new Set<string>();
+let notifiedOwner: string | undefined;
+
+function loadNotifiedIds(): void {
+	const owner = normalizePubKey(manager.active?.pubkey ?? '');
+	if (owner === notifiedOwner) return;
+	notifiedOwner = owner;
+	notifiedJoinRequestIds.clear();
+	notifiedWelcomeIds.clear();
+	if (!owner) return;
+	try {
+		const raw = localStorage.getItem(`${NOTIFIED_STORAGE_KEY}:${owner}`);
+		const parsed = raw ? (JSON.parse(raw) as { joins?: string[]; welcomes?: string[] }) : {};
+		for (const id of parsed.joins ?? []) notifiedJoinRequestIds.add(id);
+		for (const id of parsed.welcomes ?? []) notifiedWelcomeIds.add(id);
+	} catch {
+		// corrupt entry — start clean
+	}
+}
+
+/** "Log out and clean data" must not leave this account's notified ids behind. */
+export function deleteNotifiedAttentionForOwner(ownerPubkey: string): void {
+	if (!browser) return;
+	const owner = normalizePubKey(ownerPubkey);
+	try {
+		localStorage.removeItem(`${NOTIFIED_STORAGE_KEY}:${owner}`);
+	} catch {
+		// storage unavailable — nothing to remove
+	}
+	if (notifiedOwner === owner) {
+		notifiedOwner = undefined;
+		notifiedJoinRequestIds.clear();
+		notifiedWelcomeIds.clear();
+	}
+}
+
+function rememberNotified(set: Set<string>, id: string): void {
+	set.add(id);
+	if (set.size > MAX_NOTIFIED_IDS) {
+		const oldest = set.values().next().value;
+		if (oldest !== undefined) set.delete(oldest);
+	}
+	if (!notifiedOwner || !browser) return;
+	try {
+		localStorage.setItem(
+			`${NOTIFIED_STORAGE_KEY}:${notifiedOwner}`,
+			JSON.stringify({
+				joins: [...notifiedJoinRequestIds],
+				welcomes: [...notifiedWelcomeIds]
+			})
+		);
+	} catch {
+		// quota — the in-memory set still dedupes this session
+	}
+}
+
+/** The in-app badge already surfaces attention when the app is attended. */
+function isAttended(): boolean {
+	return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+/**
+ * Notify for pending join requests the admin has not been told about yet. One
+ * notification per group (the request card list stays the place to act).
+ * Call after the join-request poll and its auto-approve pass, so a request the
+ * admin's own setting just handled is never announced as pending. Pass a
+ * coordinator key to announce only that coordinator's requests: the poll runs
+ * per-coordinator lanes and must not let one lane announce another's requests
+ * before its approval pass has seen them.
+ */
+export async function notifyForJoinRequests(coordinatorKey?: string): Promise<void> {
+	if (!browser) return;
+	const key = coordinatorKey === undefined ? undefined : safeNormalizePubKey(coordinatorKey);
+	if (key === '') return;
+	loadNotifiedIds();
+	const pending = listJoinRequests().filter(
+		(entry) =>
+			!notifiedJoinRequestIds.has(entry.id) && (key === undefined || entry.coordinatorKey === key)
+	);
+	if (pending.length === 0 || isAttended()) return;
+	if (!(await ensureNotificationPermission())) return;
+
+	const byGroup = new Map<string, JoinRequestEntry[]>();
+	for (const entry of pending) {
+		const list = byGroup.get(entry.groupId) ?? [];
+		list.push(entry);
+		byGroup.set(entry.groupId, list);
+	}
+	for (const [groupId, entries] of byGroup) {
+		const group = getChatGroup(groupId);
+		if (!group) continue;
+		const hints = await Promise.all(
+			entries.slice(0, 3).map((entry) => resolveProfileHint(entry.requesterStablePubkey))
+		);
+		const labels = hints.map(
+			(hint, index) => profileDisplayLabel(hint, entries[index].requesterStablePubkey) ?? 'Someone'
+		);
+		const who = labels.length === 1 ? labels[0] : `${labels[0]} and ${entries.length - 1} more`;
+		await postAttentionNotification({
+			title: group.metadata?.name?.trim() || 'Join request',
+			body: `${who} ${entries.length === 1 ? 'wants' : 'want'} to join`,
+			count: entries.length,
+			groupId,
+			openNotifications: true
+		});
+		// Recorded only after the post: a failed post must retry next pass.
+		for (const entry of entries) rememberNotified(notifiedJoinRequestIds, entry.id);
+	}
+}
+
+/**
+ * Notify that the admin's own auto-approve setting let someone in. One per
+ * request, replacing the pending "wants to join" announcement for it.
+ */
+export async function notifyForApprovedJoinRequests(
+	approved: AutoApprovedJoinRequest[]
+): Promise<void> {
+	if (!browser || approved.length === 0) return;
+	if (isAttended()) return;
+	if (!(await ensureNotificationPermission())) return;
+
+	const byGroup = new Map<string, string[]>();
+	for (const { groupId, requester } of approved) {
+		const list = byGroup.get(groupId) ?? [];
+		list.push(requester);
+		byGroup.set(groupId, list);
+	}
+	for (const [groupId, requesters] of byGroup) {
+		const hints = await Promise.all(requesters.slice(0, 3).map(resolveProfileHint));
+		const labels = hints.map(
+			(hint, index) => profileDisplayLabel(hint, requesters[index]) ?? 'Someone'
+		);
+		const who = labels.length === 1 ? labels[0] : `${labels[0]} and ${requesters.length - 1} more`;
+		// No `openNotifications`: the request is gone from the dialog, so the tap
+		// lands on the group where the member-added message is.
+		await postAttentionNotification({
+			title: getChatGroup(groupId)?.metadata?.name?.trim() || 'Join request approved',
+			body: `Approved ${who}`,
+			count: requesters.length,
+			groupId
+		});
+	}
+}
+
+/**
+ * Notify for group invitations (welcomes) the reader has not been told about
+ * yet. Pass a coordinator key to announce only that coordinator's welcomes.
+ */
+export async function notifyForWelcomes(coordinatorKey?: string): Promise<void> {
+	if (!browser) return;
+	const key = coordinatorKey === undefined ? undefined : safeNormalizePubKey(coordinatorKey);
+	if (key === '') return;
+	loadNotifiedIds();
+	const pending = listWelcomeNotifications().filter(
+		(entry) =>
+			!notifiedWelcomeIds.has(entry.id) && (key === undefined || entry.coordinatorKey === key)
+	);
+	if (pending.length === 0 || isAttended()) return;
+	if (!(await ensureNotificationPermission())) return;
+
+	for (const entry of pending) {
+		// A welcome without a preview has no group to open yet; leave it unrecorded
+		// so the next pass retries once the preview resolves.
+		const gid = entry.preview?.gid;
+		if (!gid) continue;
+		await postAttentionNotification({
+			title: entry.preview?.name?.trim() || 'Group invitation',
+			body: 'You have been invited to join',
+			count: 1,
+			groupId: gid
+		});
+		rememberNotified(notifiedWelcomeIds, entry.id);
 	}
 }
 

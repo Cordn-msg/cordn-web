@@ -593,6 +593,33 @@ describe('inviteChatGroupMembers()', () => {
 		expect(listAvailableKeyPackages).not.toHaveBeenCalled();
 	});
 
+	test('consumes key packages in bounded batches', async () => {
+		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
+		let inFlight = 0;
+		let peak = 0;
+		const consumeKeyPackage = vi.fn(async () => {
+			inFlight += 1;
+			peak = Math.max(peak, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			inFlight -= 1;
+			// A package for another identity: every target fails, so the batch returns
+			// without committing — this test only measures how consumption is paced.
+			return { keyPackage: { pk: carolPk, kp_ref: 'ref-1', event: {} } };
+		});
+		getCoordinatorClientMock.mockReturnValue({ ConsumeKeyPackage: consumeKeyPackage });
+		chatGroupsStore.groups = [demoGroup()];
+
+		const targets = Array.from({ length: 20 }, (_, index) => ({
+			identifier: `ref-${index}`,
+			expectedStablePubkey: String(index).padStart(2, '0').repeat(32)
+		}));
+		const result = await inviteChatGroupMembers({ groupId: 'demo', targets });
+
+		expect(consumeKeyPackage).toHaveBeenCalledTimes(20);
+		expect(result.failures).toHaveLength(20);
+		expect(peak).toBeLessThanOrEqual(8);
+	});
+
 	test('still catches up established groups before inviting', async () => {
 		const { chatGroupsStore, inviteChatGroupMembers } = await import('./chatGroups.svelte');
 		const consumeKeyPackage = vi.fn().mockResolvedValue({

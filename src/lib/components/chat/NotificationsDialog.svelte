@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import WelcomeNotificationCard from '$lib/components/chat/WelcomeNotificationCard.svelte';
 	import JoinRequestCard from '$lib/components/chat/JoinRequestCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -7,10 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
-	import {
-		getCoordinatorLabel,
-		listKnownCoordinatorKeys
-	} from '$lib/services/chatCoordinators.svelte';
+	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 	import {
 		listWelcomeNotifications,
 		chatWelcomeNotificationsStore,
@@ -33,13 +29,10 @@
 		rejectJoinRequestAction,
 		refreshJoinRequestsAction
 	} from '$lib/services/chatUiActions.svelte';
-	import { welcomeNotificationsQueryOptions } from '$lib/queries/chatWelcomeQueries';
-	import { joinRequestsQueryOptions } from '$lib/queries/chatJoinRequestQueries';
-	import { queryClient } from '$lib/query-client';
+	import { notificationPollState } from '$lib/services/chatNotificationPoll.svelte';
 	import { getDirectChatTargetPubkeyFromWelcome } from '$lib/components/chat/chatGroupDisplay';
 	import { useProfileHints } from '$lib/services/useProfileHints.svelte';
-	import { isSignerUnavailableError } from '$lib/services/chatRuntime';
-	import { errorMessage as errorText, normalizePubKey } from '$lib/utils';
+	import { normalizePubKey } from '$lib/utils';
 	import { metadataRelays } from '$lib/services/relay-pool';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
@@ -51,73 +44,10 @@
 	const welcomeNotifications = $derived.by(() => listWelcomeNotifications());
 	const joinRequests = $derived.by(() => listJoinRequests());
 
-	// Per-coordinator polling (AGENTS.md): each coordinator resolves on its own
-	// schedule and merges into the welcome/join stores as it lands — a faulty
-	// coordinator can't stall the rest. The UI reads the stores, not query
-	// results.
-	//
-	// Polling is imperative (fetchQuery over the same per-coordinator query
-	// cache) instead of always-mounted createQueries observers: queryFns read
-	// coordinator/health $state before their first await, which used to pollute
-	// svelte-query's subscribe-$effect deps (TanStack/query#11541) — health
-	// writes re-ran it, tearing down observers mid-flight (cancelling in-flight
-	// fetches so data never landed) and mount-fetching the still-dataless
-	// queries again: a self-sustaining welcome_take RPC storm (~3.2 nos2x
-	// signs/sec). The queryFns now untrack those reads; this poll call is
-	// untracked too so fetch reads never pollute the effect below, and polling
-	// keeps no observers mounted at all.
-	const coordinatorKeys = $derived.by(() => [...new Set(listKnownCoordinatorKeys())]);
-
+	// Polling is owned by the chat layout (chatNotificationPoll.svelte.ts) so it
+	// keeps running on routes without the tab bar (conversations) and can raise
+	// notifications. This dialog only reads the stores it fills.
 	let isPollRefreshing = $state(false);
-	// $state (not .raw): pollFailures is mutated via splice below and the error
-	// banner derives from it — raw state mutations never notify.
-	const pollFailures = $state<string[]>([]);
-
-	async function pollNotifications() {
-		const account = $activeAccount;
-		if (!account) return;
-		isPollRefreshing = true;
-		try {
-			const results = await Promise.allSettled(
-				coordinatorKeys.map(async (key) => {
-					// Shared cache, staleTime dedupes; per-key failures surface below.
-					await Promise.all([
-						queryClient.fetchQuery(welcomeNotificationsQueryOptions(account.pubkey, key)),
-						queryClient.fetchQuery(joinRequestsQueryOptions(account.pubkey, key))
-					]);
-				})
-			);
-			pollFailures.splice(
-				0,
-				pollFailures.length,
-				...results
-					.map((result, index) =>
-						// A not-yet-injected signer is transient and self-healing (the chat
-						// layout already shows its waiting hint; the next poll recovers) —
-						// it is not coordinator noise.
-						result.status === 'rejected' && !isSignerUnavailableError(result.reason)
-							? `${getCoordinatorLabel(coordinatorKeys[index])}: ${errorText(result.reason)}`
-							: ''
-					)
-					.filter(Boolean)
-			);
-		} finally {
-			isPollRefreshing = false;
-		}
-	}
-
-	// Immediate poll on mount/account/coordinator-set change, then every 5 min
-	// (same cadence the query options' refetchInterval had). untrack: the poll
-	// synchronously runs queryFn preludes (via fetchQuery); the account/keys
-	// reads above are this effect's only intended dependencies — fetch reads
-	// must not re-run/reset the interval.
-	$effect(() => {
-		const account = $activeAccount;
-		if (!account || coordinatorKeys.length === 0) return;
-		void untrack(() => pollNotifications());
-		const timer = setInterval(() => void pollNotifications(), 5 * 60 * 1000);
-		return () => clearInterval(timer);
-	});
 
 	const unifiedItems = $derived.by(() => {
 		const items: UnifiedItem[] = [
@@ -128,10 +58,12 @@
 	});
 
 	const useScrollableList = $derived(unifiedItems.length > 2);
-	const isLoading = $derived(isPollRefreshing);
+	const isLoading = $derived(isPollRefreshing || notificationPollState.refreshing);
 	const errorMessage = $derived.by(() => {
 		return (
-			chatWelcomeNotificationsStore.error || chatJoinRequestsStore.error || pollFailures.join('; ')
+			chatWelcomeNotificationsStore.error ||
+			chatJoinRequestsStore.error ||
+			notificationPollState.failures.join('; ')
 		);
 	});
 	const hasError = $derived(Boolean(errorMessage));

@@ -51,6 +51,7 @@ import {
 import { loadChatGroupPinsForOwner } from '$lib/services/chatGroupPins.svelte';
 import { loadChatGroupFoldersForOwner } from '$lib/services/chatGroupFolders.svelte';
 import { loadChatGroupMutesForOwner } from '$lib/services/chatGroupMutes.svelte';
+import { loadChatAutoApproveForOwner } from '$lib/services/chatAutoApprove.svelte';
 import { loadChatPetnamesForOwner } from '$lib/services/chatPetnames.svelte';
 import { loadEmojiPacksForOwner } from '$lib/services/chatEmojiPacks.svelte';
 import { ensureEmojiCollectionLoaded } from '$lib/services/chatEmojiCollection.svelte';
@@ -1210,6 +1211,7 @@ if (browser) {
 		loadChatGroupPinsForOwner(nextOwnerPubkey);
 		loadChatGroupFoldersForOwner(nextOwnerPubkey);
 		loadChatGroupMutesForOwner(nextOwnerPubkey);
+		loadChatAutoApproveForOwner(nextOwnerPubkey);
 		loadChatPetnamesForOwner(nextOwnerPubkey);
 		loadEmojiPacksForOwner(nextOwnerPubkey);
 		void ensureEmojiCollectionLoaded();
