@@ -706,6 +706,13 @@ const newsReleases: NewsRelease[] = [
 		version: 1,
 		title: 'Folders for your chats, and a count on the way back down',
 		body: '- ✨ Your chat list now opens with filters: **All**, **DMs** and **Groups** in a strip at the top, on the chat home and in the sidebar. A DM is a chat with exactly two people; anything bigger is a group. The strip stays out of the way until you have two chats or a folder of your own.\n- ✨ Make your own folders — Work, Family, whatever fits — from the **+** at the end of the strip, or from any chat’s three-dot menu. A folder is a list of chats you pick: nothing is moved, muted or deleted, and a chat can sit in as many folders as you like. Folders stay on this device, like pins.\n- ✨ Each filter shows what is waiting inside it: the unread messages across its chats, plus an amber **@** when one of them mentions you.\n- ✨ Reading back through a chat now shows how far you have left. The scroll-to-bottom button carries the number of unread messages still below you, the count drops as they come into view, and the badge is gone once you reach the bottom.\n- 🔄 Search still looks through every chat whichever filter is open, and Mark all read still marks everything — a filter never hides something you were looking for.'
+	},
+	{
+		id: 'cordn-news-2026-11-24-repair-behind-chat',
+		createdAt: Date.UTC(2026, 10, 24),
+		version: 1,
+		title: 'A chat that fell behind can find its way back',
+		body: '- ✨ When this device misses a group change, newer messages stop opening and sending pauses. The chat now says so, and **Repair this chat** checks the group history to catch this device up. It only switches to the repaired state when the whole missed stretch can be followed; otherwise it changes nothing and offers to ask a group admin.\n- ✨ Already current but missing earlier messages? **Recover messages** replays the saved states to restore what can still be read, without changing the current group state.\n- 🔄 Your messages stay in place through either path, and a repaired device shares its fresh state with your other linked devices so they settle on the same history.\n- 🐛 A device that is behind can no longer publish its stale state as the group’s shared copy, which could pull your other devices into the same dead end.'
 	}
 ];
 
