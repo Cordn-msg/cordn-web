@@ -32,6 +32,7 @@
 		chatGroupInfoActionsStore,
 		deleteGroupAction,
 		recoverPoisonedGroupAction,
+		refreshJoinRequestsAction,
 		requestGroupRepairAction,
 		removeGroupMemberAction,
 		updateGroupMetadataAction
@@ -547,9 +548,8 @@
 						<Card.Header>
 							<Card.Title>Join requests</Card.Title>
 							<Card.Description>
-								Approve new requests automatically, in one batch, while this device is online.
-								Requests waiting when you turn this on, and requests from people you removed, are
-								never auto-approved.
+								Approve requests automatically, in one batch, while this device is online. Requests
+								already waiting are approved too; requests from people you removed are not.
 							</Card.Description>
 						</Card.Header>
 						<Card.Content>
@@ -562,7 +562,11 @@
 								<Switch
 									id="auto-approve-join-requests"
 									checked={isAutoApproveEnabled(group.id)}
-									onCheckedChange={(checked) => setAutoApproveEnabled(group.id, checked)}
+									onCheckedChange={(checked) => {
+										setAutoApproveEnabled(group.id, checked);
+										// Approve what is already waiting now instead of on the next poll.
+										if (checked) void refreshJoinRequestsAction().catch(() => {});
+									}}
 								/>
 							</div>
 						</Card.Content>

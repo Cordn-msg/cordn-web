@@ -9,8 +9,12 @@ import { normalizePubKey } from '$lib/utils';
  * existing member stays manual.
  */
 
-/** Per group, rolling hour. A flood of requests must not turn into a flood of Commits. */
-export const MAX_AUTO_APPROVE_PER_HOUR = 5;
+/**
+ * Per group, rolling hour, counted in Commits — not people. A pass approves every
+ * eligible request in ONE Commit, so a backlog costs the same as a single request;
+ * the budget exists to stop a flood of requests turning into a flood of Commits.
+ */
+export const MAX_AUTO_APPROVE_COMMITS_PER_HOUR = 5;
 
 /** Session attempts per request before it is left for a human. */
 export const MAX_AUTO_APPROVE_ATTEMPTS = 3;
@@ -27,8 +31,6 @@ export interface AutoApproveCandidate {
 export interface AutoApproveGroupContext {
 	/** The active account is an admin of this group. */
 	isAdmin: boolean;
-	/** When the admin switched auto-approve on (ms). Older requests stay manual. */
-	enabledAt: number;
 	/** Current member pubkeys. */
 	members: string[];
 	/** Pubkeys with a member-removed system message in the durable history. */
@@ -37,15 +39,16 @@ export interface AutoApproveGroupContext {
 	attempts: Record<string, number>;
 	/** Requests already being accepted by hand. */
 	submitting: string[];
-	/** Approvals already made in this group's rolling hour. */
-	recentApprovals: number;
+	/** Commits already made in this group's rolling hour. */
+	recentCommits: number;
 }
 
 /**
- * The requests this group may auto-approve right now, oldest first, capped.
+ * The requests this group may auto-approve right now, oldest first.
  * Every skip is a guard: not an admin, already a member, previously removed,
- * requested before the switch was flipped, already being handled by hand, or
- * out of attempts / hourly budget.
+ * already being handled by hand, or out of attempts / hourly Commit budget.
+ * There is no "waiting when the switch was flipped" rule: enabling applies to
+ * whatever is already waiting, and one pass still costs a single Commit.
  */
 export function selectAutoApproveTargets(
 	candidates: AutoApproveCandidate[],
@@ -56,8 +59,7 @@ export function selectAutoApproveTargets(
 	const members = new Set(context.members.map(normalizePubKey));
 	const removed = new Set(context.removed.map(normalizePubKey));
 	const submitting = new Set(context.submitting);
-	const remaining = Math.max(0, MAX_AUTO_APPROVE_PER_HOUR - context.recentApprovals);
-	if (remaining === 0) return [];
+	if (context.recentCommits >= MAX_AUTO_APPROVE_COMMITS_PER_HOUR) return [];
 
 	const seen = new Set<string>();
 	const targets: AutoApproveCandidate[] = [];
@@ -65,15 +67,12 @@ export function selectAutoApproveTargets(
 		const requester = normalizePubKey(candidate.requester);
 		if (!requester) continue;
 		if (seen.has(requester)) continue;
-		// Older than the switch: a backlog must never be bulk-approved by surprise.
-		if (candidate.at < context.enabledAt) continue;
 		if (members.has(requester)) continue;
 		if (removed.has(requester)) continue;
 		if (submitting.has(candidate.id)) continue;
 		if ((context.attempts[candidate.id] ?? 0) >= MAX_AUTO_APPROVE_ATTEMPTS) continue;
 		seen.add(requester);
 		targets.push(candidate);
-		if (targets.length >= remaining) break;
 	}
 	return targets;
 }

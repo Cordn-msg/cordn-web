@@ -111,7 +111,10 @@ beforeEach(async () => {
 	h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [] });
 	h.removedRows = [];
 	h.removedRowsError = false;
-	autoApprove ??= await import('./chatAutoApprove.svelte');
+	// Fresh module per test: the hourly Commit budget and attempt counts are
+	// session state, so a previous test's Commits must not spend this one's.
+	vi.resetModules();
+	autoApprove = await import('./chatAutoApprove.svelte');
 	autoApprove.loadChatAutoApproveForOwner(ADMIN);
 });
 
@@ -257,13 +260,28 @@ describe('autoApproveJoinRequests', () => {
 		expect(h.inviteCalls).toHaveLength(0);
 	});
 
-	test('never sweeps in a request older than the switch', async () => {
+	test('approves a request that was already waiting when the switch was flipped', async () => {
 		h.entries = [request('a', ALICE, Date.now() - 60_000)];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
 
-		await autoApprove.autoApproveJoinRequests(COORD);
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
-		expect(h.inviteCalls).toHaveLength(0);
+		expect(h.inviteCalls).toHaveLength(1);
+		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
+	});
+
+	test('approves a backlog larger than the hourly budget in one Commit', async () => {
+		h.entries = Array.from({ length: 8 }, (_, index) =>
+			request(`backlog-${index}`, String(index).padStart(2, '0').repeat(32))
+		);
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
+
+		// One Commit + one Welcome for the whole backlog, not five-then-later.
+		expect(h.inviteCalls).toHaveLength(1);
+		expect(h.inviteCalls[0].targets).toHaveLength(8);
+		expect(approved).toHaveLength(8);
 	});
 
 	test('skips backgrounded native passes while multi-device sync is on', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
 	MAX_AUTO_APPROVE_ATTEMPTS,
-	MAX_AUTO_APPROVE_PER_HOUR,
+	MAX_AUTO_APPROVE_COMMITS_PER_HOUR,
 	selectAutoApproveTargets,
 	type AutoApproveCandidate,
 	type AutoApproveGroupContext
@@ -20,12 +20,11 @@ function candidate(id: string, requester: string, at: number): AutoApproveCandid
 function context(overrides: Partial<AutoApproveGroupContext> = {}): AutoApproveGroupContext {
 	return {
 		isAdmin: true,
-		enabledAt,
 		members: [],
 		removed: [],
 		attempts: {},
 		submitting: [],
-		recentApprovals: 0,
+		recentCommits: 0,
 		...overrides
 	};
 }
@@ -61,9 +60,13 @@ describe('selectAutoApproveTargets', () => {
 		expect(targets).toEqual([]);
 	});
 
-	test('skips requests made before the switch was flipped', () => {
-		const targets = selectAutoApproveTargets([candidate('1', alice, enabledAt - 1)], context());
-		expect(targets).toEqual([]);
+	test('approves a backlog that was already waiting when the switch was flipped', () => {
+		// No clock comparison: a request older than the switch is still eligible.
+		const targets = selectAutoApproveTargets(
+			[candidate('1', alice, enabledAt - 60_000), candidate('2', bob, enabledAt - 30_000)],
+			context()
+		);
+		expect(targets.map((target) => target.id)).toEqual(['1', '2']);
 	});
 
 	test('skips a request being accepted by hand', () => {
@@ -82,22 +85,24 @@ describe('selectAutoApproveTargets', () => {
 		expect(targets).toEqual([]);
 	});
 
-	test('caps the pass at the remaining hourly budget', () => {
+	test('approves a whole backlog in one pass, not a per-person slice', () => {
+		// The budget counts Commits, so a batch bigger than the budget still goes in
+		// one Commit — a backlog must not trickle in five people at a time.
 		const targets = selectAutoApproveTargets(
 			[
 				candidate('1', alice, enabledAt + 1),
 				candidate('2', bob, enabledAt + 2),
 				candidate('3', carol, enabledAt + 3)
 			],
-			context({ recentApprovals: MAX_AUTO_APPROVE_PER_HOUR - 2 })
+			context({ recentCommits: MAX_AUTO_APPROVE_COMMITS_PER_HOUR - 1 })
 		);
-		expect(targets.map((target) => target.id)).toEqual(['1', '2']);
+		expect(targets.map((target) => target.id)).toEqual(['1', '2', '3']);
 	});
 
-	test('approves nothing once the hourly budget is spent', () => {
+	test('approves nothing once the hourly Commit budget is spent', () => {
 		const targets = selectAutoApproveTargets(
 			[candidate('1', alice, enabledAt + 1)],
-			context({ recentApprovals: MAX_AUTO_APPROVE_PER_HOUR })
+			context({ recentCommits: MAX_AUTO_APPROVE_COMMITS_PER_HOUR })
 		);
 		expect(targets).toEqual([]);
 	});

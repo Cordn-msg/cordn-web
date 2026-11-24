@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteSet } from 'svelte/reactivity';
 import { SYSTEM_MESSAGE_KIND } from '$lib/chat/kinds';
 import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 import {
@@ -27,9 +27,9 @@ import { canRunBackgroundWork, isNativePlatform } from '$lib/services/nativeBrid
 import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
 
 /**
- * Per-group "auto-approve new join requests" switches, device-local and never
- * synced (same model as chatGroupMutes): an admin enables it on one device and
- * the value here is `enabledAt`, so requests that predate the switch stay manual.
+ * Per-group "auto-approve join requests" switches, device-local and never synced
+ * (same model as chatGroupMutes). A group is either on or off: turning it on
+ * applies to whatever is already waiting as well as to what arrives next.
  *
  * The pass runs wherever join requests are fetched (web tab, Android app), and
  * approves in ONE Commit + one Welcome per group — the same batching a manual
@@ -42,7 +42,7 @@ import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
  */
 const STORAGE_KEY = 'cordn-chat-auto-approve';
 
-const chatAutoApproveStore = $state({ enabled: new SvelteMap<string, number>() });
+const chatAutoApproveStore = $state({ enabled: new SvelteSet<string>() });
 
 let activeStorageKey = getStorageKey();
 
@@ -52,10 +52,7 @@ function getStorageKey(ownerPubkey?: string) {
 
 function saveEnabled() {
 	if (!browser) return;
-	localStorage.setItem(
-		activeStorageKey,
-		JSON.stringify(Object.fromEntries(chatAutoApproveStore.enabled))
-	);
+	localStorage.setItem(activeStorageKey, JSON.stringify([...chatAutoApproveStore.enabled]));
 }
 
 export function loadChatAutoApproveForOwner(ownerPubkey?: string) {
@@ -63,15 +60,17 @@ export function loadChatAutoApproveForOwner(ownerPubkey?: string) {
 	activeStorageKey = getStorageKey(ownerPubkey);
 	try {
 		const raw = localStorage.getItem(activeStorageKey);
-		const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-		const enabled = new SvelteMap<string, number>();
-		for (const [groupId, enabledAt] of Object.entries(parsed)) {
-			if (typeof enabledAt === 'number' && Number.isFinite(enabledAt))
-				enabled.set(groupId, enabledAt);
+		const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+		const enabled = new SvelteSet<string>();
+		// Legacy shape was `{ gid: enabledAt }`; a gid present there means on.
+		if (Array.isArray(parsed)) {
+			for (const groupId of parsed) if (typeof groupId === 'string') enabled.add(groupId);
+		} else if (parsed && typeof parsed === 'object') {
+			for (const groupId of Object.keys(parsed)) enabled.add(groupId);
 		}
 		chatAutoApproveStore.enabled = enabled;
 	} catch {
-		chatAutoApproveStore.enabled = new SvelteMap();
+		chatAutoApproveStore.enabled = new SvelteSet();
 	}
 }
 
@@ -81,7 +80,7 @@ export function deleteChatAutoApproveForOwner(ownerPubkey: string) {
 	localStorage.removeItem(storageKey);
 	if (activeStorageKey === storageKey) {
 		activeStorageKey = getStorageKey();
-		chatAutoApproveStore.enabled = new SvelteMap();
+		chatAutoApproveStore.enabled = new SvelteSet();
 	}
 }
 
@@ -89,33 +88,28 @@ export function isAutoApproveEnabled(groupId: string): boolean {
 	return chatAutoApproveStore.enabled.has(groupId);
 }
 
-/** Enabling stamps `enabledAt`, so a backlog of waiting requests is never swept in. */
+/** Turning it on applies to whatever is already waiting: one pass, one Commit. */
 export function setAutoApproveEnabled(groupId: string, enabled: boolean) {
-	const next = new SvelteMap(chatAutoApproveStore.enabled);
-	if (enabled) {
-		if (!next.has(groupId)) next.set(groupId, Date.now());
-	} else {
-		next.delete(groupId);
-	}
+	const next = new SvelteSet(chatAutoApproveStore.enabled);
+	if (enabled) next.add(groupId);
+	else next.delete(groupId);
 	chatAutoApproveStore.enabled = next;
 	saveEnabled();
 }
 
 /** Session-only: a reloaded page gets a fresh budget. Enough to stop a runaway loop. */
-const approvalTimes = new Map<string, number[]>();
+const commitTimes = new Map<string, number[]>();
 const attempts = new Map<string, number>();
 
-function countRecentApprovals(groupId: string, now = Date.now()): number {
-	const recent = (approvalTimes.get(groupId) ?? []).filter((at) => now - at < 60 * 60 * 1000);
-	approvalTimes.set(groupId, recent);
+/** Commits already made in this group's rolling hour — one per pass, not per person. */
+function countRecentCommits(groupId: string, now = Date.now()): number {
+	const recent = (commitTimes.get(groupId) ?? []).filter((at) => now - at < 60 * 60 * 1000);
+	commitTimes.set(groupId, recent);
 	return recent.length;
 }
 
-function rememberApprovals(groupId: string, count: number) {
-	if (count <= 0) return;
-	const now = Date.now();
-	const recent = [...(approvalTimes.get(groupId) ?? []), ...Array<number>(count).fill(now)];
-	approvalTimes.set(groupId, recent);
+function rememberCommit(groupId: string) {
+	commitTimes.set(groupId, [...(commitTimes.get(groupId) ?? []), Date.now()]);
 }
 
 /**
@@ -210,8 +204,6 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 	}
 
 	for (const [groupId, entries] of byGroup) {
-		const enabledAt = chatAutoApproveStore.enabled.get(groupId);
-		if (enabledAt === undefined) continue;
 		const group = getChatGroup(groupId);
 		if (!group) continue;
 		// Admin-ness is re-checked here even though the switch is admin-only: a
@@ -237,7 +229,6 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 
 		const targets = selectAutoApproveTargets(entries.map(toCandidate), {
 			isAdmin: true,
-			enabledAt,
 			members: [...members],
 			removed,
 			attempts: Object.fromEntries(
@@ -246,7 +237,7 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 					.map((entry) => [entry.id, attempts.get(entry.id) ?? 0])
 			),
 			submitting: entries.filter((entry) => isJoinRequestSubmitting(entry.id)).map((e) => e.id),
-			recentApprovals: countRecentApprovals(groupId)
+			recentCommits: countRecentCommits(groupId)
 		});
 		if (targets.length === 0) continue;
 
@@ -263,7 +254,6 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 			});
 			const failed = new Set(result.failures.map((failure) => normalizePubKey(failure.identifier)));
 			const nowMembers = new Set(memberPubkeys(groupId).map(normalizePubKey));
-			let approvedCount = 0;
 			for (const target of targets) {
 				// A failure means "not added by this Commit": either they are already a
 				// member (nothing to do, mark the request handled) or the attempt is
@@ -275,7 +265,6 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 				}
 				markJoinRequestAccepted(target.id, groupId);
 				approved.push({ groupId, requester: target.requester });
-				approvedCount += 1;
 			}
 			// A duplicate request from someone just approved would stay pending and be
 			// announced as "wants to join" right after the approval: close every request
@@ -286,7 +275,9 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 				if (nowMembers.has(normalizePubKey(entry.requesterStablePubkey)))
 					markJoinRequestAccepted(entry.id, groupId);
 			}
-			rememberApprovals(groupId, approvedCount);
+			// The Commit happened, whatever each target's outcome: it counts against the
+			// hourly budget. A thrown batch never reaches here, so it costs no Commit.
+			rememberCommit(groupId);
 		} catch (error) {
 			// The whole batch failed to commit: count an attempt for every target so a
 			// persistently broken group cannot retry forever. One unhealthy group must
