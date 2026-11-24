@@ -970,6 +970,31 @@ export function diffStaleGroupEpochs(params: {
 }
 
 /**
+ * Whether a group's state is safe to publish as a multi-device document.
+ *
+ * A behind group must never be sealed: its `fetchCursor` may already cover
+ * messages its MLS state never applied, so the document would claim a cursor
+ * its state cannot support. A linked device seeding from that document starts
+ * after the missed Commits and can never open the later epochs (the incident
+ * this guard comes from: epoch 9 published at cursor 297, first app message it
+ * could apply was 205). `staleMark` and `firstUnopenedCursor` are the durable
+ * missed-update evidence; `skippedSiblingCommit` is an epoch transition this
+ * device could not derive. Staircase filters the same `behind` groups out of
+ * its reseal path.
+ */
+export function isGroupDocumentPublishable(group: {
+	staleMark?: unknown;
+	firstUnopenedCursor?: number;
+	skippedSiblingCommit?: unknown;
+}): boolean {
+	return (
+		group.staleMark === undefined &&
+		group.firstUnopenedCursor === undefined &&
+		group.skippedSiblingCommit === undefined
+	);
+}
+
+/**
  * Deterministic content hash of the meta view that gets published (§4.2):
  * `lastResortKeyPackage` + the composed `removed` set. Excludes `issuedAt`
  * (which changes every publish) so the hash is a stable signal for "did the

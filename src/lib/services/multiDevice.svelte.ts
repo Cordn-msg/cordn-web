@@ -53,6 +53,7 @@ import {
 	probeSealedMessage
 } from '$lib/services/chatGroupMessages.svelte';
 import { createWorkingChatGroupSession } from '$lib/services/chatGroupSessions.svelte';
+import { appendHealthySnapshot } from '$lib/services/chatGroupSnapshots';
 import { errorMessage, normalizePubKey } from '$lib/utils';
 import { base64ToBytes, clientStateDecoder, type ClientState } from 'ts-mls';
 import {
@@ -79,6 +80,7 @@ import {
 	planCarryForward,
 	diffLocalAhead,
 	diffStaleGroupEpochs,
+	isGroupDocumentPublishable,
 	metaViewHash,
 	isNewerTipEvent,
 	nextTipCreatedAt,
@@ -1777,10 +1779,14 @@ async function publish(
 		localEpochs: collectLocalGroupEpochs(liveGroups),
 		publishedEpochs: config.publishedGroupEpochs
 	});
-	const gidsToReseal =
+	const gidsToReseal = (
 		plan.resealGroups === 'all'
 			? liveGroups.map((g) => g.id)
-			: [...new Set([...plan.resealGroups, ...staleGids])];
+			: [...new Set([...plan.resealGroups, ...staleGids])]
+	).filter((gid) => {
+		const group = liveGroups.find((candidate) => candidate.id === gid);
+		return group !== undefined && isGroupDocumentPublishable(group);
+	});
 	// Surface progress only for bulk reseals (enable / server change / rotation);
 	// steady-state reseals a single changed group and would flicker a bar for
 	// nothing. The DEK seal is local, so the Blossom upload round is the slow part.
@@ -3010,9 +3016,22 @@ async function fastForwardGroup(
 			branch: undefined,
 			skippedSiblingCommit: undefined,
 			commitPoint: undefined,
-			// The adopted state moved on: whatever would not open may now (or is
-			// gone for good) — the missed-update mark is re-earned, not kept.
+			// The adopted state moved on: the device is no longer behind. Old drop
+			// issues remain as MISSING HISTORY evidence; the UI routes those to
+			// snapshot catch-up instead of another state repair.
 			staleMark: undefined,
+			lineCursor: undefined,
+			firstUnopenedCursor: undefined,
+			// Keep older states for message catch-up, but make the adopted state
+			// the newest healthy recovery baseline.
+			snapshots: appendHealthySnapshot(existing.snapshots, {
+				groupId: existing.id,
+				status: 'healthy',
+				epoch: incomingEpoch.toString(),
+				cursor: doc.cursor,
+				createdAt: Date.now(),
+				stateBase64: doc.clientState
+			}),
 			// The epoch this adoption leaves is one a lagging sender may still seal
 			// under (report-05): keep its payload key. The spread carries the rest
 			// of the retained keys across (staircase retainedExporterSecrets).

@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { acceptChatWelcome, createChatKeyPackage, goto, storeJoinRequest, toastSuccess } =
-	vi.hoisted(() => ({
-		acceptChatWelcome: vi.fn(),
-		createChatKeyPackage: vi.fn(),
-		goto: vi.fn(),
-		storeJoinRequest: vi.fn(),
-		toastSuccess: vi.fn()
-	}));
+const {
+	acceptChatWelcome,
+	createChatKeyPackage,
+	goto,
+	repairChatGroup,
+	storeJoinRequest,
+	toastInfo,
+	toastSuccess
+} = vi.hoisted(() => ({
+	acceptChatWelcome: vi.fn(),
+	createChatKeyPackage: vi.fn(),
+	goto: vi.fn(),
+	repairChatGroup: vi.fn(),
+	storeJoinRequest: vi.fn(),
+	toastInfo: vi.fn(),
+	toastSuccess: vi.fn()
+}));
 
 vi.mock('$app/environment', () => ({ browser: true, dev: false }));
 vi.stubGlobal('localStorage', {
@@ -17,7 +26,9 @@ vi.stubGlobal('localStorage', {
 });
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/paths', () => ({ resolve: () => '/chat/x' }));
-vi.mock('svelte-sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
+vi.mock('svelte-sonner', () => ({
+	toast: { success: toastSuccess, info: toastInfo, error: vi.fn() }
+}));
 
 vi.mock('$lib/services/accountManager.svelte', () => ({
 	manager: { getActive: () => ({ pubkey: 'aa'.repeat(32) }) }
@@ -46,6 +57,7 @@ vi.mock('$lib/services/chatGroups.svelte', () => ({
 	listChatGroups: () => joinedGroupsForTest,
 	listCoordinatorAvailableKeyPackages: vi.fn(),
 	recoverPoisonedChatGroup: vi.fn(),
+	repairChatGroup,
 	removeChatGroupMember: vi.fn(),
 	sendChatGroupMessage: vi.fn(),
 	updateChatGroupMetadata: vi.fn()
@@ -107,6 +119,7 @@ vi.mock('$lib/services/chatWelcomeNotifications.svelte', () => ({
 import { sentJoinRequestsStore } from '$lib/services/chatJoinRequests.svelte';
 import {
 	autoAcceptJoinRequestWelcomesAction,
+	repairChatGroupAction,
 	requestGroupRepairAction
 } from '$lib/services/chatUiActions.svelte';
 
@@ -144,6 +157,31 @@ describe('requestGroupRepairAction', () => {
 
 		expect(await requestGroupRepairAction('repair-gid', { force: true })).toBe(true);
 		expect(storeJoinRequest).toHaveBeenCalledWith(COORDINATOR, 'repair-gid', 'repair-kp-2');
+	});
+});
+
+describe('repairChatGroupAction', () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	test('does not announce sending when the replay discovered removal', async () => {
+		repairChatGroup.mockResolvedValue({
+			repaired: true,
+			complete: true,
+			removed: true,
+			unresolved: 0,
+			checked: 10,
+			recovered: 0,
+			oldEpoch: '9',
+			newEpoch: '10'
+		});
+
+		await repairChatGroupAction('repair-gid');
+
+		expect(toastSuccess).not.toHaveBeenCalled();
+		expect(toastInfo).toHaveBeenCalledWith(
+			'You are no longer a member of this group',
+			expect.anything()
+		);
 	});
 });
 

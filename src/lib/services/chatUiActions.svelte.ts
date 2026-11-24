@@ -10,9 +10,13 @@ import {
 	inviteChatGroupMember,
 	listCoordinatorAvailableKeyPackages,
 	recoverPoisonedChatGroup,
+	repairChatGroup,
+	runChatGroupCatchUpCheck,
 	removeChatGroupMember,
 	sendChatGroupMessage,
 	updateChatGroupMetadata,
+	type ChatGroupCatchUpResult,
+	type ChatGroupRepairResult,
 	type ChatGroupInviteTarget,
 	type CoordinatorAvailableKeyPackage
 } from '$lib/services/chatGroups.svelte';
@@ -94,6 +98,14 @@ export const chatGroupInfoActionsStore = $state<{
 	/** Which group the last recovery attempt belonged to. */
 	recoveryGroupId: string;
 	recoveryResult: 'success' | 'failure' | null;
+	/** Non-destructive full catch-up ("check for missing messages"). */
+	catchUpSubmitting: boolean;
+	catchUpGroupId: string;
+	catchUpResult: ChatGroupCatchUpResult | null;
+	/** State-adopting replay ("repair this chat"). */
+	repairSubmitting: boolean;
+	repairGroupId: string;
+	repairResult: ChatGroupRepairResult | null;
 	error: string;
 }>({
 	removeSubmitting: '',
@@ -102,6 +114,12 @@ export const chatGroupInfoActionsStore = $state<{
 	recoverySubmitting: false,
 	recoveryGroupId: '',
 	recoveryResult: null,
+	catchUpSubmitting: false,
+	catchUpGroupId: '',
+	catchUpResult: null,
+	repairSubmitting: false,
+	repairGroupId: '',
+	repairResult: null,
 	error: ''
 });
 
@@ -633,5 +651,76 @@ export async function recoverPoisonedGroupAction(groupId?: string) {
 			error instanceof Error ? error.message : 'Failed to recover group';
 	} finally {
 		chatGroupInfoActionsStore.recoverySubmitting = false;
+	}
+}
+
+/** Replay the group history on this device's live state and adopt it only if
+ *  the replay reaches a newer epoch. Nothing is written when it cannot. */
+export async function repairChatGroupAction(groupId?: string) {
+	if (
+		!groupId ||
+		chatGroupInfoActionsStore.repairSubmitting ||
+		chatGroupInfoActionsStore.catchUpSubmitting
+	)
+		return;
+	chatGroupInfoActionsStore.repairSubmitting = true;
+	chatGroupInfoActionsStore.repairGroupId = groupId;
+	chatGroupInfoActionsStore.repairResult = null;
+	// A repair supersedes a previous check's result for this group.
+	chatGroupInfoActionsStore.catchUpResult = null;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		const result = await repairChatGroup(groupId);
+		chatGroupInfoActionsStore.repairResult = result;
+		if (result.removed) {
+			toast.info('You are no longer a member of this group', {
+				description: 'Open group details to ask a group admin to let you back in.'
+			});
+		} else if (result.repaired) {
+			toast.success("You're caught up", {
+				description:
+					result.recovered === 1
+						? 'Recovered 1 message. Sending is available again.'
+						: `Recovered ${result.recovered} messages. Sending is available again.`
+			});
+		} else {
+			toast.info('This device could not repair itself', {
+				description: 'Open group details to ask a group admin to let this device back in.'
+			});
+		}
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to repair this group';
+		toast.error('Repair failed', { description: chatGroupInfoActionsStore.error });
+	} finally {
+		chatGroupInfoActionsStore.repairSubmitting = false;
+	}
+}
+
+export async function checkChatGroupMessagesAction(groupId?: string) {
+	if (
+		!groupId ||
+		chatGroupInfoActionsStore.catchUpSubmitting ||
+		chatGroupInfoActionsStore.repairSubmitting
+	)
+		return;
+	chatGroupInfoActionsStore.catchUpSubmitting = true;
+	chatGroupInfoActionsStore.catchUpGroupId = groupId;
+	chatGroupInfoActionsStore.catchUpResult = null;
+	chatGroupInfoActionsStore.error = '';
+	try {
+		const result = await runChatGroupCatchUpCheck(groupId);
+		chatGroupInfoActionsStore.catchUpResult = result;
+		if (result.recovered > 0) {
+			toast.success(
+				result.recovered === 1 ? 'Recovered 1 message' : `Recovered ${result.recovered} messages`,
+				{ description: "The rest of this device's state was left as it was." }
+			);
+		}
+	} catch (error) {
+		chatGroupInfoActionsStore.error =
+			error instanceof Error ? error.message : 'Failed to check for missing messages';
+	} finally {
+		chatGroupInfoActionsStore.catchUpSubmitting = false;
 	}
 }

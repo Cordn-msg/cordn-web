@@ -35,6 +35,7 @@ import {
 	stateFingerprint,
 	diffLocalAhead,
 	diffStaleGroupEpochs,
+	isGroupDocumentPublishable,
 	documentAddress,
 	groupEpoch,
 	isNewerTipEvent,
@@ -1401,6 +1402,29 @@ describe('planLastResortRepair (spec §11.5 resolution order)', () => {
 				implicated: false
 			})
 		).toEqual({ kind: 'skip' });
+	});
+});
+
+describe('isGroupDocumentPublishable (never seal a behind state)', () => {
+	test('a healthy group is publishable', () => {
+		expect(isGroupDocumentPublishable({})).toBe(true);
+	});
+
+	test('missed-update evidence blocks the reseal', () => {
+		expect(
+			isGroupDocumentPublishable({
+				staleMark: { cursor: 338, unopenableCount: 933 }
+			})
+		).toBe(false);
+		expect(isGroupDocumentPublishable({ firstUnopenedCursor: 338 })).toBe(false);
+	});
+
+	test('an unapplied sibling Commit blocks the reseal', () => {
+		expect(
+			isGroupDocumentPublishable({
+				skippedSiblingCommit: { epoch: '9', cursor: 206 }
+			})
+		).toBe(false);
 	});
 });
 

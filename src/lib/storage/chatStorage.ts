@@ -59,6 +59,13 @@ export interface StoredChatGroupRecord {
 	 *  unopenable payloads since the mark, cleared by a current-epoch decrypt).
 	 *  Commits are refused while set; sends once the run reaches 2. */
 	staleMark?: { cursor: number; unopenableCount: number };
+	/** Newest cursor at which another member's message decrypted at the current
+	 *  epoch: proof this device shares a line with someone. Reset when this
+	 *  device's own Commit moves the epoch (the proof does not cross it). */
+	lineCursor?: number;
+	/** Earliest cursor whose sealed payload never opened here. Durable on
+	 *  purpose: the 50-issue cap must not lose the recovery frontier. */
+	firstUnopenedCursor?: number;
 	/** Retained per-epoch payload keys (epoch → base64 key): a lagging sender
 	 *  seals under an epoch we already left; ts-mls keeps the matching inner
 	 *  receiver material for 4 epochs. */
