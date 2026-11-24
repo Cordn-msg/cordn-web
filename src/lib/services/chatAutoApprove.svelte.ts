@@ -199,16 +199,24 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 		// local admin list can change between the toggle and this pass.
 		if (!isGroupAdmin({ metadata: group.metadata, stablePubkey: activePubkey })) continue;
 
-		let removed: string[];
-		try {
-			removed = await listRemovedPubkeys(groupId);
-		} catch {
-			// Without the removal history the guard cannot be honoured: leave the group for a human.
-			continue;
-		}
-
 		let remainingEntries = entries;
 		while (remainingEntries.length > 0 && chatAutoApproveStore.enabled.has(groupId)) {
+			// Re-read the live list every batch: a request the admin dismissed or accepted
+			// during the previous Commit must not be approved by the next one.
+			const pending = new Set(listJoinRequests().map((entry) => entry.id));
+			remainingEntries = remainingEntries.filter((entry) => pending.has(entry.id));
+			if (remainingEntries.length === 0) break;
+
+			let removed: string[];
+			try {
+				// Re-read every batch too: a removal made during the previous Commit must be
+				// honoured by the next one. Without the history the guard cannot be honoured:
+				// leave the group for a human.
+				removed = await listRemovedPubkeys(groupId);
+			} catch {
+				break;
+			}
+
 			const members = new Set(memberPubkeys(groupId).map(normalizePubKey));
 			// Already a member: the request is satisfied, so close it without inviting.
 			// The manual accept's remove-then-re-add would churn the member for nothing.

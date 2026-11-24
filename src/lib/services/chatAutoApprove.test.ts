@@ -298,6 +298,61 @@ describe('autoApproveJoinRequests', () => {
 		expect(peak).toBe(1);
 	});
 
+	test('does not approve a request the admin dismissed during an earlier batch', async () => {
+		h.entries = Array.from({ length: 16 }, (_, index) =>
+			request(
+				`drain-${index}`,
+				String(index + 1)
+					.padStart(2, '0')
+					.repeat(32),
+				index
+			)
+		);
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+		let invites = 0;
+		h.invite = () => {
+			invites += 1;
+			// The admin rejects the sixteenth request while the first Commit runs.
+			const last = h.entries.find((entry) => entry.id === 'drain-15');
+			if (last) last.status = 'dismissed';
+			return Promise.resolve({ group: { id: GROUP }, failures: [] });
+		};
+
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
+
+		expect(invites).toBe(1);
+		expect(approved).toHaveLength(15);
+		expect(h.entries.find((entry) => entry.id === 'drain-15')?.status).toBe('dismissed');
+	});
+
+	test('honours a removal made during an earlier batch', async () => {
+		const late = 'ff'.repeat(32);
+		h.entries = [
+			...Array.from({ length: 15 }, (_, index) =>
+				request(
+					`drain-${index}`,
+					String(index + 1)
+						.padStart(2, '0')
+						.repeat(32),
+					index
+				)
+			),
+			request('drain-late', late, 15)
+		];
+		autoApprove.setAutoApproveEnabled(GROUP, true);
+		h.invite = () => {
+			// The admin removes that member while the first Commit runs.
+			h.removedRows = [removal(late)];
+			return Promise.resolve({ group: { id: GROUP }, failures: [] });
+		};
+
+		const approved = await autoApprove.autoApproveJoinRequests(COORD);
+
+		expect(h.inviteCalls).toHaveLength(1);
+		expect(approved).toHaveLength(15);
+		expect(h.entries.find((entry) => entry.id === 'drain-late')?.status).toBeUndefined();
+	});
+
 	test('continues draining later batches without retrying a failed request immediately', async () => {
 		h.entries = [
 			request('failed-first', ALICE, 0),

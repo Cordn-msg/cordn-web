@@ -134,7 +134,7 @@ async function runJoinRequestLeg(stablePubkey: string, coordinatorKey: string): 
 		failure = error;
 	}
 	// A failed read still gets its pass: the requests are already durable, and the
-	// guardrails (switch age, membership, removals) are re-checked there.
+	// guardrails (enabled switch, membership, removals) are re-checked there.
 	const approved = await autoApproveJoinRequests(coordinatorKey).catch(() => []);
 	await notifyForApprovedJoinRequests(approved).catch(() => {});
 	await notifyForJoinRequests(coordinatorKey).catch(() => {});
