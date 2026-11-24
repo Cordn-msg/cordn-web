@@ -548,8 +548,8 @@
 						<Card.Header>
 							<Card.Title>Join requests</Card.Title>
 							<Card.Description>
-								Approve requests automatically, in one batch, while this device is online. Requests
-								already waiting are approved too; requests from people you removed are not.
+								Approve requests automatically, in batches of up to 15, while this device is online.
+								Requests already waiting are approved too; requests from people you removed are not.
 							</Card.Description>
 						</Card.Header>
 						<Card.Content>

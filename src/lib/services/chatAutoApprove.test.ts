@@ -111,8 +111,8 @@ beforeEach(async () => {
 	h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [] });
 	h.removedRows = [];
 	h.removedRowsError = false;
-	// Fresh module per test: the hourly Commit budget and attempt counts are
-	// session state, so a previous test's Commits must not spend this one's.
+	// Fresh module per test: attempt counts are session state, so a previous
+	// test's failures must not affect this one's requests.
 	vi.resetModules();
 	autoApprove = await import('./chatAutoApprove.svelte');
 	autoApprove.loadChatAutoApproveForOwner(ADMIN);
@@ -270,41 +270,63 @@ describe('autoApproveJoinRequests', () => {
 		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
 	});
 
-	test('approves a backlog larger than the hourly budget in one Commit', async () => {
-		h.entries = Array.from({ length: 8 }, (_, index) =>
-			request(`backlog-${index}`, String(index).padStart(2, '0').repeat(32))
+	test('drains a 77-request backlog in serial batches of 15 with no hourly cap', async () => {
+		h.entries = Array.from({ length: 77 }, (_, index) =>
+			request(
+				`backlog-${index}`,
+				String(index + 1)
+					.padStart(2, '0')
+					.repeat(32),
+				index
+			)
 		);
 		autoApprove.setAutoApproveEnabled(GROUP, true);
+		let active = 0;
+		let peak = 0;
+		h.invite = async () => {
+			active += 1;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			active -= 1;
+			return { group: { id: GROUP }, failures: [] };
+		};
 
 		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
-		// One Commit + one Welcome for the whole backlog, not five-then-later.
-		expect(h.inviteCalls).toHaveLength(1);
-		expect(h.inviteCalls[0].targets).toHaveLength(8);
-		expect(approved).toHaveLength(8);
+		expect(h.inviteCalls.map((call) => call.targets.length)).toEqual([15, 15, 15, 15, 15, 2]);
+		expect(approved).toHaveLength(77);
+		expect(peak).toBe(1);
 	});
 
-	test('a batch whose key-package lookups all fail spends no Commit budget', async () => {
-		// Five no-op waves would exhaust the hourly budget if a batch that never
-		// committed counted against it. Each wave is a different requester so the
-		// attempt limit does not end the experiment first.
+	test('continues draining later batches without retrying a failed request immediately', async () => {
+		h.entries = [
+			request('failed-first', ALICE, 0),
+			...Array.from({ length: 15 }, (_, index) =>
+				request(
+					`later-${index}`,
+					String(index + 1)
+						.padStart(2, '0')
+						.repeat(32),
+					index + 1
+				)
+			)
+		];
 		autoApprove.setAutoApproveEnabled(GROUP, true);
-		for (let pass = 0; pass < 5; pass += 1) {
-			const requester = String(pass + 1)
-				.padStart(2, '0')
-				.repeat(32);
-			h.entries = [request(`no-kp-${pass}`, requester)];
-			h.invite = () =>
-				Promise.resolve({ group: { id: GROUP }, failures: [{ identifier: requester }] });
-			await autoApprove.autoApproveJoinRequests(COORD);
-		}
-		expect(h.inviteCalls).toHaveLength(5);
+		h.invite = (input) => {
+			const targets = (input as { targets: Array<{ identifier: string }> }).targets;
+			return Promise.resolve({
+				group: { id: GROUP },
+				failures: targets.some((target) => target.identifier === ALICE)
+					? [{ identifier: ALICE }]
+					: []
+			});
+		};
 
-		h.entries = [request('has-kp', ALICE)];
-		h.invite = () => Promise.resolve({ group: { id: GROUP }, failures: [] });
 		const approved = await autoApprove.autoApproveJoinRequests(COORD);
 
-		expect(approved).toEqual([{ groupId: GROUP, requester: ALICE }]);
+		expect(h.inviteCalls.map((call) => call.targets.length)).toEqual([15, 1]);
+		expect(approved).toHaveLength(15);
+		expect(h.entries[0].status).toBeUndefined();
 	});
 
 	test('skips backgrounded native passes while multi-device sync is on', async () => {

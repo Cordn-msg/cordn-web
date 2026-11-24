@@ -9,12 +9,8 @@ import { normalizePubKey } from '$lib/utils';
  * existing member stays manual.
  */
 
-/**
- * Per group, rolling hour, counted in Commits — not people. A pass approves every
- * eligible request in ONE Commit, so a backlog costs the same as a single request;
- * the budget exists to stop a flood of requests turning into a flood of Commits.
- */
-export const MAX_AUTO_APPROVE_COMMITS_PER_HOUR = 5;
+/** Keep each MLS Commit bounded; the runner drains larger backlogs in serial batches. */
+export const MAX_AUTO_APPROVE_BATCH_SIZE = 15;
 
 /** Session attempts per request before it is left for a human. */
 export const MAX_AUTO_APPROVE_ATTEMPTS = 3;
@@ -39,16 +35,13 @@ export interface AutoApproveGroupContext {
 	attempts: Record<string, number>;
 	/** Requests already being accepted by hand. */
 	submitting: string[];
-	/** Commits already made in this group's rolling hour. */
-	recentCommits: number;
 }
 
 /**
- * The requests this group may auto-approve right now, oldest first.
+ * Up to one batch of requests this group may auto-approve now, oldest first.
  * Every skip is a guard: not an admin, already a member, previously removed,
- * already being handled by hand, or out of attempts / hourly Commit budget.
- * There is no "waiting when the switch was flipped" rule: enabling applies to
- * whatever is already waiting, and one pass still costs a single Commit.
+ * already being handled by hand, or out of attempts. There is no timestamp or
+ * hourly-budget rule: the runner keeps taking batches until the backlog drains.
  */
 export function selectAutoApproveTargets(
 	candidates: AutoApproveCandidate[],
@@ -59,7 +52,6 @@ export function selectAutoApproveTargets(
 	const members = new Set(context.members.map(normalizePubKey));
 	const removed = new Set(context.removed.map(normalizePubKey));
 	const submitting = new Set(context.submitting);
-	if (context.recentCommits >= MAX_AUTO_APPROVE_COMMITS_PER_HOUR) return [];
 
 	const seen = new Set<string>();
 	const targets: AutoApproveCandidate[] = [];
@@ -73,6 +65,7 @@ export function selectAutoApproveTargets(
 		if ((context.attempts[candidate.id] ?? 0) >= MAX_AUTO_APPROVE_ATTEMPTS) continue;
 		seen.add(requester);
 		targets.push(candidate);
+		if (targets.length >= MAX_AUTO_APPROVE_BATCH_SIZE) break;
 	}
 	return targets;
 }

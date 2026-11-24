@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
 	MAX_AUTO_APPROVE_ATTEMPTS,
-	MAX_AUTO_APPROVE_COMMITS_PER_HOUR,
+	MAX_AUTO_APPROVE_BATCH_SIZE,
 	selectAutoApproveTargets,
 	type AutoApproveCandidate,
 	type AutoApproveGroupContext
@@ -9,7 +9,6 @@ import {
 
 const alice = 'aa'.repeat(32);
 const bob = 'bb'.repeat(32);
-const carol = 'cc'.repeat(32);
 
 const enabledAt = 1_000_000;
 
@@ -24,7 +23,6 @@ function context(overrides: Partial<AutoApproveGroupContext> = {}): AutoApproveG
 		removed: [],
 		attempts: {},
 		submitting: [],
-		recentCommits: 0,
 		...overrides
 	};
 }
@@ -85,26 +83,22 @@ describe('selectAutoApproveTargets', () => {
 		expect(targets).toEqual([]);
 	});
 
-	test('approves a whole backlog in one pass, not a per-person slice', () => {
-		// The budget counts Commits, so a batch bigger than the budget still goes in
-		// one Commit — a backlog must not trickle in five people at a time.
-		const targets = selectAutoApproveTargets(
-			[
-				candidate('1', alice, enabledAt + 1),
-				candidate('2', bob, enabledAt + 2),
-				candidate('3', carol, enabledAt + 3)
-			],
-			context({ recentCommits: MAX_AUTO_APPROVE_COMMITS_PER_HOUR - 1 })
+	test('caps one batch at 15 oldest eligible requests', () => {
+		const candidates = Array.from({ length: MAX_AUTO_APPROVE_BATCH_SIZE + 2 }, (_, index) =>
+			candidate(
+				String(index + 1),
+				String(index + 1)
+					.padStart(2, '0')
+					.repeat(32),
+				enabledAt + index
+			)
 		);
-		expect(targets.map((target) => target.id)).toEqual(['1', '2', '3']);
-	});
 
-	test('approves nothing once the hourly Commit budget is spent', () => {
-		const targets = selectAutoApproveTargets(
-			[candidate('1', alice, enabledAt + 1)],
-			context({ recentCommits: MAX_AUTO_APPROVE_COMMITS_PER_HOUR })
+		const targets = selectAutoApproveTargets(candidates.reverse(), context());
+
+		expect(targets.map((target) => target.id)).toEqual(
+			Array.from({ length: MAX_AUTO_APPROVE_BATCH_SIZE }, (_, index) => String(index + 1))
 		);
-		expect(targets).toEqual([]);
 	});
 
 	test('keeps only the oldest request per requester', () => {

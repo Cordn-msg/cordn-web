@@ -32,9 +32,10 @@ import { normalizePubKey, safeNormalizePubKey } from '$lib/utils';
  * applies to whatever is already waiting as well as to what arrives next.
  *
  * The pass runs wherever join requests are fetched (web tab, Android app), and
- * approves in ONE Commit + one Welcome per group — the same batching a manual
- * multi-select invite uses. It never takes the remove-then-re-add path a manual
- * accept uses, so an existing member is never churned.
+ * drains each group in serial batches of up to 15 requests — one Commit + one
+ * Welcome per batch, the same batching a manual multi-select invite uses. It
+ * never takes the manual accept's remove-then-re-add path, so an existing member
+ * is never churned.
  *
  * A pass is scoped to ONE coordinator's requests: a slow or offline coordinator
  * must never delay the approval of another's, so the single-flight is per
@@ -88,7 +89,7 @@ export function isAutoApproveEnabled(groupId: string): boolean {
 	return chatAutoApproveStore.enabled.has(groupId);
 }
 
-/** Turning it on applies to whatever is already waiting: one pass, one Commit. */
+/** Turning it on applies to whatever is already waiting as well as what arrives next. */
 export function setAutoApproveEnabled(groupId: string, enabled: boolean) {
 	const next = new SvelteSet(chatAutoApproveStore.enabled);
 	if (enabled) next.add(groupId);
@@ -97,20 +98,8 @@ export function setAutoApproveEnabled(groupId: string, enabled: boolean) {
 	saveEnabled();
 }
 
-/** Session-only: a reloaded page gets a fresh budget. Enough to stop a runaway loop. */
-const commitTimes = new Map<string, number[]>();
+/** Session attempts per request, so a persistently failing request is left for a human. */
 const attempts = new Map<string, number>();
-
-/** Commits already made in this group's rolling hour — one per pass, not per person. */
-function countRecentCommits(groupId: string, now = Date.now()): number {
-	const recent = (commitTimes.get(groupId) ?? []).filter((at) => now - at < 60 * 60 * 1000);
-	commitTimes.set(groupId, recent);
-	return recent.length;
-}
-
-function rememberCommit(groupId: string) {
-	commitTimes.set(groupId, [...(commitTimes.get(groupId) ?? []), Date.now()]);
-}
 
 /**
  * Pubkeys the durable history shows as removed — a kicked member stays manual.
@@ -210,15 +199,6 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 		// local admin list can change between the toggle and this pass.
 		if (!isGroupAdmin({ metadata: group.metadata, stablePubkey: activePubkey })) continue;
 
-		const members = new Set(memberPubkeys(groupId).map(normalizePubKey));
-		// Already a member: the request is satisfied, so close it without inviting.
-		// The manual accept's remove-then-re-add would churn the member for nothing.
-		for (const entry of entries) {
-			if (isJoinRequestSubmitting(entry.id)) continue;
-			if (members.has(normalizePubKey(entry.requesterStablePubkey)))
-				markJoinRequestAccepted(entry.id, groupId);
-		}
-
 		let removed: string[];
 		try {
 			removed = await listRemovedPubkeys(groupId);
@@ -227,66 +207,86 @@ async function runAutoApprove(coordinatorKey: string): Promise<AutoApprovedJoinR
 			continue;
 		}
 
-		const targets = selectAutoApproveTargets(entries.map(toCandidate), {
-			isAdmin: true,
-			members: [...members],
-			removed,
-			attempts: Object.fromEntries(
-				entries
-					.filter((entry) => attempts.has(entry.id))
-					.map((entry) => [entry.id, attempts.get(entry.id) ?? 0])
-			),
-			submitting: entries.filter((entry) => isJoinRequestSubmitting(entry.id)).map((e) => e.id),
-			recentCommits: countRecentCommits(groupId)
-		});
-		if (targets.length === 0) continue;
-
-		// Mark the batch as being handled so the request cards disable themselves and
-		// a manual accept cannot race this Commit into a remove-then-re-add.
-		for (const target of targets) setJoinRequestSubmitting(target.id);
-		try {
-			const result = await inviteChatGroupMembers({
-				groupId,
-				targets: targets.map((target) => ({
-					identifier: target.requester,
-					expectedStablePubkey: target.requester
-				}))
-			});
-			const failed = new Set(result.failures.map((failure) => normalizePubKey(failure.identifier)));
-			const nowMembers = new Set(memberPubkeys(groupId).map(normalizePubKey));
-			for (const target of targets) {
-				// A failure means "not added by this Commit": either they are already a
-				// member (nothing to do, mark the request handled) or the attempt is
-				// counted and retried on the next pass.
-				if (failed.has(target.requester)) {
-					if (nowMembers.has(target.requester)) markJoinRequestAccepted(target.id, groupId);
-					else attempts.set(target.id, (attempts.get(target.id) ?? 0) + 1);
-					continue;
-				}
-				markJoinRequestAccepted(target.id, groupId);
-				approved.push({ groupId, requester: target.requester });
-			}
-			// A duplicate request from someone just approved would stay pending and be
-			// announced as "wants to join" right after the approval: close every request
-			// whose requester is a member now.
-			const handled = new Set(targets.map((target) => target.id));
-			for (const entry of entries) {
-				if (handled.has(entry.id)) continue;
-				if (nowMembers.has(normalizePubKey(entry.requesterStablePubkey)))
+		let remainingEntries = entries;
+		while (remainingEntries.length > 0 && chatAutoApproveStore.enabled.has(groupId)) {
+			const members = new Set(memberPubkeys(groupId).map(normalizePubKey));
+			// Already a member: the request is satisfied, so close it without inviting.
+			// The manual accept's remove-then-re-add would churn the member for nothing.
+			for (const entry of remainingEntries) {
+				if (isJoinRequestSubmitting(entry.id)) continue;
+				if (members.has(normalizePubKey(entry.requesterStablePubkey)))
 					markJoinRequestAccepted(entry.id, groupId);
 			}
-			// Charge the budget only when a Commit actually happened: a batch whose
-			// key-package lookups all failed returns without committing, so it must not
-			// spend the hour's budget. A thrown batch never reaches here either.
-			if (targets.some((target) => !failed.has(target.requester))) rememberCommit(groupId);
-		} catch (error) {
-			// The whole batch failed to commit: count an attempt for every target so a
-			// persistently broken group cannot retry forever. One unhealthy group must
-			// not stop the others; the next pass retries.
-			for (const target of targets) attempts.set(target.id, (attempts.get(target.id) ?? 0) + 1);
-			console.warn('Auto-approve failed', error instanceof Error ? error.message : error);
-		} finally {
-			for (const target of targets) clearJoinRequestSubmitting(target.id);
+
+			const targets = selectAutoApproveTargets(remainingEntries.map(toCandidate), {
+				isAdmin: true,
+				members: [...members],
+				removed,
+				attempts: Object.fromEntries(
+					remainingEntries
+						.filter((entry) => attempts.has(entry.id))
+						.map((entry) => [entry.id, attempts.get(entry.id) ?? 0])
+				),
+				submitting: remainingEntries
+					.filter((entry) => isJoinRequestSubmitting(entry.id))
+					.map((entry) => entry.id)
+			});
+			if (targets.length === 0) break;
+
+			// Mark the batch as being handled so the request cards disable themselves and
+			// a manual accept cannot race this Commit into a remove-then-re-add.
+			for (const target of targets) setJoinRequestSubmitting(target.id);
+			try {
+				const result = await inviteChatGroupMembers({
+					groupId,
+					targets: targets.map((target) => ({
+						identifier: target.requester,
+						expectedStablePubkey: target.requester
+					}))
+				});
+				const failed = new Set(
+					result.failures.map((failure) => normalizePubKey(failure.identifier))
+				);
+				const nowMembers = new Set(memberPubkeys(groupId).map(normalizePubKey));
+				for (const target of targets) {
+					// A failure means "not added by this Commit": either they are already a
+					// member (nothing to do, mark the request handled) or the attempt is
+					// counted and retried on the next pass.
+					if (failed.has(target.requester)) {
+						if (nowMembers.has(target.requester)) markJoinRequestAccepted(target.id, groupId);
+						else attempts.set(target.id, (attempts.get(target.id) ?? 0) + 1);
+						continue;
+					}
+					markJoinRequestAccepted(target.id, groupId);
+					approved.push({ groupId, requester: target.requester });
+				}
+				// A duplicate request from someone just approved would stay pending and be
+				// announced as "wants to join" right after the approval: close every request
+				// whose requester is a member now.
+				const handled = new Set(targets.map((target) => target.id));
+				for (const entry of remainingEntries) {
+					if (handled.has(entry.id)) continue;
+					if (nowMembers.has(normalizePubKey(entry.requesterStablePubkey)))
+						markJoinRequestAccepted(entry.id, groupId);
+				}
+			} catch (error) {
+				// The whole batch failed to commit: count an attempt for every target so a
+				// persistently broken group cannot retry forever. One unhealthy group must
+				// not stop the others; the next pass retries.
+				for (const target of targets) attempts.set(target.id, (attempts.get(target.id) ?? 0) + 1);
+				console.warn('Auto-approve failed', error instanceof Error ? error.message : error);
+			} finally {
+				for (const target of targets) clearJoinRequestSubmitting(target.id);
+			}
+			// Attempt each request at most once per drain. Failed requests stay pending
+			// for the next pass; later batches continue without waiting for them.
+			const processed = new Set(targets.map((target) => target.id));
+			const currentMembers = new Set(memberPubkeys(groupId).map(normalizePubKey));
+			remainingEntries = remainingEntries.filter(
+				(entry) =>
+					!processed.has(entry.id) &&
+					!currentMembers.has(normalizePubKey(entry.requesterStablePubkey))
+			);
 		}
 	}
 	return approved;
