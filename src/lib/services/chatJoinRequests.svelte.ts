@@ -343,7 +343,7 @@ export function getJoinRequest(id: string): JoinRequestEntry | undefined {
 	return chatJoinRequestsStore.entries.find((entry) => entry.id === id);
 }
 
-function markJoinRequestAccepted(id: string, groupId: string) {
+export function markJoinRequestAccepted(id: string, groupId: string) {
 	chatJoinRequestsStore.entries = chatJoinRequestsStore.entries.map((entry) =>
 		entry.id === id
 			? { ...entry, status: 'accepted', acceptedAt: Date.now(), acceptedGroupId: groupId }

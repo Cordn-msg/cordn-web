@@ -708,6 +708,13 @@ const newsReleases: NewsRelease[] = [
 		body: '- ✨ Your chat list now opens with filters: **All**, **DMs** and **Groups** in a strip at the top, on the chat home and in the sidebar. A DM is a chat with exactly two people; anything bigger is a group. The strip stays out of the way until you have two chats or a folder of your own.\n- ✨ Make your own folders — Work, Family, whatever fits — from the **+** at the end of the strip, or from any chat’s three-dot menu. A folder is a list of chats you pick: nothing is moved, muted or deleted, and a chat can sit in as many folders as you like. Folders stay on this device, like pins.\n- ✨ Each filter shows what is waiting inside it: the unread messages across its chats, plus an amber **@** when one of them mentions you.\n- ✨ Reading back through a chat now shows how far you have left. The scroll-to-bottom button carries the number of unread messages still below you, the count drops as they come into view, and the badge is gone once you reach the bottom.\n- 🔄 Search still looks through every chat whichever filter is open, and Mark all read still marks everything — a filter never hides something you were looking for.'
 	},
 	{
+		id: 'cordn-news-2026-11-24-auto-approve',
+		createdAt: Date.UTC(2026, 10, 24),
+		version: 1,
+		title: 'Join requests that approve themselves',
+		body: '- ✨ Any group you administer can now let people in without you tapping each request. Turn on **Auto-approve join requests** in the group’s info page: requests are approved in batches, so several people waiting means one encrypted join event instead of a queue of them.\n- ✨ Requests already waiting when you turn it on are approved too — it is not “new requests only”.\n- ✨ You still get one notification per request, and when the app let someone in for you it says **Approved** instead of **wants to join**.\n- 🔄 The safeguards stay: someone already in the group is never re-invited, anyone you removed is never auto-approved, and a group whose history cannot be read stays manual. The switch is admin-only and stays on this device.\n- 🔄 It runs while Cordn is open — on refresh and about every five minutes — so a request can take a few minutes to be approved. Turning it off stops it immediately.'
+	},
+	{
 		id: 'cordn-news-2026-11-24-repair-behind-chat',
 		createdAt: Date.UTC(2026, 10, 24),
 		version: 1,

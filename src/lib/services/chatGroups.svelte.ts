@@ -1890,6 +1890,12 @@ export interface ChatGroupInviteTarget {
 	expectedStablePubkey: string;
 }
 
+/**
+ * Key packages one invite consumes at a time. One Commit still covers the whole
+ * batch, but a large backlog must not open hundreds of coordinator requests at once.
+ */
+const KEY_PACKAGE_CONSUME_CONCURRENCY = 8;
+
 export async function inviteChatGroupMembers(input: {
 	groupId: string;
 	targets: ChatGroupInviteTarget[];
@@ -1911,66 +1917,65 @@ export async function inviteChatGroupMembers(input: {
 			keyPackage: KeyPackage;
 		}> = [];
 
-		// Consume in parallel: each call targets a distinct identity, so there is
-		// no contention. Failures are collected per identifier so one unreachable
-		// member can't abort the batch.
-		await Promise.all(
-			input.targets.map(async (target) => {
-				const identifier = target.identifier.trim();
-				if (!identifier) {
-					failures.push({
-						identifier: target.identifier,
-						error:
-							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
-					});
-					return;
-				}
-				try {
-					const consumeResult = await withCoordinatorClient(
-						account,
-						group.coordinatorKey,
-						(client) => client.ConsumeKeyPackage({ id: identifier })
+		// Consume in bounded batches: each call targets a distinct identity, so there
+		// is no contention, and failures are collected per identifier so one
+		// unreachable member can't abort the batch.
+		const consumeTarget = async (target: ChatGroupInviteTarget) => {
+			const identifier = target.identifier.trim();
+			if (!identifier) {
+				failures.push({
+					identifier: target.identifier,
+					error:
+						'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
+				});
+				return;
+			}
+			try {
+				const consumeResult = await withCoordinatorClient(account, group.coordinatorKey, (client) =>
+					client.ConsumeKeyPackage({ id: identifier })
+				);
+				if (!consumeResult.keyPackage) {
+					throw new Error(
+						'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
 					);
-					if (!consumeResult.keyPackage) {
-						throw new Error(
-							'This person has no reachable key package on this coordinator. Ask them to publish one and try again.'
-						);
-					}
-					// Fork-MR scenario K: the coordinator may hand out another DEVICE's
-					// package for this slot (fine — same identity, the welcome is per
-					// identity) but never another IDENTITY's. The caller knows the slot's
-					// owner (the listing/join request they picked the ref from), so the
-					// consumed package is cross-checked against it strictly — a package
-					// for anyone else is refused, never added under the requested name.
-					const consumedPk = normalizePubKey(consumeResult.keyPackage.pk);
-					if (consumedPk !== normalizePubKey(target.expectedStablePubkey)) {
-						throw new Error(
-							'The coordinator returned a key package for a different identity. Refresh their packages and try again.'
-						);
-					}
-					const targetStablePubkey = consumedPk;
-					if (findMemberLeafIndexByStablePubkey(state, targetStablePubkey) >= 0) {
-						throw new Error(
-							'This identity is already a group member. Reinvites are not supported.'
-						);
-					}
-					const memberKeyPackage = await parseConsumedPublishedKeyPackage({
-						stablePubkey: consumedPk,
-						publicationEvent: consumeResult.keyPackage.event
-					});
-					targets.push({
-						targetStablePubkey,
-						keyPackageReference: consumeResult.keyPackage.kp_ref,
-						keyPackage: memberKeyPackage
-					});
-				} catch (error) {
-					failures.push({
-						identifier,
-						error: error instanceof Error ? error.message : 'Failed to invite member'
-					});
 				}
-			})
-		);
+				// Fork-MR scenario K: the coordinator may hand out another DEVICE's
+				// package for this slot (fine — same identity, the welcome is per
+				// identity) but never another IDENTITY's. The caller knows the slot's
+				// owner (the listing/join request they picked the ref from), so the
+				// consumed package is cross-checked against it strictly — a package
+				// for anyone else is refused, never added under the requested name.
+				const consumedPk = normalizePubKey(consumeResult.keyPackage.pk);
+				if (consumedPk !== normalizePubKey(target.expectedStablePubkey)) {
+					throw new Error(
+						'The coordinator returned a key package for a different identity. Refresh their packages and try again.'
+					);
+				}
+				const targetStablePubkey = consumedPk;
+				if (findMemberLeafIndexByStablePubkey(state, targetStablePubkey) >= 0) {
+					throw new Error('This identity is already a group member. Reinvites are not supported.');
+				}
+				const memberKeyPackage = await parseConsumedPublishedKeyPackage({
+					stablePubkey: consumedPk,
+					publicationEvent: consumeResult.keyPackage.event
+				});
+				targets.push({
+					targetStablePubkey,
+					keyPackageReference: consumeResult.keyPackage.kp_ref,
+					keyPackage: memberKeyPackage
+				});
+			} catch (error) {
+				failures.push({
+					identifier,
+					error: error instanceof Error ? error.message : 'Failed to invite member'
+				});
+			}
+		};
+		for (let index = 0; index < input.targets.length; index += KEY_PACKAGE_CONSUME_CONCURRENCY) {
+			await Promise.all(
+				input.targets.slice(index, index + KEY_PACKAGE_CONSUME_CONCURRENCY).map(consumeTarget)
+			);
+		}
 
 		void queryClient.invalidateQueries({
 			queryKey: chatQueryKeys.availableKeyPackages(account.pubkey, group.coordinatorKey)

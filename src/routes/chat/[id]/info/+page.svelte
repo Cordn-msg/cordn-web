@@ -13,6 +13,8 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import * as ScrollArea from '$lib/components/ui/scroll-area';
+	import { Switch } from '$lib/components/ui/switch';
+	import { Label } from '$lib/components/ui/label';
 	import { activeAccount } from '$lib/services/accountManager.svelte';
 	import { isGroupAdmin } from '$lib/services/chatAdminPolicy';
 	import { getNewestHealthySnapshot } from '$lib/services/chatGroupSnapshots';
@@ -37,6 +39,7 @@
 		deleteGroupAction,
 		recoverPoisonedGroupAction,
 		repairChatGroupAction,
+		refreshJoinRequestsAction,
 		requestGroupRepairAction,
 		removeGroupMemberAction,
 		updateGroupMetadataAction
@@ -44,6 +47,10 @@
 	import { getChatGroupDisplayTitle } from '$lib/components/chat/chatGroupDisplay';
 	import { getCoordinatorLabel } from '$lib/services/chatCoordinators.svelte';
 	import { hasJoinRequestBeenSent } from '$lib/services/chatJoinRequests.svelte';
+	import {
+		isAutoApproveEnabled,
+		setAutoApproveEnabled
+	} from '$lib/services/chatAutoApprove.svelte';
 	import { normalizePubKey } from '$lib/utils';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -718,6 +725,36 @@
 						{/if}
 					</Card.Content>
 				</Card.Root>
+
+				{#if canManageMembers}
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Join requests</Card.Title>
+							<Card.Description>
+								Approve requests automatically, in batches of up to 15, while this device is online.
+								Requests already waiting are approved too; requests from people you removed are not.
+							</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<div
+								class="flex items-center justify-between gap-4 rounded-2xl border border-border p-4"
+							>
+								<Label for="auto-approve-join-requests" class="text-sm font-normal">
+									Auto-approve join requests
+								</Label>
+								<Switch
+									id="auto-approve-join-requests"
+									checked={isAutoApproveEnabled(group.id)}
+									onCheckedChange={(checked) => {
+										setAutoApproveEnabled(group.id, checked);
+										// Approve what is already waiting now instead of on the next poll.
+										if (checked) void refreshJoinRequestsAction().catch(() => {});
+									}}
+								/>
+							</div>
+						</Card.Content>
+					</Card.Root>
+				{/if}
 
 				<Card.Root>
 					<Card.Header>
