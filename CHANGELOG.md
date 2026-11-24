@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.8.0 — 2026-11-24
+
+### Features
+
+- **news:** announce chat repair and message recovery
+- detect and repair behind MLS groups
+- **chat:** drain auto-approval in batches of 15
+- **chat:** auto-approve applies to waiting requests too
+- **chat:** auto-approve join requests and notify on requests/welcomes
+- **chat:** compact folder strip that collapses while scrolling
+- **chat:** sum unread message counts in folder tabs
+- **chat:** telegram-style chat folder filters
+- **chat:** show remaining unread count on scroll-to-bottom button
+- add multi-device recovery checks and group rejoin
+- **multi-device:** align defaults with Staircase and harden tip sync
+- **calls:** route Android call audio to headsets and boost remote volume
+- **media:** make cordn.feeds.relay.tools the default Blossom host
+- **chat:** configure the call token service and show participant pictures in calls
+- **chat:** pin a participant as the main call view and fullscreen any card
+- **chat:** add call badges, fullscreen, screen sharing and lock-screen keep-alive
+- **chat:** end-to-end encrypted group calls
+- **chat:** add group calendar events with RSVPs
+- **chat:** show the composer expand control only when needed
+- **chat:** randomize outgoing attachment filenames
+- **chat:** mute group notifications and unify group menus
+- **chat:** tighten gaps between same-author message bubbles
+
+### Fixes
+
+- **chat:** re-read pending requests and removals between auto-approve batches
+- **chat:** bound invite key-package fan-out and charge only real Commits
+- **chat:** isolate poll lanes and split welcome/join legs
+- **chat:** decouple join-request approval and polling per coordinator
+- **chat:** decode coordinator locator before building the page title
+- **chat:** read removals from storage and close duplicate requests
+- **chat:** close auto-approve races and notification gaps
+- **chat:** fit the folder editor on phones and add a chat search
+- **multi-device:** match queued publish work as a union
+- **multi-device:** correct sync status, link flow and duplicate publish
+- **chat:** let the folder strip scroll with the list
+- **chat:** hide the folder strip as soon as the scroll direction flips
+- **chat:** settle the folder strip after scrolling stops
+- **chat:** cover filtered empty states and remaining folder pruning
+- **chat:** address review findings on folder filters and unread badge
+- skip failed relay probes during copy repair
+- harden multi-device recovery edge cases
+- **multi-device:** keep a queued plan persisted until it runs
+- **multi-device:** close the publish, unlink and link races
+- **chat:** request call tokens natively so the APK is not bound by the service CORS allowlist
+- **chat:** polish call fullscreen, duration and media errors
+- **chat:** clear the status bar, label screen shares and stop call tiles overflowing
+- **chat:** harden call lifecycle, media attach and announcements
+- **chat:** surface calendar save failures from the agenda
+- **chat:** drop calendar field-size caps for parity with other kinds
+- **chat:** harden calendar cancellation and edge cases
+- **chat:** give images full width and rebalance the rich view
+- **chat:** tighten event card preview and open rich view on click
+- **chat:** polish calendar cards and calendar navigation
+- **chat:** align calendar event actions with the message menu
+- **chat:** shrink continuation-row height estimates
+- **chat:** keep the normal gap above day and unread separators
+
+### Docs
+
+- **news:** announce auto-approved join requests
+- **news:** announce chat folders and the unread count badge
+- **news:** announce encrypted group calls
+- **news:** announce group calendars and RSVPs
+- **news:** announce private file names and the quieter composer
+
+### Other
+
+- **multi-device:** pin the queued-plan window with a parked publish
+
 ## 0.7.0 — 2026-11-13
 
 ### Features
